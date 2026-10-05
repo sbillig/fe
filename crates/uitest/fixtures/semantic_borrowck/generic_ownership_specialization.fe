@@ -4,12 +4,12 @@ trait Operation { fn apply(pointer: *Item) }
 // Template validation after apply remains pending until T is selected.
 fn generic<T: Operation>(pointer: *Item) -> Item {
     T::apply(pointer)
-    *pointer
+    unsafe { *pointer }
 }
 
 struct Consume {}
 impl Operation for Consume {
-    fn apply(pointer: *Item) { let moved = *pointer }
+    fn apply(pointer: *Item) { unsafe { let moved = *pointer } }
 }
 // Rejected: Consume moves the pointee before generic reads it.
 fn concrete(pointer: *Item) -> Item { generic<Consume>(pointer) }

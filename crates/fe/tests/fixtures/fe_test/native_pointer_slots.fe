@@ -2,42 +2,42 @@ use core::ptr
 use std::evm::Evm
 
 fn replace_shared(slot: *ref u256, value: ref u256) {
-    *slot = value
+    unsafe { *slot = value }
 }
 
 fn replace_mutable(slot: *mut u256, value: mut u256) {
-    *slot = value
+    unsafe { *slot = value }
 }
 
 fn read_shared(slot: *ref u256) -> u256 {
-    *slot
+    unsafe { *slot }
 }
 
 fn read_mutable(slot: *mut u256) -> u256 {
-    *slot
+    unsafe { *slot }
 }
 
 fn increment(slot: *mut u256) {
-    *slot += 1
+    unsafe { *slot += 1 }
 }
 
 fn read_array(slot: *ref [u256; 2]) -> [u256; 2] {
-    *slot
+    unsafe { *slot }
 }
 
 fn increment_byte(slot: *mut u8) {
-    *slot += 1
+    unsafe { *slot += 1 }
 }
 
 fn read_byte(slot: *ref u8) -> u8 {
-    *slot
+    unsafe { *slot }
 }
 
 #[test]
 fn native_scalar_slot_preserves_layout_and_aliases() {
     let mut owner: u8 = 7
     let slot = ptr::alloc<mut u8>()
-    *slot = mut owner
+    unsafe { *slot = mut owner }
     increment_byte(slot)
     replace_mutable_with_heap(slot, value: 0)
     assert!(owner == 8)
@@ -47,7 +47,7 @@ fn native_scalar_slot_preserves_layout_and_aliases() {
 fn shared_native_scalar_slot_reads_the_word_layout() {
     let owner: u8 = 19
     let slot = ptr::alloc<ref u8>()
-    *slot = ref owner
+    unsafe { *slot = ref owner }
     assert!(read_byte(slot) == 19)
     replace_shared_with_heap(slot, value: 0)
 }
@@ -55,48 +55,48 @@ fn shared_native_scalar_slot_reads_the_word_layout() {
 #[test]
 fn packed_scalar_slot_preserves_adjacent_bytes() {
     let owner = ptr::alloc<[u8; 2]>()
-    *owner = [7, 99]
+    unsafe { *owner = [7, 99] }
     let slot = ptr::alloc<mut u8>()
-    *slot = mut (*owner)[0]
+    unsafe { *slot = mut (*owner)[0] }
     increment_byte(slot)
-    assert!((*owner)[0] == 8)
-    assert!((*owner)[1] == 99)
+    unsafe { assert!((*owner)[0] == 8) }
+    unsafe { assert!((*owner)[1] == 99) }
 }
 
 #[test]
 fn shared_slot_replacement_reads_the_new_referent() {
     let old = ptr::alloc<u256>()
     let next = ptr::alloc<u256>()
-    *old = 11
-    *next = 22
+    unsafe { *old = 11 }
+    unsafe { *next = 22 }
     let slot = ptr::alloc<ref u256>()
-    *slot = ref *old
-    replace_shared(slot, value: ref *next)
+    unsafe { *slot = ref *old }
+    unsafe { replace_shared(slot, value: ref *next) }
     assert!(read_shared(slot) == 22)
-    assert!(*old == 11)
+    unsafe { assert!(*old == 11) }
 }
 
 #[test]
 fn mutable_slot_replacement_updates_the_new_referent() {
     let old = ptr::alloc<u256>()
     let next = ptr::alloc<u256>()
-    *old = 11
-    *next = 22
+    unsafe { *old = 11 }
+    unsafe { *next = 22 }
     let slot = ptr::alloc<mut u256>()
-    *slot = mut *old
-    replace_mutable(slot, value: mut *next)
+    unsafe { *slot = mut *old }
+    unsafe { replace_mutable(slot, value: mut *next) }
     increment(slot)
     assert!(read_mutable(slot) == 23)
-    assert!(*old == 11)
-    assert!(*next == 23)
+    unsafe { assert!(*old == 11) }
+    unsafe { assert!(*next == 23) }
 }
 
 #[test]
 fn replacement_initializes_a_clobbered_slot() {
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe { *owner = 7 }
     let slot = ptr::alloc<ref u256>()
-    let native = ref *owner
+    let native = unsafe { ref *owner }
     ptr::zero_bytes(ptr::byte_ptr(slot), 32)
     replace_shared(slot, value: native)
     assert!(read_shared(slot) == 7)
@@ -105,11 +105,11 @@ fn replacement_initializes_a_clobbered_slot() {
 #[test]
 fn aggregate_read_copies_the_referent() {
     let owner = ptr::alloc<[u256; 2]>()
-    *owner = [11, 22]
+    unsafe { *owner = [11, 22] }
     let slot = ptr::alloc<ref [u256; 2]>()
-    *slot = ref *owner
+    unsafe { *slot = ref *owner }
     let copied = read_array(slot)
-    *owner = [33, 44]
+    unsafe { *owner = [33, 44] }
     assert!(copied[0] == 11)
     assert!(copied[1] == 22)
 }
@@ -122,9 +122,9 @@ fn choose_byte(
     use_first: bool,
 ) {
     if use_first {
-        *slot = first
+        unsafe { *slot = first }
     } else {
-        *slot = second
+        unsafe { *slot = second }
     }
 }
 
@@ -132,29 +132,29 @@ fn choose_byte(
 fn reference_slots_keep_layout_across_control_flow() {
     let mut native: u8 = 8
     let packed = ptr::alloc<u8>()
-    *packed = 31
+    unsafe { *packed = 31 }
     let slot = ptr::alloc<mut u8>()
-    choose_byte(slot, first: mut native, second: mut *packed, use_first: true)
+    unsafe { choose_byte(slot, first: mut native, second: mut *packed, use_first: true) }
     increment_byte(slot)
     replace_mutable_with_heap(slot, value: 0)
     assert!(native == 9)
-    assert!(*packed == 31)
-    choose_byte(slot, first: mut native, second: mut *packed, use_first: false)
+    unsafe { assert!(*packed == 31) }
+    unsafe { choose_byte(slot, first: mut native, second: mut *packed, use_first: false) }
     increment_byte(slot)
     replace_mutable_with_heap(slot, value: 0)
     assert!(native == 9)
-    assert!(*packed == 32)
+    unsafe { assert!(*packed == 32) }
 }
 
 fn increment_array_byte(slot: *mut [u8; 2]) {
-    (*slot)[1] += 1
+    unsafe { (*slot)[1] += 1 }
 }
 
 #[test]
 fn native_aggregate_slot_preserves_field_layout_and_aliases() {
     let mut native: [u8; 2] = [11, 22]
     let slot = ptr::alloc<mut [u8; 2]>()
-    *slot = mut native
+    unsafe { *slot = mut native }
     increment_array_byte(slot)
     replace_mutable_with_heap(slot, value: [0, 0])
     assert!(native[0] == 11)
@@ -169,7 +169,7 @@ struct NativeLinks {
 impl Copy for NativeLinks {}
 
 fn read_links(slot: *ref NativeLinks) -> u8 {
-    let links = *slot
+    let links = unsafe { *slot }
     links.first + links.pair[1]
 }
 
@@ -179,13 +179,13 @@ fn nested_native_references_keep_their_layout() {
     let pair: [u8; 2] = [4, 5]
     let links = NativeLinks { first: ref first, pair: ref pair }
     let slot = ptr::alloc<ref NativeLinks>()
-    *slot = ref links
+    unsafe { *slot = ref links }
     assert!(read_links(slot) == 8)
     let heap_first = ptr::alloc<u8>()
-    *heap_first = 0
+    unsafe { *heap_first = 0 }
     let heap_pair = ptr::alloc<[u8; 2]>()
-    *heap_pair = [0, 0]
-    replace_shared_with_heap(slot, value: NativeLinks { first: ref *heap_first, pair: ref *heap_pair })
+    unsafe { *heap_pair = [0, 0] }
+    unsafe { replace_shared_with_heap(slot, value: NativeLinks { first: ref *heap_first, pair: ref *heap_pair }) }
 }
 
 enum NativeChoice {
@@ -209,23 +209,23 @@ impl NativeChoice {
 }
 
 fn change_choice(slot: *mut NativeChoice) {
-    (*slot).change()
+    unsafe { (*slot).change() }
 }
 
 fn choice_last(slot: *ref NativeChoice) -> u8 {
-    (*slot).last()
+    unsafe { (*slot).last() }
 }
 
 #[test]
 fn native_enum_slot_preserves_variant_layout_and_aliases() {
     let mut native = NativeChoice::First(7)
     let slot = ptr::alloc<mut NativeChoice>()
-    *slot = mut native
+    unsafe { *slot = mut native }
     change_choice(slot)
     replace_mutable_with_heap(slot, value: NativeChoice::First(0))
     assert!(native.last() == 23)
     let shared = ptr::alloc<ref NativeChoice>()
-    *shared = ref native
+    unsafe { *shared = ref native }
     assert!(choice_last(slot: shared) == 23)
     replace_shared_with_heap(slot: shared, value: NativeChoice::First(0))
 }
@@ -233,27 +233,27 @@ fn native_enum_slot_preserves_variant_layout_and_aliases() {
 #[test]
 fn packed_enum_slot_preserves_variant_layout_and_aliases() {
     let packed = ptr::alloc<NativeChoice>()
-    *packed = NativeChoice::First(7)
+    unsafe { *packed = NativeChoice::First(7) }
     let slot = ptr::alloc<mut NativeChoice>()
-    *slot = mut *packed
+    unsafe { *slot = mut *packed }
     change_choice(slot)
-    assert!((*packed).last() == 23)
+    unsafe { assert!((*packed).last() == 23) }
     let shared = ptr::alloc<ref NativeChoice>()
-    *shared = ref *packed
+    unsafe { *shared = ref *packed }
     assert!(choice_last(slot: shared) == 23)
 }
 
 // Typed replacement ends the retained local borrow before the local expires.
 fn replace_mutable_with_heap<T>(slot: *mut T, value: own T) {
     let replacement = ptr::alloc<T>()
-    *replacement = value
-    *slot = mut *replacement
+    unsafe { *replacement = value }
+    unsafe { *slot = mut *replacement }
 }
 
 fn replace_shared_with_heap<T>(slot: *ref T, value: own T) {
     let replacement = ptr::alloc<T>()
-    *replacement = value
-    *slot = ref *replacement
+    unsafe { *replacement = value }
+    unsafe { *slot = ref *replacement }
 }
 
 
@@ -271,13 +271,13 @@ pub contract NativeSlotContract {
     recv NativeSlotMsg {
         Increment -> u256 uses (mut value) {
             let slot = ptr::alloc<mut u256>()
-            *slot = mut value
+            unsafe { *slot = mut value }
             increment(slot)
             value
         }
         ChangeChoice -> u8 uses (mut choice) {
             let slot = ptr::alloc<mut NativeChoice>()
-            *slot = mut choice
+            unsafe { *slot = mut choice }
             change_choice(slot)
             choice.last()
         }
@@ -295,7 +295,7 @@ fn native_slots_preserve_storage_addresses_and_layouts() uses (evm: mut Evm) {
     assert!(last == 23)
 }
 
-fn load_shared_byte(slot: *ref u8) -> ref u8 { *slot }
+fn load_shared_byte(slot: *ref u8) -> ref u8 { unsafe { *slot } }
 
 fn choose_shared_byte(first: ref u8, second: ref u8, use_first: bool) -> ref u8 {
     if use_first { first } else { second }
@@ -304,9 +304,9 @@ fn choose_shared_byte(first: ref u8, second: ref u8, use_first: bool) -> ref u8 
 #[test]
 fn returning_a_stored_native_reference_preserves_its_carrier() {
     let owner = ptr::alloc<u8>()
-    *owner = 23
+    unsafe { *owner = 23 }
     let slot = ptr::alloc<ref u8>()
-    *slot = ref *owner
+    unsafe { *slot = ref *owner }
     let loaded = load_shared_byte(slot)
     assert!(loaded == 23)
     assert!(load_shared_byte(slot) == 23)
@@ -316,9 +316,9 @@ fn returning_a_stored_native_reference_preserves_its_carrier() {
 fn mixed_native_reference_returns_preserve_both_layouts() {
     let native: u8 = 11
     let packed = ptr::alloc<u8>()
-    *packed = 37
-    assert!(choose_shared_byte(first: ref native, second: ref *packed, use_first: true) == 11)
-    assert!(choose_shared_byte(first: ref native, second: ref *packed, use_first: false) == 37)
+    unsafe { *packed = 37 }
+    unsafe { assert!(choose_shared_byte(first: ref native, second: ref *packed, use_first: true) == 11) }
+    unsafe { assert!(choose_shared_byte(first: ref native, second: ref *packed, use_first: false) == 37) }
 }
 
 struct NativeBytePair { first: u8, second: u8 }
@@ -327,7 +327,7 @@ struct NativeBytePair { first: u8, second: u8 }
 fn stored_constant_field_reference_preserves_its_value() {
     let owner = NativeBytePair { first: 11, second: 23 }
     let slot = ptr::alloc<ref u8>()
-    *slot = ref owner.second
+    unsafe { *slot = ref owner.second }
     assert!(read_byte(slot) == 23)
     replace_shared_with_heap(slot, value: 0)
 }

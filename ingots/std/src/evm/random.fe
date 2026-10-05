@@ -128,9 +128,11 @@ pub fn shuffle_slice<T>(_ items: MemSlice<T>) uses (rng: mut Rng) where T: Copy 
     while i > 1 {
         let j = rng.uniform(i)
         i -= 1
-        let held = *items.ptr_at(i)
-        *items.ptr_at(i) = *items.ptr_at(j)
-        *items.ptr_at(j) = held
+        unsafe {
+            let held = *items.ptr_at(i)
+            *items.ptr_at(i) = *items.ptr_at(j)
+            *items.ptr_at(j) = held
+        }
     }
 }
 

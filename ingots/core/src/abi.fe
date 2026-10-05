@@ -227,7 +227,7 @@ pub trait Encode<A: Abi>: AbiSize {
 }
 
 pub fn store_word(ptr: *u8, value: u256) {
-    *ptr::cast<u8, u256>(ptr) = value
+    unsafe { *ptr::cast<u8, u256>(ptr) = value }
 }
 
 pub fn decode_or_revert<A: Abi, T, D>(d: mut D) -> T
@@ -5259,7 +5259,7 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         // Empty arrays contain no values to initialize or decode.
         if N == 0 {
-            return *ptr::alloc<[T; N]>()
+            return unsafe { *ptr::alloc<[T; N]>() }
         }
         let first = decode_field<A, T, D>(mut d)
         let mut out: [T; N] = [first; N]
@@ -5277,7 +5277,7 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     {
         // Empty arrays contain no values to initialize or decode.
         if N == 0 {
-            return *ptr::alloc<[T; N]>()
+            return unsafe { *ptr::alloc<[T; N]>() }
         }
         let first = decode_field_from<A, T, I>(input, base: pos, head_pos: pos)
         let mut out: [T; N] = [first; N]
@@ -5297,7 +5297,7 @@ impl<A: Abi, T, const N: usize> Decode<A> for [T; N]
     {
         // Empty arrays contain no values to initialize or decode.
         if N == 0 {
-            return *ptr::alloc<[T; N]>()
+            return unsafe { *ptr::alloc<[T; N]>() }
         }
         let first = decode_field_from_prechecked_head<A, T, I>(input, base: pos, head_pos: pos, input_len: input_len)
         let mut out: [T; N] = [first; N]

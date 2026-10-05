@@ -217,7 +217,7 @@ impl<T> MemSlice<T> {
         if index >= self.len() {
             return Option::None
         }
-        Option::Some(*self.ptr_at(index))
+        Option::Some(unsafe { *self.ptr_at(index) })
     }
 }
 
@@ -474,7 +474,7 @@ impl<T, const N: usize> Index<usize> for *[T; N] {
 
     #[inline(always)]
     fn index(self, _ index: usize) -> T {
-        *array_elem(self, index)
+        unsafe { *array_elem(self, index) }
     }
 }
 
@@ -483,7 +483,7 @@ impl<T, const N: usize> IndexMut<usize> for *[T; N] {
 
     #[inline(always)]
     fn index_mut(self, _ index: usize) -> mut T {
-        mut *array_elem(self, index)
+        unsafe { mut *array_elem(self, index) }
     }
 }
 
@@ -492,7 +492,7 @@ impl<T> Index<usize> for MemArray<T> {
 
     #[inline(always)]
     fn index(self, _ index: usize) -> T {
-        *mem_array_elem(self, index)
+        unsafe { *mem_array_elem(self, index) }
     }
 }
 
@@ -501,7 +501,7 @@ impl<T> IndexMut<usize> for MemArray<T> {
 
     #[inline(always)]
     fn index_mut(self, _ index: usize) -> mut T {
-        mut *mem_array_elem(self, index)
+        unsafe { mut *mem_array_elem(self, index) }
     }
 }
 
@@ -512,7 +512,7 @@ impl<T> Index<usize> for MemSlice<T>
 
     #[inline(always)]
     fn index(self, _ index: usize) -> T {
-        *self.ptr_at(index as u256)
+        unsafe { *self.ptr_at(index as u256) }
     }
 }
 

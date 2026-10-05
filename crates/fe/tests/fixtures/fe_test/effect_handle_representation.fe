@@ -89,8 +89,8 @@ fn read_value() -> u256 uses (value: u256) {
 fn handle_metadata_does_not_change_the_raw_target() {
     let first = ptr::alloc<u256>()
     let second = ptr::alloc<u256>()
-    *first = 11
-    *second = 22
+    unsafe { *first = 11 }
+    unsafe { *second = 22 }
     let ptr: OffsetPtr<u256> = OffsetPtr { addr: first, encoded: 0x120 }
     assert!(ptr.encoded == 0x120)
     let value = with (ptr) { read_value() }
@@ -122,8 +122,8 @@ impl<T> EffectHandleMut for FixedPtr<T> {}
 
 fn fixed_raw_roundtrip(value: u256) -> u256 uses (ptr: FixedPtr<u256>) {
     let raw = ptr.raw()
-    *raw = value
-    *raw
+    unsafe { *raw = value }
+    unsafe { *raw }
 }
 
 fn write_then_read(value: u256) -> u256 uses (target: mut u256) {

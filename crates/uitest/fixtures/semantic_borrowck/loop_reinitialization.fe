@@ -7,16 +7,16 @@ mod counted {
     struct Item { value: u64 }
     fn consume(_ value: own Item) {}
     fn reinit(_ pointer: *Item, _ count: usize) {
-        *pointer = Item { value: 1 }
+        unsafe { *pointer = Item { value: 1 } }
         let mut i: usize = 0
         while i < count { i += 1 }
     }
     fn caller(count: usize) {
         let pointer = ptr::alloc<Item>()
-        *pointer = Item { value: 42 }
-        consume(*pointer)
+        unsafe { *pointer = Item { value: 42 } }
+        unsafe { consume(*pointer) }
         reinit(pointer, count)
-        consume(*pointer)
+        unsafe { consume(*pointer) }
     }
 }
 
@@ -26,17 +26,17 @@ mod nested {
     struct Item { value: u64 }
     fn consume(_ value: own Item) {}
     fn reinit(_ pointer: *Item, _ count: usize) {
-        *pointer = Item { value: 1 }
+        unsafe { *pointer = Item { value: 1 } }
         for _ in 0..count {
             for _ in 0..count {}
         }
     }
     fn caller(count: usize) {
         let pointer = ptr::alloc<Item>()
-        *pointer = Item { value: 42 }
-        consume(*pointer)
+        unsafe { *pointer = Item { value: 42 } }
+        unsafe { consume(*pointer) }
         reinit(pointer, count)
-        consume(*pointer)
+        unsafe { consume(*pointer) }
     }
 }
 
@@ -46,7 +46,7 @@ mod returning {
     struct Item { value: u64 }
     fn consume(_ value: own Item) {}
     fn reinit(_ pointer: *Item, _ count: usize) {
-        *pointer = Item { value: 1 }
+        unsafe { *pointer = Item { value: 1 } }
         let mut i: usize = 0
         while true {
             if i == count { return }
@@ -55,10 +55,10 @@ mod returning {
     }
     fn caller(count: usize) {
         let pointer = ptr::alloc<Item>()
-        *pointer = Item { value: 42 }
-        consume(*pointer)
+        unsafe { *pointer = Item { value: 42 } }
+        unsafe { consume(*pointer) }
         reinit(pointer, count)
-        consume(*pointer)
+        unsafe { consume(*pointer) }
     }
 }
 
@@ -68,20 +68,20 @@ mod restored_each_iteration {
     struct Item { value: u64 }
     fn consume(_ value: own Item) {}
     fn reinit(_ pointer: *Item, _ count: usize) {
-        *pointer = Item { value: 1 }
+        unsafe { *pointer = Item { value: 1 } }
         let mut i: usize = 0
         while i < count {
-            consume(*pointer)
-            *pointer = Item { value: 2 }
+            unsafe { consume(*pointer) }
+            unsafe { *pointer = Item { value: 2 } }
             i += 1
         }
     }
     fn caller(count: usize) {
         let pointer = ptr::alloc<Item>()
-        *pointer = Item { value: 42 }
-        consume(*pointer)
+        unsafe { *pointer = Item { value: 42 } }
+        unsafe { consume(*pointer) }
         reinit(pointer, count)
-        consume(*pointer)
+        unsafe { consume(*pointer) }
     }
 }
 
@@ -91,21 +91,21 @@ mod moved_on_return {
     struct Item { value: u64 }
     fn consume(_ value: own Item) {}
     fn reinit(_ pointer: *Item, _ count: usize) {
-        *pointer = Item { value: 1 }
+        unsafe { *pointer = Item { value: 1 } }
         let mut i: usize = 0
         while i < count {
-            consume(*pointer)
+            unsafe { consume(*pointer) }
             if i == 3 { return }
-            *pointer = Item { value: 2 }
+            unsafe { *pointer = Item { value: 2 } }
             i += 1
         }
     }
     fn caller(count: usize) {
         let pointer = ptr::alloc<Item>()
-        *pointer = Item { value: 42 }
-        consume(*pointer)
+        unsafe { *pointer = Item { value: 42 } }
+        unsafe { consume(*pointer) }
         reinit(pointer, count)
-        consume(*pointer)
+        unsafe { consume(*pointer) }
     }
 }
 
@@ -117,16 +117,16 @@ mod conditional_write_in_loop {
     fn reinit(_ pointer: *Item, _ count: usize) {
         let mut i: usize = 0
         while i < count {
-            if i == 3 { *pointer = Item { value: 1 } }
+            unsafe { if i == 3 { *pointer = Item { value: 1 } } }
             i += 1
         }
     }
     fn caller(count: usize) {
         let pointer = ptr::alloc<Item>()
-        *pointer = Item { value: 42 }
-        consume(*pointer)
+        unsafe { *pointer = Item { value: 42 } }
+        unsafe { consume(*pointer) }
         reinit(pointer, count)
-        consume(*pointer)
+        unsafe { consume(*pointer) }
     }
 }
 
@@ -138,15 +138,15 @@ mod possibly_empty_loop {
     fn reinit(_ pointer: *Item, _ count: usize) {
         let mut i: usize = 0
         while i < count {
-            *pointer = Item { value: 1 }
+            unsafe { *pointer = Item { value: 1 } }
             i += 1
         }
     }
     fn caller(count: usize) {
         let pointer = ptr::alloc<Item>()
-        *pointer = Item { value: 42 }
-        consume(*pointer)
+        unsafe { *pointer = Item { value: 42 } }
+        unsafe { consume(*pointer) }
         reinit(pointer, count)
-        consume(*pointer)
+        unsafe { consume(*pointer) }
     }
 }

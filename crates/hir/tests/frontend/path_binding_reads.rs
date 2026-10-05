@@ -139,7 +139,7 @@ struct Data {
 }
 
 fn read(ptr: *Data) -> u256 {
-    ptr.value
+    unsafe { ptr.value }
 }
 "#,
     );

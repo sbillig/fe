@@ -3,24 +3,24 @@ use core::{Option, ptr}
 struct Node { value: u256, next: *Node, other: *Node }
 
 // A helper returning a recursive field must preserve its exact stored address.
-fn next_1(_ node: *Node) -> *Node { node.next }
+fn next_1(_ node: *Node) -> *Node { unsafe { node.next } }
 fn forwarded_1(_ node: *Node) -> *Node { next_1(node) }
 
-fn next_4(_ node: *Node) -> *Node { node.next.next.next.next }
+fn next_4(_ node: *Node) -> *Node { unsafe { node.next.next.next.next } }
 fn forwarded_4(_ node: *Node) -> *Node { next_4(node) }
 
-fn next_16(_ node: *Node) -> *Node { node.next.next.next.next.next.next.next.next.next.next.next.next.next.next.next.next }
+fn next_16(_ node: *Node) -> *Node { unsafe { node.next.next.next.next.next.next.next.next.next.next.next.next.next.next.next.next } }
 fn forwarded_16(_ node: *Node) -> *Node { next_16(node) }
 
 // Accepted: the selected tail is distinct from the borrowed head.
 fn tail_after_1_links() {
     let head = ptr::alloc<Node>()
     let tail = ptr::alloc<Node>()
-    *tail = Node { value: 0, next: tail, other: head }
-    *head = Node { value: 1, next: tail, other: head }
+    unsafe { *tail = Node { value: 0, next: tail, other: head } }
+    unsafe { *head = Node { value: 1, next: tail, other: head } }
     let selected = forwarded_1(head)
-    let borrowed = mut head.value
-    selected.value = 2
+    let borrowed = unsafe { mut head.value }
+    unsafe { selected.value = 2 }
     borrowed = 3
 }
 
@@ -28,11 +28,11 @@ fn tail_after_1_links() {
 fn head_after_1_links() {
     let head = ptr::alloc<Node>()
     let tail = ptr::alloc<Node>()
-    *tail = Node { value: 0, next: tail, other: head }
-    *head = Node { value: 1, next: head, other: head }
+    unsafe { *tail = Node { value: 0, next: tail, other: head } }
+    unsafe { *head = Node { value: 1, next: head, other: head } }
     let selected = forwarded_1(head)
-    let borrowed = mut head.value
-    selected.value = 2
+    let borrowed = unsafe { mut head.value }
+    unsafe { selected.value = 2 }
     borrowed = 3
 }
 
@@ -40,11 +40,11 @@ fn head_after_1_links() {
 fn tail_after_4_links() {
     let head = ptr::alloc<Node>()
     let tail = ptr::alloc<Node>()
-    *tail = Node { value: 0, next: tail, other: head }
-    *head = Node { value: 1, next: tail, other: head }
+    unsafe { *tail = Node { value: 0, next: tail, other: head } }
+    unsafe { *head = Node { value: 1, next: tail, other: head } }
     let selected = forwarded_4(head)
-    let borrowed = mut head.value
-    selected.value = 2
+    let borrowed = unsafe { mut head.value }
+    unsafe { selected.value = 2 }
     borrowed = 3
 }
 
@@ -52,11 +52,11 @@ fn tail_after_4_links() {
 fn head_after_4_links() {
     let head = ptr::alloc<Node>()
     let tail = ptr::alloc<Node>()
-    *tail = Node { value: 0, next: tail, other: head }
-    *head = Node { value: 1, next: head, other: head }
+    unsafe { *tail = Node { value: 0, next: tail, other: head } }
+    unsafe { *head = Node { value: 1, next: head, other: head } }
     let selected = forwarded_4(head)
-    let borrowed = mut head.value
-    selected.value = 2
+    let borrowed = unsafe { mut head.value }
+    unsafe { selected.value = 2 }
     borrowed = 3
 }
 
@@ -64,11 +64,11 @@ fn head_after_4_links() {
 fn tail_after_16_links() {
     let head = ptr::alloc<Node>()
     let tail = ptr::alloc<Node>()
-    *tail = Node { value: 0, next: tail, other: head }
-    *head = Node { value: 1, next: tail, other: head }
+    unsafe { *tail = Node { value: 0, next: tail, other: head } }
+    unsafe { *head = Node { value: 1, next: tail, other: head } }
     let selected = forwarded_16(head)
-    let borrowed = mut head.value
-    selected.value = 2
+    let borrowed = unsafe { mut head.value }
+    unsafe { selected.value = 2 }
     borrowed = 3
 }
 
@@ -76,24 +76,24 @@ fn tail_after_16_links() {
 fn head_after_16_links() {
     let head = ptr::alloc<Node>()
     let tail = ptr::alloc<Node>()
-    *tail = Node { value: 0, next: tail, other: head }
-    *head = Node { value: 1, next: head, other: head }
+    unsafe { *tail = Node { value: 0, next: tail, other: head } }
+    unsafe { *head = Node { value: 1, next: head, other: head } }
     let selected = forwarded_16(head)
-    let borrowed = mut head.value
-    selected.value = 2
+    let borrowed = unsafe { mut head.value }
+    unsafe { selected.value = 2 }
     borrowed = 3
 }
 
 struct OptionalNode { value: u256, next: Option<*OptionalNode> }
 
-fn take(_ node: *OptionalNode) -> OptionalNode { *node }
+fn take(_ node: *OptionalNode) -> OptionalNode { unsafe { *node } }
 
 // Accepted: consuming the head leaves the distinct tail available.
 fn move_distinct_nodes() {
     let head = ptr::alloc<OptionalNode>()
     let tail = ptr::alloc<OptionalNode>()
-    *tail = OptionalNode { value: 2, next: Option::None }
-    *head = OptionalNode { value: 1, next: Option::Some(tail) }
+    unsafe { *tail = OptionalNode { value: 2, next: Option::None } }
+    unsafe { *head = OptionalNode { value: 1, next: Option::Some(tail) } }
     let first = take(head)
     let tail = match first.next { Option::Some(tail) => tail, Option::None => return }
     let second = take(tail)
@@ -104,8 +104,8 @@ fn move_distinct_nodes() {
 fn move_same_node_twice() {
     let head = ptr::alloc<OptionalNode>()
     let tail = ptr::alloc<OptionalNode>()
-    *tail = OptionalNode { value: 2, next: Option::None }
-    *head = OptionalNode { value: 1, next: Option::Some(tail) }
+    unsafe { *tail = OptionalNode { value: 2, next: Option::None } }
+    unsafe { *head = OptionalNode { value: 1, next: Option::Some(tail) } }
     let first = take(head)
     let tail = match first.next { Option::Some(tail) => tail, Option::None => return }
     let second = take(head)

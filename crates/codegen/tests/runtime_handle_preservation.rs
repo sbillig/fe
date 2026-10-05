@@ -474,8 +474,8 @@ fn pointer_helpers_use_native_raw_addr_transport_in_rmir() {
         r#"
 pub fn pointer_roundtrip() -> u256 {
     let ptr = core::ptr::alloc<u256>()
-    *ptr = 7
-    *ptr
+    unsafe { *ptr = 7 }
+    unsafe { *ptr }
 }
 "#
         .to_string(),

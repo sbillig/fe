@@ -53,7 +53,11 @@ fn native_space_source(space: &str, writable: bool) -> String {
     } else {
         ""
     };
-    let update = if writable { "(*slot).pair[1] += 1" } else { "" };
+    let update = if writable {
+        "unsafe { (*slot).pair[1] += 1 }"
+    } else {
+        ""
+    };
     format!(
         r#"
 use core::ptr
@@ -71,25 +75,25 @@ impl<T> EffectRefMut<T> for Provider<T> {{}}
 struct Cell {{ prefix: u8, pair: [u8; 2] }}
 
 #[inline(never)]
-fn pass(slot: *{kind} Cell) -> {kind} Cell {{ *slot }}
+fn pass(slot: *{kind} Cell) -> {kind} Cell {{ unsafe {{ *slot }} }}
 #[inline(never)]
-fn project(slot: *{kind} Cell) -> u8 {{ (*slot).pair[1] }}
+fn project(slot: *{kind} Cell) -> u8 {{ unsafe {{ (*slot).pair[1] }} }}
 #[inline(never)]
 fn churn(seed: u256) -> *u256 {{
     let allocation = ptr::alloc<u256>()
-    *allocation = seed
+    unsafe {{ *allocation = seed }}
     allocation
 }}
 fn observe(seed: u256) -> u8 uses (value: {effect_mode}Cell) {{
     {initialize}
     let slot = ptr::alloc<{kind} Cell>()
-    *slot = {kind} value
+    unsafe {{ *slot = {kind} value }}
     {update}
     let carrier = pass(slot)
     let second = ptr::alloc<{kind} Cell>()
-    *second = carrier
+    unsafe {{ *second = carrier }}
     let scratch = churn(seed)
-    assert!(*scratch == seed)
+    unsafe {{ assert!(*scratch == seed) }}
     project(slot: second)
 }}
 msg NativeMsg {{
@@ -175,8 +179,8 @@ fn choose(value: Choice, take_first: bool) -> ref u8 {
 fn entry() -> u8 {
     let first: [u8; 2] = [11, 23]
     let second = core::ptr::alloc<[u8; 2]>()
-    *second = [37, 41]
-    let value = Choice { first: ref first[1], second: ref (*second)[0] }
+    unsafe { *second = [37, 41] }
+    let value = unsafe { Choice { first: ref first[1], second: ref (*second)[0] } }
     choose(value, take_first: true)
 }
 "#;

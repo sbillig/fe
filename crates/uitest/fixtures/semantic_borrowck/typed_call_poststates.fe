@@ -4,20 +4,20 @@ struct Holder { cells: *[Cell; 2], len: usize }
 impl Cell {
     fn update(mut self) {
         match self.pointer {
-            Option::Some(pointer) => { *pointer = 0 }
+            Option::Some(pointer) => { unsafe { *pointer = 0 } }
             Option::None => { self.replace() }
         }
     }
     fn replace(mut self) { self.pointer = Option::Some(ptr::alloc<u8>()) }
 }
 impl Holder {
-    fn get(mut self) -> mut Cell { mut (*self.cells)[self.len - 1] }
+    fn get(mut self) -> mut Cell { unsafe { mut (*self.cells)[self.len - 1] } }
 }
 
 fn inspect() {
     let cells = ptr::alloc<[Cell; 2]>()
-    (*cells)[0] = Cell { pointer: Option::None }
-    (*cells)[1] = Cell { pointer: Option::None }
+    unsafe { (*cells)[0] = Cell { pointer: Option::None } }
+    unsafe { (*cells)[1] = Cell { pointer: Option::None } }
     let mut holder = Holder { cells, len: 1 }
     let mut count: u64 = 0
     while count < 2 {

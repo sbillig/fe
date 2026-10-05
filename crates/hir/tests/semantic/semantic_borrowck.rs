@@ -147,10 +147,10 @@ struct Item { n: u256 }
 trait Operation { fn apply(pointer: *Item) }
 struct Consume {}
 impl Operation for Consume {
-    fn apply(pointer: *Item) { let moved = *pointer }
+    fn apply(pointer: *Item) { unsafe { let moved = *pointer } }
 }
 fn generic<T: Operation>(pointer: *Item) -> Item { T::apply(pointer)
-*pointer }
+unsafe { *pointer } }
 fn concrete(pointer: *Item) -> Item { generic<Consume>(pointer) }
 "#,
             "move conflict",
@@ -163,7 +163,7 @@ impl Operation for Clobber {
     fn apply(slot: *ref u256) { core::ptr::zero_bytes(core::ptr::byte_ptr(slot), 32) }
 }
 fn generic<T: Operation>(slot: *ref u256) -> ref u256 { T::apply(slot)
-*slot }
+unsafe { *slot } }
 fn concrete(slot: *ref u256) -> ref u256 { generic<Clobber>(slot) }
 "#,
             "invalidated by a raw write",
@@ -172,10 +172,10 @@ fn concrete(slot: *ref u256) -> ref u256 { generic<Clobber>(slot) }
             r#"
 trait Lender { fn lend(pointer: *u256) -> mut u256 }
 struct Alias {}
-impl Lender for Alias { fn lend(pointer: *u256) -> mut u256 { mut *pointer } }
+impl Lender for Alias { fn lend(pointer: *u256) -> mut u256 { unsafe { mut *pointer } } }
 fn generic<T: Lender>(pointer: *u256) {
     let first = T::lend(pointer)
-    let second = mut *pointer
+    let second = unsafe { mut *pointer }
     first = 1
     second = 2
 }
@@ -441,7 +441,7 @@ impl Copy for Key {}
 impl StorageKey for Key {
     fn encoded_len(self) -> u256 { 32 }
     fn write_key(ptr: *u8, self) {
-        *self.log = self.id
+        unsafe { *self.log = self.id }
         u256::write_key(ptr, self.id)
     }
 }
@@ -659,10 +659,10 @@ fn memory_{index}() uses (call: mut Call) {{
 fn fresh_native_slots_require_typed_initialization_before_reads() {
     let mut accepted = Vec::new();
     for kind in ["ref", "mut"] {
-        for read in ["*slot", "read(slot)", "forward(slot)"] {
+        for read in ["unsafe { *slot }", "read(slot)", "forward(slot)"] {
             let source = format!(
                 r#"
-fn read(_ slot: *{kind} u256) -> u256 {{ *slot }}
+fn read(_ slot: *{kind} u256) -> u256 {{ unsafe {{ *slot }} }}
 fn forward(_ slot: *{kind} u256) -> u256 {{ read(slot) }}
 fn bad() -> u256 {{
     let slot = core::ptr::alloc<{kind} u256>()
@@ -719,15 +719,15 @@ fn fresh_native_slots_preserve_invalid_alternatives_and_typed_restoration() {
 use core::ptr
 fn fresh() -> *{kind} u256 {{ ptr::alloc<{kind} u256>() }}
 fn forward() -> *{kind} u256 {{ fresh() }}
-fn replace(_ slot: *{kind} u256, _ native: {kind} u256) {{ *slot = native }}
-fn read(_ slot: *{kind} u256) -> u256 {{ *slot }}
+fn replace(_ slot: *{kind} u256, _ native: {kind} u256) {{ unsafe {{ *slot = native }} }}
+fn read(_ slot: *{kind} u256) -> u256 {{ unsafe {{ *slot }} }}
 fn inspect(condition: bool) -> u256 {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
-    let native = {kind} *owner
+    unsafe {{ *owner = 7 }}
+    let native = unsafe {{ {kind} *owner }}
     let slot = forward()
     let other = fresh()
-    {initialization}
+    unsafe {{ {initialization} }}
     read(slot)
 }}
 "#
@@ -756,15 +756,15 @@ fn forward() -> *{kind} u256 {{ fresh() }}
 fn raw_transport() -> *{kind} u256 {{ forward() }}
 fn initialize(_ value: {kind} u256) -> *{kind} u256 {{
     let slot = forward()
-    *slot = value
+    unsafe {{ *slot = value }}
     slot
 }}
 fn initialized_forward(_ value: {kind} u256) -> *{kind} u256 {{ initialize(value) }}
 fn inspect() -> u256 {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
-    let slot = initialized_forward({kind} *owner)
-    *slot
+    unsafe {{ *owner = 7 }}
+    let slot = unsafe {{ initialized_forward({kind} *owner) }}
+    unsafe {{ *slot }}
 }}
 "#
         );
@@ -820,8 +820,8 @@ enum Choice {{ Empty, Some(ref u256) }}
 fn discard(_ value: ref u256) {{}}
 fn inspect() {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
-    {body}
+    unsafe {{ *owner = 7 }}
+    unsafe {{ {body} }}
 }}
 "#
         );
@@ -843,18 +843,18 @@ fn fresh_slot_discovery_replays_typed_stores_before_reads_in_either_query_order(
         for initialized in [false, true] {
             for query_first in ["inspect", "read", "fresh"] {
                 let store = if initialized {
-                    "*slot = ref *owner"
+                    "unsafe { *slot = ref *owner }"
                 } else {
                     ""
                 };
                 let (read, use_result) = if native_result {
                     (
-                        "fn read(_ slot: *ref u256) -> ref u256 { *slot }",
+                        "fn read(_ slot: *ref u256) -> ref u256 { unsafe { *slot } }",
                         "let borrowed = read(ptr::cast(bytes))\n    let observed: u256 = borrowed\n    observed",
                     )
                 } else {
                     (
-                        "fn read(_ slot: *ref u256) -> u256 { *slot }",
+                        "fn read(_ slot: *ref u256) -> u256 { unsafe { *slot } }",
                         "read(ptr::cast(bytes))",
                     )
                 };
@@ -865,7 +865,7 @@ fn fresh() -> *u8 {{ ptr::alloc_bytes(32) }}
 {read}
 fn inspect() -> u256 {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let bytes = fresh()
     let slot: *ref u256 = ptr::cast(bytes)
     {store}
@@ -901,20 +901,20 @@ fn inspect() -> u256 {{
 #[test]
 fn allocation_birth_does_not_reuse_previous_loop_initialization() {
     for (store, valid) in [
-        ("*slot = ref *owner", true),
-        ("if index == 0 { *slot = ref *owner }", false),
+        ("unsafe { *slot = ref *owner }", true),
+        ("unsafe { if index == 0 { *slot = ref *owner } }", false),
     ] {
         let source = format!(
             r#"
 use core::ptr
 fn inspect() {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let mut index: u256 = 0
     while index < 2 {{
         let slot = ptr::alloc<ref u256>()
         {store}
-        let loaded: u256 = *slot
+        let loaded: u256 = unsafe {{ *slot }}
         index += 1
     }}
 }}
@@ -939,7 +939,7 @@ struct Item {{ n: u256 }}
 fn consume(_ value: own Item) {{}}
 fn initialized(_ n: u256) -> *Item {{
     let p = core::ptr::alloc<Item>()
-    *p = Item {{ n }}
+    unsafe {{ *p = Item {{ n }} }}
     p
 }}
 fn forward(_ n: u256) -> *Item {{ initialized(n) }}
@@ -947,7 +947,7 @@ fn check(_ count: u256) {{
     let mut i: u256 = 0
     while i < count {{
         {allocation}
-        consume(*p)
+        unsafe {{ consume(*p) }}
         i += 1
     }}
 }}
@@ -957,8 +957,9 @@ fn check(_ count: u256) {{
 
 #[test]
 fn allocation_birth_inline_loop_is_available() {
-    let source =
-        allocation_birth_loop_source("let p = core::ptr::alloc<Item>()\n*p = Item { n: i }");
+    let source = allocation_birth_loop_source(
+        "let p = core::ptr::alloc<Item>()\nunsafe { *p = Item { n: i } }",
+    );
     let diagnostics = checked_borrow_diags(&source);
     assert!(diagnostics.is_empty(), "{diagnostics}");
 }
@@ -978,16 +979,16 @@ fn allocation_birth_forwarded_factory_loop_is_available() {
 #[test]
 fn allocation_birth_preserves_duplicate_and_callee_exit_moves() {
     for allocation in [
-        "let p = initialized(i)\nconsume(*p)",
+        "let p = initialized(i)\nunsafe { consume(*p) }",
         "let p = moved(i)",
-        "let pair = aliased(i)\nconsume(*pair.left)\nlet p = pair.right",
+        "let pair = aliased(i)\nunsafe { consume(*pair.left) }\nlet p = pair.right",
     ] {
         let source = allocation_birth_loop_source(allocation)
             + r#"
 struct Pair { left: *Item, right: *Item }
 fn moved(_ n: u256) -> *Item {
     let p = initialized(n)
-    consume(*p)
+    unsafe { consume(*p) }
     p
 }
 fn aliased(_ n: u256) -> Pair {
@@ -1007,7 +1008,7 @@ fn aliased(_ n: u256) -> Pair {
 #[test]
 fn allocation_birth_distinguishes_multiple_factory_results() {
     let source = allocation_birth_loop_source(
-        "let pair = distinct(i)\nconsume(*pair.left)\nlet p = pair.right",
+        "let pair = distinct(i)\nunsafe { consume(*pair.left) }\nlet p = pair.right",
     ) + r#"
 struct Pair { left: *Item, right: *Item }
 fn distinct(_ n: u256) -> Pair {
@@ -1030,7 +1031,7 @@ fn allocation_birth_retains_older_moved_pointers_before_the_next_move() {
         ("let mut old = [initialized(0)]", "old[0]", "old[0] = p"),
     ] {
         let source = allocation_birth_loop_source(&format!(
-            "let p = forward(i)\nif i > 0 {{ consume(*{old}) }}\n{retain}",
+            "let p = forward(i)\nunsafe {{ if i > 0 {{ consume(*{old}) }} }}\n{retain}",
         ))
         .replace(
             "let mut i: u256 = 0",
@@ -1063,7 +1064,7 @@ struct Item {{ n: u256 }}
 fn consume(_ value: own Item) {{}}
 fn initialized(_ n: u256) -> *Item {{
     let p = core::ptr::alloc<Item>()
-    *p = Item {{ n }}
+    unsafe {{ *p = Item {{ n }} }}
     p
 }}
 fn select(flag: bool, old: *Item) -> *Item {{
@@ -1073,8 +1074,8 @@ fn select(flag: bool, old: *Item) -> *Item {{
 fn check(flag: bool) {{
     let old = initialized(0)
     let chosen = select(flag, old)
-    if flag {{ consume(*chosen) }}
-    consume(*old)
+    unsafe {{ if flag {{ consume(*chosen) }} }}
+    unsafe {{ consume(*old) }}
 }}
 "#
         );
@@ -1119,7 +1120,7 @@ struct Item { n: u256 }
 fn consume(_ value: own Item) {}
 fn initialized() -> *Item {
     let p = core::ptr::alloc<Item>()
-    *p = Item { n: 1 }
+    unsafe { *p = Item { n: 1 } }
     p
 }
 fn first(depth: u256) -> *Item {
@@ -1130,7 +1131,7 @@ fn second(depth: u256) -> *Item {
     if depth == 0 { initialized() }
     else { first(depth: depth - 1) }
 }
-fn check() { consume(*first(depth: 2)) }
+fn check() { unsafe { consume(*first(depth: 2)) } }
 "#;
     for first in ["first", "second", "initialized", "check"] {
         let mut db = HirAnalysisTestDb::default();
@@ -1151,7 +1152,7 @@ fn nonreturning_recursive_fresh_summary_has_no_birth() {
 struct Item { n: u256 }
 fn never() -> *Item {
     let p = core::ptr::alloc<Item>()
-    *p = Item { n: 1 }
+    unsafe { *p = Item { n: 1 } }
     never()
 }
 "#;
@@ -1237,7 +1238,7 @@ fn check(_ count: u256) {
     let mut i: u256 = 0
     while i < count {
         let slot = uninitialized()
-        let loaded: u256 = *slot
+        let loaded: u256 = unsafe { *slot }
         i += 1
     }
 }
@@ -1280,15 +1281,15 @@ fn typed(_ p: *u8) -> *Item { core::ptr::cast<u8, Item>(p) }
 #[test]
 fn allocation_birth_does_not_revive_an_input_pointer_or_its_loaded_referent() {
     for allocation in [
-        "let old = initialized(i)\nconsume(*old)\nlet p = identity(old)",
-        "let old = initialized(i)\nconsume(*old)\nlet slot = container(old)\nlet p = *slot",
+        "let old = initialized(i)\nunsafe { consume(*old) }\nlet p = identity(old)",
+        "let old = initialized(i)\nunsafe { consume(*old) }\nlet slot = container(old)\nlet p = unsafe { *slot }",
     ] {
         let source = allocation_birth_loop_source(allocation)
             + r#"
 fn identity(_ p: *Item) -> *Item { p }
 fn container(_ p: *Item) -> **Item {
     let slot = core::ptr::alloc<*Item>()
-    *slot = p
+    unsafe { *slot = p }
     slot
 }
 "#;
@@ -1305,7 +1306,7 @@ fn container(_ p: *Item) -> **Item {
 fn allocation_birth_nested_loops_and_recursive_pointer_forwarding() {
     for allocation in [
         "let p = recursive_pointer(forward(i), 2)",
-        "let mut j: u256 = 0\nwhile j < 2 { let q = forward(j)\nconsume(*q)\nj += 1 }\nlet p = forward(i)",
+        "let mut j: u256 = 0\nwhile j < 2 { let q = forward(j)\nunsafe { consume(*q) }\nj += 1 }\nlet p = forward(i)",
     ] {
         let source = allocation_birth_loop_source(allocation)
             + r#"
@@ -1336,7 +1337,7 @@ fn allocation_birth_enum_selected_factories_keep_their_guards() {
 #[test]
 fn allocation_birth_fresh_or_old_return_does_not_revive_old_alternative() {
     let source = allocation_birth_loop_source(
-        "let old = initialized(i)\nconsume(*old)\nlet p = maybe(Choice::Old, old, i)",
+        "let old = initialized(i)\nunsafe { consume(*old) }\nlet p = maybe(Choice::Old, old, i)",
     ) + r#"
 enum Choice { Fresh, Old }
 fn maybe(_ pick: Choice, _ old: *Item, _ n: u256) -> *Item {
@@ -1379,7 +1380,7 @@ fn allocation_birth_repeated_pointer_arrays_have_one_identity() {
     for (allocation, valid) in [
         ("let values = repeated(i)\nlet p = values[0]", true),
         (
-            "let values = repeated(i)\nconsume(*values[0])\nlet p = values[1]",
+            "let values = repeated(i)\nunsafe { consume(*values[0]) }\nlet p = values[1]",
             false,
         ),
     ] {
@@ -1400,20 +1401,20 @@ fn allocation_birth_repeated_pointer_arrays_have_one_identity() {
 #[test]
 fn allocation_birth_repeated_native_slots_keep_fresh_invalid_seeds() {
     for (store, valid) in [
-        ("*slots[0] = ref *owner", true),
-        ("if i == 0 { *slots[0] = ref *owner }", false),
+        ("unsafe { *slots[0] = ref *owner }", true),
+        ("unsafe { if i == 0 { *slots[0] = ref *owner } }", false),
     ] {
         let source = format!(
             r#"
 fn repeated() -> [*ref u256; 2] {{ [core::ptr::alloc<ref u256>(); 2] }}
 fn check(_ count: u256) {{
     let owner = core::ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let mut i: u256 = 0
     while i < count {{
         let slots = repeated()
         {store}
-        let loaded: u256 = *slots[1]
+        let loaded: u256 = unsafe {{ *slots[1] }}
         i += 1
     }}
 }}
@@ -1525,17 +1526,17 @@ fn raw_range() {{
 #[test]
 fn physical_casts_do_not_inherit_zero_sized_pointee_disjointness() {
     for write in [
-        "*ptr::cast<(), u256>(empty) = 1",
+        "unsafe { *ptr::cast<(), u256>(empty) = 1 }",
         "write(empty)",
         "forward(empty)",
     ] {
         let source = format!(
             r#"
 use core::ptr
-fn write(_ empty: *()) {{ *ptr::cast<(), u256>(empty) = 1 }}
+fn write(_ empty: *()) {{ unsafe {{ *ptr::cast<(), u256>(empty) = 1 }} }}
 fn forward(_ empty: *()) {{ write(empty) }}
 fn bad(empty: *(), word: *u256) {{
-    let native = mut *word
+    let native = unsafe {{ mut *word }}
     {write}
     native = 2
 }}
@@ -1565,19 +1566,19 @@ fn operation_operands_preserve_zero_sized_ownership() {
 
 #[test]
 fn physical_offsets_with_overlapping_word_accesses_conflict() {
-    for borrow in ["mut *first", "lend(first)", "forward(first)"] {
+    for borrow in ["unsafe { mut *first }", "lend(first)", "forward(first)"] {
         let second_borrow = borrow.replace("first", "second");
         let diagnostics = checked_borrow_diags(&format!(
             r#"
 use core::ptr
-fn lend(_ pointer: *u256) -> mut u256 {{ mut *pointer }}
+fn lend(_ pointer: *u256) -> mut u256 {{ unsafe {{ mut *pointer }} }}
 fn forward(_ pointer: *u256) -> mut u256 {{ lend(pointer) }}
 fn bad() {{
     let base = ptr::alloc_bytes(96)
     let first = ptr::cast<u8, u256>(ptr::offset_bytes(base, 1))
     let second = ptr::cast<u8, u256>(ptr::offset_bytes(base, 2))
-    *first = 1
-    *second = 2
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
     let a = {borrow}
     let b = {second_borrow}
     a = 3
@@ -1594,19 +1595,19 @@ fn bad() {{
 
 #[test]
 fn physical_offsets_preserve_disjoint_typed_elements() {
-    for borrow in ["mut *first", "lend(first)", "forward(first)"] {
+    for borrow in ["unsafe { mut *first }", "lend(first)", "forward(first)"] {
         let second_borrow = borrow.replace("first", "second");
         let diagnostics = checked_borrow_diags(&format!(
             r#"
 use core::ptr
-fn lend(_ pointer: *u256) -> mut u256 {{ mut *pointer }}
+fn lend(_ pointer: *u256) -> mut u256 {{ unsafe {{ mut *pointer }} }}
 fn forward(_ pointer: *u256) -> mut u256 {{ lend(pointer) }}
 fn valid() {{
     let base = ptr::alloc_bytes(96)
     let first = ptr::cast<u8, u256>(ptr::offset_bytes(base, 1))
     let second = ptr::cast<u8, u256>(ptr::offset_bytes(base, 33))
-    *first = 1
-    *second = 2
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
     let a = {borrow}
     let b = {second_borrow}
     a = 3
@@ -1627,7 +1628,11 @@ fn physical_copy_ranges_preserve_extent_through_forwarding_and_restoration() {
     ] {
         for len in [0, 1, 32] {
             for restore in [false, true] {
-                let restoration = if restore { "*slot = mut *value" } else { "" };
+                let restoration = if restore {
+                    "unsafe { *slot = mut *value }"
+                } else {
+                    ""
+                };
                 let source = format!(
                     r#"
 use core::ptr
@@ -1636,15 +1641,15 @@ fn forward(_ destination: *u8, _ source: *u8, _ len: u256) {{ copy(destination, 
 fn inspect() {{
     let base = ptr::alloc_bytes(96)
     let value = ptr::alloc<u256>()
-    *value = 7
+    unsafe {{ *value = 7 }}
     let slot = ptr::cast<u8, mut u256>(ptr::offset_bytes(base, 2))
-    *slot = mut *value
+    unsafe {{ *slot = mut *value }}
     let destination = ptr::offset_bytes(base, 1)
     let source = ptr::alloc_bytes(96)
     let len = {len}
     {copy}
     {restoration}
-    let native = *slot
+    let native = unsafe {{ *slot }}
     native = 8
 }}
 "#
@@ -1655,7 +1660,7 @@ fn inspect() {{
                 } else {
                     assert!(
                         diagnostics.contains("invalidated by a raw write")
-                            && diagnostics.contains("let native = *slot"),
+                            && diagnostics.contains("let native = unsafe { *slot }"),
                         "{source}\n{diagnostics}"
                     );
                 }
@@ -1681,12 +1686,12 @@ fn forward(_ destination: *u8) uses (mem: mut RawMem) {{ store(destination) }}
 fn inspect() uses (mem: mut RawMem) {{
     let base = ptr::alloc_bytes(96)
     let value = ptr::alloc<u256>()
-    *value = 7
+    unsafe {{ *value = 7 }}
     let slot = ptr::cast<u8, mut u256>(ptr::offset_bytes(base, 2))
-    *slot = mut *value
+    unsafe {{ *slot = mut *value }}
     let destination = ptr::offset_bytes(base, 1)
     {call}
-    let native = *slot
+    let native = unsafe {{ *slot }}
     native = 8
 }}
 "#
@@ -1697,7 +1702,7 @@ fn inspect() uses (mem: mut RawMem) {{
             } else {
                 assert!(
                     diagnostics.contains("invalidated by a raw write")
-                        && diagnostics.contains("let native = *slot"),
+                        && diagnostics.contains("let native = unsafe { *slot }"),
                     "{source}\n{diagnostics}"
                 );
             }
@@ -1723,10 +1728,10 @@ fn repeat(_ destination: *u8, _ source: *u8, _ len: u256, _ again: bool) {{
 fn inspect() {{
     let base = ptr::alloc_bytes(96)
     let word = ptr::cast<u8, u256>(ptr::offset_bytes(base, 2))
-    *word = 7
+    unsafe {{ *word = 7 }}
     let source = ptr::offset_bytes(base, 1)
     let destination = ptr::alloc_bytes(96)
-    let native = mut *word
+    let native = unsafe {{ mut *word }}
     let len = {len}
     {call}
     native = 8
@@ -1755,12 +1760,12 @@ fn copy(_ destination: *u8, _ source: *u8, _ len: u256) { ptr::copy_raw(destinat
 fn inspect(len: u256) {
     let base = ptr::alloc_bytes(96)
     let value = ptr::alloc<u256>()
-    *value = 7
+    unsafe { *value = 7 }
     let slot = ptr::cast<u8, mut u256>(ptr::offset_bytes(base, 2))
-    *slot = mut *value
+    unsafe { *slot = mut *value }
     let source = ptr::alloc_bytes(96)
     copy(ptr::offset_bytes(base, 1), source, len)
-    let native = *slot
+    let native = unsafe { *slot }
     native = 8
 }
 "#,
@@ -1778,7 +1783,7 @@ fn signature_fallback_native_result_cannot_lose_its_referent() {
 trait Lender { fn lend(pointer: *u256) -> mut u256 }
 fn bad<T: Lender>(pointer: *u256) {
     let first = T::lend(pointer)
-    let second = mut *pointer
+    let second = unsafe { mut *pointer }
     first = 1
     second = 2
 }
@@ -1794,7 +1799,7 @@ fn signature_fallback_writable_native_contents_can_be_invalid() {
 trait Operation { fn apply(slot: *ref u256) }
 fn bad<T: Operation>(slot: *ref u256) -> ref u256 {
     T::apply(slot)
-    *slot
+    unsafe { *slot }
 }
 "#,
         "bad",
@@ -1876,8 +1881,8 @@ struct Item {{ n: u256 }}
 fn identity(pointer: *{pointee}) -> *{pointee} {{ pointer }}
 fn consume(_ item: own Item) {{}}
 fn check(pointer: *{pointee}) {{
-    consume({expression})
-    consume({expression})
+    unsafe {{ consume({expression}) }}
+    unsafe {{ consume({expression}) }}
 }}
 "#
             ));
@@ -1895,11 +1900,11 @@ fn check(pointer: *{pointee}) {{
 
 #[test]
 fn pointee_moves_survive_call_boundaries() {
-    for access in ["*pointer", "take(pointer)", "forward(pointer)"] {
+    for access in ["unsafe { *pointer }", "take(pointer)", "forward(pointer)"] {
         let diagnostics = checked_borrow_diags(&format!(
             "struct Item {{ n: u256 }}\n\
              fn consume(_ item: own Item) {{}}\n\
-             fn take(pointer: *Item) -> Item {{ *pointer }}\n\
+             fn take(pointer: *Item) -> Item {{ unsafe {{ *pointer }} }}\n\
              fn forward(pointer: *Item) -> Item {{ take(pointer) }}\n\
              fn bad(pointer: *Item) {{\n\
                  let first = {access}\n\
@@ -1917,15 +1922,19 @@ fn pointee_moves_survive_call_boundaries() {
 
 #[test]
 fn pointee_availability_is_required_by_read_and_view_calls() {
-    for access in ["(*pointer).n", "read(pointer)", "forward(pointer)"] {
+    for access in [
+        "unsafe { (*pointer).n }",
+        "read(pointer)",
+        "forward(pointer)",
+    ] {
         let diagnostics = checked_borrow_diags(&format!(
             "struct Item {{ n: u256 }}\n\
              fn consume(_ item: own Item) {{}}\n\
              fn view(_ item: Item) -> u256 {{ item.n }}\n\
-             fn read(pointer: *Item) -> u256 {{ view(*pointer) }}\n\
+             fn read(pointer: *Item) -> u256 {{ unsafe {{ view(*pointer) }} }}\n\
              fn forward(pointer: *Item) -> u256 {{ read(pointer) }}\n\
              fn bad(pointer: *Item) -> u256 {{\n\
-                 consume(*pointer)\n\
+                 unsafe {{ consume(*pointer) }}\n\
                  {access}\n\
              }}"
         ));
@@ -1942,7 +1951,7 @@ fn repeated_views_and_pointer_copies_preserve_ownership() {
         r#"
 struct Item { n: u256 }
 fn view(_ item: Item) -> u256 { item.n }
-fn read(pointer: *Item) -> u256 { view(*pointer) }
+fn read(pointer: *Item) -> u256 { unsafe { view(*pointer) } }
 fn forward(pointer: *Item) -> u256 { read(pointer) }
 fn valid(pointer: *Item) -> u256 {
     let copied = pointer
@@ -1958,7 +1967,7 @@ fn local(item: own Item) -> u256 { view(item) + view(item) }
 #[test]
 fn raw_copy_poststates_cannot_restore_entry_pointer_provenance() {
     for copy in [
-        "*target = first\nptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)",
+        "unsafe { *target = first }\nptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)",
         "copy_slot(target, source, first)",
         "forward(target, source, first)",
         "overwrite_word(target, source, first)",
@@ -1968,14 +1977,14 @@ fn raw_copy_poststates_cannot_restore_entry_pointer_provenance() {
             r#"
 use core::ptr
 fn copy_slot(target: **u256, source: **u256, first: *u256) {{
-    *target = first
+    unsafe {{ *target = first }}
     ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
 }}
 fn forward(target: **u256, source: **u256, first: *u256) {{
     copy_slot(target, source, first)
 }}
 fn loop_copy_slot(target: **u256, source: **u256, first: *u256) {{
-    *target = first
+    unsafe {{ *target = first }}
     let mut index: usize = 0
     while index < 2 {{
         ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
@@ -1983,21 +1992,21 @@ fn loop_copy_slot(target: **u256, source: **u256, first: *u256) {{
     }}
 }}
 fn overwrite_word(target: **u256, source: **u256, first: *u256) {{
-    *target = first
+    unsafe {{ *target = first }}
     let destination_word = ptr::cast<*u256, u256>(target)
     let source_word = ptr::cast<*u256, u256>(source)
-    *destination_word = *source_word
+    unsafe {{ *destination_word = *source_word }}
 }}
 fn bad() {{
     let first = ptr::alloc<u256>()
     let second = ptr::alloc<u256>()
     let source = ptr::alloc<*u256>()
     let target = ptr::alloc<*u256>()
-    *source = second
-    *target = first
+    unsafe {{ *source = second }}
+    unsafe {{ *target = first }}
     {copy}
-    let borrowed = mut *second
-    let alias = mut *(*target)
+    let borrowed = unsafe {{ mut *second }}
+    let alias = unsafe {{ mut *(*target) }}
     borrowed = 1
     alias = 2
 }}
@@ -2015,7 +2024,7 @@ fn definite_pointer_store_after_raw_copy_recovers_precise_contents() {
     // A further forwarding summary can conservatively join possibly aliased
     // source/target poststates. It is not an ordered trace of these stores.
     for copy in [
-        "ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)\n*target = first",
+        "ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)\nunsafe { *target = first }",
         "copy_slot(target, source, first)",
     ] {
         let diagnostics = checked_borrow_diags(&format!(
@@ -2023,18 +2032,18 @@ fn definite_pointer_store_after_raw_copy_recovers_precise_contents() {
 use core::ptr
 fn copy_slot(target: **u256, source: **u256, first: *u256) {{
     ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
-    *target = first
+    unsafe {{ *target = first }}
 }}
 fn valid() {{
     let first = ptr::alloc<u256>()
     let second = ptr::alloc<u256>()
     let source = ptr::alloc<*u256>()
     let target = ptr::alloc<*u256>()
-    *source = second
-    *target = first
+    unsafe {{ *source = second }}
+    unsafe {{ *target = first }}
     {copy}
-    let borrowed = mut *second
-    let independent = mut *(*target)
+    let borrowed = unsafe {{ mut *second }}
+    let independent = unsafe {{ mut *(*target) }}
     borrowed = 1
     independent = 2
 }}
@@ -2047,24 +2056,24 @@ fn valid() {{
 #[test]
 fn raw_overwrites_do_not_manufacture_native_borrow_authority() {
     for (reinitialize, access) in [false, true].into_iter().flat_map(|reinitialize| {
-        ["*slot", "load(slot)", "forward(slot)"].map(|access| (reinitialize, access))
+        ["unsafe { *slot }", "load(slot)", "forward(slot)"].map(|access| (reinitialize, access))
     }) {
         let restoration = if reinitialize {
-            "*slot = mut *owner"
+            "unsafe { *slot = mut *owner }"
         } else {
             ""
         };
         let diagnostics = checked_borrow_diags(&format!(
             r#"
 use core::ptr
-fn load(slot: *mut u256) -> mut u256 {{ *slot }}
+fn load(slot: *mut u256) -> mut u256 {{ unsafe {{ *slot }} }}
 fn forward(slot: *mut u256) -> mut u256 {{ load(slot) }}
 fn inspect() {{
     let owner = ptr::alloc<u256>()
     let source = ptr::alloc<u256>()
     let slot = ptr::alloc<mut u256>()
-    *source = 0
-    *slot = mut *owner
+    unsafe {{ *source = 0 }}
+    unsafe {{ *slot = mut *owner }}
     ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32)
     {restoration}
     let borrowed = {access}
@@ -2086,32 +2095,36 @@ fn inspect() {{
 #[test]
 fn overlapping_same_shape_stores_cannot_preserve_native_authority() {
     for overwrite in [
-        "*shifted = mut *second",
+        "unsafe { *shifted = mut *second }",
         "store(slot: shifted)",
         "forward(slot: shifted)",
     ] {
         for restore in [false, true] {
-            let restoration = if restore { "*slot = mut *first" } else { "" };
+            let restoration = if restore {
+                "unsafe { *slot = mut *first }"
+            } else {
+                ""
+            };
             let source = format!(
                 r#"
 use core::ptr
 fn store(slot: *mut u256) {{
     let source = ptr::alloc<u256>()
-    *source = 2
-    *slot = mut *source
+    unsafe {{ *source = 2 }}
+    unsafe {{ *slot = mut *source }}
 }}
 fn forward(slot: *mut u256) {{ store(slot) }}
 fn inspect() {{
     let first = ptr::alloc<u256>()
     let second = ptr::alloc<u256>()
-    *first = 1
-    *second = 2
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
     let slot = ptr::alloc<mut u256>()
-    *slot = mut *first
+    unsafe {{ *slot = mut *first }}
     let shifted = ptr::cast<u8, mut u256>(ptr::offset_bytes(ptr::byte_ptr(slot), 1))
     {overwrite}
     {restoration}
-    let restored = *slot
+    let restored = unsafe {{ *slot }}
     restored = 3
 }}
 "#
@@ -2122,7 +2135,7 @@ fn inspect() {{
             } else {
                 assert!(
                     diagnostics.contains("invalidated by a raw write")
-                        && diagnostics.contains("let restored = *slot"),
+                        && diagnostics.contains("let restored = unsafe { *slot }"),
                     "{overwrite}: {diagnostics}"
                 );
             }
@@ -2137,10 +2150,10 @@ fn ambiguous_writes_do_not_reinitialize_moved_owners() {
 struct Item { n: u256 }
 fn consume(_ item: own Item) {}
 fn bad(first: *Item, second: *Item, flag: bool) {
-    let old = *first
+    let old = unsafe { *first }
     let destination = if flag { first } else { second }
-    *destination = Item { n: 7 }
-    let reused = *first
+    unsafe { *destination = Item { n: 7 } }
+    let reused = unsafe { *first }
     consume(old)
     consume(reused)
 }
@@ -2160,9 +2173,9 @@ fn exact_and_dynamic_index_writes_have_distinct_reinitialization_guarantees() {
 struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
 fn inspect(array: *[Item; 2], index: usize) {{
-    let old = (*array)[0]
-    (*array)[{destination}] = Item {{ n: 7 }}
-    let reused = (*array)[0]
+    let old = unsafe {{ (*array)[0] }}
+    unsafe {{ (*array)[{destination}] = Item {{ n: 7 }} }}
+    let reused = unsafe {{ (*array)[0] }}
     consume(old)
     consume(reused)
 }}
@@ -2192,9 +2205,9 @@ struct Item {{ n: u256 }}
 struct Pair {{ left: Item, right: Item }}
 fn consume(_ pair: own Pair) {{}}
 fn inspect(pointer: *Pair) {{
-    let old = *pointer
-    {replacement}
-    let reused = *pointer
+    let old = unsafe {{ *pointer }}
+    unsafe {{ {replacement} }}
+    let reused = unsafe {{ *pointer }}
     consume(old)
     consume(reused)
 }}
@@ -2219,14 +2232,14 @@ fn call_availability_preserves_move_then_reinitialize_order() {
 struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
 fn replace(pointer: *Item) -> Item {{
-    let old = *pointer
-    *pointer = Item {{ n: 7 }}
+    let old = unsafe {{ *pointer }}
+    unsafe {{ *pointer = Item {{ n: 7 }} }}
     old
 }}
 fn forward(pointer: *Item) -> Item {{ replace(pointer) }}
 fn valid(pointer: *Item) {{
     let previous = {replace}
-    let fresh = *pointer
+    let fresh = unsafe {{ *pointer }}
     consume(previous)
     consume(fresh)
 }}
@@ -2239,20 +2252,20 @@ fn valid(pointer: *Item) {{
 #[test]
 fn call_initialization_discharges_incoming_availability_requirements() {
     for action in [
-        "initialize(pointer)\nlet fresh = *pointer",
+        "initialize(pointer)\nlet fresh = unsafe { *pointer }",
         "let fresh = initialize_then_take(pointer)",
     ] {
         let diagnostics = checked_borrow_diags(&format!(
             r#"
 struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
-fn initialize(pointer: *Item) {{ *pointer = Item {{ n: 7 }} }}
+fn initialize(pointer: *Item) {{ unsafe {{ *pointer = Item {{ n: 7 }} }} }}
 fn initialize_then_take(pointer: *Item) -> Item {{
-    *pointer = Item {{ n: 7 }}
-    *pointer
+    unsafe {{ *pointer = Item {{ n: 7 }} }}
+    unsafe {{ *pointer }}
 }}
 fn valid(pointer: *Item) {{
-    let previous = *pointer
+    let previous = unsafe {{ *pointer }}
     {action}
     consume(previous)
     consume(fresh)
@@ -2286,12 +2299,12 @@ fn call_reinitialization_requires_every_normal_return_path() {
             r#"
 struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
-fn initialize(pointer: *Item, flag: bool) {{ {body} }}
+fn initialize(pointer: *Item, flag: bool) {{ unsafe {{ {body} }} }}
 fn forward(pointer: *Item, flag: bool) {{ initialize(pointer, flag) }}
 fn inspect(pointer: *Item, flag: bool) {{
-    let old = *pointer
+    let old = unsafe {{ *pointer }}
     forward(pointer, flag)
-    let fresh = *pointer
+    let fresh = unsafe {{ *pointer }}
     consume(old)
     consume(fresh)
 }}
@@ -2319,11 +2332,11 @@ fn recursive_availability_keeps_base_case_initialization_and_consumption() {
 struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
 fn recurse(pointer: *Item, again: bool) {{
-    if again {{ recurse(pointer, again: false) }} else {{ {body} }}
+    if again {{ recurse(pointer, again: false) }} else {{ unsafe {{ {body} }} }}
 }}
 fn inspect(pointer: *Item) {{
     recurse(pointer, again: true)
-    let remaining = *pointer
+    let remaining = unsafe {{ *pointer }}
     consume(remaining)
 }}
 "#
@@ -2346,13 +2359,13 @@ fn initialization_before_consumption_leaves_the_caller_unavailable() {
 struct Item { n: u256 }
 fn consume(_ item: own Item) {}
 fn initialize_then_take(pointer: *Item) -> Item {
-    *pointer = Item { n: 7 }
-    *pointer
+    unsafe { *pointer = Item { n: 7 } }
+    unsafe { *pointer }
 }
 fn forward(pointer: *Item) -> Item { initialize_then_take(pointer) }
 fn bad(pointer: *Item) {
     let first = forward(pointer)
-    let second = *pointer
+    let second = unsafe { *pointer }
     consume(first)
     consume(second)
 }
@@ -2370,13 +2383,13 @@ fn restored_call_moves_still_conflict_with_shared_loans() {
         r#"
 struct Item { n: u256 }
 fn replace(pointer: *Item) -> Item {
-    let old = *pointer
-    *pointer = Item { n: 7 }
+    let old = unsafe { *pointer }
+    unsafe { *pointer = Item { n: 7 } }
     old
 }
 fn read(_ item: ref Item) -> u256 { item.n }
 fn bad(pointer: *Item) -> u256 {
-    let held = ref *pointer
+    let held = unsafe { ref *pointer }
     let old = replace(pointer)
     read(held) + old.n
 }
@@ -2408,14 +2421,14 @@ fn call_availability_is_independent_of_the_owned_value_shape() {
 {definition}
 fn consume(_ item: own Item) {{}}
 fn replace(pointer: *Item) -> Item {{
-    let old = *pointer
-    *pointer = {replacement}
+    let old = unsafe {{ *pointer }}
+    unsafe {{ *pointer = {replacement} }}
     old
 }}
 fn forward(pointer: *Item) -> Item {{ replace(pointer) }}
 fn valid(pointer: *Item) {{
     let old = forward(pointer)
-    let fresh = *pointer
+    let fresh = unsafe {{ *pointer }}
     consume(old)
     consume(fresh)
 }}
@@ -2434,7 +2447,7 @@ trait Operation { fn apply(pointer: *Item) }
 fn consume(_ item: own Item) {}
 fn bad<T: Operation>(pointer: *Item) {
     T::apply(pointer)
-    let reused = *pointer
+    let reused = unsafe { *pointer }
     consume(reused)
 }
 "#,
@@ -2447,13 +2460,13 @@ fn availability_summaries_do_not_depend_on_diagnostic_queries() {
     let source = r#"
 struct Item { n: u256 }
 fn replace(pointer: *Item) -> Item {
-    let old = *pointer
-    *pointer = Item { n: 7 }
+    let old = unsafe { *pointer }
+    unsafe { *pointer = Item { n: 7 } }
     old
 }
 fn initialize_then_take(pointer: *Item) -> Item {
-    *pointer = Item { n: 7 }
-    *pointer
+    unsafe { *pointer = Item { n: 7 } }
+    unsafe { *pointer }
 }
 fn forward(pointer: *Item) -> Item { replace(pointer) }
 "#;
@@ -2497,17 +2510,17 @@ use core::ptr
 struct Item { value: ref u256 }
 fn consume(_ item: own Item) {}
 fn replace(pointer: *Item, owner: ref u256) -> Item {
-    let old = *pointer
-    *pointer = Item { value: owner }
+    let old = unsafe { *pointer }
+    unsafe { *pointer = Item { value: owner } }
     old
 }
 fn forward(pointer: *Item, owner: ref u256) -> Item { replace(pointer, owner) }
 fn valid() {
     let owner = ptr::alloc<u256>()
     let pointer = ptr::alloc<Item>()
-    *pointer = Item { value: ref *owner }
-    let old = forward(pointer, owner: ref *owner)
-    let fresh = *pointer
+    unsafe { *pointer = Item { value: ref *owner } }
+    let old = unsafe { forward(pointer, owner: ref *owner) }
+    let fresh = unsafe { *pointer }
     consume(old)
     consume(fresh)
 }
@@ -2523,17 +2536,17 @@ fn typed_call_restoration_precedes_native_contents_requirements() {
 use core::ptr
 fn restore(slot: *mut u256) -> mut u256 {
     let owner = ptr::alloc<u256>()
-    *owner = 0
-    *slot = mut *owner
-    *slot
+    unsafe { *owner = 0 }
+    unsafe { *slot = mut *owner }
+    unsafe { *slot }
 }
 fn forward(slot: *mut u256) -> mut u256 { restore(slot) }
 fn valid() {
     let owner = ptr::alloc<u256>()
     let source = ptr::alloc<u256>()
     let slot = ptr::alloc<mut u256>()
-    *source = 0
-    *slot = mut *owner
+    unsafe { *source = 0 }
+    unsafe { *slot = mut *owner }
     ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32)
     let borrowed = forward(slot)
     borrowed = 1
@@ -2547,8 +2560,8 @@ fn valid() {
 fn raw_pointer_assignments_initialize_native_slots_without_reading_old_contents() {
     for kind in ["ref", "mut"] {
         for assignment in [
-            "*slot = native",
-            "*identity(slot) = native",
+            "unsafe { *slot = native }",
+            "unsafe { *identity(slot) = native }",
             "replace(slot, native)",
             "forward(slot, native)",
         ] {
@@ -2556,16 +2569,16 @@ fn raw_pointer_assignments_initialize_native_slots_without_reading_old_contents(
                 r#"
 use core::ptr
 fn identity<T>(_ pointer: *T) -> *T {{ pointer }}
-fn replace(_ slot: *{kind} u256, _ value: {kind} u256) {{ *slot = value }}
+fn replace(_ slot: *{kind} u256, _ value: {kind} u256) {{ unsafe {{ *slot = value }} }}
 fn forward(_ slot: *{kind} u256, _ value: {kind} u256) {{ replace(slot, value) }}
 fn inspect() -> u256 {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let slot = ptr::alloc<{kind} u256>()
-    let native = {kind} *owner
+    let native = unsafe {{ {kind} *owner }}
     ptr::zero_bytes(ptr::byte_ptr(slot), 32)
     {assignment}
-    *slot
+    unsafe {{ *slot }}
 }}
 "#
             );
@@ -2578,17 +2591,17 @@ fn inspect() -> u256 {{
 #[test]
 fn native_pointer_copy_reads_require_valid_carriers() {
     for kind in ["ref", "mut"] {
-        for read in ["*slot", "read(slot)", "forward(slot)"] {
+        for read in ["unsafe { *slot }", "read(slot)", "forward(slot)"] {
             let source = format!(
                 r#"
 use core::ptr
-fn read(_ slot: *{kind} u256) -> u256 {{ *slot }}
+fn read(_ slot: *{kind} u256) -> u256 {{ unsafe {{ *slot }} }}
 fn forward(_ slot: *{kind} u256) -> u256 {{ read(slot) }}
 fn inspect() -> u256 {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let slot = ptr::alloc<{kind} u256>()
-    *slot = {kind} *owner
+    unsafe {{ *slot = {kind} *owner }}
     ptr::zero_bytes(ptr::byte_ptr(slot), 32)
     {read}
 }}
@@ -2622,7 +2635,7 @@ use core::ptr
 fn read(_ value: ref u256) -> u256 {{ value }}
 fn clobber(slot: *ref u256, destination: *u8) -> ref u256 {{
     ptr::zero_bytes(destination, 32)
-    *slot
+    unsafe {{ *slot }}
 }}
 fn forward(slot: *ref u256, destination: *u8) -> ref u256 {{ clobber(slot, destination) }}
 fn recursive(slot: *ref u256, destination: *u8, again: bool) -> ref u256 {{
@@ -2631,9 +2644,9 @@ fn recursive(slot: *ref u256, destination: *u8, again: bool) -> ref u256 {{
 }}
 fn check() -> u256 {{
     let owner = ptr::alloc<u256>()
-    *owner = 1
+    unsafe {{ *owner = 1 }}
     let slot = ptr::alloc<ref u256>()
-    *slot = ref *owner
+    unsafe {{ *slot = ref *owner }}
     let destination = {destination}
     let borrowed = {call}
     read(borrowed)
@@ -2659,11 +2672,11 @@ fn write_requirements_cannot_hide_partial_writes_behind_whole_writes() {
 struct Item { n: u256 }
 fn consume(_ item: own Item) {}
 fn field_then_whole(field: *Item, whole: *Item) {
-    (*field).n = 1
-    *whole = Item { n: 7 }
+    unsafe { (*field).n = 1 }
+    unsafe { *whole = Item { n: 7 } }
 }
 fn bad(pointer: *Item) {
-    let old = *pointer
+    let old = unsafe { *pointer }
     field_then_whole(field: pointer, whole: pointer)
     consume(old)
 }
@@ -2684,14 +2697,14 @@ struct Item {{ n: u256 }}
 struct Pair {{ left: Item, right: Item }}
 fn consume(_ item: own Item) {{}}
 fn take_both(pointer: *Pair) {{
-    consume((*pointer).left)
-    consume((*pointer).right)
+    unsafe {{ consume((*pointer).left) }}
+    unsafe {{ consume((*pointer).right) }}
 }}
-fn initialize_left(pointer: *Pair) {{ (*pointer).left = Item {{ n: 7 }} }}
+fn initialize_left(pointer: *Pair) {{ unsafe {{ (*pointer).left = Item {{ n: 7 }} }} }}
 fn inspect(pointer: *Pair) {{
     take_both(pointer)
     initialize_left(pointer)
-    let fresh = (*pointer).{field}
+    let fresh = unsafe {{ (*pointer).{field} }}
     consume(fresh)
 }}
 "#
@@ -2949,7 +2962,7 @@ fn pointer_store_through_cast_is_valid() {
 use core::ptr
 
 fn store_word(ptr: *u8, value: u256) {
-    *ptr::cast<u8, u256>(ptr) = value
+    unsafe { *ptr::cast<u8, u256>(ptr) = value }
 }
 "#,
     );
@@ -3304,8 +3317,8 @@ fn memory_summary_combines_access_store_and_return_provenance() {
         "semantic_borrowck.fe".into(),
         r#"
 fn replace_and_return(slot: **u256, value: *u256) -> *u256 {
-    *slot = value
-    *slot
+    unsafe { *slot = value }
+    unsafe { *slot }
 }
 "#,
     );
@@ -3343,7 +3356,7 @@ use core::ptr
 use std::evm::RawMem
 
 fn direct_read(p: *u256) -> u256 {
-    *p
+    unsafe { *p }
 }
 
 fn raw_mem_read(p: *u256) -> u256 uses (mem: RawMem) {
@@ -3433,7 +3446,7 @@ fn pointer_returned_borrow_uses_matching_pointer_param() {
         r#"
 fn second(_ a: *u256, b: *u256) -> mut u256 {
     let q = b
-    mut *q
+    unsafe { mut *q }
 }
 "#,
         "second",
@@ -3456,8 +3469,8 @@ fn pointer_local_copy_conflicts_with_original_pointer_borrow() {
         r#"
 fn bad(p: *u256) {
     let q = p
-    let a = mut *q
-    let b = mut *p
+    let a = unsafe { mut *q }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -3477,8 +3490,8 @@ struct Holder {
 
 fn bad(p: *u256) {
     let h = Holder { ptr: p }
-    let a = mut *h.ptr
-    let b = mut *p
+    let a = unsafe { mut *h.ptr }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -3507,7 +3520,7 @@ fn ok() {
     data.b = 8
     let words = core::ptr::cast<Data, u256>(data)
     let second = core::ptr::offset(words, 1)
-    *second = *second + 3
+    unsafe { *second = *second + 3 }
     assert(data.a == 5)
     assert(data.b == 11)
     let holder = Holder { data: data }
@@ -3535,7 +3548,7 @@ struct Holder {
 
 impl Holder {
     fn write(mut self, _ value: u8) {
-        *self.ptr = value
+        unsafe { *self.ptr = value }
         self.len = 1
     }
 }
@@ -3596,7 +3609,7 @@ struct Holder {
 }
 
 fn pick(_ a: *u256, h: Holder) -> mut u256 {
-    mut *h.ptr
+    unsafe { mut *h.ptr }
 }
 "#,
         "pick",
@@ -3625,13 +3638,13 @@ struct Holder {
 }
 
 fn pick(h: Holder) -> mut u256 {
-    mut *h.ptr
+    unsafe { mut *h.ptr }
 }
 
 fn bad(p: *u256) {
     let h = Holder { ptr: p }
     let a = pick(h)
-    let b = mut *p
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -3647,8 +3660,8 @@ fn mem_span_from_raw_parts_preserves_pointer_provenance() {
         r#"
 fn bad(p: *u256, len: u256) {
     let span = core::ptr::MemSpan::from_raw_parts(ptr: core::ptr::byte_ptr(p), len: len)
-    let x = mut *p
-    *span.ptr() = 1
+    let x = unsafe { mut *p }
+    unsafe { *span.ptr() = 1 }
     x = 2
 }
 "#,
@@ -3662,11 +3675,11 @@ fn mem_buffer_preserves_fresh_pointer_provenance() {
     assert_no_borrow_conflict(
         r#"
 fn read_buffer(buffer: own core::ptr::MemBuffer) -> u8 {
-    *buffer.ptr()
+    unsafe { *buffer.ptr() }
 }
 
 fn ok(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     let buffer = core::ptr::MemBuffer::alloc(32)
     let value = read_buffer(buffer)
     assert(value == 0)
@@ -3682,11 +3695,11 @@ fn encoded_mem_buffer_preserves_fresh_pointer_provenance() {
         r#"
 fn read_encoded(args: own (u256, u256)) -> u8 {
     let buffer = std::evm::encode_abi_payload<(u256, u256)>(args)
-    *buffer.ptr()
+    unsafe { *buffer.ptr() }
 }
 
 fn ok(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     let value = read_encoded((1, 2))
     assert(value == 0)
     borrowed = 1
@@ -3725,7 +3738,7 @@ fn writing_fresh_allocation_preserves_pointer_value_provenance() {
         r#"
 fn fresh() -> *u8 {
     let ptr = core::ptr::alloc_bytes(32)
-    *ptr = 1
+    unsafe { *ptr = 1 }
     ptr
 }
 "#,
@@ -3753,7 +3766,7 @@ fn second_array(
     _ a: core::ptr::MemArray<u256>,
     b: core::ptr::MemArray<u256>,
 ) -> mut u256 {
-    mut *b.ptr()
+    unsafe { mut *b.ptr() }
 }
 "#,
         "second_array",
@@ -3778,7 +3791,7 @@ fn pointer_array_returned_borrow_preserves_formal_index() {
     with_borrow_summary(
         r#"
 fn elem(array: *[u256; 64], i: usize) -> mut u256 {
-    mut (*array)[i]
+    unsafe { mut (*array)[i] }
 }
 "#,
         "elem",
@@ -3803,12 +3816,12 @@ fn pointer_array_returned_borrow_conflicts_with_constant_element() {
     assert_mut_borrow_conflict(
         r#"
 fn elem(array: *[u256; 64], i: usize) -> mut u256 {
-    mut (*array)[i]
+    unsafe { mut (*array)[i] }
 }
 
 fn bad(array: *[u256; 64], i: usize) {
     let a = elem(array, i)
-    let b = mut (*array)[0]
+    let b = unsafe { mut (*array)[0] }
     b = 1
     a = 2
 }
@@ -3821,8 +3834,8 @@ fn store_through_pointer_conflicts_with_active_pointee_borrow() {
     assert_mut_borrow_conflict(
         r#"
 fn bad(p: *u256) {
-    let a = mut *p
-    *p = 1
+    let a = unsafe { mut *p }
+    unsafe { *p = 1 }
     a = 2
 }
 "#,
@@ -3834,8 +3847,8 @@ fn read_through_pointer_conflicts_with_active_mut_borrow() {
     let diags = borrow_diags(
         r#"
 fn bad(p: *u256) {
-    let borrowed = mut *p
-    let value = *p
+    let borrowed = unsafe { mut *p }
+    let value = unsafe { *p }
     assert(value == 0)
     borrowed = 1
 }
@@ -3850,11 +3863,11 @@ fn call_read_through_pointer_conflicts_with_active_mut_borrow() {
     let diags = borrow_diags(
         r#"
 fn read(p: *u256) -> u256 {
-    *p
+    unsafe { *p }
 }
 
 fn bad(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     let value = read(p)
     assert(value == 0)
     borrowed = 1
@@ -3870,11 +3883,11 @@ fn call_read_through_pointer_allows_active_ref_borrow() {
     assert_no_borrow_conflict(
         r#"
 fn read(p: *u256) -> u256 {
-    *p
+    unsafe { *p }
 }
 
 fn ok(p: *u256) {
-    let borrowed: ref u256 = ref *p
+    let borrowed: ref u256 = unsafe { ref *p }
     let value = read(p)
     assert(borrowed == value)
 }
@@ -3887,11 +3900,11 @@ fn call_write_through_pointer_conflicts_with_active_borrow() {
     assert_mut_borrow_conflict(
         r#"
 fn write(p: *u256) {
-    *p = 1
+    unsafe { *p = 1 }
 }
 
 fn bad(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     write(p)
     borrowed = 2
 }
@@ -3904,11 +3917,11 @@ fn passing_mut_borrow_does_not_authorize_other_pointer_access() {
     assert_mut_borrow_conflict(
         r#"
 fn write_other(_ allowed: mut u256, other: *u256) {
-    *other = 1
+    unsafe { *other = 1 }
 }
 
 fn bad(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     write_other(mut borrowed, p)
     borrowed = 2
 }
@@ -3925,7 +3938,7 @@ fn write(_ value: mut u256) {
 }
 
 fn ok(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     write(mut borrowed)
     borrowed = 2
 }
@@ -3938,13 +3951,13 @@ fn call_write_through_unrelated_pointer_allows_active_borrow() {
     assert_no_borrow_conflict(
         r#"
 fn write(p: *u256) {
-    *p = 1
+    unsafe { *p = 1 }
 }
 
 fn ok() {
     let p = core::ptr::alloc<u256>()
     let q = core::ptr::alloc<u256>()
-    let borrowed = mut *q
+    let borrowed = unsafe { mut *q }
     write(p)
     borrowed = 2
 }
@@ -3961,7 +3974,7 @@ extern {
 }
 
 fn bad(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     touch(p)
     borrowed = 1
 }
@@ -3980,7 +3993,7 @@ extern {
 fn ok() {
     let p = core::ptr::alloc<u256>()
     let q = core::ptr::alloc<u256>()
-    let borrowed = mut *q
+    let borrowed = unsafe { mut *q }
     touch(p)
     borrowed = 1
 }
@@ -3995,7 +4008,7 @@ fn signature_fallback_without_arguments_can_touch_existing_storage() {
 extern { fn unknown() }
 fn bad() {
     let pointer = core::ptr::alloc<u256>()
-    let native = mut *pointer
+    let native = unsafe { mut *pointer }
     unknown()
     native = 2
 }
@@ -4023,7 +4036,7 @@ fn bad() {
     let child = core::ptr::alloc<u256>()
     let holder = core::ptr::alloc<Holder>()
     holder.child = child
-    let borrowed = mut *child
+    let borrowed = unsafe { mut *child }
     touch(holder)
     borrowed = 1
 }
@@ -4046,7 +4059,7 @@ extern {
 fn bad() {
     let child = core::ptr::alloc<u256>()
     let holder = Holder { child }
-    let borrowed = mut *child
+    let borrowed = unsafe { mut *child }
     touch(holder)
     borrowed = 1
 }
@@ -4060,14 +4073,14 @@ fn recursive_pointer_call_propagates_memory_effects() {
         r#"
 fn write_recursive(n: u256, p: *u256) {
     if n == 0 {
-        *p = 1
+        unsafe { *p = 1 }
         return
     }
     write_recursive(n - 1, p)
 }
 
 fn bad(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     write_recursive(1, p)
     borrowed = 2
 }
@@ -4086,7 +4099,7 @@ fn recurse(n: u256, p: *u256) {
 }
 
 fn ok(p: *u256) {
-    let borrowed = mut *p
+    let borrowed = unsafe { mut *p }
     recurse(1, p)
     borrowed = 1
 }
@@ -4100,7 +4113,7 @@ fn recursive_pointer_slot_write_retains_precise_provenance() {
         r#"
 fn replace(n: u256, slot: **u256, value: *u256) {
     if n == 0 {
-        *slot = value
+        unsafe { *slot = value }
         return
     }
     replace(n - 1, slot, value)
@@ -4110,10 +4123,10 @@ fn ok() {
     let old = core::ptr::alloc<u256>()
     let new = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = old
-    let old_borrow = mut *old
+    unsafe { *slot = old }
+    let old_borrow = unsafe { mut *old }
     replace(1, slot, new)
-    let slot_borrow = mut *(*slot)
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     old_borrow = 2
 }
@@ -4126,17 +4139,17 @@ fn call_pointer_slot_write_updates_caller_provenance() {
     assert_mut_borrow_conflict(
         r#"
 fn replace(slot: **u256, value: *u256) {
-    *slot = value
+    unsafe { *slot = value }
 }
 
 fn bad() {
     let first = core::ptr::alloc<u256>()
     let second = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = second
-    let first_borrow = mut *first
+    unsafe { *slot = second }
+    let first_borrow = unsafe { mut *first }
     replace(slot, first)
-    let slot_borrow = mut *(*slot)
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     first_borrow = 2
 }
@@ -4156,10 +4169,10 @@ fn bad() {
     let first = core::ptr::alloc<u256>()
     let second = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = second
-    let first_borrow = mut *first
-    replace(mut *slot, first)
-    let slot_borrow = mut *(*slot)
+    unsafe { *slot = second }
+    let first_borrow = unsafe { mut *first }
+    unsafe { replace(mut *slot, first) }
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     first_borrow = 2
 }
@@ -4180,10 +4193,10 @@ fn ok() {
     let second = core::ptr::alloc<u256>()
     let third = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = second
-    let first_borrow = mut *first
-    replace(mut *slot, third)
-    let slot_borrow = mut *(*slot)
+    unsafe { *slot = second }
+    let first_borrow = unsafe { mut *first }
+    unsafe { replace(mut *slot, third) }
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     first_borrow = 2
 }
@@ -4196,7 +4209,7 @@ fn precise_call_pointer_slot_write_drops_old_provenance() {
     assert_no_borrow_conflict(
         r#"
 fn replace(slot: **u256, value: *u256) {
-    *slot = value
+    unsafe { *slot = value }
 }
 
 fn ok() {
@@ -4204,10 +4217,10 @@ fn ok() {
     let second = core::ptr::alloc<u256>()
     let third = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = second
-    let first_borrow = mut *first
+    unsafe { *slot = second }
+    let first_borrow = unsafe { mut *first }
     replace(slot, third)
-    let slot_borrow = mut *(*slot)
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     first_borrow = 2
 }
@@ -4220,7 +4233,7 @@ fn transitive_call_pointer_slot_write_updates_caller_provenance() {
     assert_mut_borrow_conflict(
         r#"
 fn replace(slot: **u256, value: *u256) {
-    *slot = value
+    unsafe { *slot = value }
 }
 
 fn forward_replace(slot: **u256, value: *u256) {
@@ -4231,10 +4244,10 @@ fn bad() {
     let first = core::ptr::alloc<u256>()
     let second = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = second
-    let first_borrow = mut *first
+    unsafe { *slot = second }
+    let first_borrow = unsafe { mut *first }
     forward_replace(slot, first)
-    let slot_borrow = mut *(*slot)
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     first_borrow = 2
 }
@@ -4248,7 +4261,7 @@ fn conditional_call_pointer_slot_write_keeps_old_and_new_provenance() {
         r#"
 fn maybe_replace(cond: bool, slot: **u256, value: *u256) {
     if cond {
-        *slot = value
+        unsafe { *slot = value }
     }
 }
 
@@ -4256,10 +4269,10 @@ fn bad(cond: bool) {
     let first = core::ptr::alloc<u256>()
     let second = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = second
-    let first_borrow = mut *first
+    unsafe { *slot = second }
+    let first_borrow = unsafe { mut *first }
     maybe_replace(cond, slot, first)
-    let slot_borrow = mut *(*slot)
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     first_borrow = 2
 }
@@ -4269,7 +4282,7 @@ fn bad(cond: bool) {
         r#"
 fn maybe_replace(cond: bool, slot: **u256, value: *u256) {
     if cond {
-        *slot = value
+        unsafe { *slot = value }
     }
 }
 
@@ -4277,10 +4290,10 @@ fn bad(cond: bool) {
     let first = core::ptr::alloc<u256>()
     let second = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = second
-    let second_borrow = mut *second
+    unsafe { *slot = second }
+    let second_borrow = unsafe { mut *second }
     maybe_replace(cond, slot, first)
-    let slot_borrow = mut *(*slot)
+    let slot_borrow = unsafe { mut *(*slot) }
     slot_borrow = 1
     second_borrow = 2
 }
@@ -4293,12 +4306,12 @@ fn call_pointer_slot_write_conflicts_with_active_slot_borrow() {
     assert_mut_borrow_conflict(
         r#"
 fn replace(slot: **u256, value: *u256) {
-    *slot = value
+    unsafe { *slot = value }
 }
 
 fn bad(value: *u256) {
     let slot = core::ptr::alloc<*u256>()
-    let borrowed = mut *slot
+    let borrowed = unsafe { mut *slot }
     replace(slot, value)
     borrowed = value
 }
@@ -4313,9 +4326,9 @@ fn pointer_slot_read_does_not_conflict_with_pointee_borrow() {
 fn ok() {
     let pointee = core::ptr::alloc<u256>()
     let slot = core::ptr::alloc<*u256>()
-    *slot = pointee
-    let borrowed = mut *(*slot)
-    let copied = *slot
+    unsafe { *slot = pointee }
+    let borrowed = unsafe { mut *(*slot) }
+    let copied = unsafe { *slot }
     assert(copied == pointee)
     borrowed = 1
 }
@@ -4328,7 +4341,7 @@ fn store_through_active_borrow_handle_is_allowed() {
     assert_no_borrow_conflict(
         r#"
 fn ok(p: *u256) {
-    let a = mut *p
+    let a = unsafe { mut *p }
     a = 1
 }
 "#,
@@ -4342,7 +4355,7 @@ fn normalized_verifier_rejects_analysis_only_any_index() {
         "semantic_borrowck.fe".into(),
         r#"
 fn write(array: *[u256; 2]) {
-    (*array)[0] = 1
+    unsafe { (*array)[0] = 1 }
 }
 "#,
     );
@@ -4395,7 +4408,7 @@ fn raw_pointer_offset_preserves_input_allocation_provenance() {
         r#"
 fn borrow_at(p: *u256, i: usize) -> mut u256 {
     let q = core::ptr::offset<u256>(p, i as u256)
-    mut *q
+    unsafe { mut *q }
 }
 "#,
         "borrow_at",
@@ -4418,7 +4431,7 @@ fn core_pointer_cast_preserves_pointee_provenance() {
         r#"
 fn borrow_cast(p: *u256) -> mut u8 {
     let q = core::ptr::cast<u256, u8>(p)
-    mut *q
+    unsafe { mut *q }
 }
 "#,
         "borrow_cast",
@@ -4446,8 +4459,8 @@ struct Holder {
 fn bad(p: *u256, q: *u256) {
     let mut h = Holder { ptr: q }
     h.ptr = p
-    let a = mut *h.ptr
-    let b = mut *p
+    let a = unsafe { mut *h.ptr }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4462,8 +4475,8 @@ fn raw_pointer_params_may_alias() {
     assert_mut_borrow_conflict(
         r#"
 fn bad(a: *u256, b: *u256) {
-    let x = mut *a
-    let y = mut *b
+    let x = unsafe { mut *a }
+    let y = unsafe { mut *b }
     y = 1
     x = 2
 }
@@ -4483,8 +4496,8 @@ fn ok(q: *u256) {
     let p = core::ptr::alloc<u256>()
     let mut h = Holder { ptr: p }
     h = Holder { ptr: q }
-    let a = mut *h.ptr
-    let b = mut *p
+    let a = unsafe { mut *h.ptr }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4508,12 +4521,12 @@ struct Holder {
 fn bad(q: *u256) {
     let p = core::ptr::alloc<u256>()
     let h = core::ptr::alloc<Holder>()
-    (*h).ptr = q
+    unsafe { (*h).ptr = q }
     let word = core::ptr::cast<Holder, u256>(h)
-    *word = 0
-    let r = (*h).ptr
-    let x = mut *r
-    let y = mut *p
+    unsafe { *word = 0 }
+    let r = unsafe { (*h).ptr }
+    let x = unsafe { mut *r }
+    let y = unsafe { mut *p }
     y = 1
     x = 2
 }
@@ -4535,8 +4548,8 @@ fn wrap(p: *u256) -> Holder {
 
 fn bad(p: *u256) {
     let h = wrap(p)
-    let a = mut *h.ptr
-    let b = mut *p
+    let a = unsafe { mut *h.ptr }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4551,7 +4564,7 @@ fn pointer_pointee_read_from_view_param_is_not_move_from_param() {
     let diags = borrow_diags(
         r#"
 fn read(p: *u256) -> u256 {
-    *p
+    unsafe { *p }
 }
 "#,
     );
@@ -4572,8 +4585,8 @@ fn fresh(_ p: *u256) -> *u256 {
 
 fn ok(p: *u256) {
     let q = fresh(p)
-    let a = mut *q
-    let b = mut *p
+    let a = unsafe { mut *q }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4596,8 +4609,8 @@ extern {
 
 fn bad(p: *u256) {
     let q = unknown_ptr<u256>()
-    let a = mut *q
-    let b = mut *p
+    let a = unsafe { mut *q }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4619,8 +4632,8 @@ fn pick(cond: bool, p: *u256, q: *u256) -> *u256 {
 
 fn bad(cond: bool, p: *u256, q: *u256) {
     let r = pick(cond, p, q)
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4638,8 +4651,8 @@ fn pick(cond: bool, p: *u256, q: *u256) -> *u256 {
 
 fn bad(cond: bool, p: *u256, q: *u256) {
     let r = pick(cond, p, q)
-    let a = mut *r
-    let b = mut *q
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *q }
     b = 1
     a = 2
 }
@@ -4665,8 +4678,8 @@ fn wrap(cond: bool, p: *u256, q: *u256) -> Holder {
 
 fn bad(cond: bool, p: *u256, q: *u256) {
     let h = wrap(cond, p, q)
-    let a = mut *h.ptr
-    let b = mut *p
+    let a = unsafe { mut *h.ptr }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4688,8 +4701,8 @@ fn wrap(cond: bool, p: *u256, q: *u256) -> Holder {
 
 fn bad(cond: bool, p: *u256, q: *u256) {
     let h = wrap(cond, p, q)
-    let a = mut *h.ptr
-    let b = mut *q
+    let a = unsafe { mut *h.ptr }
+    let b = unsafe { mut *q }
     b = 1
     a = 2
 }
@@ -4719,8 +4732,8 @@ fn bad(
     b: core::ptr::MemArray<u256>,
 ) {
     let r = pick(cond, a, b)
-    let x = mut *r.ptr()
-    let y = mut *a.ptr()
+    let x = unsafe { mut *r.ptr() }
+    let y = unsafe { mut *a.ptr() }
     y = 1
     x = 2
 }
@@ -4746,8 +4759,8 @@ fn bad(
     b: core::ptr::MemArray<u256>,
 ) {
     let r = pick(cond, a, b)
-    let x = mut *r.ptr()
-    let y = mut *b.ptr()
+    let x = unsafe { mut *r.ptr() }
+    let y = unsafe { mut *b.ptr() }
     y = 1
     x = 2
 }
@@ -4762,8 +4775,8 @@ fn pointer_array_literal_propagates_element_provenance() {
 fn bad(p: *u256, q: *u256) {
     let arr = [p, q]
     let r = arr[0]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4778,8 +4791,8 @@ fn pointer_array_repeat_propagates_element_provenance() {
 fn bad(p: *u256) {
     let arr = [p; 2]
     let r = arr[1]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4795,8 +4808,8 @@ fn bad(p: *u256, q: *u256, i: usize) {
     let mut arr = [q, q]
     arr[i] = p
     let r = arr[0]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4811,8 +4824,8 @@ fn dynamic_pointer_array_read_joins_possible_slots() {
 fn bad(p: *u256, q: *u256, i: usize) {
     let arr = [p, q]
     let r = arr[i]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4831,8 +4844,8 @@ fn pick(arr: [*u256; 2], i: usize) -> *u256 {
 fn bad(p: *u256, q: *u256, i: usize) {
     let arr = [p, q]
     let r = pick(arr, i)
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4847,12 +4860,12 @@ fn pointer_slot_reassignment_does_not_clear_pointee_facts() {
 fn bad(pp: * *u256, p: *u256, other: * *u256) {
     let mut pp_local = pp
     let q = pp_local
-    *pp_local = p
+    unsafe { *pp_local = p }
     pp_local = other
 
-    let r = *q
-    let a = mut *r
-    let b = mut *p
+    let r = unsafe { *q }
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4874,7 +4887,7 @@ struct Store {
 
 fn bad() uses (store: mut Store) {
     let p = unknown_ptr<Store>()
-    let a = mut *p
+    let a = unsafe { mut *p }
     let b = mut store
     b.value = 1
     a.value = 2
@@ -4890,9 +4903,9 @@ fn fresh_allocation_pointer_slots_default_to_unknown() {
         r#"
 fn bad(p: *u256) {
     let pp = core::ptr::alloc<*u256>()
-    let r = *pp
-    let a = mut *r
-    let b = mut *p
+    let r = unsafe { *pp }
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4911,8 +4924,8 @@ fn bad(p: *u256, q: *u256, i: usize, j: usize) {
     k = j
     arr[k] = q
     let r = arr[i]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4925,15 +4938,15 @@ fn may_target_pointer_store_keeps_unwritten_left_slot_targets() {
     assert_mut_borrow_conflict(
         r#"
 fn bad(pp1: * *u256, pp2: * *u256, p: *u256, q: *u256, choose: bool) {
-    *pp1 = p
+    unsafe { *pp1 = p }
     let mut pp = pp1
     if choose {
         pp = pp2
     }
-    *pp = q
-    let r = *pp1
-    let a = mut *r
-    let b = mut *p
+    unsafe { *pp = q }
+    let r = unsafe { *pp1 }
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4946,15 +4959,15 @@ fn may_target_pointer_store_keeps_unwritten_right_slot_targets() {
     assert_mut_borrow_conflict(
         r#"
 fn bad(pp1: * *u256, pp2: * *u256, p: *u256, q: *u256, choose: bool) {
-    *pp2 = p
+    unsafe { *pp2 = p }
     let mut pp = pp1
     if choose {
         pp = pp2
     }
-    *pp = q
-    let r = *pp2
-    let a = mut *r
-    let b = mut *p
+    unsafe { *pp = q }
+    let r = unsafe { *pp2 }
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4973,10 +4986,10 @@ extern {
 fn bad(p: *u256, q: *u256) {
     let pp = core::ptr::alloc<*u256>()
     let unknown = unknown_ptr<*u256>()
-    *unknown = q
-    let r = *pp
-    let a = mut *r
-    let b = mut *p
+    unsafe { *unknown = q }
+    let r = unsafe { *pp }
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -4994,13 +5007,13 @@ extern {
 
 fn bad(p: *u256, q: *u256) {
     let unknown1 = unknown_ptr<*u256>()
-    *unknown1 = p
+    unsafe { *unknown1 = p }
     let unknown2 = unknown_ptr<*u256>()
-    *unknown2 = q
+    unsafe { *unknown2 = q }
     let unknown3 = unknown_ptr<*u256>()
-    let r = *unknown3
-    let a = mut *r
-    let b = mut *p
+    let r = unsafe { *unknown3 }
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5013,11 +5026,11 @@ fn dynamic_pointer_read_keeps_default_targets_for_uncovered_slots() {
     assert_mut_borrow_conflict(
         r#"
 fn bad(pp: *[*u256; 2], p: *u256, i: usize) {
-    let old = (*pp)[1]
-    let a = mut *old
-    (*pp)[0] = p
-    let r = (*pp)[i]
-    let b = mut *r
+    let old = unsafe { (*pp)[1] }
+    let a = unsafe { mut *old }
+    unsafe { (*pp)[0] = p }
+    let r = unsafe { (*pp)[i] }
+    let b = unsafe { mut *r }
     b = 1
     a = 2
 }
@@ -5030,15 +5043,15 @@ fn pointer_summary_read_keeps_default_targets_for_uncovered_slots() {
     assert_mut_borrow_conflict(
         r#"
 fn pick(pp: *[*u256; 2], i: usize) -> *u256 {
-    (*pp)[i]
+    unsafe { (*pp)[i] }
 }
 
 fn bad(pp: *[*u256; 2], p: *u256, i: usize) {
-    let old = (*pp)[1]
-    let a = mut *old
-    (*pp)[0] = p
+    let old = unsafe { (*pp)[1] }
+    let a = unsafe { mut *old }
+    unsafe { (*pp)[0] = p }
     let r = pick(pp, i)
-    let b = mut *r
+    let b = unsafe { mut *r }
     b = 1
     a = 2
 }
@@ -5053,8 +5066,8 @@ fn unrelated_constant_pointer_slots_do_not_conflict() {
 fn ok() {
     let p = core::ptr::alloc<u256>()
     let q = core::ptr::alloc<u256>()
-    let a = mut *q
-    let b = mut *p
+    let a = unsafe { mut *q }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5067,8 +5080,8 @@ fn ok() {
     let q = core::ptr::alloc<u256>()
     let arr = [q, q]
     let r = arr[0]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5081,8 +5094,8 @@ fn ok() {
     let q = core::ptr::alloc<u256>()
     let arr = [p, q]
     let r = arr[1]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5095,8 +5108,8 @@ fn ok() {
     let q = core::ptr::alloc<u256>()
     let arr = [q; 64]
     let r = arr[63]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5115,8 +5128,8 @@ fn ok() {
         q,
     ]
     let r = arr[32]
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5130,8 +5143,8 @@ fn ok() {
     let mut arr = [q; 64]
     arr[0] = p
     let r = arr[0]
-    let a = mut *r
-    let b = mut *q
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *q }
     b = 1
     a = 2
 }
@@ -5154,8 +5167,8 @@ fn wrap(q: *u256) -> Holder {
 fn ok(q: *u256) {
     let p = core::ptr::alloc<u256>()
     let h = wrap(q)
-    let a = mut *h.ptr
-    let b = mut *p
+    let a = unsafe { mut *h.ptr }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5237,7 +5250,7 @@ fn local_pointer_array_borrow_summary_keeps_constant_slot_precision() {
 fn pick(_ p: *u256, q: *u256) -> mut u256 {
     let arr = [q, q]
     let r = arr[0]
-    mut *r
+    unsafe { mut *r }
 }
 "#,
         "pick",
@@ -5259,7 +5272,7 @@ fn pointer_to_array_of_pointers_summary_preserves_indexed_pointee() {
     with_borrow_summary(
         r#"
 fn pick(pp: *[*u256; 64], i: usize) -> *u256 {
-    (*pp)[i]
+    unsafe { (*pp)[i] }
 }
 "#,
         "pick",
@@ -5287,16 +5300,16 @@ fn pointer_to_large_pointer_array_caller_keeps_element_precision() {
     assert_no_borrow_conflict(
         r#"
 fn pick(pp: *[*u256; 64], i: usize) -> *u256 {
-    (*pp)[i]
+    unsafe { (*pp)[i] }
 }
 
 fn ok(q: *u256, i: usize) {
     let p = core::ptr::alloc<u256>()
     let pp = core::ptr::alloc<[*u256; 64]>()
-    *pp = [q; 64]
+    unsafe { *pp = [q; 64] }
     let r = pick(pp, i)
-    let a = mut *r
-    let b = mut *p
+    let a = unsafe { mut *r }
+    let b = unsafe { mut *p }
     b = 1
     a = 2
 }
@@ -5347,8 +5360,8 @@ fn bad(p: *u256) {
     let e = E::A(p)
     match e {
         E::A(r) => {
-            let a = mut *r
-            let b = mut *p
+            let a = unsafe { mut *r }
+            let b = unsafe { mut *p }
             b = 1
             a = 2
         }
@@ -5418,8 +5431,8 @@ fn ok(q: *u256, len: u256) {
     let p = core::ptr::alloc<u256>()
     let mut span = core::ptr::MemSpan::from_raw_parts(ptr: core::ptr::byte_ptr(p), len: len)
     span = core::ptr::MemSpan::from_raw_parts(ptr: core::ptr::byte_ptr(q), len: len)
-    let x = mut *core::ptr::cast<u8, u256>(span.ptr())
-    let y = mut *p
+    let x = unsafe { mut *core::ptr::cast<u8, u256>(span.ptr()) }
+    let y = unsafe { mut *p }
     y = 1
     x = 2
 }
@@ -6207,7 +6220,7 @@ use core::ptr
 
 fn keep_pointer_in_memory(value: *u256) {
     let destination = ptr::alloc<*u256>()
-    *destination = value
+    unsafe { *destination = value }
 }
 "#,
     );
@@ -6470,7 +6483,7 @@ extern {
 }
 
 fn mutate_unknown_memory() -> u256 {
-    *unknown_ptr() = 1
+    unsafe { *unknown_ptr() = 1 }
     1
 }
 
@@ -6496,7 +6509,7 @@ impl Token {
         where K: PointerSource
     {
         let ptr = key.ptr()
-        let _ value = *ptr
+        let _ value = unsafe { *ptr }
     }
 }
 
@@ -6527,7 +6540,7 @@ impl Cell {
         where K: PointerSource
     {
         let ptr = key.ptr()
-        let value = *ptr
+        let value = unsafe { *ptr }
     }
 }
 
@@ -6616,7 +6629,7 @@ trait Reader {
 fn bad<R>(_ value: ref R, ptr: *u256)
     where R: Reader
 {
-    let borrowed = mut *ptr
+    let borrowed = unsafe { mut *ptr }
     value.read()
     borrowed = 1
 }
@@ -6665,7 +6678,7 @@ fn invalid_callee_summaries_do_not_crash_semantic_borrow_analysis() {
         r#"
 fn broken_borrow(p: *u256) -> mut u256 {
     undefined = 1
-    mut *p
+    unsafe { mut *p }
 }
 
 fn broken_pointer(p: *u256) -> *u256 {
@@ -6676,7 +6689,7 @@ fn broken_pointer(p: *u256) -> *u256 {
 fn caller(p: *u256) {
     let borrowed = broken_borrow(p)
     borrowed = 1
-    *broken_pointer(p) = 1
+    unsafe { *broken_pointer(p) = 1 }
 }
 "#,
     );
@@ -9891,19 +9904,19 @@ fn pointer_accesses_discharge_native_input_separation_at_calls() {
         r#"
 struct Holder { ptr: *u256 }
 impl Holder {
-    fn write(mut self) { *self.ptr = 1 }
+    fn write(mut self) { unsafe { *self.ptr = 1 } }
 }
 fn write_both(_ target: mut u256, pointer: *u256) {
-    *pointer = 1
+    unsafe { *pointer = 1 }
     target = 2
 }
 fn bad() {
     let pointer = core::ptr::alloc<u256>()
-    write_both(mut *pointer, pointer)
+    unsafe { write_both(mut *pointer, pointer) }
 }
 fn retained() {
     let pointer = core::ptr::alloc<u256>()
-    let borrowed = mut *pointer
+    let borrowed = unsafe { mut *pointer }
     let mut holder = Holder { ptr: pointer }
     holder.write()
     borrowed = 2
@@ -9911,7 +9924,7 @@ fn retained() {
 fn disjoint() {
     let left = core::ptr::alloc<u256>()
     let right = core::ptr::alloc<u256>()
-    write_both(mut *left, pointer: right)
+    unsafe { write_both(mut *left, pointer: right) }
 }
 "#,
     );
@@ -9950,11 +9963,11 @@ fn bad() {
     let second = core::ptr::alloc<u256>()
     let source = core::ptr::alloc<*u256>()
     let target = core::ptr::alloc<*u256>()
-    *source = second
-    *target = first
-    let borrowed = mut *second
+    unsafe { *source = second }
+    unsafe { *target = first }
+    let borrowed = unsafe { mut *second }
     core::ptr::copy_raw(core::ptr::byte_ptr(target), source: core::ptr::byte_ptr(source), len: 32)
-    let alias = mut *(*target)
+    let alias = unsafe { mut *(*target) }
     borrowed = 1
     alias = 2
 }
@@ -10011,7 +10024,7 @@ fn check(_ count: u256) {{
     while i < count {{
         {allocation}
         let p = ptr::cast<u8, Item>(text.encoded_span().ptr())
-        consume(*p)
+        unsafe {{ consume(*p) }}
         i += 1
     }}
 }}
@@ -10102,13 +10115,13 @@ fn literal_birth_native_views_require_each_iterations_typed_initialization() {
 use core::ptr
 fn check(_ count: u256) {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let mut i: u256 = 0
     while i < count {{
         let text: Text = "hello"
         let slot = ptr::cast<u8, {native} u256>(text.encoded_span().ptr())
-        {store}
-        let loaded: u256 = *slot
+        unsafe {{ {store} }}
+        let loaded: u256 = unsafe {{ *slot }}
         i += 1
     }}
 }}
@@ -10136,7 +10149,7 @@ fn literal_birth_nested_loops_and_late_views_are_query_order_independent() {
 let mut j: u256 = 0
 while j < count {
     let inner: Text = "inner"
-    consume(*typed(inner.encoded_span().ptr()))
+    unsafe { consume(*typed(inner.encoded_span().ptr())) }
     j += 1
 }
 let text: Text = "outer"
@@ -10204,7 +10217,7 @@ fn staged(_ cursor: mut u256, _ count: u256, _ initialize: bool) -> u256 {
     while i < count {
         if initialize {
             let data = ptr::MemBuffer::alloc(32)
-            *ptr::cast<u8, u256>(data.ptr()) = 7
+            unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
             children[i as usize] = data.span()
         }
         i += 1
@@ -10212,7 +10225,7 @@ fn staged(_ cursor: mut u256, _ count: u256, _ initialize: bool) -> u256 {
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 
 fn run(_ count: u256, _ initialize: bool) -> u256 {
@@ -10230,11 +10243,11 @@ use core::ptr
 fn staged(cursor: mut u256, index: usize) -> u256 {{
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe {{ *ptr::cast<u8, u256>(data.ptr()) = 7 }}
     children[{stored}] = data.span()
     let child = children[{read}]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe {{ *ptr::cast<u8, u256>(child.ptr()) }}
 }}
 pub fn run() -> u256 {{
     let mut cursor: u256 = 0
@@ -10285,11 +10298,11 @@ use core::ptr
 fn staged(cursor: mut u256, index: usize) -> u256 {{
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe {{ *ptr::cast<u8, u256>(data.ptr()) = 7 }}
     children[{stored}] = data.span()
     let child = children[index]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe {{ *ptr::cast<u8, u256>(child.ptr()) }}
 }}
 "#
         );
@@ -10703,7 +10716,7 @@ fn raw_call_consumption_retires_native_contents_without_writing_bytes() {
     let prefix = r#"
 use core::ptr
 fn consume(_ value: own [ref u256; 2]) {}
-fn take(_ values: *[ref u256; 2]) { consume(*values) }
+fn take(_ values: *[ref u256; 2]) { unsafe { consume(*values) } }
 "#;
     with_borrow_summary(prefix, "take", |_, summary| {
         assert!(summary.mutable_inputs.is_empty());
@@ -10712,7 +10725,10 @@ fn take(_ values: *[ref u256; 2]) { consume(*values) }
     for (after, moved) in [
         ("", false),
         ("take(values)", true),
-        ("*values = [ref owner, ref owner]\ntake(values)", false),
+        (
+            "unsafe { *values = [ref owner, ref owner] }\ntake(values)",
+            false,
+        ),
     ] {
         let diagnostics = checked_borrow_diags(&format!(
             r#"
@@ -10720,7 +10736,7 @@ fn take(_ values: *[ref u256; 2]) { consume(*values) }
 fn caller() {{
     let owner: u256 = 7
     let values = ptr::alloc<[ref u256; 2]>()
-    *values = [ref owner, ref owner]
+    unsafe {{ *values = [ref owner, ref owner] }}
     take(values)
     {after}
 }}
@@ -10744,31 +10760,31 @@ fn pick(_ first: *Node, _ second: *Node, use_first: bool) -> *Node {
 }
 fn bad_mut() {
     let node = core::ptr::alloc<Node>()
-    node.value = 1
-    node.next = node
+    unsafe { node.value = 1 }
+    unsafe { node.next = node }
     let first = pick(node, node, use_first: true)
     let second = pick(node, node, use_first: false)
-    let borrowed = mut first.value
-    second.next.value = 2
+    let borrowed = unsafe { mut first.value }
+    unsafe { second.next.value = 2 }
     borrowed = 3
 }
 fn bad_ref() {
     let node = core::ptr::alloc<Node>()
-    node.value = 1
-    node.next = node
-    let borrowed = ref node.value
-    node.next.value = 2
+    unsafe { node.value = 1 }
+    unsafe { node.next = node }
+    let borrowed = unsafe { ref node.value }
+    unsafe { node.next.value = 2 }
     let observed = borrowed
 }
 fn disjoint() {
     let head = core::ptr::alloc<Node>()
     let tail = core::ptr::alloc<Node>()
-    head.value = 1
-    head.next = tail
-    tail.value = 2
-    tail.next = head
-    let borrowed = mut head.value
-    tail.value = 3
+    unsafe { head.value = 1 }
+    unsafe { head.next = tail }
+    unsafe { tail.value = 2 }
+    unsafe { tail.next = head }
+    let borrowed = unsafe { mut head.value }
+    unsafe { tail.value = 3 }
     borrowed = 4
 }
 "#,
@@ -10821,9 +10837,9 @@ fn inspect() {{
     let base = ptr::cast<u8, u256>(ptr::alloc_bytes(1024))
     {pointer}
     let other = {other}
-    *other = 1
-    let held = mut *other
-    *pointer = 3
+    unsafe {{ *other = 1 }}
+    let held = unsafe {{ mut *other }}
+    unsafe {{ *pointer = 3 }}
     held = 4
 }}
 "#
@@ -10863,10 +10879,10 @@ fn forward(_ base: *u256, n: u256) -> *u256 {{ advance(base, n) }}
 fn inspect(n: u256) {{
     let base = ptr::cast<u8, u256>(ptr::alloc_bytes(1024))
     let other = {other}
-    *other = 1
-    let held = mut *other
+    unsafe {{ *other = 1 }}
+    let held = unsafe {{ mut *other }}
     let pointer = forward(base, n)
-    *pointer = 3
+    unsafe {{ *pointer = 3 }}
     held = 4
 }}
 "#
@@ -10909,7 +10925,7 @@ fn unrelated_loops_preserve_conditional_pointer_replacements() {
 use core::ptr
 fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
     ptr::zero_bytes(destination, 32)
-    let pointer = *slot
+    let pointer = unsafe {{ *slot }}
     {loops}
     {result}
 }}
@@ -10918,15 +10934,15 @@ fn forward(slot: **u256, destination: *u8, n: u256) -> *u256 {{
 }}
 fn inspect() {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let slot = ptr::alloc<*u256>()
-    *slot = owner
+    unsafe {{ *slot = owner }}
     let destination = {destination}
     let other = ptr::alloc<u256>()
-    *other = 1
-    let held = mut *other
+    unsafe {{ *other = 1 }}
+    let held = unsafe {{ mut *other }}
     let pointer = {call}
-    *pointer = 3
+    unsafe {{ *pointer = 3 }}
     held = 4
 }}
 "#
@@ -10958,7 +10974,7 @@ fn unrelated_loops_preserve_native_invalidation_obligations() {
 use core::ptr
 fn work(slot: *ref u256, destination: *u8, n: u256) -> ref u256 {{
     ptr::zero_bytes(destination, 32)
-    let pointer = *slot
+    let pointer = unsafe {{ *slot }}
     let mut i: u256 = 0
     while i < n {{ i += 1 }}
     pointer
@@ -10968,9 +10984,9 @@ fn forward(slot: *ref u256, destination: *u8, n: u256) -> ref u256 {{
 }}
 fn inspect() -> u256 {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let slot = ptr::alloc<ref u256>()
-    *slot = ref *owner
+    unsafe {{ *slot = ref *owner }}
     let destination = {destination}
     let pointer = {call}
     pointer
@@ -11015,9 +11031,9 @@ fn inspect(n: u256) {{
     let base = ptr::cast<u8, u256>(ptr::alloc_bytes(1024))
     let pointer = advance(base, n)
     let other = {other}
-    *other = 1
-    let held = mut *other
-    *pointer = 3
+    unsafe {{ *other = 1 }}
+    let held = unsafe {{ mut *other }}
+    unsafe {{ *pointer = 3 }}
     held = 4
 }}
 "#
@@ -11054,28 +11070,28 @@ fn writes_through_conditional_replacements_keep_their_prerequisite() {
 use core::ptr
 fn work(slot: **u256, second: **u256, destination: *u8) -> *u256 {{
     ptr::zero_bytes(destination, 32)
-    let pointer = *slot
+    let pointer = unsafe {{ *slot }}
     ptr::zero_bytes(ptr::byte_ptr(pointer), 32)
-    {returned}
+    unsafe {{ {returned} }}
 }}
 fn forward(slot: **u256, second: **u256, destination: *u8) -> *u256 {{
     work(slot, second, destination)
 }}
 fn inspect() {{
     let owner = ptr::alloc<u256>()
-    *owner = 7
+    unsafe {{ *owner = 7 }}
     let slot = ptr::alloc<*u256>()
-    *slot = owner
+    unsafe {{ *slot = owner }}
     let target = ptr::alloc<u256>()
-    *target = 8
+    unsafe {{ *target = 8 }}
     let second = ptr::alloc<*u256>()
-    *second = target
+    unsafe {{ *second = target }}
     let destination = {destination}
     let other = ptr::alloc<u256>()
-    *other = 1
-    let held = mut *other
+    unsafe {{ *other = 1 }}
+    let held = unsafe {{ mut *other }}
     let pointer = {call}
-    *pointer = 3
+    unsafe {{ *pointer = 3 }}
     held = 4
 }}
 "#
@@ -11138,10 +11154,10 @@ fn inspect(n: u256) {{
     {call}
     let first = ptr::cast<u8, u256>(pair.first)
     let second = ptr::cast<u8, u256>(pair.second)
-    *first = 1
-    *second = 2
-    let a = mut *first
-    let b = mut *second
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
+    let a = unsafe {{ mut *first }}
+    let b = unsafe {{ mut *second }}
     a = 3
     b = 4
 }}
@@ -11227,10 +11243,10 @@ fn inspect(n: u256) {{
     {call}
     let first = ptr::cast<u8, u256>({first})
     let second = ptr::cast<u8, u256>({second})
-    *first = 1
-    *second = 2
-    let a = mut *first
-    let b = mut *second
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
+    let a = unsafe {{ mut *first }}
+    let b = unsafe {{ mut *second }}
     a = 3
     b = 4
 }}
@@ -11290,10 +11306,10 @@ fn inspect(n: u256) {{
     }}
     let first = ptr::cast<u8, u256>({first})
     let second = ptr::cast<u8, u256>({second})
-    *first = 1
-    *second = 2
-    let a = mut *first
-    let b = mut *second
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
+    let a = unsafe {{ mut *first }}
+    let b = unsafe {{ mut *second }}
     a = 3
     b = 4
 }}
@@ -11333,10 +11349,10 @@ fn inspect(n: u256) {{
     let ps = advance({argument}, n)
     let first = ptr::cast<u8, u256>(ps[0])
     let second = ptr::cast<u8, u256>(ps[1])
-    *first = 1
-    *second = 2
-    let a = mut *first
-    let b = mut *second
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
+    let a = unsafe {{ mut *first }}
+    let b = unsafe {{ mut *second }}
     a = 3
     b = 4
 }}
@@ -11396,10 +11412,10 @@ fn inspect(n: u256) {{
     {call}
     let first = ptr::cast<u8, u256>(base)
     let second = ptr::cast<u8, u256>(p)
-    *first = 1
-    *second = 2
-    let a = mut *first
-    let b = mut *second
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
+    let a = unsafe {{ mut *first }}
+    let b = unsafe {{ mut *second }}
     a = 3
     b = 4
 }}
@@ -11464,10 +11480,10 @@ fn inspect(n: u256) {{
     {call}
     let first = ptr::cast<u8, u256>({first})
     let second = ptr::cast<u8, u256>({second})
-    *first = 1
-    *second = 2
-    let a = mut *first
-    let b = mut *second
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
+    let a = unsafe {{ mut *first }}
+    let b = unsafe {{ mut *second }}
     a = 3
     b = 4
 }}
@@ -11615,10 +11631,10 @@ fn inspect(n: u256, k: usize) {{
     let ps = advance([ptr::alloc_bytes(32), ptr::alloc_bytes(32), ptr::alloc_bytes(32)], base, k, n)
     let first = ptr::cast<u8, u256>(base)
     let second = ptr::cast<u8, u256>({read})
-    *first = 1
-    *second = 2
-    let a = mut *first
-    let b = mut *second
+    unsafe {{ *first = 1 }}
+    unsafe {{ *second = 2 }}
+    let a = unsafe {{ mut *first }}
+    let b = unsafe {{ mut *second }}
     a = 3
     b = 4
 }}
@@ -11750,7 +11766,7 @@ fn loops_preserve_offsets_of_invariant_conditional_replacements() {
 use core::ptr
 fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
     ptr::zero_bytes(destination, 32)
-    let pointer = *slot
+    let pointer = unsafe {{ *slot }}
     let mut result = ptr::offset(pointer, 1)
     let mut i: u256 = 0
     while i < n {{
@@ -11765,13 +11781,13 @@ fn forward(slot: **u256, destination: *u8, n: u256) -> *u256 {{
 fn inspect() {{
     let owner = ptr::alloc<[u256; 4]>()
     let slot = ptr::alloc<*u256>()
-    *slot = ptr::cast<[u256; 4], u256>(owner)
+    unsafe {{ *slot = ptr::cast<[u256; 4], u256>(owner) }}
     let destination = {destination}
     let other = ptr::alloc<u256>()
-    *other = 1
-    let held = mut *other
+    unsafe {{ *other = 1 }}
+    let held = unsafe {{ mut *other }}
     let pointer = {call}
-    *pointer = 3
+    unsafe {{ *pointer = 3 }}
     held = 4
 }}
 "#
@@ -11798,11 +11814,11 @@ fn loops_bound_offsets_of_replacements_created_in_the_loop() {
             r#"
 use core::ptr
 fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
-    let mut result = *slot
+    let mut result = unsafe {{ *slot }}
     let mut i: u256 = 0
     while i < n {{
         ptr::zero_bytes(destination, 32)
-        {body}
+        unsafe {{ {body} }}
         i += 1
     }}
     result
@@ -11810,13 +11826,13 @@ fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
 fn inspect() {{
     let owner = ptr::alloc<[u256; 4]>()
     let slot = ptr::alloc<*u256>()
-    *slot = ptr::cast<[u256; 4], u256>(owner)
+    unsafe {{ *slot = ptr::cast<[u256; 4], u256>(owner) }}
     let destination = ptr::byte_ptr(slot)
     let other = ptr::alloc<u256>()
-    *other = 1
-    let held = mut *other
+    unsafe {{ *other = 1 }}
+    let held = unsafe {{ mut *other }}
     let pointer = work(slot, destination, n: 2)
-    *pointer = 3
+    unsafe {{ *pointer = 3 }}
     held = 4
 }}
 "#
@@ -11861,17 +11877,17 @@ fn deferred_input_loan_separation_is_enforced_at_callers() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
 
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     foreign(value: native, saved)
 }
 "#,
@@ -11883,7 +11899,7 @@ fn drive() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *ref u256) -> u256 {
-    let other = *saved
+    let other = unsafe { *saved }
     let seen: u256 = other
     value = 9
     seen
@@ -11891,10 +11907,10 @@ fn foreign(value: mut u256, saved: *ref u256) -> u256 {
 
 fn drive() -> u256 {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<ref u256>()
-    *saved = ref native
+    unsafe { *saved = ref native }
     foreign(value: native, saved)
 }
 "#,
@@ -11906,7 +11922,7 @@ fn drive() -> u256 {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -11917,10 +11933,10 @@ fn wrap(value: mut u256, saved: *mut u256) {
 
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     wrap(value: native, saved)
 }
 "#,
@@ -11932,7 +11948,7 @@ fn drive() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -11940,10 +11956,10 @@ fn foreign(value: mut u256, saved: *mut u256) {
 // Control: a fresh reborrow argument is not authorized by the stored child.
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     foreign(value: mut native, saved)
 }
 "#,
@@ -11955,7 +11971,7 @@ fn drive() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -11963,12 +11979,12 @@ fn foreign(value: mut u256, saved: *mut u256) {
 // Control: the stored borrow targets a different allocation.
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
+    unsafe { *target = 0 }
     let elsewhere = ptr::alloc<u256>()
-    *elsewhere = 0
-    let native = mut *target
+    unsafe { *elsewhere = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut *elsewhere
+    unsafe { *saved = mut *elsewhere }
     foreign(value: native, saved)
 }
 "#,
@@ -11978,7 +11994,7 @@ fn drive() {
             "returned_authority",
             r#"
 use core::ptr
-fn load(saved: *mut u256) -> mut u256 { *saved }
+fn load(saved: *mut u256) -> mut u256 { unsafe { *saved } }
 fn foreign(value: mut u256, saved: *mut u256) {
     let other = load(saved)
     other = 5
@@ -11986,10 +12002,10 @@ fn foreign(value: mut u256, saved: *mut u256) {
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     foreign(value: native, saved)
 }
 "#,
@@ -12001,16 +12017,16 @@ fn drive() {
 use core::ptr
 struct Holder { slot: *mut u256 }
 fn foreign(value: mut u256, holder: Holder) {
-    let other = *holder.slot
+    let other = unsafe { *holder.slot }
     other = 5
     value = 9
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     let holder = Holder { slot: saved }
     foreign(value: native, holder)
 }
@@ -12023,16 +12039,16 @@ fn drive() {
 use core::ptr
 struct Holder { slot: *mut u256 }
 fn foreign(value: mut u256, holder: mut Holder) {
-    let other = *holder.slot
+    let other = unsafe { *holder.slot }
     other = 5
     value = 9
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     let mut holder = Holder { slot: saved }
     foreign(value: native, holder: mut holder)
 }
@@ -12045,16 +12061,16 @@ fn drive() {
 use core::ptr
 struct Holder { slot: *mut u256 }
 fn foreign(value: mut u256) uses (holder: Holder) {
-    let other = *holder.slot
+    let other = unsafe { *holder.slot }
     other = 5
     value = 9
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     let holder = Holder { slot: saved }
     with (holder) { foreign(value: native) }
 }
@@ -12073,8 +12089,8 @@ fn foreign(value: mut u256, holder: mut Holder) {
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let mut holder = Holder { saved: mut native }
     foreign(value: native, holder: mut holder)
 }
@@ -12093,8 +12109,8 @@ fn foreign(value: mut u256, holder: Holder) {
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let holder = Holder { saved: mut native }
     foreign(value: native, holder)
 }
@@ -12106,15 +12122,15 @@ fn drive() {
             r#"
 use core::ptr
 fn foreign(saved: *mut u256, raw: *u256) {
-    let native = *saved
-    *raw = 5
+    let native = unsafe { *saved }
+    unsafe { *raw = 5 }
     native = 9
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
+    unsafe { *target = 0 }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut *target
+    unsafe { *saved = mut *target }
     foreign(saved, raw: target)
 }
 "#,
@@ -12127,17 +12143,17 @@ use core::ptr
 struct Pair { first: u256, second: u256 }
 fn foreign(value: mut Pair, saved: *ref u256) -> u256 {
     let child = ref value.first
-    let other = *saved
+    let other = unsafe { *saved }
     let seen: u256 = other
     value.second = 9
     child + seen
 }
 fn drive() -> u256 {
     let target = ptr::alloc<Pair>()
-    *target = Pair { first: 1, second: 2 }
-    let native = mut *target
+    unsafe { *target = Pair { first: 1, second: 2 } }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<ref u256>()
-    *saved = ref native.first
+    unsafe { *saved = ref native.first }
     foreign(value: native, saved)
 }
 "#,
@@ -12149,16 +12165,16 @@ fn drive() -> u256 {
 use core::ptr
 fn foreign(value: mut u256, saved: *ref u256) -> u256 {
     let child = ref value
-    let other = *saved
+    let other = unsafe { *saved }
     let seen: u256 = other
     child + seen
 }
 fn drive() -> u256 {
     let target = ptr::alloc<u256>()
-    *target = 1
-    let native = mut *target
+    unsafe { *target = 1 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<ref u256>()
-    *saved = ref native
+    unsafe { *saved = ref native }
     foreign(value: native, saved)
 }
 "#,
@@ -12175,8 +12191,8 @@ fn foreign(value: mut u256, pointer: *u256) {
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     foreign(value: native, pointer: target)
 }
 "#,
@@ -12189,8 +12205,8 @@ use core::ptr
 fn sink() uses (slot: mut u256) {}
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     with (target) { sink() }
     native = 9
 }
@@ -12203,7 +12219,7 @@ fn drive() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -12218,10 +12234,10 @@ fn recurse(value: mut u256, saved: *mut u256, again: bool) {
 
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     recurse(value: native, saved, again: true)
 }
 "#,
@@ -12233,7 +12249,7 @@ fn drive() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -12248,12 +12264,12 @@ fn recurse(value: mut u256, saved: *mut u256, again: bool) {
 
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
     let separate = ptr::alloc<u256>()
-    *separate = 1
-    *saved = mut *separate
+    unsafe { *separate = 1 }
+    unsafe { *saved = mut *separate }
     recurse(value: native, saved, again: true)
 }
 "#,
@@ -12376,15 +12392,15 @@ fn locals() {
 }
 fn allocations() {
     let left = ptr::alloc<u256>()
-    *left = 0
+    unsafe { *left = 0 }
     let right = ptr::alloc<u256>()
-    *right = 0
-    forward_again(mut *left, mut *right)
+    unsafe { *right = 0 }
+    unsafe { forward_again(mut *left, mut *right) }
 }
 fn fields() {
     let pair = ptr::alloc<(u256, u256)>()
-    *pair = (0, 0)
-    let whole = mut *pair
+    unsafe { *pair = (0, 0) }
+    let whole = unsafe { mut *pair }
     forward_again(mut whole.0, mut whole.1)
 }
 "#,
@@ -12399,7 +12415,7 @@ fn caller_conflicts_name_the_borrow_and_access_that_began_the_requirement() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -12410,10 +12426,10 @@ fn wrap(value: mut u256, saved: *mut u256) {
 
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     wrap(value: native, saved)
 }
 "#,
@@ -12439,7 +12455,7 @@ fn separation_requirements_are_query_order_independent() {
 use core::ptr
 
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -12452,7 +12468,7 @@ struct Triple { first: u256, second: u256, third: u256 }
 
 fn guarded(value: mut Triple, saved: *ref u256, flag: bool) -> u256 {
     let child = if flag { ref value.first } else { ref value.second }
-    let other = *saved
+    let other = unsafe { *saved }
     let seen: u256 = other
     value.third = 9
     child + seen
@@ -12463,7 +12479,7 @@ fn looped(value: mut [u256; 4], saved: *ref [u256; 4]) -> u256 {
     let mut total: u256 = 0
     while i < 4 {
         let child = ref value[i]
-        let other = *saved
+        let other = unsafe { *saved }
         let seen: u256 = other[i]
         total = total + child + seen
         i = i + 1
@@ -12473,10 +12489,10 @@ fn looped(value: mut [u256; 4], saved: *ref [u256; 4]) -> u256 {
 
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     wrap(value: native, saved)
 }
 "#;
@@ -12622,7 +12638,7 @@ pub contract Cell {{
         let raw = saved
         let mut local: u256 = 0
         let native = mut local
-        *raw = 1
+        unsafe {{ *raw = 1 }}
         native = 2
     }}
 }}
@@ -12667,7 +12683,7 @@ trait Operation { fn apply(_ saved: *mut u256) }
 struct Alias {}
 impl Operation for Alias {
     fn apply(_ saved: *mut u256) {
-        let other = *saved
+        let other = unsafe { *saved }
         other = 5
     }
 }
@@ -12677,20 +12693,20 @@ fn generic<T: Operation>(value: mut u256, saved: *mut u256) {
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     generic<Alias>(value: native, saved)
 }
 fn disjoint() {
     let target = ptr::alloc<u256>()
-    *target = 0
+    unsafe { *target = 0 }
     let elsewhere = ptr::alloc<u256>()
-    *elsewhere = 0
-    let native = mut *target
+    unsafe { *elsewhere = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut *elsewhere
+    unsafe { *saved = mut *elsewhere }
     generic<Alias>(value: native, saved)
 }
 "#
@@ -12743,7 +12759,7 @@ fn foreign(value: mut u256, saved: *mut u256, touch: bool, pick: own Pick) {{
     if touch {{
         match pick {{
             Pick::Left => {{
-                let other = *saved
+                let other = unsafe {{ *saved }}
                 other = 5
             }}
             Pick::Right => {{}}
@@ -12756,10 +12772,10 @@ fn branch(value: mut u256, saved: *mut u256, touch: bool, pick: own Pick) {{
 }}
 fn drive() {{
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe {{ *target = 0 }}
+    let native = unsafe {{ mut *target }}
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe {{ *saved = mut native }}
     branch(value: native, saved, touch: {flag}, {callee_args})
 }}
 "#
@@ -12785,29 +12801,29 @@ fn separation_provenance_belongs_to_each_body_and_follows_edits() {
         format!(
             r#"{prefix}use core::ptr
 fn first(value: mut u256, saved: *mut u256) {{
-    let other = *saved
+    let other = unsafe {{ *saved }}
     other = 5
     value = 9
 }}
 fn second(value: mut u256, saved: *mut u256) {{
-    let alias = *saved
+    let alias = unsafe {{ *saved }}
     alias = 5
     value = 9
 }}
 fn aliased_first() {{
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe {{ *target = 0 }}
+    let native = unsafe {{ mut *target }}
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe {{ *saved = mut native }}
     first(value: native, saved)
 }}
 fn aliased_second() {{
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe {{ *target = 0 }}
+    let native = unsafe {{ mut *target }}
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe {{ *saved = mut native }}
     second(value: native, saved)
 }}
 "#
@@ -12841,8 +12857,8 @@ fn aliased_second() {{
         );
         // Reborrowing the stored child is the access each body began with.
         for (caller, access) in [
-            ("aliased_first", ("let other = *saved", 3)),
-            ("aliased_second", ("let alias = *saved", 8)),
+            ("aliased_first", ("let other = unsafe { *saved }", 3)),
+            ("aliased_second", ("let alias = unsafe { *saved }", 8)),
         ] {
             let block = diagnostics
                 .split("error[")
@@ -12868,17 +12884,17 @@ fn separation_requirements_propagate_from_nonreturning_bodies() {
             r#"
 use core::ptr
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
     while true {}
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     foreign(value: native, saved)
 }
 "#
@@ -12902,7 +12918,7 @@ fn foreign(value: mut [u256; 4], saved: *ref [u256; 4]) -> u256 {{
     let mut total: u256 = 0
     while i < 4 {{
         let child = ref value[i]
-        let other = *saved
+        let other = unsafe {{ *saved }}
         let seen: u256 = other[{index}]
         total = total + child + seen
         i = i + 1
@@ -12911,10 +12927,10 @@ fn foreign(value: mut [u256; 4], saved: *ref [u256; 4]) -> u256 {{
 }}
 fn drive() -> u256 {{
     let target = ptr::alloc<[u256; 4]>()
-    *target = [1, 2, 3, 4]
-    let native = mut *target
+    unsafe {{ *target = [1, 2, 3, 4] }}
+    let native = unsafe {{ mut *target }}
     let saved = ptr::alloc<ref [u256; 4]>()
-    *saved = ref native
+    unsafe {{ *saved = ref native }}
     foreign(value: native, saved)
 }}
 "#
@@ -12934,7 +12950,7 @@ fn foreign(value: mut [[[u256; 2]; 2]; 2], saved: *ref [[[u256; 2]; 2]; 2]) -> u
             while k < 2 {
                 let child = ref value[i][j][k]
                 let next = ref value[k][j][i]
-                let other = *saved
+                let other = unsafe { *saved }
                 let seen: u256 = other[k][j][i]
                 total = total + child + next + seen
                 k = k + 1
@@ -12960,17 +12976,17 @@ use core::ptr
 struct Triple {{ first: u256, second: u256, third: u256 }}
 fn foreign(value: mut Triple, saved: *ref u256, flag: bool) -> u256 {{
     let child = if flag {{ ref value.first }} else {{ ref value.second }}
-    let other = *saved
+    let other = unsafe {{ *saved }}
     let seen: u256 = other
     value.third = 9
     child + seen
 }}
 fn drive(flag: bool) -> u256 {{
     let target = ptr::alloc<Triple>()
-    *target = Triple {{ first: 1, second: 2, third: 3 }}
-    let native = mut *target
+    unsafe {{ *target = Triple {{ first: 1, second: 2, third: 3 }} }}
+    let native = unsafe {{ mut *target }}
     let saved = ptr::alloc<ref u256>()
-    *saved = ref native.first
+    unsafe {{ *saved = ref native.first }}
     foreign(value: native, saved, flag: {flag})
 }}
 "#
@@ -12994,7 +13010,7 @@ use core::ptr
 struct Holder { slot: *mut u256 }
 fn foreign(value: mut u256, touch: bool) uses (holder: Holder) {
     if touch {
-        let other = *holder.slot
+        let other = unsafe { *holder.slot }
         other = 5
     }
     value = 9
@@ -13046,8 +13062,8 @@ fn overwritten_pointer_requirements_forward_through_recursion() {
 use core::ptr
 fn foreign(value: mut u256, cell: **u256, raw: *u8) {{
     ptr::zero_bytes(raw, 32)
-    let p = *cell
-    *p = 5
+    let p = unsafe {{ *cell }}
+    unsafe {{ *p = 5 }}
     value = 9
 }}
 fn recurse(value: mut u256, cell: **u256, raw: *u8, again: bool) {{
@@ -13056,12 +13072,12 @@ fn recurse(value: mut u256, cell: **u256, raw: *u8, again: bool) {{
 }}
 fn drive() {{
     let target = ptr::alloc<u256>()
-    *target = 0
+    unsafe {{ *target = 0 }}
     let elsewhere = ptr::alloc<u256>()
-    *elsewhere = 0
+    unsafe {{ *elsewhere = 0 }}
     let cell = ptr::alloc<*u256>()
-    *cell = elsewhere
-    recurse(value: mut *target, cell, raw: {raw}, again: true)
+    unsafe {{ *cell = elsewhere }}
+    unsafe {{ recurse(value: mut *target, cell, raw: {raw}, again: true) }}
 }}
 "#
         )
@@ -13135,7 +13151,7 @@ fn separation_exhaustion_is_absorbing_before_fallbacks() {
         format!("match k {{\n{}\n    }}", arms.join(",\n"))
     };
     let call = format!(
-        "    let value = {}\n    let pointer = {}\n    leaf(value, pointer)",
+        "    let value = unsafe {{ {} }}\n    let pointer = {}\n    leaf(value, pointer)",
         select(&|index| format!("mut *a{index}")),
         select(&|_| "ptr::alloc<u256>()".to_string())
     );
@@ -13147,7 +13163,7 @@ trait Operation {{ fn apply() }}
 struct Safe {{}}
 impl Operation for Safe {{ fn apply() {{}} }}
 fn leaf(value: mut u256, pointer: *u256) {{
-    *pointer = 1
+    unsafe {{ *pointer = 1 }}
     value = 2
 }}
 fn plain(k: u256, {params}) {{
@@ -13219,7 +13235,7 @@ trait Operation { fn apply(_ saved: *mut u256) }
 struct Alias {}
 impl Operation for Alias {
     fn apply(_ saved: *mut u256) {
-        let other = *saved
+        let other = unsafe { *saved }
         other = 5
     }
 }
@@ -13230,16 +13246,16 @@ fn generic<T: Operation>(value: mut u256, saved: *mut u256) {
 fn concrete(value: mut u256, saved: *mut u256) { generic<Alias>(value, saved) }
 fn blocked(value: mut u256, saved: *mut u256) {
     missing = 1
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
 fn drive() {
     let target = ptr::alloc<u256>()
-    *target = 0
-    let native = mut *target
+    unsafe { *target = 0 }
+    let native = unsafe { mut *target }
     let saved = ptr::alloc<mut u256>()
-    *saved = mut native
+    unsafe { *saved = mut native }
     blocked(value: native, saved)
 }
 "#;
@@ -13279,7 +13295,7 @@ fn separation_requirements_scale_through_chains_cycles_and_diamonds() {
     let foreign = r#"
 use core::ptr
 fn foreign(value: mut u256, saved: *mut u256) {
-    let other = *saved
+    let other = unsafe { *saved }
     other = 5
     value = 9
 }
@@ -13289,12 +13305,12 @@ fn foreign(value: mut u256, saved: *mut u256) {
             r#"
 fn drive() {{
     let target = ptr::alloc<u256>()
-    *target = 0
+    unsafe {{ *target = 0 }}
     let elsewhere = ptr::alloc<u256>()
-    *elsewhere = 0
-    let native = mut *target
+    unsafe {{ *elsewhere = 0 }}
+    let native = unsafe {{ mut *target }}
     let saved = ptr::alloc<mut u256>()
-    *saved = mut {stored}
+    unsafe {{ *saved = mut {stored} }}
     {call}
 }}
 "#
@@ -13387,7 +13403,7 @@ fn input_reborrow_requirements_reject_concrete_aliases_through_wrappers() {
             r#"
 use core::ptr
 fn access(_ value: {borrow} u256, _ pointer: *u256) {{
-    *pointer = 5
+    unsafe {{ *pointer = 5 }}
     {update}
 }}
 fn forward(_ value: {borrow} u256, _ pointer: *u256) {{
@@ -13398,15 +13414,15 @@ fn forward_again(_ value: {borrow} u256, _ pointer: *u256) {{
 }}
 fn disjoint() {{
     let left = ptr::alloc<u256>()
-    *left = 0
+    unsafe {{ *left = 0 }}
     let right = ptr::alloc<u256>()
-    *right = 0
-    forward_again({borrow} *left, right)
+    unsafe {{ *right = 0 }}
+    unsafe {{ forward_again({borrow} *left, right) }}
 }}
 fn aliased() {{
     let target = ptr::alloc<u256>()
-    *target = 0
-    forward_again({borrow} *target, target)
+    unsafe {{ *target = 0 }}
+    unsafe {{ forward_again({borrow} *target, target) }}
 }}
 "#
         );
@@ -13420,7 +13436,7 @@ fn reborrowed_fields_keep_the_enclosing_borrow_exclusive() {
 use core::ptr
 struct Pair { left: u256, right: u256 }
 fn write(_ value: mut u256, _ pointer: *u256) {
-    *pointer = 3
+    unsafe { *pointer = 3 }
     value = 4
 }
 fn forward(_ pair: mut Pair, _ pointer: *u256) {
@@ -13428,13 +13444,13 @@ fn forward(_ pair: mut Pair, _ pointer: *u256) {
 }
 fn same_field() {
     let pair = ptr::alloc<Pair>()
-    *pair = Pair { left: 0, right: 0 }
-    forward(mut *pair, ptr::cast<Pair, u256>(pair))
+    unsafe { *pair = Pair { left: 0, right: 0 } }
+    unsafe { forward(mut *pair, ptr::cast<Pair, u256>(pair)) }
 }
 fn other_field() {
     let pair = ptr::alloc<Pair>()
-    *pair = Pair { left: 0, right: 0 }
-    forward(mut *pair, ptr::offset(ptr::cast<Pair, u256>(pair), 1))
+    unsafe { *pair = Pair { left: 0, right: 0 } }
+    unsafe { forward(mut *pair, ptr::offset(ptr::cast<Pair, u256>(pair), 1)) }
 }
 "#;
     // Both pointers point inside the exclusive whole-Pair argument. A
@@ -13449,20 +13465,21 @@ fn repeated_separation_requirements_use_the_canonical_clause_budget() {
         r#"
 use core::ptr
 fn repeated(_ value: mut u256, _ pointer: *u256) {{
-{writes}
+    unsafe {{
+{writes}    }}
     value = 2
 }}
 fn disjoint() {{
     let left = ptr::alloc<u256>()
-    *left = 0
+    unsafe {{ *left = 0 }}
     let right = ptr::alloc<u256>()
-    *right = 0
-    repeated(mut *left, right)
+    unsafe {{ *right = 0 }}
+    unsafe {{ repeated(mut *left, right) }}
 }}
 fn aliased() {{
     let target = ptr::alloc<u256>()
-    *target = 0
-    repeated(mut *target, target)
+    unsafe {{ *target = 0 }}
+    unsafe {{ repeated(mut *target, target) }}
 }}
 "#
     );
@@ -13483,8 +13500,8 @@ fn callee_separation_excludes_impossible_clobbers_of_independent_locals() {
 use core::ptr
 struct Cell { pointer: *u256 }
 fn write(_ cell: mut Cell) {
-    *cell.pointer = 1
-    *cell.pointer = 2
+    unsafe { *cell.pointer = 1 }
+    unsafe { *cell.pointer = 2 }
 }
 fn hold(_ local: mut u256, _ cell: mut Cell) { write(cell) }
 fn forward(_ cell: mut Cell) -> u256 {
@@ -13494,14 +13511,14 @@ fn forward(_ cell: mut Cell) -> u256 {
 }
 fn disjoint() {
     let data = ptr::alloc<u256>()
-    *data = 0
+    unsafe { *data = 0 }
     let mut cell = Cell { pointer: data }
     let _ = forward(mut cell)
 }
 fn aliased() {
     let cell = ptr::alloc<Cell>()
-    *cell = Cell { pointer: ptr::cast<Cell, u256>(cell) }
-    let _ = forward(mut *cell)
+    unsafe { *cell = Cell { pointer: ptr::cast<Cell, u256>(cell) } }
+    let _ = unsafe { forward(mut *cell) }
 }
 "#;
     assert_eq!(conflicting_functions(source), ["aliased"]);
@@ -13537,17 +13554,17 @@ struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
 fn initialized() -> *Item {{
     let pointer = core::ptr::alloc<Item>()
-    *pointer = Item {{ n: 1 }}
+    unsafe {{ *pointer = Item {{ n: 1 }} }}
     pointer
 }}
 fn store(_ slot: **Item, _ old: *Item, depth: u256) {{
-    if depth == 0 {{ {body} }}
+    if depth == 0 {{ unsafe {{ {body} }} }}
     else {{ store(slot, old, depth: depth - 1) }}
 }}
 fn inspect() {{
     let slot = core::ptr::alloc<*Item>()
     let old = initialized()
-    {caller}
+    unsafe {{ {caller} }}
 }}
 "#
         ));
@@ -13586,24 +13603,26 @@ struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
 fn fill(_ slot: *Pair, count: u256) {{
     let mut pointer = core::ptr::alloc<Item>()
-    {writes}
+    unsafe {{ {writes} }}
     let mut index: u256 = 0
     while index < count {{
         pointer = core::ptr::alloc<Item>()
-        if index + 1 < count {{ {previous} = pointer }}
-        {current} = pointer
+        unsafe {{
+            if index + 1 < count {{ {previous} = pointer }}
+            {current} = pointer
+        }}
         index += 1
     }}
 }}
 fn inspect() {{
     let slot = core::ptr::alloc<Pair>()
     fill(slot, count: 3)
-    let previous = {previous}
-    let current = {current}
-    *current = Item {{ n: 1 }}
-    consume(*previous)
-    *current = Item {{ n: 2 }}
-    consume(*previous)
+    let previous = unsafe {{ {previous} }}
+    let current = unsafe {{ {current} }}
+    unsafe {{ *current = Item {{ n: 1 }} }}
+    unsafe {{ consume(*previous) }}
+    unsafe {{ *current = Item {{ n: 2 }} }}
+    unsafe {{ consume(*previous) }}
 }}
 "#
         ));
@@ -13619,13 +13638,13 @@ fn recursive_poststate_keeps_native_contents_invalid() {
     let diagnostics = checked_borrow_diags(
         r#"
 fn store(_ slot: **ref u256, depth: u256) {
-    if depth == 0 { *slot = core::ptr::alloc<ref u256>() }
+    if depth == 0 { unsafe { *slot = core::ptr::alloc<ref u256>() } }
     else { store(slot, depth: depth - 1) }
 }
 fn inspect() {
     let slot = core::ptr::alloc<*ref u256>()
     store(slot, depth: 3)
-    let loaded: u256 = *(*slot)
+    let loaded: u256 = unsafe { *(*slot) }
 }
 "#,
     );
@@ -13647,13 +13666,13 @@ fn recursive_reinitialization_requires_all_returning_paths() {
 struct Item {{ n: u256 }}
 fn consume(_ item: own Item) {{}}
 fn initialize(_ pointer: *Item, flag: bool, depth: u256) {{
-    if depth == 0 {{ {write} }}
+    if depth == 0 {{ unsafe {{ {write} }} }}
     else {{ initialize(pointer, flag, depth: depth - 1) }}
 }}
 fn inspect(_ pointer: *Item, flag: bool, depth: u256) {{
-    consume(*pointer)
+    unsafe {{ consume(*pointer) }}
     initialize(pointer, flag, depth)
-    consume(*pointer)
+    unsafe {{ consume(*pointer) }}
 }}
 "#
         ));
@@ -13678,19 +13697,19 @@ fn consume(_ item: own Item) {}
 fn fill(_ slots: *[*Item; 2]) {
     let mut index: usize = 0
     while index < 2 {
-        (*slots)[index] = core::ptr::alloc<Item>()
+        unsafe { (*slots)[index] = core::ptr::alloc<Item>() }
         index += 1
     }
 }
 fn inspect() {
     let slots = core::ptr::alloc<[*Item; 2]>()
     fill(slots)
-    let first = (*slots)[0]
-    let second = (*slots)[1]
-    *second = Item { n: 1 }
-    consume(*first)
-    *second = Item { n: 2 }
-    consume(*first)
+    let first = unsafe { (*slots)[0] }
+    let second = unsafe { (*slots)[1] }
+    unsafe { *second = Item { n: 1 } }
+    unsafe { consume(*first) }
+    unsafe { *second = Item { n: 2 } }
+    unsafe { consume(*first) }
 }
 "#,
     );
@@ -13776,8 +13795,8 @@ fn named_scalar_call_results_keep_return_relations() {
         "let held = mut arr[k]\n    if j != k {\n        let mut m: usize = same(j)\n        \
          if flag { m = j }\n        arr[m] = 0\n    }\n    held = 1",
         "let held = mut arr[0]\n    let unused = constrain(same(k))\n    arr[k] = 2\n    held = 1",
-        "let cells = ptr::alloc<[u64; 8]>()\n    *cells = [0; 8]\n    \
-         let held = mut (*cells)[k]\n    if j != k { write(cells, same(j)) }\n    held = 1",
+        "let cells = ptr::alloc<[u64; 8]>()\n    unsafe { *cells = [0; 8] }\n    \
+         let held = unsafe { mut (*cells)[k] }\n    if j != k { write(cells, same(j)) }\n    held = 1",
     ] {
         let source = format!(
             r#"
@@ -13787,7 +13806,7 @@ fn constrain(_ index: usize) -> usize {{
     if index != 1 {{ assert!(false) }}
     index
 }}
-fn write(_ cells: *[u64; 8], _ index: usize) {{ (*cells)[index] = 0 }}
+fn write(_ cells: *[u64; 8], _ index: usize) {{ unsafe {{ (*cells)[index] = 0 }} }}
 fn f(_ arr: mut [u64; 8], k: usize, j: usize, flag: bool) {{
     {body}
 }}

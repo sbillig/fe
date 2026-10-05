@@ -7,13 +7,13 @@ fn staged_without_iterations(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_staged_without_iterations() -> u256 {
     let mut cursor: u256 = 0
@@ -26,14 +26,14 @@ fn staged_other_member(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[0] = data.span()
         i += 1
     }
     if count == 0 { return 0 }
     let child = children[1]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_staged_other_member() -> u256 {
     let mut cursor: u256 = 0
@@ -46,14 +46,14 @@ fn staged_skipped_store(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         if i != 0 { children[i as usize] = data.span() }
         i += 1
     }
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_staged_skipped_store() -> u256 {
     let mut cursor: u256 = 0
@@ -66,14 +66,14 @@ fn staged_early_break(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         if i == 1 { break }
         children[i as usize] = data.span()
         i += 1
     }
     let child = children[1]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_staged_early_break() -> u256 {
     let mut cursor: u256 = 0
@@ -91,7 +91,7 @@ fn repeat_cell_maybe_empty(_ cursor: mut u256, _ count: u256) -> u256 {
     }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_repeat_cell_maybe_empty() -> u256 {
     let mut cursor: u256 = 0
@@ -105,7 +105,7 @@ fn changed_bound(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < limit {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         limit = 1
         i += 1
@@ -113,7 +113,7 @@ fn changed_bound(_ cursor: mut u256, _ count: u256) -> u256 {
     if count < 2 { return 0 }
     let child = children[1]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_changed_bound() -> u256 {
     let mut cursor: u256 = 0
@@ -127,14 +127,14 @@ fn reset_cells(_ cursor: mut u256, _ count: u256) -> u256 {
     while i < count {
         children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_reset_cells() -> u256 {
     let mut cursor: u256 = 0

@@ -5,11 +5,11 @@ use core::ptr
 fn store_zero_read_index(cursor: mut u256, index: usize) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[0] = data.span()
     let child = children[index]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 
 // Accepted: the matching caller reads the stored zero member.
@@ -27,11 +27,11 @@ pub fn zero_cell_wrong_index() -> u256 {
 fn store_one_read_index(cursor: mut u256, index: usize) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[1] = data.span()
     let child = children[index]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 
 // Accepted: the matching caller reads the stored nonzero member.
@@ -49,11 +49,11 @@ pub fn nonzero_cell_wrong_index() -> u256 {
 fn store_index_read_index(cursor: mut u256, index: usize) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[index] = data.span()
     let child = children[index]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 
 // Accepted: the same symbolic selector stores and reads one member.
@@ -65,11 +65,11 @@ pub fn same_symbolic_cell() -> u256 {
 fn store_zero_read_zero(cursor: mut u256, index: usize) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[0] = data.span()
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 
 // Accepted: a literal read of the stored zero member.
@@ -81,11 +81,11 @@ pub fn literal_zero_cell() -> u256 {
 fn store_one_read_one(cursor: mut u256, index: usize) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[1] = data.span()
     let child = children[1]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 
 // Accepted: a literal read of the stored nonzero member.
@@ -98,11 +98,11 @@ pub fn literal_nonzero_cell() -> u256 {
 fn store_zero_read_one(cursor: mut u256, index: usize) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[0] = data.span()
     let child = children[1]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn literal_wrong_nonzero_cell() -> u256 {
     let mut cursor: u256 = 0
@@ -113,11 +113,11 @@ pub fn literal_wrong_nonzero_cell() -> u256 {
 fn store_one_read_zero(cursor: mut u256, index: usize) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[1] = data.span()
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn literal_wrong_zero_cell() -> u256 {
     let mut cursor: u256 = 0

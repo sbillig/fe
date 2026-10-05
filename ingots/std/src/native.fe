@@ -36,9 +36,9 @@ impl Args {
     }
     pub fn get(self, _ index: usize) -> Arg {
         core::assert(index < self.len())
-        let bytes = *ptr::offset(self.argv, index as u256)
+        let bytes = unsafe { *ptr::offset(self.argv, index as u256) }
         let mut len: usize = 0
-        while *ptr::offset(bytes, len as u256) != 0 {
+        while unsafe { *ptr::offset(bytes, len as u256) } != 0 {
             len += 1
         }
         Arg { ptr: bytes, len }
@@ -51,6 +51,6 @@ impl Arg {
     }
     pub fn byte_at(self, _ index: usize) -> u8 {
         core::assert(index < self.len)
-        *ptr::offset(self.ptr, index as u256)
+        unsafe { *ptr::offset(self.ptr, index as u256) }
     }
 }

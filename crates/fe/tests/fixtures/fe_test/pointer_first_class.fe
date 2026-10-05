@@ -24,12 +24,12 @@ pub contract PointerBounds {
     recv PointerBoundsMsg {
         MemArrayRead {} {
             let array = core::ptr::MemArray<u256>::new_uninit(1)
-            let _value = *array.ptr_at(1)
+            let _value = unsafe { *array.ptr_at(1) }
         }
 
         MemArrayWrite {} {
             let array = core::ptr::MemArray<u256>::new_uninit(1)
-            *array.ptr_at(1) = 1
+            unsafe { *array.ptr_at(1) = 1 }
         }
 
         MemSpanSlice {} {
@@ -45,15 +45,15 @@ pub contract PointerBounds {
 }
 
 fn read_data(_ data: *Data) -> u256 {
-    data.a
+    unsafe { data.a }
 }
 
 fn write_data(_ data: *Data, value: u256) {
-    data.a = value
+    unsafe { data.a = value }
 }
 
 fn replace_holder_data(_ holder: *Holder, _ data: *Data) {
-    holder.data = data
+    unsafe { holder.data = data }
 }
 
 fn pointers_equal<T>(_ lhs: T, _ rhs: T) -> bool where T: core::ops::Eq {
@@ -63,23 +63,23 @@ fn pointers_equal<T>(_ lhs: T, _ rhs: T) -> bool where T: core::ops::Eq {
 #[test]
 fn test_first_class_memory_pointers() {
     let data = core::ptr::alloc<Data>()
-    data.a = 5
-    data.b = 8
+    unsafe { data.a = 5 }
+    unsafe { data.b = 8 }
 
     let words = core::ptr::cast<Data, u256>(data)
     let second = core::ptr::offset(words, 1)
-    *second = *second + 3
-    assert(data.a == 5)
-    assert(data.b == 11)
+    unsafe { *second = *second + 3 }
+    unsafe { assert(data.a == 5) }
+    unsafe { assert(data.b == 11) }
 
     let holder = Holder { data: data }
-    holder.data.b = holder.data.a + holder.data.b
-    assert(holder.data.b == 16)
-    assert(data.b == 16)
+    unsafe { holder.data.b = holder.data.a + holder.data.b }
+    unsafe { assert(holder.data.b == 16) }
+    unsafe { assert(data.b == 16) }
 
     let byte_ptr = core::ptr::byte_ptr(data)
     let roundtrip = core::ptr::cast<u8, Data>(byte_ptr)
-    let first = *roundtrip
+    let first = unsafe { *roundtrip }
     assert(first.a == 5)
     assert(first.b == 16)
 
@@ -88,8 +88,8 @@ fn test_first_class_memory_pointers() {
     assert(raw_array[0] == 19)
 
     let byte_alloc = core::ptr::alloc_bytes(1)
-    *byte_alloc = 37
-    assert(*byte_alloc == 37)
+    unsafe { *byte_alloc = 37 }
+    unsafe { assert(*byte_alloc == 37) }
 
     let mut array = core::ptr::alloc_array<u256>(2)
     array[0] = first.a
@@ -118,7 +118,7 @@ fn test_first_class_memory_pointers() {
     let pair_words = core::ptr::cast<u8, u256>(pair_bytes)
     assert(pair[0] == 13)
     assert(pair[1] == 21)
-    assert(*pair_words + *core::ptr::offset(pair_words, 1) == 34)
+    unsafe { assert(*pair_words + *core::ptr::offset(pair_words, 1) == 34) }
 }
 
 #[test]
@@ -128,10 +128,10 @@ fn test_pointer_parameter_field_access() {
     assert(read_data(data) == 42)
 
     let replacement = core::ptr::alloc<Data>()
-    replacement.a = 99
+    unsafe { replacement.a = 99 }
     let holder = core::ptr::alloc<Holder>()
     replace_holder_data(holder, replacement)
-    assert(holder.data.a == 99)
+    unsafe { assert(holder.data.a == 99) }
 }
 
 #[test]
@@ -257,18 +257,18 @@ fn test_typed_memory_slices_and_growable_buffers() {
 #[test]
 fn test_pointer_to_pointer_deref() {
     let p = core::ptr::alloc<u256>()
-    *p = 5
+    unsafe { *p = 5 }
     let pp = core::ptr::alloc<*u256>()
-    *pp = p
-    assert(*(*pp) == 5)
+    unsafe { *pp = p }
+    unsafe { assert(*(*pp) == 5) }
 }
 
 #[test]
 fn test_borrowed_pointer_deref() {
     let mut p = core::ptr::alloc<u256>()
     let borrowed = mut p
-    *borrowed = 3
-    assert(*p == 3)
+    unsafe { *borrowed = 3 }
+    unsafe { assert(*p == 3) }
 }
 
 #[test]

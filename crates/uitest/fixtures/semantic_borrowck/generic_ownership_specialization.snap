@@ -4,9 +4,9 @@ expression: diags
 input_file: fixtures/semantic_borrowck/generic_ownership_specialization.fe
 ---
 error[16-0002]: move conflict in `fn generic`
-  ┌─ generic_ownership_specialization.fe:7:5
+  ┌─ generic_ownership_specialization.fe:7:14
   │
 6 │     T::apply(pointer)
   │     ----------------- value is moved here
-7 │     *pointer
-  │     ^^^^^^^^ cannot use a value after it was moved
+7 │     unsafe { *pointer }
+  │              ^^^^^^^^ cannot use a value after it was moved

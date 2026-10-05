@@ -7,32 +7,32 @@ fn fill_and_overwrite(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u25
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
     children[0] = incoming
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_fill_and_overwrite() -> u256 {
     let cursor = ptr::alloc<u256>()
-    *cursor = 0
+    unsafe { *cursor = 0 }
     let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
-    fill_and_overwrite(mut *cursor, incoming, 2)
+    unsafe { fill_and_overwrite(mut *cursor, incoming, 2) }
 }
 
 // Rejected: an input span can alias the mutable cursor.
 fn read_input(_ cursor: mut u256, _ incoming: ptr::MemSpan) -> u256 {
     cursor += 1
-    *ptr::cast<u8, u256>(incoming.ptr())
+    unsafe { *ptr::cast<u8, u256>(incoming.ptr()) }
 }
 pub fn run_read_input() -> u256 {
     let cursor = ptr::alloc<u256>()
-    *cursor = 0
+    unsafe { *cursor = 0 }
     let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
-    read_input(mut *cursor, incoming)
+    unsafe { read_input(mut *cursor, incoming) }
 }
 
 // Rejected: every member stores the cursor-aliasing input span.
@@ -46,20 +46,20 @@ fn store_alias(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u256) -> u
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_store_alias() -> u256 {
     let cursor = ptr::alloc<u256>()
-    *cursor = 0
+    unsafe { *cursor = 0 }
     let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
-    store_alias(mut *cursor, incoming, 2)
+    unsafe { store_alias(mut *cursor, incoming, 2) }
 }
 
 // Rejected: every member holds the same span, so two members alias.
 fn same_pointer(_ count: u256) -> u256 {
     let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
     let data = ptr::MemBuffer::alloc(32)
-    *ptr::cast<u8, u256>(data.ptr()) = 7
+    unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     let mut i: u256 = 0
     while i < count {
         children[i as usize] = data.span()
@@ -67,8 +67,8 @@ fn same_pointer(_ count: u256) -> u256 {
     }
     let first = children[0]
     let second = children[1]
-    let borrowed = mut *ptr::cast<u8, u256>(first.ptr())
-    let value = *ptr::cast<u8, u256>(second.ptr())
+    let borrowed = unsafe { mut *ptr::cast<u8, u256>(first.ptr()) }
+    let value = unsafe { *ptr::cast<u8, u256>(second.ptr()) }
     borrowed = value
     value
 }
@@ -80,7 +80,7 @@ fn fill_and_clobber(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
@@ -88,7 +88,7 @@ fn fill_and_clobber(_ cursor: mut u256, _ count: u256) -> u256 {
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_fill_and_clobber() -> u256 {
     let mut cursor: u256 = 0

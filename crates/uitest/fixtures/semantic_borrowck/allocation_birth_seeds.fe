@@ -4,9 +4,9 @@ mod direct {
     struct Holder { pointer: *Item }
     fn make() -> *Holder {
         let item = ptr::alloc<Item>()
-        *item = Item { value: 42 }
+        unsafe { *item = Item { value: 42 } }
         let holder = ptr::alloc<Holder>()
-        *holder = Holder { pointer: item }
+        unsafe { *holder = Holder { pointer: item } }
         holder
     }
     fn forward() -> *Holder { make() }
@@ -14,8 +14,8 @@ mod direct {
         let mut counter: u64 = 0
         let mut holder = make()
         for _ in 0..2 { holder = make() }
-        let pointer = (*holder).pointer
-        let item = *pointer
+        let pointer = unsafe { (*holder).pointer }
+        let item = unsafe { *pointer }
         counter += 1
         core::assert(item.value == 42)
         core::assert(counter == 1)
@@ -28,9 +28,9 @@ mod forwarded {
     struct Holder { pointer: *Item }
     fn make() -> *Holder {
         let item = ptr::alloc<Item>()
-        *item = Item { value: 42 }
+        unsafe { *item = Item { value: 42 } }
         let holder = ptr::alloc<Holder>()
-        *holder = Holder { pointer: item }
+        unsafe { *holder = Holder { pointer: item } }
         holder
     }
     fn forward() -> *Holder { make() }
@@ -38,8 +38,8 @@ mod forwarded {
         let mut counter: u64 = 0
         let mut holder = make()
         for _ in 0..2 { holder = forward() }
-        let pointer = (*holder).pointer
-        let item = *pointer
+        let pointer = unsafe { (*holder).pointer }
+        let item = unsafe { *pointer }
         counter += 1
         core::assert(item.value == 42)
         core::assert(counter == 1)

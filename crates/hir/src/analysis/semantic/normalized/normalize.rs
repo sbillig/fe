@@ -3181,17 +3181,19 @@ fn exclusive(value: mut u256) -> bool { mutable(value) == 11 }
             "native_pointer_reads.fe".into(),
             r#"
 fn identity<T>(_ pointer: *T) -> *T { pointer }
-fn shared(slot: *ref u256) -> u256 { *slot }
-fn exclusive(slot: *mut u256) -> u256 { *slot }
-fn temporary(slot: *ref u256) -> u256 { *identity(slot) }
-fn nested(slots: **ref u256) -> u256 { *(*slots) }
-fn indexed(slot: *ref [u256; 2]) -> u256 { (*slot)[1] }
+fn shared(slot: *ref u256) -> u256 { unsafe { *slot } }
+fn exclusive(slot: *mut u256) -> u256 { unsafe { *slot } }
+fn temporary(slot: *ref u256) -> u256 { unsafe { *identity(slot) } }
+fn nested(slots: **ref u256) -> u256 { unsafe { *(*slots) } }
+fn indexed(slot: *ref [u256; 2]) -> u256 { unsafe { (*slot)[1] } }
 fn indexed_update(slot: *mut [u256; 2]) -> u256 {
-    (*slot)[1] += 1
-    (*slot)[1]
+    unsafe {
+        (*slot)[1] += 1
+        (*slot)[1]
+    }
 }
 struct Pair { n: u256 }
-fn field(slot: *ref Pair) -> u256 { (*slot).n }
+fn field(slot: *ref Pair) -> u256 { unsafe { (*slot).n } }
 "#,
         );
         let (top_mod, _) = db.top_mod(file);

@@ -146,7 +146,7 @@ fn nested_pointer_syntax_lowers_both_pointer_layers() {
         "nested_pointer_syntax_lowers_both_pointer_layers.fe".into(),
         r#"
 fn deref_once(value: **u256) -> *u256 {
-    *value
+    unsafe { *value }
 }
 "#,
     );
@@ -164,14 +164,14 @@ fn raw_pointer_assignments_preserve_native_value_types() {
 use core::ptr
 struct Slots { shared: *ref u256 }
 fn identity<T>(_ pointer: *T) -> *T { pointer }
-fn shared(slot: *ref u256, value: ref u256) { *slot = value }
-fn exclusive(slot: *mut u256, value: mut u256) { *slot = value }
-fn weaken(slot: *ref u256, value: mut u256) { *slot = value }
-fn temporary(slot: *ref u256, value: ref u256) { *identity(slot) = value }
-fn nested(slots: **ref u256, value: ref u256) { *(*slots) = value }
-fn field(slots: Slots, value: ref u256) { *slots.shared = value }
+fn shared(slot: *ref u256, value: ref u256) { unsafe { *slot = value } }
+fn exclusive(slot: *mut u256, value: mut u256) { unsafe { *slot = value } }
+fn weaken(slot: *ref u256, value: mut u256) { unsafe { *slot = value } }
+fn temporary(slot: *ref u256, value: ref u256) { unsafe { *identity(slot) = value } }
+fn nested(slots: **ref u256, value: ref u256) { unsafe { *(*slots) = value } }
+fn field(slots: Slots, value: ref u256) { unsafe { *slots.shared = value } }
 fn element(slots: *[ref u256; 2], value: ref u256) {
-    *ptr::offset(ptr::cast<[ref u256; 2], ref u256>(slots), 1) = value
+    unsafe { *ptr::offset(ptr::cast<[ref u256; 2], ref u256>(slots), 1) = value }
 }
 "#,
     );
@@ -197,7 +197,7 @@ fn element(slots: *[ref u256; 2], value: ref u256) {
 fn raw_pointer_assignments_reject_values_of_the_referent_type() {
     for kind in ["ref", "mut"] {
         let mut db = HirAnalysisTestDb::default();
-        let source = format!("fn invalid(slot: *{kind} u256) {{ *slot = 1 }}");
+        let source = format!("fn invalid(slot: *{kind} u256) {{ unsafe {{ *slot = 1 }} }}");
         let file = db.new_stand_alone("raw_pointer_wrong_assignment.fe".into(), &source);
         let (top_mod, _) = db.top_mod(file);
         let diags = diagnostics_for(&db, top_mod);
@@ -215,7 +215,7 @@ fn compound_assignment_requires_a_mutable_native_referent() {
             "struct Holder {{ shared: ref u256 }}\n\
              fn identity<T>(_ pointer: *T) -> *T {{ pointer }}\n\
              fn invalid(slot: *ref u256, mut holder: Holder, mut values: [ref u256; 1]) {{\n\
-                 {target} += 1\n\
+                 unsafe {{ {target} += 1 }}\n\
              }}"
         );
         let mut db = HirAnalysisTestDb::default();
@@ -232,7 +232,7 @@ fn compound_assignment_requires_a_mutable_native_referent() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "mutable_compound_assignment.fe".into(),
-        "fn valid(slot: *mut u256) { *slot += 1 }",
+        "fn valid(slot: *mut u256) { unsafe { *slot += 1 } }",
     );
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
@@ -280,7 +280,7 @@ impl Wrapper {
 fn make() -> Counter { Counter { value: 0 } }
 fn valid(mut counter: own Counter, pointer: *Counter) {
     counter.increment()
-    (*pointer).increment()
+    unsafe { (*pointer).increment() }
     make().increment()
 }
 "#,
@@ -294,7 +294,7 @@ fn native_pointer_reads_cannot_move_non_copy_referents() {
     for kind in ["ref", "mut"] {
         let source = format!(
             "struct Item {{ value: u256 }}\n\
-             fn invalid(slot: *{kind} Item) -> Item {{ *slot }}"
+             fn invalid(slot: *{kind} Item) -> Item {{ unsafe {{ *slot }} }}"
         );
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone("native_pointer_non_copy_read.fe".into(), &source);

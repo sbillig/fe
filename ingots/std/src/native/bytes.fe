@@ -76,12 +76,12 @@ impl ByteBuffer {
 
     pub fn byte_at(self, _ index: u64) -> u8 {
         core::assert(index < self.len)
-        *ptr::offset(self.data(), index as u256)
+        unsafe { *ptr::offset(self.data(), index as u256) }
     }
 
     pub fn set_byte(mut self, index: u64, value: u8) {
         core::assert(index < self.len)
-        *ptr::offset(self.data(), index as u256) = value
+        unsafe { *ptr::offset(self.data(), index as u256) = value }
     }
 
     /// Copy within the initialized extent, preserving overlapping source bytes.

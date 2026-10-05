@@ -54,13 +54,13 @@ fn fresh_moved_after_inner() {
     let mut x: u256 = 0
     while x < 2 {
         let item = ptr::alloc<Item>()
-        *item = Item { n: x }
+        unsafe { *item = Item { n: x } }
         let mut y: u256 = 0
         while y < 2 {
             y += 1
         }
-        touch(mut *item)
-        consume(*item)
+        unsafe { touch(mut *item) }
+        unsafe { consume(*item) }
         x += 1
     }
 }
@@ -85,10 +85,10 @@ fn moved_inside() {
     let mut x: u256 = 0
     while x < 2 {
         let item = ptr::alloc<Item>()
-        *item = Item { n: x }
+        unsafe { *item = Item { n: x } }
         let mut y: u256 = 0
         while y < 2 {
-            consume(*item)
+            unsafe { consume(*item) }
             y += 1
         }
         x += 1

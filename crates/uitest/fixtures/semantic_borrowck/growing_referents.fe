@@ -57,7 +57,7 @@ fn leaves(
     l7: Leaves<7>,
     l8: Leaves<8>,
 ) -> u256 {
-    l8.l7.value
+    unsafe { l8.l7.value }
 }
 
 // Symbolic array guards are instantiated by the referent inventory.

@@ -13,10 +13,10 @@ error[16-0001]: borrow conflict in `fn held_written_inside`
    │             ^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
 
 error[16-0002]: move conflict in `fn moved_inside`
-   ┌─ inner_loop_feedback.fe:91:21
+   ┌─ inner_loop_feedback.fe:91:30
    │
-91 │             consume(*item)
-   │                     ^^^^^
-   │                     │
-   │                     cannot use a value after it was moved
-   │                     value is moved here
+91 │             unsafe { consume(*item) }
+   │                              ^^^^^
+   │                              │
+   │                              cannot use a value after it was moved
+   │                              value is moved here

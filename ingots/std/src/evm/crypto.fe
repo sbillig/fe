@@ -199,7 +199,7 @@ pub fn keccak256(_ data: MemSpan) -> u256 {
 /// into one buffer without the packed builder's per-field bookkeeping.
 pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
     let buffer = ptr::alloc<[u256; N]>()
-    *buffer = words
+    unsafe { *buffer = words }
     ops::keccak256(offset: ptr::byte_ptr(buffer), len: N as u256 * 32)
 }
 

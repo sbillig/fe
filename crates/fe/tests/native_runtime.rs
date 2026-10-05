@@ -414,8 +414,8 @@ fn step() uses (handle: mut Handle) {
     handle.value += 1
     handle.calls += 1
 }
-fn replace(slot: *mut i32, value: mut i32) { *slot = value }
-fn increment(slot: *mut i32) { *slot += 1 }
+fn replace(slot: *mut i32, value: mut i32) { unsafe { *slot = value } }
+fn increment(slot: *mut i32) { unsafe { *slot += 1 } }
 pub fn main() -> i32 {
     let mut first: i32 = 20
     let mut second: i32 = 40
@@ -427,14 +427,14 @@ pub fn main() -> i32 {
     core::assert(handle.calls == 2)
     core::assert(handle.value == 22)
     let slot = ptr::alloc<mut i32>()
-    *slot = mut first
+    unsafe { *slot = mut first }
     increment(slot)
     replace(slot, value: mut second)
     increment(slot)
     // The heap slot must not retain a reference to a local when main returns.
     let retained = ptr::alloc<i32>()
-    *retained = 0
-    replace(slot, value: mut *retained)
+    unsafe { *retained = 0 }
+    unsafe { replace(slot, value: mut *retained) }
     core::assert(first == 23)
     core::assert(second == 41)
     0
@@ -873,7 +873,7 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
             false,
         ),
     ] {
-        fs::write(&source, format!("use core::ptr\npub fn main() -> i32 {{\nlet data = ptr::alloc_bytes(8)\n*data = 42\n{operation}\ncore::assert(*data == 42)\n0\n}}\n")).unwrap();
+        fs::write(&source, format!("use core::ptr\npub fn main() -> i32 {{\nlet data = ptr::alloc_bytes(8)\nunsafe {{ *data = 42 }}\n{operation}\nunsafe {{ core::assert(*data == 42) }}\n0\n}}\n")).unwrap();
         for level in ["0", "1", "2"] {
             let out = temp.path().join(format!("{name}-{level}"));
             build(&source, &out, level, &[]);

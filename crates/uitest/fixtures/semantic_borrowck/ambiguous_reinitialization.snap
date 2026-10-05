@@ -4,10 +4,10 @@ expression: diags
 input_file: fixtures/semantic_borrowck/ambiguous_reinitialization.fe
 ---
 error[16-0002]: move conflict in `fn restore`
-  ┌─ ambiguous_reinitialization.fe:8:5
+  ┌─ ambiguous_reinitialization.fe:8:14
   │
-6 │     let old = *first
-  │               ------ value is moved here
+6 │     let old = unsafe { *first }
+  │                        ------ value is moved here
 7 │     let destination = if flag { first } else { second }
-8 │     *destination = Item { n: 7 }
-  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot write through a moved value
+8 │     unsafe { *destination = Item { n: 7 } }
+  │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot write through a moved value

@@ -1299,8 +1299,8 @@ fn choose(first: ref u8, second: ref u8, use_first: bool) -> ref u8 {
                 r#"
 struct Buffer { ptr: *u8 }
 struct Loan { value: mut u8 }
-fn direct(_ ptr: *u8) -> mut u8 { mut *ptr }
-fn nested(_ buffer: Buffer) -> Loan { Loan { value: mut *buffer.ptr } }
+fn direct(_ ptr: *u8) -> mut u8 { unsafe { mut *ptr } }
+fn nested(_ buffer: Buffer) -> Loan { unsafe { Loan { value: mut *buffer.ptr } } }
 "#
                 .to_string(),
             ),

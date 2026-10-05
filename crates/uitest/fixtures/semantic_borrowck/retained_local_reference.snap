@@ -10,8 +10,8 @@ error[16-0003]: invalid return borrow in `fn read_initialized_reference`
    │ ╭─────────────────────────────────────────^
  5 │ │     let value: u256 = 7
  6 │ │     let slot = ptr::alloc<ref u256>()
- 7 │ │     *slot = ref value
- 8 │ │     let result: u256 = *slot
+ 7 │ │     unsafe { *slot = ref value }
+ 8 │ │     let result: u256 = unsafe { *slot }
  9 │ │     result
 10 │ │ }
    │ ╰─^ cannot leave a borrow of local `value` in caller-accessible storage

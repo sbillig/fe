@@ -4,27 +4,27 @@ expression: diags
 input_file: fixtures/semantic_borrowck/loop_reinitialization.fe
 ---
 error[16-0002]: move conflict in `fn caller`
-    ┌─ loop_reinitialization.fe:108:17
+    ┌─ loop_reinitialization.fe:108:26
     │
 107 │         reinit(pointer, count)
     │         ---------------------- value is moved here
-108 │         consume(*pointer)
-    │                 ^^^^^^^^ cannot use a value after it was moved
+108 │         unsafe { consume(*pointer) }
+    │                          ^^^^^^^^ cannot use a value after it was moved
 
 error[16-0002]: move conflict in `fn caller`
-    ┌─ loop_reinitialization.fe:129:17
+    ┌─ loop_reinitialization.fe:129:26
     │
-127 │         consume(*pointer)
-    │                 -------- value is moved here
+127 │         unsafe { consume(*pointer) }
+    │                          -------- value is moved here
 128 │         reinit(pointer, count)
-129 │         consume(*pointer)
-    │                 ^^^^^^^^ cannot use a value after it was moved
+129 │         unsafe { consume(*pointer) }
+    │                          ^^^^^^^^ cannot use a value after it was moved
 
 error[16-0002]: move conflict in `fn caller`
-    ┌─ loop_reinitialization.fe:150:17
+    ┌─ loop_reinitialization.fe:150:26
     │
-148 │         consume(*pointer)
-    │                 -------- value is moved here
+148 │         unsafe { consume(*pointer) }
+    │                          -------- value is moved here
 149 │         reinit(pointer, count)
-150 │         consume(*pointer)
-    │                 ^^^^^^^^ cannot use a value after it was moved
+150 │         unsafe { consume(*pointer) }
+    │                          ^^^^^^^^ cannot use a value after it was moved

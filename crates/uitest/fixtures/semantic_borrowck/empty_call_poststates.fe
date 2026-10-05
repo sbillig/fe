@@ -3,12 +3,12 @@ struct One { pointer: *u8 }
 struct Two { pointer: *u8, other: *u8 }
 fn fill(_ one: Option<*One>, _ two: Option<*Two>, _ replacement: *u8) {
     match one {
-        Option::Some(target) => { *target = One { pointer: replacement } }
+        Option::Some(target) => { unsafe { *target = One { pointer: replacement } } }
         Option::None => {}
     }
     match two {
         Option::Some(target) => {
-            *target = Two { pointer: replacement, other: replacement }
+            unsafe { *target = Two { pointer: replacement, other: replacement } }
         }
         Option::None => {}
     }
@@ -19,35 +19,35 @@ fn both_absent() { fill(Option::None, Option::None, ptr::alloc_bytes(1)) }
 fn present_0_0() {
     let shared = ptr::alloc_bytes(1)
     let one = ptr::alloc<One>()
-    *one = One { pointer: ptr::alloc_bytes(1) }
+    unsafe { *one = One { pointer: ptr::alloc_bytes(1) } }
     let two = ptr::alloc<Two>()
-    *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) }
+    unsafe { *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) } }
     fill(Option::None, Option::None, shared)
 }
 
 fn present_1_0() {
     let shared = ptr::alloc_bytes(1)
     let one = ptr::alloc<One>()
-    *one = One { pointer: ptr::alloc_bytes(1) }
+    unsafe { *one = One { pointer: ptr::alloc_bytes(1) } }
     let two = ptr::alloc<Two>()
-    *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) }
+    unsafe { *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) } }
     fill(Option::Some(one), Option::None, shared)
 }
 
 fn present_0_1() {
     let shared = ptr::alloc_bytes(1)
     let one = ptr::alloc<One>()
-    *one = One { pointer: ptr::alloc_bytes(1) }
+    unsafe { *one = One { pointer: ptr::alloc_bytes(1) } }
     let two = ptr::alloc<Two>()
-    *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) }
+    unsafe { *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) } }
     fill(Option::None, Option::Some(two), shared)
 }
 
 fn present_1_1() {
     let shared = ptr::alloc_bytes(1)
     let one = ptr::alloc<One>()
-    *one = One { pointer: ptr::alloc_bytes(1) }
+    unsafe { *one = One { pointer: ptr::alloc_bytes(1) } }
     let two = ptr::alloc<Two>()
-    *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) }
+    unsafe { *two = Two { pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) } }
     fill(Option::Some(one), Option::Some(two), shared)
 }

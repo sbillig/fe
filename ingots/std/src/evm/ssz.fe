@@ -449,8 +449,10 @@ fn alloc_pair(_ left: u256, _ right: u256) -> *ChunkPair {
 
 #[inline(always)]
 fn write_pair(_ scratch: *ChunkPair, _ left: u256, _ right: u256) {
-    scratch.left = left
-    scratch.right = right
+    unsafe {
+        scratch.left = left
+        scratch.right = right
+    }
 }
 
 #[inline(always)]

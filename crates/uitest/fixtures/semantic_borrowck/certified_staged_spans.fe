@@ -7,14 +7,14 @@ fn stage_and_read(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_stage_and_read(_ count: u256) -> u256 {
     let mut cursor: u256 = 0
@@ -27,7 +27,7 @@ fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
@@ -36,7 +36,7 @@ fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
     while j < count {
         let child = children[j as usize]
         cursor += 1
-        sum += *ptr::cast<u8, u256>(child.ptr())
+        unsafe { sum += *ptr::cast<u8, u256>(child.ptr()) }
         j += 1
     }
     sum
@@ -51,7 +51,7 @@ fn make_children(_ count: u256) -> ptr::MemArray<ptr::MemSpan> {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
@@ -64,7 +64,7 @@ fn read_returned_first(_ cursor: mut u256, _ count: u256) -> u256 {
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_read_returned_first(_ count: u256) -> u256 {
     let mut cursor: u256 = 0
@@ -79,7 +79,7 @@ fn read_returned_all(_ cursor: mut u256, _ count: u256) -> u256 {
     while j < count {
         let child = children[j as usize]
         cursor += 1
-        sum += *ptr::cast<u8, u256>(child.ptr())
+        unsafe { sum += *ptr::cast<u8, u256>(child.ptr()) }
         j += 1
     }
     sum
@@ -98,7 +98,7 @@ fn read_uninitialized(_ cursor: mut u256) -> u256 {
     let children = make_uninitialized()
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_read_uninitialized() -> u256 {
     let mut cursor: u256 = 0
@@ -111,7 +111,7 @@ fn maybe_children(_ count: u256, _ fill: bool) -> ptr::MemArray<ptr::MemSpan> {
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()
         i += 1
     }
@@ -123,7 +123,7 @@ fn read_maybe_filled(_ cursor: mut u256, _ fill: bool) -> u256 {
     let children = maybe_children(2, fill)
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_read_maybe_filled(_ fill: bool) -> u256 {
     let mut cursor: u256 = 0
@@ -136,16 +136,16 @@ fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
     let mut i: u256 = 0
     while i < count {
         let noise = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(noise.ptr()) = 4
+        unsafe { *ptr::cast<u8, u256>(noise.ptr()) = 4 }
         let data = ptr::MemBuffer::alloc(32)
-        *ptr::cast<u8, u256>(data.ptr()) = 7
+        unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[0] = data.span()
         i += 1
     }
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
-    *ptr::cast<u8, u256>(child.ptr())
+    unsafe { *ptr::cast<u8, u256>(child.ptr()) }
 }
 pub fn run_repeat_cell(_ count: u256) -> u256 {
     let mut cursor: u256 = 0

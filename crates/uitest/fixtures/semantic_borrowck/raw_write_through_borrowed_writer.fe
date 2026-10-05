@@ -13,7 +13,7 @@ struct Writer {
 fn copy_in_loop(_ q: Arr, w: mut Writer) {
     let mut i: u256 = 0
     while i < 2 {
-        *w.p = *q.ptr
+        unsafe { *w.p = *q.ptr }
         i += 1
     }
 }
@@ -26,7 +26,7 @@ fn local_writer(_ q: Arr, _ p: *u256) -> u256 {
     copy_in_loop(q, w: mut w)
     r = 1
     let again = mut w
-    *again.p
+    unsafe { *again.p }
 }
 
 // Rejected: the caller cannot establish separation of the borrowed writer
@@ -34,7 +34,7 @@ fn local_writer(_ q: Arr, _ p: *u256) -> u256 {
 fn raw_writer(_ q: Arr, _ wp: *Writer) {
     let mut local: u256 = 0
     let r = mut local
-    copy_in_loop(q, w: mut *wp)
+    unsafe { copy_in_loop(q, w: mut *wp) }
     r = 1
 }
 

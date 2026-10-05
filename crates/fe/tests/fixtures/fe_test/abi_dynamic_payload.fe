@@ -58,19 +58,19 @@ pub contract BytesViewBounds {
 
         InvalidBytesMetadata {} {
             let data = ptr::alloc_bytes(32)
-            *ptr::cast<u8, u256>(data) = 1
+            unsafe { *ptr::cast<u8, u256>(data) = 1 }
             let _bytes = Bytes::from_abi_tail(data, len: 1, size: 32)
         }
 
         InvalidDynArrayMetadata {} {
             let data = ptr::alloc_bytes(32)
-            *ptr::cast<u8, u256>(data) = 2
+            unsafe { *ptr::cast<u8, u256>(data) = 2 }
             let _array: DynArray<u256> = DynArray::from_abi_tail(data, len: 1, size: 32)
         }
 
         OversizedStaticDynArrayMetadata {} {
             let data = ptr::alloc_bytes(96)
-            *ptr::cast<u8, u256>(data) = 1
+            unsafe { *ptr::cast<u8, u256>(data) = 1 }
             let _array: DynArray<u256> = DynArray::from_abi_tail(data, len: 1, size: 96)
         }
     }

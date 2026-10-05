@@ -3533,7 +3533,7 @@ mod tests {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
             "internal_ctfe_pointer_borrow.fe".into(),
-            "const fn external(p: *u8) -> mut u8 { mut *p }",
+            "const fn external(p: *u8) -> mut u8 { unsafe { mut *p } }",
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);

@@ -110,7 +110,7 @@ fn shuffles_keep_every_element() {
     let slice = memory.as_slice()
     let mut i: u256 = 0
     while i < 5 {
-        *slice.ptr_at(i) = i + 1
+        unsafe { *slice.ptr_at(i) = i + 1 }
         i += 1
     }
     with (Rng = rng) {
@@ -119,7 +119,7 @@ fn shuffles_keep_every_element() {
     let mut total: u256 = 0
     let mut k: u256 = 0
     while k < 5 {
-        total += *slice.ptr_at(k)
+        unsafe { total += *slice.ptr_at(k) }
         k += 1
     }
     assert!(total == 15)

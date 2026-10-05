@@ -10,35 +10,35 @@ error[16-0001]: borrow conflict in `fn unguarded_native_read`
     │     ^^^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
 
 error[16-0002]: move conflict in `fn duplicate_move`
-   ┌─ boolean_factory_loop.fe:27:17
+   ┌─ boolean_factory_loop.fe:27:26
    │
-26 │         consume(*p)
-   │                 -- value is moved here
-27 │         consume(*p)
-   │                 ^^ cannot use a value after it was moved
+26 │         unsafe { consume(*p) }
+   │                          -- value is moved here
+27 │         unsafe { consume(*p) }
+   │                          ^^ cannot use a value after it was moved
 
 error[16-0002]: move conflict in `fn old_moved_before_selection`
-   ┌─ boolean_factory_loop.fe:63:13
+   ┌─ boolean_factory_loop.fe:63:22
    │
-61 │     consume(*old)
-   │             ---- value is moved here
+61 │     unsafe { consume(*old) }
+   │                      ---- value is moved here
 62 │     let selected = maybe(flag, old)
-63 │     consume(*selected)
-   │             ^^^^^^^^^ cannot use a value after it was moved
+63 │     unsafe { consume(*selected) }
+   │                      ^^^^^^^^^ cannot use a value after it was moved
 
 error[16-0002]: move conflict in `fn independent_choices`
-   ┌─ boolean_factory_loop.fe:72:13
+   ┌─ boolean_factory_loop.fe:72:22
    │
-71 │     consume(*first)
-   │             ------ value is moved here
-72 │     consume(*second)
-   │             ^^^^^^^ cannot use a value after it was moved
+71 │     unsafe { consume(*first) }
+   │                      ------ value is moved here
+72 │     unsafe { consume(*second) }
+   │                      ^^^^^^^ cannot use a value after it was moved
 
 error[16-0002]: move conflict in `fn repeated_boolean_load`
-    ┌─ boolean_factory_loop.fe:116:17
+    ┌─ boolean_factory_loop.fe:116:26
     │
-116 │         consume(*selected)
-    │                 ^^^^^^^^^
-    │                 │
-    │                 cannot use a value after it was moved
-    │                 value is moved here
+116 │         unsafe { consume(*selected) }
+    │                          ^^^^^^^^^
+    │                          │
+    │                          cannot use a value after it was moved
+    │                          value is moved here

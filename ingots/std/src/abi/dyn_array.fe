@@ -285,7 +285,7 @@ impl<T> DynVec<T>
         let parts = ptr::cast<u8, MemSpan>(ptr::alloc_bytes(len * size_of<MemSpan>()))
         let mut i: u256 = 0
         while i < len {
-            *ptr::offset(parts, i) = part
+            unsafe { *ptr::offset(parts, i) = part }
             i += 1
         }
         DynVec { parts, capacity: len, len, parts_size: len * part.len() }
@@ -314,7 +314,7 @@ impl<T> DynVec<T>
             self.capacity = capacity
         }
         let part = encode_alloc<Sol, T>(value).span()
-        *ptr::offset(self.parts, self.len) = part
+        unsafe { *ptr::offset(self.parts, self.len) = part }
         self.parts_size += part.len()
         self.len += 1
     }
@@ -328,8 +328,8 @@ impl<T> DynVec<T>
 
         let part = encode_alloc<Sol, T>(value).span()
         let slot = ptr::offset(self.parts, index)
-        self.parts_size = self.parts_size - (*slot).len() + part.len()
-        *slot = part
+        self.parts_size = self.parts_size - unsafe { (*slot).len() } + part.len()
+        unsafe { *slot = part }
     }
 
     /// Assemble the elements into an ABI-encodable `DynArray`.
@@ -355,7 +355,7 @@ fn assemble_dyn_array<T>(_ parts: *MemSpan, count: u256, parts_size: u256) -> Dy
     let mut tail = count * head
     let mut i: u256 = 0
     while i < count {
-        let part = *ptr::offset(parts, i)
+        let part = unsafe { *ptr::offset(parts, i) }
         if T::IS_DYNAMIC {
             store_word(ptr: ptr::offset_bytes(root, i * 32), value: tail)
         }

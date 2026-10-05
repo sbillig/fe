@@ -46,7 +46,7 @@ pub fn encode_uint(_ value: u256) -> Bytes {
         return Bytes::from_word_prefix(word: value << 248, len: 1)
     }
     let out = ptr::alloc_bytes(1 + len)
-    *out = (0x80 + len).downcast_truncate()
+    unsafe { *out = (0x80 + len).downcast_truncate() }
     write_be(ptr::offset_bytes(out, 1), value, len)
     Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: 1 + len))
 }
@@ -95,11 +95,11 @@ fn header_len(_ len: u256) -> u256 {
 // whose payload has `len` bytes.
 fn write_header(_ dest: *u8, offset: u256, len: u256) {
     if len < 56 {
-        *dest = (offset + len).downcast_truncate()
+        unsafe { *dest = (offset + len).downcast_truncate() }
         return
     }
     let len_len = byte_len(len)
-    *dest = (offset + 55 + len_len).downcast_truncate()
+    unsafe { *dest = (offset + 55 + len_len).downcast_truncate() }
     write_be(ptr::offset_bytes(dest, 1), value: len, len_len)
 }
 
@@ -119,7 +119,7 @@ fn write_be(_ dest: *u8, value: u256, _ len: u256) {
     let mut i = len
     while i > 0 {
         i -= 1
-        *ptr::offset_bytes(dest, i) = rest.downcast_truncate()
+        unsafe { *ptr::offset_bytes(dest, i) = rest.downcast_truncate() }
         rest >>= 8
     }
 }
@@ -200,7 +200,7 @@ impl Item {
         let mut i: usize = 0
         while !rest.is_empty() {
             let (item, tail) = split(rest).unwrap()
-            *items.ptr_at(i) = item
+            unsafe { *items.ptr_at(i) = item }
             rest = tail
             i += 1
         }

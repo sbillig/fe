@@ -4,25 +4,25 @@ expression: diags
 input_file: fixtures/semantic_borrowck/native_reference_arrays.fe
 ---
 error[16-0001]: borrow conflict in `fn load_uninitialized`
-   ┌─ native_reference_arrays.fe:11:13
+   ┌─ native_reference_arrays.fe:11:22
    │
-11 │     consume(*pointer)
-   │             ^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
+11 │     unsafe { consume(*pointer) }
+   │                      ^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
 
 error[16-0001]: borrow conflict in `fn load_uninitialized_mixed`
-   ┌─ native_reference_arrays.fe:17:19
+   ┌─ native_reference_arrays.fe:17:28
    │
-17 │     consume_mixed(*pointer)
-   │                   ^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
+17 │     unsafe { consume_mixed(*pointer) }
+   │                            ^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
 
 error[16-0001]: borrow conflict in `fn clobber_then_load`
-   ┌─ native_reference_arrays.fe:34:13
+   ┌─ native_reference_arrays.fe:36:22
    │
-34 │     consume(*values)
-   │             ^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
+36 │     unsafe { consume(*values) }
+   │                      ^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
 
 error[16-0001]: borrow conflict in `fn clobber_overlapping`
-   ┌─ native_reference_arrays.fe:56:5
+   ┌─ native_reference_arrays.fe:58:5
    │
-56 │     clobber_other_then_load(values, other: ptr::cast<[ref u256; 2], u8>(values))
+58 │     clobber_other_then_load(values, other: ptr::cast<[ref u256; 2], u8>(values))
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write

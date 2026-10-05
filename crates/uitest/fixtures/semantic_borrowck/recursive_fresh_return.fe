@@ -4,7 +4,7 @@ struct Item { n: u256 }
 fn consume(_ item: own Item) {}
 fn initialized(_ n: u256) -> *Item {
     let p = core::ptr::alloc<Item>()
-    *p = Item { n }
+    unsafe { *p = Item { n } }
     p
 }
 
@@ -13,24 +13,24 @@ fn recursive(_ n: u256, depth: u256) -> *Item {
     if depth == 0 { initialized(n) }
     else { recursive(n, depth: depth - 1) }
 }
-fn example() { consume(*recursive(7, depth: 2)) }
+fn example() { unsafe { consume(*recursive(7, depth: 2)) } }
 
 // Accepted: recursion forwards one existing allocation.
 fn forward_recursive(_ pointer: *Item, depth: u256) -> *Item {
     if depth == 0 { pointer }
     else { forward_recursive(pointer, depth: depth - 1) }
 }
-fn forward_existing() { consume(*forward_recursive(initialized(7), depth: 2)) }
+fn forward_existing() { unsafe { consume(*forward_recursive(initialized(7), depth: 2)) } }
 
 // Rejected: the stored pointer can be an older object from the same loop
 // allocation site, so reinitializing the result does not restore it.
 fn make_with_previous(_ slot: **Item, _ n: u256) -> *Item {
     let mut current = core::ptr::alloc<Item>()
-    *slot = current
+    unsafe { *slot = current }
     let mut i: u256 = 0
     while i < n {
         current = core::ptr::alloc<Item>()
-        if i + 1 < n { *slot = current }
+        unsafe { if i + 1 < n { *slot = current } }
         i += 1
     }
     current
@@ -38,10 +38,10 @@ fn make_with_previous(_ slot: **Item, _ n: u256) -> *Item {
 fn stored_previous_object() {
     let slot = core::ptr::alloc<*Item>()
     let result = make_with_previous(slot, 3)
-    *result = Item { n: 1 }
-    consume(*(*slot))
-    *result = Item { n: 1 }
-    consume(*(*slot))
+    unsafe { *result = Item { n: 1 } }
+    unsafe { consume(*(*slot)) }
+    unsafe { *result = Item { n: 1 } }
+    unsafe { consume(*(*slot)) }
 }
 
 // Accepted: fresh recursive results converge inside a caller loop.
@@ -49,7 +49,7 @@ fn loop_recursive(_ count: u256) {
     let mut i: u256 = 0
     while i < count {
         let p = recursive(i, depth: 2)
-        consume(*p)
+        unsafe { consume(*p) }
         i += 1
     }
 }
@@ -66,7 +66,7 @@ fn loop_mutual(_ count: u256) {
     let mut i: u256 = 0
     while i < count {
         let p = first(i, depth: 2)
-        consume(*p)
+        unsafe { consume(*p) }
         i += 1
     }
 }
@@ -74,10 +74,10 @@ fn loop_mutual(_ count: u256) {
 // Rejected: a later fresh result does not revive an older moved one.
 fn older_moved_result() {
     let old = recursive(0, depth: 2)
-    consume(*old)
+    unsafe { consume(*old) }
     let fresh = recursive(1, depth: 2)
-    consume(*fresh)
-    consume(*old)
+    unsafe { consume(*fresh) }
+    unsafe { consume(*old) }
 }
 
 fn maybe(_ old: *Item, _ n: u256, depth: u256, pick: bool) -> *Item {
@@ -89,9 +89,9 @@ fn maybe(_ old: *Item, _ n: u256, depth: u256, pick: bool) -> *Item {
 // Rejected: the recursive result may be the old moved pointer.
 fn fresh_or_old() {
     let old = initialized(0)
-    consume(*old)
+    unsafe { consume(*old) }
     let selected = maybe(old, 1, depth: 2, pick: false)
-    consume(*selected)
+    unsafe { consume(*selected) }
 }
 
 fn recursive_slot(depth: u256) -> *ref u256 {
@@ -102,12 +102,12 @@ fn recursive_slot(depth: u256) -> *ref u256 {
 // Rejected: a recursively returned native slot is still uninitialized.
 fn read_recursive_slot() {
     let slot = recursive_slot(depth: 2)
-    let loaded: u256 = *slot
+    let loaded: u256 = unsafe { *slot }
 }
 
 fn store(_ slot: **Item) -> *Item {
     let p = recursive(1, depth: 2)
-    *slot = p
+    unsafe { *slot = p }
     p
 }
 
@@ -115,14 +115,14 @@ fn store(_ slot: **Item) -> *Item {
 fn stored_result() {
     let slot = core::ptr::alloc<*Item>()
     let p = store(slot)
-    consume(*p)
-    consume(*(*slot))
+    unsafe { consume(*p) }
+    unsafe { consume(*(*slot)) }
 }
 
 fn store_in_cycle(_ slot: **Item, depth: u256) -> *Item {
     let p = if depth == 0 { initialized(1) }
         else { store_in_cycle(slot, depth: depth - 1) }
-    *slot = p
+    unsafe { *slot = p }
     p
 }
 
@@ -130,16 +130,16 @@ fn store_in_cycle(_ slot: **Item, depth: u256) -> *Item {
 fn stored_in_cycle() {
     let slot = core::ptr::alloc<*Item>()
     let p = store_in_cycle(slot, depth: 2)
-    consume(*p)
-    consume(*(*slot))
+    unsafe { consume(*p) }
+    unsafe { consume(*(*slot)) }
 }
 
-fn write(_ p: *Item) { (*p).n = 7 }
+fn write(_ p: *Item) { unsafe { (*p).n = 7 } }
 
 // Rejected: a call can still write through the recursively returned object.
 fn reachable_effect() {
     let p = recursive(1, depth: 2)
-    let loan = mut (*p).n
+    let loan = unsafe { mut (*p).n }
     write(p)
     loan = 3
 }
@@ -148,7 +148,7 @@ fn store_after_recursion(_ slot: **Item, depth: u256) -> *Item {
     if depth == 0 { initialized(1) }
     else {
         let p = store_after_recursion(slot, depth: depth - 1)
-        *slot = p
+        unsafe { *slot = p }
         p
     }
 }
@@ -157,5 +157,5 @@ fn store_after_recursion(_ slot: **Item, depth: u256) -> *Item {
 fn unsupported_poststate() {
     let slot = core::ptr::alloc<*Item>()
     let p = store_after_recursion(slot, depth: 2)
-    let n = (*p).n
+    let n = unsafe { (*p).n }
 }

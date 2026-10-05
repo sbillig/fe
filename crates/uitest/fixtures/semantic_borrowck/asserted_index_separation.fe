@@ -7,26 +7,26 @@ fn consume(_ item: own Item) {}
 fn read_other(index: usize) -> u256 {
     assert!(index == 1)
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[index].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[index].n }
 }
 
 // Accepted: the literal index is disjoint from the moved element.
 fn read_constant(index: usize) -> u256 {
     assert!(index == 1)
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[1].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[1].n }
 }
 
 // Rejected: an unconstrained index may select the moved element.
 fn read_unproved(index: usize) -> u256 {
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[index].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[index].n }
 }
 
 // Rejected: a new scalar-cell version cannot reuse the earlier assertion.
@@ -35,9 +35,9 @@ fn read_changed(index: usize) -> u256 {
     assert!(selector == 1)
     selector = 0
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[selector].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[selector].n }
 }
 
 fn check_one(_ index: usize) {
@@ -56,34 +56,34 @@ fn check_when(_ index: usize, _ enabled: bool) {
 fn read_checked(index: usize) -> u256 {
     check_one(index)
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[index].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[index].n }
 }
 
 // Rejected: the helper's assertion still allows element zero.
 fn read_small(index: usize) -> u256 {
     check_small(index)
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[index].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[index].n }
 }
 
 // Rejected: the helper can return without asserting.
 fn read_conditional(index: usize, enabled: bool) -> u256 {
     check_when(index, enabled)
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[index].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[index].n }
 }
 
 // Accepted: the helper asserts on the path selected by the caller.
 fn read_enabled(index: usize) -> u256 {
     check_when(index, true)
     let items = ptr::alloc<[Item; 2]>()
-    *items = [Item { n: 10 }, Item { n: 20 }]
-    consume((*items)[0])
-    (*items)[index].n
+    unsafe { *items = [Item { n: 10 }, Item { n: 20 }] }
+    unsafe { consume((*items)[0]) }
+    unsafe { (*items)[index].n }
 }
