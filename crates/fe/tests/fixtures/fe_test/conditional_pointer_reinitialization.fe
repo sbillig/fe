@@ -1,0 +1,41 @@
+use core::{Option, ptr}
+struct Token { data: *u8 }
+struct Slot { pointer: *Option<Token> }
+struct Buffer { data: *u8, marker: u256 }
+fn clear(_ state: mut Buffer) {
+    ptr::zero_bytes(ptr: state.data, len: 1)
+    state.marker = 1
+}
+fn release(_ value: own Token) {
+    ptr::zero_bytes(ptr: value.data, len: 1)
+}
+fn run_children(_ state: mut Buffer, _ first: own Token) {
+    let slot = ptr::alloc<Option<Token>>()
+    *slot = Option::Some(first)
+    let mut holder = Slot { pointer: slot }
+    while true {
+        let value = *holder.pointer
+        *holder.pointer = Option::None
+        match value {
+            Option::Some(value,) => {
+                clear(mut state)
+                release(value)
+            },
+            Option::None => {
+                break
+            },
+        }
+    }
+}
+#[test]
+fn cleanup_preserves_reinitialization_through_a_pointer_field() {
+    let data = ptr::alloc<u8>()
+    *data = 12
+    let child = ptr::alloc<u8>()
+    *child = 25
+    let mut state = Buffer { data, marker: 0 }
+    run_children(mut state, Token { data: child })
+    assert(*data == 0)
+    assert(*child == 0)
+    assert(state.marker == 1)
+}

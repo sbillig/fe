@@ -337,6 +337,24 @@ impl<'db> Borrowck<'db> {
     }
 
     pub fn analyze_availability(&self) -> AvailabilityAnalysis<'db> {
+        // Infer stronger caller obligations only when they are needed to
+        // establish ownership safety. Accepted bodies retain their contracts.
+        let analysis = self.analyze_availability_with_conditional_writes(false);
+        if analysis.diagnostic.is_none() {
+            return analysis;
+        }
+        let conditional = self.analyze_availability_with_conditional_writes(true);
+        if conditional.diagnostic.is_none() {
+            conditional
+        } else {
+            analysis
+        }
+    }
+
+    fn analyze_availability_with_conditional_writes(
+        &self,
+        conditional_writes: bool,
+    ) -> AvailabilityAnalysis<'db> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("availability");
         let mut entries = vec![None; self.body.blocks.len()];
@@ -365,7 +383,13 @@ impl<'db> Borrowck<'db> {
                 for (index, _) in self.before[block_index].iter().enumerate() {
                     #[cfg(feature = "borrowck-profile")]
                     profile.point("evaluate", block_index, index);
-                    self.evaluate_availability(&mut state, block_index, index, None);
+                    self.evaluate_availability(
+                        &mut state,
+                        block_index,
+                        index,
+                        conditional_writes,
+                        None,
+                    );
                 }
                 let Some(terminal) = &self.terminal[block_index] else {
                     continue;
@@ -517,7 +541,13 @@ impl<'db> Borrowck<'db> {
             };
             for (index, _) in self.before[block_index].iter().enumerate() {
                 analysis.report_errors = !self.validation_dependencies[block_index][index];
-                self.evaluate_availability(&mut state, block_index, index, Some(&mut analysis));
+                self.evaluate_availability(
+                    &mut state,
+                    block_index,
+                    index,
+                    conditional_writes,
+                    Some(&mut analysis),
+                );
             }
             analysis.report_errors =
                 !self.validation_dependencies[block_index][block.statements.len()];
@@ -639,6 +669,7 @@ impl<'db> Borrowck<'db> {
         state: &mut AvailabilityState<'db>,
         block: usize,
         index: usize,
+        conditional_writes: bool,
         mut analysis: Option<&mut AvailabilityAnalysis<'db>>,
     ) {
         let statement = &self.body.blocks[block].statements[index];
@@ -717,6 +748,16 @@ impl<'db> Borrowck<'db> {
                 }
                 if let Some(write) = access.region.definite_write() {
                     self.initialize_availability(state, write.region());
+                } else if conditional_writes
+                    && let Some(write) = self.conditional_write_initialization(
+                        &access.region.with_guard(&state.guard),
+                        access.origin,
+                    )
+                {
+                    self.initialize_availability(state, &write.region);
+                    if let Some(analysis) = analysis.as_deref_mut() {
+                        analysis.separations.extend(write.separations);
+                    }
                 }
             }
         }

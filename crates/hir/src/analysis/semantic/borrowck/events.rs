@@ -953,9 +953,11 @@ impl<'db> Borrowck<'db> {
                 };
                 let mut excluded = false;
                 for pair in pairs {
-                    let Some(requirement) =
-                        clobber_exclusion(&pair.access, pair.possible, separation_origin)
-                    else {
+                    let Some(requirement) = clobber_exclusion(
+                        &[&pair.access, &pair.borrowed],
+                        pair.possible.clone(),
+                        separation_origin,
+                    ) else {
                         excluded = false;
                         break;
                     };
@@ -1060,13 +1062,56 @@ impl<'db> Borrowck<'db> {
             if pair.definite.is_some() {
                 return None;
             }
-            let exclusion = clobber_exclusion(&pair.access, pair.possible, separation_origin)?;
+            let exclusion = clobber_exclusion(
+                &[&pair.access, &pair.borrowed],
+                pair.possible.clone(),
+                separation_origin,
+            )?;
             self.discharge(&exclusion, origin, &mut facts);
             if facts.diagnostic.is_some() {
                 return None;
             }
         }
         Some(facts.deferred)
+    }
+
+    /// Recover one definite destination by requiring every conditional arbitrary
+    /// alternative to be absent. These are physical call-boundary obligations,
+    /// not authority to use an otherwise invalid pointer.
+    pub(super) fn conditional_write_initialization(
+        &self,
+        region: &RegionSet<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Option<ConditionalInitialization<'db>> {
+        if region.clauses().len() > SEPARATION_PAIR_LIMIT {
+            return None;
+        }
+        let separation_origin = SeparationOrigin {
+            owner: self.instance.key(self.db).owner(self.db),
+            template_owner: self.body.template_owner,
+            borrow: origin,
+            access: origin,
+        };
+        let mut certain = Vec::new();
+        let mut facts = ConflictFacts::default();
+        for clause in region.clauses() {
+            if let Some(exclusion) =
+                clobber_exclusion(&[&clause.payload], clause.guard.clone(), separation_origin)
+            {
+                self.discharge(&exclusion, origin, &mut facts);
+                if facts.diagnostic.is_some() {
+                    return None;
+                }
+            } else {
+                certain.push(clause.clone());
+            }
+        }
+        let certain = RegionSet::new(region.scope(), certain);
+        certain.definite_write()?;
+        Some(ConditionalInitialization {
+            region: certain,
+            separations: facts.deferred,
+        })
     }
 
     /// Settle a callee's separation clause at this call. Only physical
@@ -1148,9 +1193,11 @@ impl<'db> Borrowck<'db> {
                             || self.refinable_guard(&slice.guard)
                     }))
             {
-                if let Some(exclusion) =
-                    clobber_exclusion(&pair.access, guard.clone(), requirement.origin)
-                {
+                if let Some(exclusion) = clobber_exclusion(
+                    &[&pair.access, &pair.borrowed],
+                    guard.clone(),
+                    requirement.origin,
+                ) {
                     self.discharge(&exclusion, origin, analysis);
                     if analysis.diagnostic.is_some() {
                         return;
@@ -1392,6 +1439,12 @@ pub(super) struct ConflictAnalysis<'db> {
     pub validity: NativeValidity<'db>,
 }
 
+/// A definite write justified by physical separation requirements.
+pub(super) struct ConditionalInitialization<'db> {
+    pub region: RegionSet<'db>,
+    pub separations: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
+}
+
 #[derive(Default)]
 pub(super) struct ConflictFacts<'db> {
     diagnostic: Option<SemanticDiagnostic<'db>>,
@@ -1453,21 +1506,23 @@ fn remove_suspended<'db>(
 }
 
 /// Excluding the raw overwrite is sufficient to exclude an arbitrary address
-/// introduced by it. This is a new physical obligation, not a permission or an
-/// assumed fact. Clobber conditions retain their original non-clobbered inputs,
-/// so recursively discharging this requirement cannot recreate itself.
+/// introduced by it on either side of an overlap. This is a new physical
+/// obligation, not a permission or an assumed fact. Clobber conditions retain
+/// their original non-clobbered inputs, so recursively discharging this
+/// requirement cannot recreate itself.
 fn clobber_exclusion<'db>(
-    access: &SymbolicPlace<'db>,
+    places: &[&SymbolicPlace<'db>],
     guard: Guard<'db>,
     origin: SeparationOrigin<'db>,
 ) -> Option<ResolvedSeparation<'db>> {
-    let RegionRoot::External(source) = &access.root else {
-        return None;
-    };
-    let condition = source.clobber_dependency()?;
-    if condition.target.invalidated || condition.written.invalidated {
-        return None;
-    }
+    let condition = places.iter().find_map(|place| {
+        let RegionRoot::External(source) = &place.root else {
+            return None;
+        };
+        source
+            .clobber_dependency()
+            .filter(|condition| !condition.target.invalidated && !condition.written.invalidated)
+    })?;
     let region = |source: &SourceExpr<'db>| {
         RegionSet::new(
             guard.scope(),

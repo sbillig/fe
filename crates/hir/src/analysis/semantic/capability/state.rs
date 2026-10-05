@@ -426,7 +426,7 @@ impl<'db> BorrowState<'db> {
         // the next feedback within its own history. Leaf paths come from the
         // holder's shape, so only finitely many such edges occur.
         let mut sources: FxHashMap<CapabilityValue<'db>, SlotSources<'db>> = FxHashMap::default();
-        let mut invariant_replacements = FxHashSet::default();
+        let mut prior_sources = FxHashSet::default();
         let feedback_guards = RefCell::default();
         let repeats = FeedbackRepeats {
             guards: &feedback_guards,
@@ -460,15 +460,14 @@ impl<'db> BorrowState<'db> {
                             slot.entry(place).or_default().insert(guard);
                         }
                     }
-                    // Copying a pointer between holders does not introduce a
-                    // new overwrite. Preserve conditions already in the state.
-                    // The replacement an offset of one is based on is held too.
-                    invariant_replacements.extend(
+                    // Copies retain known provenance across holders. Also keep
+                    // ordinary addresses: a newly created replacement can have
+                    // a condition entirely about these previously held sources.
+                    prior_sources.extend(
                         slots
                             .values()
                             .flat_map(FeedbackPlaces::keys)
                             .map(|place| &place.source)
-                            .filter(|source| source.is_raw_memory_replacement())
                             .flat_map(|source| [Some(source), source.replacement_root()])
                             .flatten()
                             .cloned(),
@@ -488,7 +487,7 @@ impl<'db> BorrowState<'db> {
             )
         });
         for (value, prior) in holders.chain(storage) {
-            let prior_sources = prior.and_then(|prior| sources.get(prior));
+            let prior_slots = prior.and_then(|prior| sources.get(prior));
             let mapped = values.map_payloads(value, &mut destination, |_, path, entry, domain| {
                 forgotten
                     .entry((
@@ -498,7 +497,7 @@ impl<'db> BorrowState<'db> {
                         path.clone(),
                     ))
                     .or_insert_with(|| {
-                        let previous_slots: Vec<_> = prior_sources
+                        let previous_slots: Vec<_> = prior_slots
                             .into_iter()
                             .flatten()
                             .filter_map(|(prior, places)| {
@@ -513,7 +512,7 @@ impl<'db> BorrowState<'db> {
                                 domain,
                                 repeats,
                                 &previous_slots,
-                                &invariant_replacements,
+                                &prior_sources,
                             )
                             .unwrap_or_else(|| entry.payload.clone())
                             .forget_occurrences(occurrence);
@@ -1096,6 +1095,7 @@ impl<'db> BorrowState<'db> {
             .iter()
             .flat_map(|(region, _)| region.clauses().iter().map(move |clause| (*region, clause)));
         for ((region, clause), domains) in clauses.zip(&typed) {
+            let destination = RegionSet::new(region.scope(), [clause.clone()]);
             for (root, contents) in &self.contents {
                 if !contents.shape().contains_capability(values.db)
                     || !root.may_alias_unknown(&clause.payload.root)
@@ -1117,7 +1117,7 @@ impl<'db> BorrowState<'db> {
                         .substitute(values.db, &contents.scope().freshening(region.scope()))
                         .close_existentials(region.scope());
                 if matches!(
-                    candidate.overlap(values.db, region),
+                    candidate.overlap(values.db, &destination),
                     OverlapResult::Disjoint
                 ) {
                     continue;
@@ -1132,7 +1132,7 @@ impl<'db> BorrowState<'db> {
                         contents.shape(),
                         contents.scope(),
                         Some(root),
-                        Some(AccessFootprint::typed(region)),
+                        Some(AccessFootprint::typed(&destination)),
                     )
                     .map_err(StateError::OpaqueContents)?;
                 let unknown = values.with_guard(&unknown, &residual);
@@ -1146,6 +1146,7 @@ impl<'db> BorrowState<'db> {
         let mut written = written.into_iter();
         for (region, replacement) in replacements {
             for clause in region.clauses() {
+                let destination = RegionSet::new(region.scope(), [clause.clone()]);
                 let applied = written.next().expect("typed domains for every clause");
                 let lift = IndexSubst::new(replacement.scope(), clause.guard.scope(), [])
                     .expect("unknown store witness scope");
@@ -1188,7 +1189,7 @@ impl<'db> BorrowState<'db> {
                             .substitute(values.db, &contents.scope().freshening(region.scope()))
                             .close_existentials(region.scope());
                     if matches!(
-                        candidate.overlap(values.db, region),
+                        candidate.overlap(values.db, &destination),
                         OverlapResult::Disjoint
                     ) {
                         continue;

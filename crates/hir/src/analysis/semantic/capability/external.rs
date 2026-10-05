@@ -411,6 +411,53 @@ fn place_correspondence<'db>(
 }
 
 impl<'db> ClobberCondition<'db> {
+    /// Keep an overlap prerequisite over previously held address bases. A
+    /// displacement first computed in the loop may range over that base's
+    /// allocation, but following another pointer cannot retain its identity.
+    fn widen_feedback(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        prior_sources: &FxHashSet<ExternalSource<'db>>,
+        renewed: &dyn Fn(IndexExpr<'db>) -> bool,
+    ) -> Option<Self> {
+        let mut condition = self.clone();
+        for place in [&mut condition.target, &mut condition.written] {
+            // An arbitrary family carries no address identity to preserve.
+            if place.source.is_arbitrary()
+                || place.path.indices().any(renewed)
+                || place.views.iter().next().is_some()
+            {
+                return None;
+            }
+            let mut base = &place.source;
+            while !prior_sources.contains(base) || base.indices().any(renewed) {
+                let ExternalOrigin::Memory { base: parent, .. } = &base.origin else {
+                    return None;
+                };
+                if !base.dereferences.is_empty()
+                    || base.reachable
+                    || !parent.path.is_empty()
+                    || parent.views.iter().next().is_some()
+                {
+                    return None;
+                }
+                base = &parent.source;
+            }
+            if base != &place.source {
+                place.source = ExternalSource::memory(
+                    db,
+                    SourceExpr::whole(base.clone()),
+                    place.source.contract.ty,
+                    MemoryOffset::Unknown,
+                );
+            }
+        }
+        if condition.extent.indices().any(renewed) {
+            condition.extent = AccessExtent::Unknown;
+        }
+        Some(condition)
+    }
+
     /// A conditional write keeps its prerequisite even when the newly touched
     /// cell is local and cannot itself appear in a caller-facing condition.
     pub fn from_places(
@@ -794,22 +841,31 @@ impl<'db> ExternalSource<'db> {
         place: &SourceExpr<'db>,
         guard: &Guard<'db>,
         previous: &[FeedbackSlot<'_, 'db>],
-        invariant_replacements: &FxHashSet<Self>,
+        prior_sources: &FxHashSet<Self>,
+        renewed: &dyn Fn(IndexExpr<'db>) -> bool,
     ) -> Option<Self> {
         if previous.iter().any(|slot| slot.places.contains_key(place))
-            || invariant_replacements.contains(self)
+            || (self.is_raw_memory_replacement() && prior_sources.contains(self))
         {
             return None;
         }
-        // A replacement created in the loop would add alternatives on every
-        // iteration. One held before the loop is invariant, and so is its
-        // condition; an offset of it is widened only if it grows.
+        // A new replacement need not introduce new provenance. A condition
+        // over previously held address bases remains dischargeable by a
+        // caller. Widen new displacements and changing extents within those
+        // bases; other new replacements lose their condition as before.
         if self.is_raw_memory_replacement()
             && !self
                 .replacement_root()
-                .is_some_and(|root| root.is_invariant_replacement(self, invariant_replacements))
+                .is_some_and(|root| root.is_invariant_replacement(self, prior_sources))
         {
-            return Some(Self::opaque_memory(self.contract));
+            let mut family = Self::opaque_memory(self.contract);
+            family.clobber = self.replacement_root().and_then(|root| {
+                root.clobber
+                    .as_ref()?
+                    .widen_feedback(db, prior_sources, renewed)
+                    .map(Box::new)
+            });
+            return (family != *self).then_some(family);
         }
         let mut source = self;
         let mut followed = false;

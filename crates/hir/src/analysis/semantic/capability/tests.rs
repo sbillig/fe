@@ -3344,7 +3344,7 @@ trait WidenFeedbackFor<'db> {
         db: &'db dyn HirAnalysisDb,
         guard: &Guard<'db>,
         previous: &FeedbackPlaces<'db>,
-        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+        prior_sources: &FxHashSet<ExternalSource<'db>>,
     ) -> Option<ExternalSource<'db>>;
 }
 
@@ -3354,7 +3354,7 @@ impl<'db> WidenFeedbackFor<'db> for ExternalSource<'db> {
         db: &'db dyn HirAnalysisDb,
         guard: &Guard<'db>,
         previous: &FeedbackPlaces<'db>,
-        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+        prior_sources: &FxHashSet<ExternalSource<'db>>,
     ) -> Option<ExternalSource<'db>> {
         self.widen_feedback(
             db,
@@ -3364,7 +3364,8 @@ impl<'db> WidenFeedbackFor<'db> for ExternalSource<'db> {
                 pairs: Vec::new(),
                 places: previous,
             }],
-            invariant_replacements,
+            prior_sources,
+            &|_| false,
         )
     }
 }
@@ -3457,6 +3458,7 @@ fn feedback_matches_prior_places_by_referent_path() {
             &always,
             &slots,
             &FxHashSet::default(),
+            &|_| false,
         );
         assert_eq!(widened.is_some(), grows);
     }
@@ -3550,6 +3552,7 @@ fn feedback_keeps_loop_invariant_guard_facts() {
                     places: &previous,
                 }],
                 &FxHashSet::default(),
+                &|_| false,
             );
             // Only a fact the loop may change is forgotten.
             assert_eq!(widened.is_some(), repeated);

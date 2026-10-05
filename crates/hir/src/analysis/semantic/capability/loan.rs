@@ -111,11 +111,11 @@ impl<'db> CapabilityRef<'db> {
         domain: &Guard<'db>,
         repeats: FeedbackRepeats<'_, 'db>,
         previous: &[FeedbackSlot<'_, 'db>],
-        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+        prior_sources: &FxHashSet<ExternalSource<'db>>,
     ) -> Option<Self> {
         match self {
             Self::Address(region) => region
-                .widen_feedback(db, domain, repeats, previous, invariant_replacements)
+                .widen_feedback(db, domain, repeats, previous, prior_sources)
                 .map(Self::Address),
             _ => None,
         }

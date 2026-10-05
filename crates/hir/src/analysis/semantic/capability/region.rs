@@ -314,7 +314,7 @@ impl<'db> RegionSet<'db> {
         domain: &Guard<'db>,
         repeats: FeedbackRepeats<'_, 'db>,
         previous: &[FeedbackSlot<'_, 'db>],
-        invariant_replacements: &FxHashSet<ExternalSource<'db>>,
+        prior_sources: &FxHashSet<ExternalSource<'db>>,
     ) -> Option<Self> {
         let mut clauses = None;
         for (index, clause) in self.clauses.iter().enumerate() {
@@ -330,7 +330,8 @@ impl<'db> RegionSet<'db> {
                     },
                     &guard,
                     previous,
-                    invariant_replacements,
+                    prior_sources,
+                    repeats.index,
                 )
             {
                 let clauses = clauses.get_or_insert_with(|| self.clauses.to_vec());
