@@ -2799,7 +2799,7 @@ fn selector_signature_from_expr<'db>(
                 }
             }
         }
-        Partial::Present(Expr::Block(stmts)) => {
+        Partial::Present(Expr::Block(stmts, _)) => {
             if let Some(last_stmt) = stmts.last()
                 && let Partial::Present(Stmt::Expr(inner_expr)) = last_stmt.data(db, body)
             {

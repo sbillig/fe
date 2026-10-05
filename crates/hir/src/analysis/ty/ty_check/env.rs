@@ -689,7 +689,7 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
         let new_scope = match block.data(self.db, self.body) {
-            Partial::Present(Expr::Block(_)) => ScopeId::Block(self.body, block),
+            Partial::Present(Expr::Block(..)) => ScopeId::Block(self.body, block),
             _ => self.scope(),
         };
 

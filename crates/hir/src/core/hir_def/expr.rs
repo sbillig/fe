@@ -8,7 +8,7 @@ use crate::{HirDb, span::expr::LazyExprSpan};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Expr<'db> {
     Lit(LitKind<'db>),
-    Block(Vec<StmtId>),
+    Block(Vec<StmtId>, BlockKind),
     /// The first `ExprId` is the lhs, the second is the rhs.
     Bin(ExprId, ExprId, BinOp),
     Un(ExprId, UnOp),
@@ -55,6 +55,13 @@ pub enum Expr<'db> {
 
     /// `with (K = v, ..) { body }`
     With(Vec<WithBinding<'db>>, ExprId),
+}
+
+/// Whether a block is a plain `{ .. }` or an `unsafe { .. }` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum BlockKind {
+    Normal,
+    Unsafe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]

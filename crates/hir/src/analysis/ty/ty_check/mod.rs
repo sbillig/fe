@@ -3101,7 +3101,7 @@ impl<'db> TyChecker<'db> {
         };
 
         match expr_data {
-            Expr::Block(stmts) => {
+            Expr::Block(stmts, _) => {
                 let Some(last) = stmts.last() else {
                     return;
                 };
@@ -4847,7 +4847,7 @@ impl<'db> TypedBody<'db> {
         }
 
         let forwarded = match expr_data {
-            Expr::Block(stmts) => {
+            Expr::Block(stmts, _) => {
                 let tail = stmts.last()?;
                 match tail.data(db, body) {
                     Partial::Present(crate::hir_def::Stmt::Expr(tail_expr)) => self
@@ -5391,7 +5391,7 @@ impl<'db> TypedBody<'db> {
         };
 
         match expr_data {
-            Expr::Block(stmts) => {
+            Expr::Block(stmts, _) => {
                 for stmt in stmts {
                     self.collect_explicit_return_param_sources_in_stmt(
                         db,
@@ -5603,7 +5603,7 @@ impl<'db> TypedBody<'db> {
         };
 
         match expr_data {
-            Expr::Block(stmts) => {
+            Expr::Block(stmts, _) => {
                 if let Some(last_stmt) = stmts.last()
                     && let Partial::Present(crate::hir_def::Stmt::Expr(tail_expr)) =
                         last_stmt.data(db, body)

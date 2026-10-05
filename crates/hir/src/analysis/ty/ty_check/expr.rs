@@ -450,7 +450,7 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
         result_discarded: bool,
     ) -> ExprProp<'db> {
-        let Expr::Block(stmts) = expr_data else {
+        let Expr::Block(stmts, _) = expr_data else {
             unreachable!()
         };
 

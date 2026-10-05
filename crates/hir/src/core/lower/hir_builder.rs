@@ -9,8 +9,8 @@ use rustc_hash::FxHashSet;
 use crate::{
     HirDb,
     hir_def::{
-        ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
-        EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
+        ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, BlockKind, Body,
+        BodyKind, EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
         FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
         GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId, ItemKind, LitKind, Mod,
         NormalAttr, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod,
@@ -998,7 +998,7 @@ where
     fn finish(mut self) -> Body<'db> {
         self.body.f_ctxt.enter_block_scope();
         let stmts = std::mem::take(&mut self.stmts);
-        let root_expr = self.push_expr(Expr::Block(stmts));
+        let root_expr = self.push_expr(Expr::Block(stmts, BlockKind::Normal));
         self.body.f_ctxt.leave_block_scope(root_expr);
         self.body.build(None, root_expr, BodyKind::FuncBody)
     }

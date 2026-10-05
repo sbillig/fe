@@ -328,7 +328,7 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
     ) -> Option<PathId<'db>> {
         match expr {
             Expr::Path(path) => path.to_opt(),
-            Expr::Block(stmts) => {
+            Expr::Block(stmts, _) => {
                 let [stmt] = stmts.as_slice() else {
                     return None;
                 };

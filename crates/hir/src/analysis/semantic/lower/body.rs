@@ -675,7 +675,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.push_place_write(origin, dst_place, SOperand::inherited(sum));
                 self.unit_value()
             }
-            Expr::Block(stmts) => self.lower_block_expr(stmts),
+            Expr::Block(stmts, _) => self.lower_block_expr(stmts),
             Expr::If(cond, then_expr, else_expr) => {
                 self.lower_if_expr(expr, *cond, *then_expr, *else_expr)
             }
