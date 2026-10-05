@@ -422,7 +422,7 @@ impl<'db> Analysis<'_, 'db> {
         if let NPlaceBase::Root(root) = place.base
             && self.is_local_root(root.index())
         {
-            let key = MoveKey::Root(root.index() as u32);
+            let key = MoveKey::Root(root);
             let path = self.path(&place.path);
             let moved = point.before.moved.iter().find(|(moved, moved_path)| {
                 *moved == key

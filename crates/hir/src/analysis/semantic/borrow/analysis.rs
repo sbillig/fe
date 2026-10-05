@@ -83,7 +83,17 @@ pub(super) struct Token<'db> {
     pub zero_sized: bool,
 }
 
-impl Token<'_> {
+impl<'db> Token<'db> {
+    fn new(kind: TokenKind, origin: SemOrigin<'db>) -> Self {
+        Self {
+            kind,
+            regions: BTreeSet::new(),
+            parents: TokenSet::new(),
+            origin,
+            zero_sized: false,
+        }
+    }
+
     pub fn is_loan(&self) -> bool {
         matches!(self.kind, TokenKind::Loan(_) | TokenKind::Reserved(_))
     }
@@ -101,7 +111,7 @@ impl Token<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum MoveKey {
     Value(NValueId),
-    Root(u32),
+    Root(NRootId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,7 +166,7 @@ pub(super) struct Analysis<'a, 'db> {
     input_tokens: FxHashMap<Base, TokenId>,
     pub statement_tokens: FxHashMap<(NBlockId, usize), TokenId>,
     /// Handles standing for effect places passed to a call.
-    effect_tokens: FxHashMap<(NBlockId, usize, usize), TokenId>,
+    effect_tokens: FxHashMap<((NBlockId, usize), usize), TokenId>,
     pub entry: Vec<Option<State>>,
     pub moved_at: FxHashMap<(MoveKey, Path), SemOrigin<'db>>,
     /// The statement at which each block diverges into a call that never returns.
@@ -254,14 +264,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
         (self.providers.len() - 1) as u32
     }
 
-    fn new_token(&mut self, kind: TokenKind, origin: SemOrigin<'db>) -> TokenId {
-        self.tokens.push(Token {
-            kind,
-            regions: BTreeSet::new(),
-            parents: TokenSet::new(),
-            origin,
-            zero_sized: false,
-        });
+    fn push_token(&mut self, token: Token<'db>) -> TokenId {
+        self.tokens.push(token);
         (self.tokens.len() - 1) as TokenId
     }
 
@@ -270,13 +274,12 @@ impl<'a, 'db> Analysis<'a, 'db> {
         if let Some(token) = self.input_tokens.get(&base) {
             return *token;
         }
-        let token = self.new_token(
+        let mut input = Token::new(
             TokenKind::Input { mutable, effect },
             SemOrigin::Body(self.body.template_owner),
         );
-        self.tokens[token as usize]
-            .regions
-            .insert(AbsPlace::new(base));
+        input.regions.insert(AbsPlace::new(base));
+        let token = self.push_token(input);
         self.input_tokens.insert(base, token);
         token
     }
@@ -336,7 +339,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     if !binding.is_some_and(|binding| entry_bindings.contains(&binding)) {
                         state
                             .moved
-                            .insert((MoveKey::Root(index as u32), Path::new()));
+                            .insert((MoveKey::Root(NRootId::new(index)), Path::new()));
                     }
                 }
                 NRootKind::ParamPlace { param } => {
@@ -627,7 +630,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         && let NPlaceBase::Root(root) = place.base
                         && self.root_provider[root.index()].is_none()
                     {
-                        let key = (MoveKey::Root(root.index() as u32), self.path(&place.path));
+                        let key = (MoveKey::Root(root), self.path(&place.path));
                         self.moved_at.entry(key.clone()).or_insert(place.origin);
                         state.moved.insert(key);
                     }
@@ -639,11 +642,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 let tokens = self.values[value.value.index()].clone();
                 self.store(destination, &tokens, state);
             }
-            NStatementKind::Define { result, expr } => {
+            NStatementKind::Define { result, .. } => {
                 state
                     .moved
                     .retain(|(key, _)| *key != MoveKey::Value(*result));
-                let tokens = self.define(block, index, statement, *result, expr, state, changed);
+                let tokens = self.define((block, index), statement, state, changed);
                 if self.carried(body.values[result.index()].ty).any() {
                     self.set_value(*result, &tokens, changed);
                 }
@@ -674,24 +677,24 @@ impl<'a, 'db> Analysis<'a, 'db> {
         if let NPlaceBase::Root(root) = destination.base
             && !path.contains(&Step::Index(None))
         {
-            let key = MoveKey::Root(root.index() as u32);
+            let key = MoveKey::Root(root);
             state
                 .moved
                 .retain(|(moved, moved_path)| *moved != key || !moved_path.starts_with(&path));
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// The tokens a defining statement's result holds.
     fn define(
         &mut self,
-        block: NBlockId,
-        index: usize,
+        site: (NBlockId, usize),
         statement: &NStatement<'db>,
-        result: NValueId,
-        expr: &NExpr<'db>,
         state: &mut State,
         changed: &mut bool,
     ) -> TokenSet {
+        let NStatementKind::Define { result, expr } = &statement.kind else {
+            return TokenSet::new();
+        };
         match expr {
             NExpr::Forward { src }
             | NExpr::ProjectValue { value: src, .. }
@@ -719,15 +722,14 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     }
                     (kind, _) => TokenKind::Loan(*kind),
                 };
-                let tokens = self.loan(block, index, kind, place, statement.origin, changed);
+                let tokens = self.loan(site, kind, place, statement.origin, changed);
                 if matches!(kind, TokenKind::Reserved(_)) {
                     state.reserved.extend(tokens.iter().copied());
                 }
                 tokens
             }
             NExpr::MakeView { place, .. } => self.loan(
-                block,
-                index,
+                site,
                 TokenKind::Loan(BorrowKind::Ref),
                 place,
                 statement.origin,
@@ -738,19 +740,16 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     HandleOrigin::Provider(binding) => Base::Provider(self.provider_index(binding)),
                     HandleOrigin::Opaque(_) => Base::Raw,
                 };
-                let token = *self
-                    .statement_tokens
-                    .entry((block, index))
-                    .or_insert_with(|| {
-                        self.tokens.push(Token {
-                            kind: TokenKind::Handle,
-                            regions: BTreeSet::from([AbsPlace::new(base)]),
-                            parents: TokenSet::new(),
-                            origin: statement.origin,
-                            zero_sized: false,
-                        });
-                        (self.tokens.len() - 1) as TokenId
-                    });
+                let token = match self.statement_tokens.get(&site) {
+                    Some(token) => *token,
+                    None => {
+                        let mut handle = Token::new(TokenKind::Handle, statement.origin);
+                        handle.regions.insert(AbsPlace::new(base));
+                        let token = self.push_token(handle);
+                        self.statement_tokens.insert(site, token);
+                        token
+                    }
+                };
                 let mut tokens = self.operand_tokens(fields.iter().copied());
                 union_into(&mut tokens, &[token]);
                 tokens
@@ -776,19 +775,17 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         }
                         NEffectArgValue::Place(place) => {
                             let regions = self.resolve(place).regions;
-                            let token = *self
-                                .effect_tokens
-                                .entry((block, index, position))
-                                .or_insert_with(|| {
-                                    self.tokens.push(Token {
-                                        kind: TokenKind::Handle,
-                                        regions: BTreeSet::new(),
-                                        parents: TokenSet::new(),
-                                        origin: statement.origin,
-                                        zero_sized: false,
-                                    });
-                                    (self.tokens.len() - 1) as TokenId
-                                });
+                            let token = match self.effect_tokens.get(&(site, position)) {
+                                Some(token) => *token,
+                                None => {
+                                    let token = self.push_token(Token::new(
+                                        TokenKind::Handle,
+                                        statement.origin,
+                                    ));
+                                    self.effect_tokens.insert((site, position), token);
+                                    token
+                                }
+                            };
                             for region in regions {
                                 *changed |= self.tokens[token as usize].regions.insert(region);
                             }
@@ -879,26 +876,22 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     fn loan(
         &mut self,
-        block: NBlockId,
-        index: usize,
+        site: (NBlockId, usize),
         kind: TokenKind,
         place: &NPlace<'db>,
         origin: SemOrigin<'db>,
         changed: &mut bool,
     ) -> TokenSet {
-        let token = *self
-            .statement_tokens
-            .entry((block, index))
-            .or_insert_with(|| {
-                self.tokens.push(Token {
-                    kind,
-                    regions: BTreeSet::new(),
-                    parents: TokenSet::new(),
-                    origin,
-                    zero_sized: place.ty.is_zero_sized(self.db),
-                });
-                (self.tokens.len() - 1) as TokenId
-            });
+        let token = match self.statement_tokens.get(&site) {
+            Some(token) => *token,
+            None => {
+                let mut loan = Token::new(kind, origin);
+                loan.zero_sized = place.ty.is_zero_sized(self.db);
+                let token = self.push_token(loan);
+                self.statement_tokens.insert(site, token);
+                token
+            }
+        };
         let resolved = self.resolve(place);
         let token_data = &mut self.tokens[token as usize];
         for region in resolved.regions {
