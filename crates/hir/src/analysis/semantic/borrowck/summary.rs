@@ -1125,6 +1125,10 @@ impl<'db> Borrowck<'db> {
             .filter(|(block, _)| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
             .filter_map(|(_, state)| state.as_ref())
             .collect();
+        let return_guard = return_states
+            .iter()
+            .map(|state| state.guard().clone())
+            .reduce(|left, right| left.or(&right));
         let scalar_inputs = self
             .inventory
             .inputs
@@ -1336,10 +1340,7 @@ impl<'db> Borrowck<'db> {
                 .occurrences()
                 .into_iter()
                 .any(|choice| self.recursive_call_choice(choice))
-        }) && let Some(returned) = return_states
-            .iter()
-            .map(|state| state.guard().clone())
-            .reduce(|left, right| left.or(&right))
+        }) && let Some(returned) = &return_guard
         {
             // A definite write must hold on every admitted normal return, not
             // merely on executions selected by that write's own hidden guard.
@@ -1403,6 +1404,22 @@ impl<'db> Borrowck<'db> {
         }
         let mut certified_ranges = Vec::new();
         for (family, scope, coverage, contents) in common_ranges {
+            // Local execution facts can occur in a proved range's guard without
+            // identifying its storage. Export the must fact only where it holds
+            // for every normal return represented by those private scalars.
+            let returned = return_guard
+                .as_ref()
+                .expect("certified return")
+                .in_scope(&scope);
+            let abstraction = self.abstract_local_indices(
+                &scope,
+                coverage.indices().into_iter().chain(returned.indices()),
+            );
+            let Some(coverage) = coverage.forget_indices_universally(&returned, |index| {
+                scope.validate(abstraction.apply(index)).is_err()
+            }) else {
+                continue;
+            };
             if contents.iter().any(|value| {
                 self.inventory
                     .values
@@ -2521,6 +2538,7 @@ impl<'db> Borrowck<'db> {
             .any(|occurrence| match occurrence {
                 ValueOccurrence::Value(_)
                 | ValueOccurrence::Root(_)
+                | ValueOccurrence::LoopEntry(_)
                 | ValueOccurrence::CallChoice { .. } => true,
                 ValueOccurrence::Argument(param) => self.summary_param_ty(*param).is_none(),
                 ValueOccurrence::Summary | ValueOccurrence::SummaryChoice(_) => false,
@@ -3035,6 +3053,7 @@ impl<'db> Borrowck<'db> {
                     ValueOccurrence::Summary => ValueOccurrence::Value(result),
                     ValueOccurrence::Value(_)
                     | ValueOccurrence::Root(_)
+                    | ValueOccurrence::LoopEntry(_)
                     | ValueOccurrence::CallChoice { .. } => {
                         invalid = true;
                         occurrence

@@ -703,6 +703,17 @@ impl<'db> Borrowck<'db> {
         })
     }
 
+    fn initial_state(&mut self) -> BorrowState<'db> {
+        let mut state = self
+            .inventory
+            .entry
+            .before_allocations(&mut self.inventory.values);
+        if let Some(guard) = self.inventory.loops.entry_guard(None, self.body.entry) {
+            state.constrain(&guard, &mut self.inventory.values);
+        }
+        state
+    }
+
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("solve");
@@ -727,11 +738,7 @@ impl<'db> Borrowck<'db> {
             self.boundary_requirements = None;
             self.conflicts = None;
             let mut incoming = vec![None; self.body.blocks.len()];
-            incoming[self.body.entry.index()] = Some(
-                self.inventory
-                    .entry
-                    .before_allocations(&mut self.inventory.values),
-            );
+            incoming[self.body.entry.index()] = Some(self.initial_state());
             let mut certificate_application_failed = false;
             // Every sweep keeps its per-statement states. The sweep that finds
             // the fixed point ran with unchanged facts, so its states are the
@@ -834,6 +841,14 @@ impl<'db> Borrowck<'db> {
                                 |occurrence| loops.repeats_occurrence(iteration, occurrence),
                             );
                         }
+                        if let Some(guard) = self
+                            .inventory
+                            .loops
+                            .entry_guard(Some(NBlockId::new(index)), successor.block)
+                            && !edge.constrain(&guard, &mut self.inventory.values)
+                        {
+                            continue;
+                        }
                         #[cfg(feature = "borrowck-profile")]
                         profile.point("join", index, successor_index);
                         if let Some(previous) = &mut incoming[successor.block.index()] {
@@ -852,11 +867,7 @@ impl<'db> Borrowck<'db> {
                     self.inventory.reset_epoch_loans();
                     self.source_generation += 1;
                     incoming.fill(None);
-                    incoming[self.body.entry.index()] = Some(
-                        self.inventory
-                            .entry
-                            .before_allocations(&mut self.inventory.values),
-                    );
+                    incoming[self.body.entry.index()] = Some(self.initial_state());
                     continue;
                 }
                 if incoming == previous_incoming && !self.loan_facts_changed {
