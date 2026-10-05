@@ -458,19 +458,25 @@ impl<'db> ClobberCondition<'db> {
         Some(condition)
     }
 
-    /// A conditional write keeps its prerequisite even when the newly touched
-    /// cell is local and cannot itself appear in a caller-facing condition.
+    /// A conditional endpoint keeps its prerequisite even when the other
+    /// endpoint is local and cannot appear in a caller-facing condition.
     pub fn from_places(
         target: &SymbolicPlace<'db>,
         written: &SymbolicPlace<'db>,
         extent: AccessExtent<'db>,
     ) -> Option<Self> {
-        let written = SourceExpr::from_place(written)?;
-        written
-            .source
-            .clobber_dependency()
-            .cloned()
-            .or_else(|| Some(Self::new(SourceExpr::from_place(target)?, written, extent)))
+        for place in [written, target] {
+            if let RegionRoot::External(source) = &place.root
+                && let Some(condition) = source.clobber_dependency()
+            {
+                return Some(condition.clone());
+            }
+        }
+        Some(Self::new(
+            SourceExpr::from_place(target)?,
+            SourceExpr::from_place(written)?,
+            extent,
+        ))
     }
 
     pub fn new(
