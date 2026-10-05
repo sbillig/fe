@@ -23,8 +23,9 @@ pub struct BorrowSummary<'db> {
     /// Whether any admitted path reaches a return.
     pub may_return: bool,
     pub result: ValueId<'db, SourceExpr<'db>>,
-    /// Scalar facts shared by all normal returns. The Result binder names this
-    /// call's returned value; formal values name immutable argument SSA values.
+    /// Scalar facts shared by all normal returns. The Result binder names an
+    /// integral return and the Summary choice a boolean return; formal values
+    /// and Argument choices name immutable argument SSA values.
     pub scalar_result: Option<Guard<'db>>,
     /// Parameters whose scalar facts this body can read or export, so a caller
     /// keeps the relations of the values it passes for them. `None` is every
@@ -53,7 +54,7 @@ pub struct BorrowSummary<'db> {
 }
 
 /// The parameters a body observes, split by whether the observation needs its
-/// integer result: a caller that forgets a dead result's relation leaves the
+/// scalar result: a caller that forgets a dead result's relation leaves the
 /// arguments only that relation named unread.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ObservedParams {
