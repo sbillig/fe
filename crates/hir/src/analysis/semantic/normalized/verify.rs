@@ -7,7 +7,8 @@ use crate::{
         semantic::{
             BorrowActivation, CallSiteId, FieldIndex, Mutability, SConst, SemOrigin,
             SemanticInstance, VariantIndex,
-            capability::{handle::OpaqueHandleContract, shape::capability_shape},
+            borrow::carried_capabilities,
+            capability::handle::OpaqueHandleContract,
             get_or_build_semantic_instance,
             lower::{effect_param_site, enum_tag_ty},
             normalized::*,
@@ -934,14 +935,13 @@ fn has_capability<'db>(
     body: &NormalizedBody<'db>,
     ty: TyId<'db>,
 ) -> Result<bool, NormalizedBodyVerifyError> {
-    capability_shape(
+    Ok(carried_capabilities(
         db,
         body.owner.key(db).impl_env(db).normalization_scope(db),
         body.owner.assumptions(db),
         ty,
     )
-    .map(|shape| shape.contains_capability(db))
-    .map_err(|_| NormalizedBodyVerifyError::ScalarCapability)
+    .contains_capability())
 }
 
 fn verify_scalar_ty<'db>(
@@ -1104,15 +1104,9 @@ fn value_has_mutable_view_origin<'db>(
     source.is_some_and(|source| value_has_mutable_view_origin(db, body, source, visiting))
 }
 
-pub(crate) struct NormalizedCfg {
-    pub predecessors: Vec<Vec<NBlockId>>,
-    pub reachable: Vec<bool>,
-    pub dominators: Vec<FxHashSet<NBlockId>>,
-}
-
-pub(crate) fn normalized_cfg(
+fn normalized_dominators(
     body: &NormalizedBody<'_>,
-) -> Result<NormalizedCfg, NormalizedBodyVerifyError> {
+) -> Result<Vec<FxHashSet<NBlockId>>, NormalizedBodyVerifyError> {
     let mut predecessors = vec![Vec::new(); body.blocks.len()];
     for (block_index, block) in body.blocks.iter().enumerate() {
         for successor in terminator_successors(&block.terminator.kind) {
@@ -1178,15 +1172,11 @@ pub(crate) fn normalized_cfg(
             break;
         }
     }
-    Ok(NormalizedCfg {
-        predecessors,
-        reachable,
-        dominators,
-    })
+    Ok(dominators)
 }
 
 fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBodyVerifyError> {
-    let dominators = normalized_cfg(body)?.dominators;
+    let dominators = normalized_dominators(body)?;
     for (block_index, block) in body.blocks.iter().enumerate() {
         let block_id = NBlockId::new(block_index);
         for (statement_index, statement) in block.statements.iter().enumerate() {

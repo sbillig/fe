@@ -1,0 +1,82 @@
+// Structs may hold borrows. All borrows in one value share one lifetime, raw
+// pointers cannot point to borrowing values, and storage cannot hold them.
+use core::option::Option
+
+struct Iter {
+    data: ref [u256; 4],
+    pos: usize,
+}
+
+impl Iter {
+    fn new(_ data: ref [u256; 4]) -> Iter {
+        Iter { data, pos: 0 }
+    }
+
+    fn next(mut self) -> Option<u256> {
+        if self.pos < 4 {
+            let value = self.data[self.pos]
+            self.pos += 1
+            Option::Some(value)
+        } else {
+            Option::None
+        }
+    }
+}
+
+struct Pair {
+    left: mut u256,
+    right: mut u256,
+}
+
+// Accepted: a wrapper borrows the array while it is iterated.
+fn sum() -> u256 {
+    let values: [u256; 4] = [1, 2, 3, 4]
+    let mut iter = Iter::new(ref values)
+    let mut total: u256 = 0
+    let mut done = false
+    while !done {
+        match iter.next() {
+            Option::Some(value) => {
+                total += value
+            }
+            Option::None => {
+                done = true
+            }
+        }
+    }
+    total
+}
+
+// Rejected: the array cannot change while a wrapper borrows it.
+fn modify_while_iterating() -> u256 {
+    let mut values: [u256; 4] = [1, 2, 3, 4]
+    let mut iter = Iter::new(ref values)
+    values[0] = 5
+    match iter.next() {
+        Option::Some(value) => value
+        Option::None => 0
+    }
+}
+
+// Rejected: a field projected out of a value keeps every borrow the value holds.
+fn one_lifetime_per_value() {
+    let mut left: u256 = 0
+    let mut right: u256 = 0
+    let pair = Pair { left: mut left, right: mut right }
+    let selected = pair.left
+    right = 1
+    selected = 2
+}
+
+// Rejected: a raw pointer cannot point to a borrowing wrapper.
+fn pointer_to_wrapper(_ iter: *Iter) {}
+
+// Rejected: storage cannot hold a borrowing wrapper.
+pub contract Stored {
+    mut iter: Option<Iter>,
+
+    init() uses (mut iter) {
+        let values: [u256; 4] = [1, 2, 3, 4]
+        iter = Option::Some(Iter::new(ref values))
+    }
+}

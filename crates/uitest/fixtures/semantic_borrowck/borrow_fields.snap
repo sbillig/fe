@@ -1,0 +1,33 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/borrow_fields.fe
+---
+error[16-0001]: borrow conflict in `fn modify_while_iterating`
+   ┌─ borrow_fields.fe:54:5
+   │
+53 │     let mut iter = Iter::new(ref values)
+   │                              ---------- borrow created here
+54 │     values[0] = 5
+   │     ^^^^^^^^^^^^^ cannot write to this place while an immutable borrow is active
+
+error[16-0001]: borrow conflict in `fn one_lifetime_per_value`
+   ┌─ borrow_fields.fe:67:5
+   │
+66 │     let selected = pair.left
+   │                    --------- borrow created here
+67 │     right = 1
+   │     ^^^^^^^^^ cannot write to this place while a mutable borrow is active
+
+error[16-0005]: noesc violation in `fn Stored::__init__`
+   ┌─ borrow_fields.fe:80:16
+   │
+80 │         iter = Option::Some(Iter::new(ref values))
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot store `Option<Iter>` in storage
+
+error[16-0010]: invalid concrete type in `fn pointer_to_wrapper`
+   ┌─ borrow_fields.fe:72:38
+   │
+72 │ fn pointer_to_wrapper(_ iter: *Iter) {}
+   │                                      ^^ raw pointers cannot point to values that hold borrows: `*<Iter>`

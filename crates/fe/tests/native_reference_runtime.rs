@@ -45,7 +45,6 @@ fn trusted_source(source: String) -> (DriverDataBase, File) {
 }
 
 fn native_space_source(space: &str, writable: bool) -> String {
-    let kind = if writable { "mut" } else { "ref" };
     let effect_mode = if writable { "mut " } else { "" };
     let offset = if space == "Calldata" { 4 } else { 0 };
     let initialize = if matches!(space, "Storage" | "TransientStorage") {
@@ -53,11 +52,7 @@ fn native_space_source(space: &str, writable: bool) -> String {
     } else {
         ""
     };
-    let update = if writable {
-        "unsafe { (*slot).pair[1] += 1 }"
-    } else {
-        ""
-    };
+    let update = if writable { "value.pair[1] += 1" } else { "" };
     format!(
         r#"
 use core::ptr
@@ -73,11 +68,12 @@ impl<T> EffectHandle for Provider<T> {{
 impl<T> EffectRef<T> for Provider<T> {{}}
 impl<T> EffectRefMut<T> for Provider<T> {{}}
 struct Cell {{ prefix: u8, pair: [u8; 2] }}
+struct Holder {{ cell: ref Cell }}
 
 #[inline(never)]
-fn pass(slot: *{kind} Cell) -> {kind} Cell {{ unsafe {{ *slot }} }}
+fn pass(holder: own Holder) -> ref Cell {{ holder.cell }}
 #[inline(never)]
-fn project(slot: *{kind} Cell) -> u8 {{ unsafe {{ (*slot).pair[1] }} }}
+fn project(holder: own Holder) -> u8 {{ holder.cell.pair[1] }}
 #[inline(never)]
 fn churn(seed: u256) -> *u256 {{
     let allocation = ptr::alloc<u256>()
@@ -86,15 +82,13 @@ fn churn(seed: u256) -> *u256 {{
 }}
 fn observe(seed: u256) -> u8 uses (value: {effect_mode}Cell) {{
     {initialize}
-    let slot = ptr::alloc<{kind} Cell>()
-    unsafe {{ *slot = {kind} value }}
     {update}
-    let carrier = pass(slot)
-    let second = ptr::alloc<{kind} Cell>()
-    unsafe {{ *second = carrier }}
+    let holder = Holder {{ cell: ref value }}
+    let carrier = pass(holder)
+    let second = Holder {{ cell: carrier }}
     let scratch = churn(seed)
-    unsafe {{ assert!(*scratch == seed) }}
-    project(slot: second)
+    assert!(unsafe {{ *scratch }} == seed)
+    project(holder: second)
 }}
 msg NativeMsg {{
     #[selector = 1]

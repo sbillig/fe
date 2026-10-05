@@ -1,0 +1,98 @@
+// Loans: conflicts between borrows and accesses of the places they borrow.
+struct Point { x: u256, y: u256 }
+
+fn set(_ target: mut u256, _ value: u256) {
+    target = value
+}
+
+fn both(_ first: mut u256, _ second: mut u256) {
+    first = 1
+    second = 2
+}
+
+// Accepted: borrows of disjoint fields coexist.
+fn disjoint_fields() {
+    let mut p = Point { x: 0, y: 0 }
+    let hx = mut p.x
+    let hy = mut p.y
+    hx = 1
+    hy = 2
+}
+
+// Rejected: a place is read while a mutable borrow of it is live.
+fn read_while_mutably_borrowed() -> u256 {
+    let mut p = Point { x: 0, y: 0 }
+    let hx = mut p.x
+    let v = p.x
+    hx = 1
+    v
+}
+
+// Rejected: a place is written while a shared borrow of it is live.
+fn write_while_shared() -> u256 {
+    let mut x: u256 = 0
+    let r = ref x
+    x = 1
+    r
+}
+
+// Accepted: a borrow ends at its last use.
+fn borrow_ends_at_last_use() -> u256 {
+    let mut x: u256 = 0
+    let h = mut x
+    h = 1
+    x
+}
+
+// Accepted: constant indices are disjoint.
+fn constant_indices() {
+    let mut a: [u256; 2] = [0, 0]
+    let first = mut a[0]
+    let second = mut a[1]
+    first = 1
+    second = 2
+}
+
+// Rejected: dynamic indices may denote the same element.
+fn dynamic_indices(_ i: usize, _ j: usize) {
+    let mut a: [u256; 2] = [0, 0]
+    let first = mut a[i]
+    let second = mut a[j]
+    first = 1
+    second = 2
+}
+
+// Accepted: copies of one mutable borrow share its loan.
+fn copied_borrow() -> u256 {
+    let mut x: u256 = 0
+    let h = mut x
+    let g = h
+    h = 1
+    g = 2
+    x
+}
+
+// Rejected: one mutable borrow is passed for two mutable parameters.
+fn duplicate_mutable_arguments() {
+    let mut x: u256 = 0
+    let h = mut x
+    both(h, h)
+}
+
+// Accepted: disjoint fields are passed for two mutable parameters.
+fn disjoint_mutable_arguments() {
+    let mut p = Point { x: 0, y: 0 }
+    both(mut p.x, mut p.y)
+}
+
+// Rejected: a borrow stays live across a loop that writes its place.
+fn written_in_loop() {
+    let mut x: u256 = 0
+    let h = mut x
+    let mut i: u256 = 0
+    while i < 2 {
+        x = i
+        i += 1
+    }
+    set(h, 1)
+}

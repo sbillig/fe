@@ -1,0 +1,42 @@
+// Returned borrows must come from the caller: a parameter, or `self` in a method.
+struct Holder { value: u256 }
+struct Wrap { r: ref u256 }
+
+impl Holder {
+    // Accepted: a method returns a borrow of its receiver.
+    fn value_ref(self) -> ref u256 {
+        ref self.value
+    }
+
+    // Rejected: a method returns a borrow of another parameter.
+    fn other_ref(self, _ other: ref u256) -> ref u256 {
+        other
+    }
+}
+
+// Rejected: a borrow of a local is returned.
+fn local_borrow() -> ref u256 {
+    let x: u256 = 1
+    ref x
+}
+
+// Rejected: an aggregate holding a borrow of a local is returned.
+fn wrapped_local() -> Wrap {
+    let x: u256 = 1
+    Wrap { r: ref x }
+}
+
+// Accepted: a borrow parameter is returned.
+fn param_borrow(_ x: ref u256) -> ref u256 {
+    x
+}
+
+// Accepted: a borrow of a view parameter's field is returned.
+fn view_field(_ holder: Holder) -> ref u256 {
+    ref holder.value
+}
+
+// Rejected: a borrow derived from an effect parameter is returned.
+fn effect_borrow() -> ref u256 uses (value: u256) {
+    ref value
+}

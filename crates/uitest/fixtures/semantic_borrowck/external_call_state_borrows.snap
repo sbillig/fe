@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/external_call_state_borrows.fe
 ---
@@ -14,7 +15,7 @@ error[16-0001]: borrow conflict in `fn CallBorrow::__init__`
 12 │ │             addr: Address { inner: 1 }, gas: 100000, value: 0,
 13 │ │             args: MemSpan::empty(), ret: mut output,
 14 │ │         )
-   │ ╰─────────^ cannot immutably borrow this place while a mutable borrow is active
+   │ ╰─────────^ this call may write storage while a borrow of it is active
 
 error[16-0001]: borrow conflict in `fn CallRefBorrow::__init__`
    ┌─ external_call_state_borrows.fe:26:23
@@ -27,7 +28,7 @@ error[16-0001]: borrow conflict in `fn CallRefBorrow::__init__`
 27 │ │             addr: Address { inner: 1 }, gas: 100000, value: 0,
 28 │ │             args: MemSpan::empty(), ret: mut output,
 29 │ │         )
-   │ ╰─────────^ cannot mutably borrow this place while an immutable borrow is active
+   │ ╰─────────^ this call may write storage while a borrow of it is active
 
 error[16-0001]: borrow conflict in `fn StaticMutBorrow::__init__`
    ┌─ external_call_state_borrows.fe:56:23
@@ -40,4 +41,4 @@ error[16-0001]: borrow conflict in `fn StaticMutBorrow::__init__`
 57 │ │             addr: Address { inner: 1 }, gas: 100000,
 58 │ │             args: MemSpan::empty(), ret: mut output,
 59 │ │         )
-   │ ╰─────────^ cannot immutably borrow this place while a mutable borrow is active
+   │ ╰─────────^ this call may read storage while a borrow of it is active

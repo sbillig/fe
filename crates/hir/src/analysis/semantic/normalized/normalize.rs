@@ -11,10 +11,11 @@ use crate::{
             PlaceProvenance, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId,
             SStmtKind, STerminatorKind, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
             SemanticLocalRole, ValueProvenance, VariantIndex,
+            borrow::carried_capabilities,
             capability::{
+                array::ArrayLength,
                 handle::OpaqueHandleContract,
                 semantics::{CapabilityClass, CapabilitySemantics, capability_semantics},
-                shape::{ArrayLength, ShapeId, capability_shape},
             },
             eval_const_ref, get_or_build_semantic_instance,
             lower::layout_backing_source_path_is_prefix,
@@ -758,9 +759,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     NExpr::Forward { src: value }
                 } else if from.as_ptr(self.db).is_some() || to.as_ptr(self.db).is_some() {
                     NExpr::PointerCast { value, to }
-                } else if self.shape(from)?.contains_capability(self.db)
-                    || self.shape(to)?.contains_capability(self.db)
-                {
+                } else if self.contains_capability(from) || self.contains_capability(to) {
                     let mapping = structural_repack_mapping(self.db, self.instance, from, to)
                         .ok_or(NormalizeError::UnsupportedCapabilityCast { from, to })?;
                     NExpr::StructuralRepack { value, mapping }
@@ -1053,8 +1052,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         })
     }
 
-    fn shape(&self, ty: TyId<'db>) -> Result<ShapeId<'db>, NormalizeError<'db>> {
-        capability_shape(
+    fn contains_capability(&self, ty: TyId<'db>) -> bool {
+        carried_capabilities(
             self.db,
             self.instance
                 .key(self.db)
@@ -1063,7 +1062,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             self.assumptions,
             ty,
         )
-        .map_err(|_| NormalizeError::UnresolvedHandleOrigin(ty))
+        .contains_capability()
     }
 
     fn normalize_constant(
@@ -1095,8 +1094,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 CapabilityKind::Mut => unreachable!(),
             });
         }
-        let shape = self.shape(ty)?;
-        if !shape.contains_capability(self.db) {
+        if !self.contains_capability(ty) {
             return Ok(NExpr::Const(constant));
         }
         let value = match constant {

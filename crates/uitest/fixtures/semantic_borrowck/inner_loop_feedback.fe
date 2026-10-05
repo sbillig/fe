@@ -1,6 +1,5 @@
 // An inner loop's feedback starts its own next iteration, not the enclosing
-// loop's: borrows and allocations made in the outer body stay current.
-use core::ptr
+// loop's: borrows and values made in the outer body stay current.
 
 struct Item { n: u256 }
 fn consume(_ item: own Item) {}
@@ -49,18 +48,17 @@ fn shared_input(_ other: mut [u64; 5]) {
     }
 }
 
-// Accepted: each outer iteration moves its own fresh allocation once.
+// Accepted: each outer iteration moves its own fresh value once.
 fn fresh_moved_after_inner() {
     let mut x: u256 = 0
     while x < 2 {
-        let item = ptr::alloc<Item>()
-        unsafe { *item = Item { n: x } }
+        let mut item = Item { n: x }
         let mut y: u256 = 0
         while y < 2 {
             y += 1
         }
-        unsafe { touch(mut *item) }
-        unsafe { consume(*item) }
+        touch(mut item)
+        consume(item)
         x += 1
     }
 }
@@ -80,15 +78,14 @@ fn held_written_inside(_ other: mut [u64; 5]) {
     }
 }
 
-// Rejected: the inner loop moves the outer allocation again on its next iteration.
+// Rejected: the inner loop moves the outer value again on its next iteration.
 fn moved_inside() {
     let mut x: u256 = 0
     while x < 2 {
-        let item = ptr::alloc<Item>()
-        unsafe { *item = Item { n: x } }
+        let item = Item { n: x }
         let mut y: u256 = 0
         while y < 2 {
-            unsafe { consume(*item) }
+            consume(item)
             y += 1
         }
         x += 1

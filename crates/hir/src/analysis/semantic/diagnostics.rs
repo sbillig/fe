@@ -13,7 +13,7 @@ use crate::{
         semantic::{
             SLocalId, SemOrigin, SemanticInstance,
             normalized::{
-                NOperand, NormalizeError, NormalizedBody, NormalizedBodyVerifyError,
+                NOperand, NormalizeError, NormalizedBodyVerifyError,
                 NormalizedLayoutPlanVerifyError,
             },
         },
@@ -25,25 +25,6 @@ use crate::{
 
 pub(crate) fn operand_origin<'db>(operand: NOperand, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
     operand.origin.map_or(fallback, SemOrigin::Expr)
-}
-
-pub(crate) fn normalized_body_internal_diag<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
-    body: &NormalizedBody<'db>,
-    origin: SemOrigin<'db>,
-    message: String,
-) -> SemanticDiagnostic<'db> {
-    SemanticDiagnostic::new(
-        instance,
-        SemanticDiagnosticKind::Internal,
-        message,
-        SemanticDiagnosticSpan::OriginWithTemplateFallback {
-            owner: instance.key(db).owner(db),
-            template_owner: body.template_owner,
-            origin,
-        },
-    )
 }
 
 pub(crate) fn smir_lowering_admission_diag<'db>(

@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/constant_operand_ownership.fe
 ---
@@ -14,7 +15,7 @@ error[16-0001]: borrow conflict in `fn move_while_borrowed`
 97 │ │     let moved = b
 98 │ │     r.v + moved.v
 99 │ │ }
-   │ ╰─^ cannot mutably borrow this place while an immutable borrow is active
+   │ ╰─^ cannot move out of this place while an immutable borrow is active
 
 error[16-0001]: borrow conflict in `fn read_while_mut_borrowed`
     ┌─ constant_operand_ownership.fe:105:13
@@ -22,7 +23,7 @@ error[16-0001]: borrow conflict in `fn read_while_mut_borrowed`
 104 │     let r = mut x
     │             ----- borrow created here
 105 │     let y = x + 1
-    │             ^ cannot immutably borrow this place while a mutable borrow is active
+    │             ^ cannot read this place while a mutable borrow is active
 
 error[16-0002]: move conflict in `fn double_move`
    ┌─ constant_operand_ownership.fe:11:26
@@ -123,16 +124,3 @@ error[16-0002]: move conflict in `fn loop_move`
    │                          │
    │                          cannot use a value after it was moved
    │                          value is moved here
-
-error[16-0002]: move conflict in `fn move_while_borrowed`
-   ┌─ constant_operand_ownership.fe:98:5
-   │
-94 │   fn move_while_borrowed() -> u256 {
-   │ ╭──────────────────────────────────'
-95 │ │     let b = Boxed { v: 3 }
-96 │ │     let r = ref b
-97 │ │     let moved = b
-98 │ │     r.v + moved.v
-   │ │     ^^^ cannot use a value after it was moved
-99 │ │ }
-   │ ╰─' value is moved here

@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/const_trait_provider_borrows.fe
 ---
@@ -9,8 +10,8 @@ error[16-0001]: borrow conflict in `fn alias`
 29 │     with (Lookup = table) { overwrite(mut table) }
    │                             ^^^^^^^^^^^^^^^^^^^^
    │                             │         │
-   │                             │         borrow created here
-   │                             cannot immutably borrow this place while a mutable borrow is active
+   │                             │         overlapping argument
+   │                             cannot pass overlapping places to one call when one of them is mutable
 
 error[16-0003]: invalid return borrow in `fn leak`
    ┌─ const_trait_provider_borrows.fe:14:50

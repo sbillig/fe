@@ -1,4 +1,4 @@
-pub mod borrowck;
+pub mod borrow;
 pub mod capability;
 pub mod consts;
 pub mod ctfe;
@@ -11,7 +11,7 @@ pub mod lower;
 pub mod normalized;
 mod verify;
 
-pub use borrowck::*;
+pub use borrow::*;
 pub use consts::*;
 pub use ctfe::*;
 pub use definite_assignment::contract_init_assigned_fields;

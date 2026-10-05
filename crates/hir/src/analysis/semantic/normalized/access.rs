@@ -29,19 +29,10 @@ pub enum AccessTarget<'a, 'db> {
     Place(&'a NPlace<'db>),
 }
 
-/// Availability phases, independent of the order of the flat access collection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccessPhase {
-    Address,
-    Operand,
-    Write,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct OperationAccess<'a, 'db> {
     pub target: AccessTarget<'a, 'db>,
     pub kind: MemoryAccessKind,
-    pub phase: AccessPhase,
     /// Receiver reservation has shared conflict semantics until its call.
     /// It still requires an available source and never consumes ownership.
     pub activation: BorrowActivation<'db>,
@@ -55,7 +46,6 @@ impl<'a, 'db> OperationAccess<'a, 'db> {
                 path: None,
             },
             kind: read_access(db, body.values[operand.value.index()].ty, operand.mode),
-            phase: AccessPhase::Operand,
             activation: BorrowActivation::Immediate,
         }
     }
@@ -89,7 +79,6 @@ impl<'db> NStatementKind<'db> {
                 accesses.push(OperationAccess {
                     target: AccessTarget::Place(destination),
                     kind: MemoryAccessKind::Write,
-                    phase: AccessPhase::Write,
                     activation: BorrowActivation::Immediate,
                 });
             }
@@ -97,13 +86,11 @@ impl<'db> NStatementKind<'db> {
                 NExpr::Load { place, mode } => accesses.push(OperationAccess {
                     target: AccessTarget::Place(place),
                     kind: read_access(db, place.ty, *mode),
-                    phase: AccessPhase::Operand,
                     activation: BorrowActivation::Immediate,
                 }),
                 NExpr::MakeView { place, .. } => accesses.push(OperationAccess {
                     target: AccessTarget::Place(place),
                     kind: MemoryAccessKind::Read,
-                    phase: AccessPhase::Operand,
                     activation: BorrowActivation::Immediate,
                 }),
                 NExpr::Borrow {
@@ -117,7 +104,6 @@ impl<'db> NStatementKind<'db> {
                         BorrowKind::Ref => MemoryAccessKind::Read,
                         BorrowKind::Mut => MemoryAccessKind::MutAccess,
                     },
-                    phase: AccessPhase::Operand,
                     activation: *activation,
                 }),
                 NExpr::ProjectValue { value, path } => {
@@ -147,7 +133,6 @@ impl<'db> NStatementKind<'db> {
                                 } else {
                                     MemoryAccessKind::Read
                                 },
-                                phase: AccessPhase::Operand,
                                 activation: BorrowActivation::Immediate,
                             },
                         });
@@ -208,7 +193,6 @@ impl<'db> NStatementKind<'db> {
                 path: None,
             },
             kind: MemoryAccessKind::Read,
-            phase: AccessPhase::Address,
             activation: BorrowActivation::Immediate,
         }));
         accesses

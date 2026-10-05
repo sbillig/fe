@@ -7,7 +7,7 @@ use crate::{
         semantic::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SemOrigin, SemanticBody,
             SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            borrowck::CallSiteRefinements,
+            borrow::{CallSiteRefinements, provisional_call_site_provider_refinements},
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
                 SemanticDiagnosticLabel, SemanticDiagnosticSpan,
@@ -510,9 +510,7 @@ fn final_call_site_data<'db>(
         };
     };
     let refinements = if call_sites_have_effect_args(&call_sites, &for_loop_call_sites) {
-        match crate::analysis::semantic::borrowck::provisional_call_site_provider_refinements(
-            db, instance,
-        ) {
+        match provisional_call_site_provider_refinements(db, instance).clone() {
             CallSiteRefinements::Refined(refinements) => refinements,
             CallSiteRefinements::Blocked => {
                 return CallSiteFinalizationData {
@@ -1194,16 +1192,6 @@ impl<'db> SemanticInstance<'db> {
 }
 
 impl<'db> SemanticInstance<'db> {
-    pub(crate) fn provisional_callees(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<SemanticCalleeRef<'db>> {
-        collect_callees(
-            &provisional_call_sites(db, self).sites,
-            &provisional_for_loop_call_sites(db, self).sites,
-        )
-    }
-
     fn ensure_body_admitted(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1268,7 +1256,7 @@ impl<'db> SemanticInstance<'db> {
         self.key(db).owner(db).scope()
     }
 
-    pub(crate) fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
         self.is_nonreturning_builtin(db) || self.normalized_result_ty(db).is_never(db)
     }
 

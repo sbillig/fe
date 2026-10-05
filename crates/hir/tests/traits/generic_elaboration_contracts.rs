@@ -3,9 +3,8 @@ use common::{InputDb, indexmap::IndexMap, stdlib::HasBuiltinCore};
 use fe_hir::{
     analysis::{
         semantic::{
-            SemanticInstanceKey, check_semantic_borrows, check_semantic_boundaries,
-            get_or_build_semantic_instance, identity_semantic_instance_key,
-            root_semantic_instance_key,
+            SemanticInstanceKey, check_semantic_borrows, get_or_build_semantic_instance,
+            identity_semantic_instance_key, root_semantic_instance_key,
         },
         ty::{
             binder::Binder,
@@ -336,8 +335,6 @@ fn access() -> u256 uses (raw: mut RawStorage) { unsafe { raw.sload(0) } }
     let identity = identity_semantic_instance_key(&db, BodyOwner::Func(func));
     let instance = get_or_build_semantic_instance(&db, identity);
     check_semantic_borrows(&db, instance).expect("sealed effect call must pass borrow validation");
-    check_semantic_boundaries(&db, instance)
-        .expect("sealed effect call must pass boundary validation");
     let BodyOwner::Func(selected) = first_callee_key(&db, identity).owner(&db) else {
         panic!("sealed effect callee is not a function");
     };

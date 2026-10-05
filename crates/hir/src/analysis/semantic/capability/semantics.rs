@@ -19,47 +19,11 @@ pub enum CapabilityClass {
     Pointer,
 }
 
-impl CapabilityClass {
-    /// Possible result origins include explicit native borrowing from raw
-    /// addresses. Raw origins still supply no inherited native parent loan.
-    pub fn can_supply_result(self, result: Self) -> bool {
-        match result {
-            Self::Borrow(BorrowKind::Mut) => matches!(
-                self,
-                Self::Borrow(BorrowKind::Mut) | Self::Pointer | Self::Handle
-            ),
-            Self::Borrow(BorrowKind::Ref) | Self::View => true,
-            Self::Handle | Self::Pointer => self == result,
-        }
-    }
-}
-
-/// Ordinary argument transport is independent of access authority and storage.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum TransportClass {
-    /// Native mutable handles require memory unless a receiver/effect contract
-    /// explicitly preserves the provider's address space.
-    MemoryBorrow,
-    /// Shared borrows and views permit read-only provider transport.
-    ReadOnly,
-    /// A nominal handle transports its representation without accessing its target.
-    ProviderValue,
-}
-
-/// Storage policy is separate from the capability's access authority.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum StorageClass {
-    Borrowed,
-    ProviderValue,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CapabilitySemantics<'db> {
     pub class: CapabilityClass,
     pub target_ty: TyId<'db>,
     pub representation_ty: TyId<'db>,
-    pub transport: TransportClass,
-    pub storage: StorageClass,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,11 +45,6 @@ pub fn capability_semantics<'db>(
             class,
             target_ty,
             representation_ty: ty,
-            transport: match kind {
-                CapabilityKind::Mut => TransportClass::MemoryBorrow,
-                CapabilityKind::Ref | CapabilityKind::View => TransportClass::ReadOnly,
-            },
-            storage: StorageClass::Borrowed,
         }));
     }
     if let Some(target_ty) = ty.as_ptr(db) {
@@ -93,8 +52,6 @@ pub fn capability_semantics<'db>(
             class: CapabilityClass::Pointer,
             target_ty,
             representation_ty: ty,
-            transport: TransportClass::ProviderValue,
-            storage: StorageClass::Borrowed,
         }));
     }
     // Semantic shapes retain generic targets; allocation layout requires a concrete target.
@@ -107,7 +64,5 @@ pub fn capability_semantics<'db>(
         class: CapabilityClass::Handle,
         target_ty,
         representation_ty: ty,
-        transport: TransportClass::ProviderValue,
-        storage: StorageClass::ProviderValue,
     }))
 }

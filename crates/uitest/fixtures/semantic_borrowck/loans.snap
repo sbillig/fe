@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/loans.fe
+---
+error[16-0001]: borrow conflict in `fn read_while_mutably_borrowed`
+   ┌─ loans.fe:26:13
+   │
+25 │     let hx = mut p.x
+   │              ------- borrow created here
+26 │     let v = p.x
+   │             ^^^ cannot read this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn write_while_shared`
+   ┌─ loans.fe:35:5
+   │
+34 │     let r = ref x
+   │             ----- borrow created here
+35 │     x = 1
+   │     ^^^^^ cannot write to this place while an immutable borrow is active
+
+error[16-0001]: borrow conflict in `fn dynamic_indices`
+   ┌─ loans.fe:60:18
+   │
+59 │     let first = mut a[i]
+   │                 -------- borrow created here
+60 │     let second = mut a[j]
+   │                  ^^^^^^^^ cannot mutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn duplicate_mutable_arguments`
+   ┌─ loans.fe:79:13
+   │
+79 │     both(h, h)
+   │          -  ^ cannot pass overlapping places to one call when one of them is mutable
+   │          │
+   │          overlapping argument
+
+error[16-0001]: borrow conflict in `fn written_in_loop`
+   ┌─ loans.fe:94:9
+   │
+91 │     let h = mut x
+   │             ----- borrow created here
+   ·
+94 │         x = i
+   │         ^^^^^ cannot write to this place while a mutable borrow is active

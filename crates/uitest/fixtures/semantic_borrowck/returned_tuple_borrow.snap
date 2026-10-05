@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/returned_tuple_borrow.fe
 ---
@@ -7,9 +8,9 @@ error[16-0001]: borrow conflict in `fn direct_conflict`
   ┌─ returned_tuple_borrow.fe:8:18
   │
 7 │     let first = direct(mut value)
-  │                 ----------------- borrow created here
+  │                        --------- borrow created here
 8 │     let second = mut value
-  │                  ^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
+  │                  ^^^^^^^^^ cannot mutably borrow this place while a mutable borrow is active
 
 error[16-0001]: borrow conflict in `fn tuple_conflict`
    ┌─ returned_tuple_borrow.fe:17:18
@@ -19,7 +20,7 @@ error[16-0001]: borrow conflict in `fn tuple_conflict`
 15 │ │     let mut value: u256 = 0
 16 │ │     let (first,) = tuple(mut value)
 17 │ │     let second = mut value
-   │ │                  ^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
+   │ │                  ^^^^^^^^^ cannot mutably borrow this place while a mutable borrow is active
 18 │ │     second = 1
 19 │ │     first = 2
 20 │ │ }
