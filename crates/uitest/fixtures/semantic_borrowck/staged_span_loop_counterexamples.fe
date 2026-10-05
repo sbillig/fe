@@ -3,7 +3,7 @@ use core::ptr
 
 // Rejected: zero iterations write no member.
 fn staged_without_iterations(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -22,7 +22,7 @@ pub fn run_staged_without_iterations() -> u256 {
 
 // Rejected: a single-slot write does not initialize member one.
 fn staged_other_member(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -42,7 +42,7 @@ pub fn run_staged_other_member() -> u256 {
 
 // Rejected: the first iteration skips its store.
 fn staged_skipped_store(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -62,7 +62,7 @@ pub fn run_staged_skipped_store() -> u256 {
 
 // Rejected: an early break leaves member one unwritten.
 fn staged_early_break(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -82,7 +82,7 @@ pub fn run_staged_early_break() -> u256 {
 
 // Rejected: a loop that may not run leaves the single slot unwritten.
 fn repeat_cell_maybe_empty(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(1)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(1) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -100,7 +100,7 @@ pub fn run_repeat_cell_maybe_empty() -> u256 {
 
 // Rejected: a bound changed inside the loop certifies no member beyond it.
 fn changed_bound(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut limit: u256 = count
     let mut i: u256 = 0
     while i < limit {
@@ -122,10 +122,10 @@ pub fn run_changed_bound() -> u256 {
 
 // Rejected: a reborn array does not inherit earlier members.
 fn reset_cells(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
-        children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+        unsafe { children = ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
         let data = ptr::MemBuffer::alloc(32)
         unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
         children[i as usize] = data.span()

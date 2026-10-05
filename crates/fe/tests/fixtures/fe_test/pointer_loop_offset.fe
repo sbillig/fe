@@ -39,7 +39,7 @@ fn skip(_ data: *u8, n: u256) -> *u8 {
 
 #[test]
 fn self_offset_pointer_in_loop() {
-    let values = MemArray<u256>::new_uninit(4)
+    let values = unsafe { MemArray<u256>::new_uninit(4) }
     fill(values.ptr_at(0), n: 4)
     assert(sum(values.ptr_at(0), n: 4) == 10)
     unsafe { assert(*values.ptr_at(3) == 4) }
@@ -47,7 +47,7 @@ fn self_offset_pointer_in_loop() {
 
 #[test]
 fn nested_self_offset_pointers() {
-    let values = MemArray<u256>::new_uninit(6)
+    let values = unsafe { MemArray<u256>::new_uninit(6) }
     let mut row = values.ptr_at(0)
     let mut i: u256 = 0
     while i < 2 {

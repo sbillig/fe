@@ -160,7 +160,7 @@ use core::{abi::Encode, ptr}
 use std::abi::Sol
 
 pub fn root(values: [bool; 5]) {
-    values.encode(ptr::alloc_bytes(160))
+    unsafe { values.encode(ptr::alloc_bytes(160)) }
 }
 "#;
 

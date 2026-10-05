@@ -4868,6 +4868,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            BodyDiag::UnsafeProviderRequiresUnsafe { primary } => primary_diag(
+                severity,
+                "binding a raw-pointer effect provider requires an `unsafe` block or function",
+                "provider reaches its target through a raw pointer",
+                primary.resolve(db),
+                error_code,
+            ),
+
             BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
                 let name = callee
                     .name(db)

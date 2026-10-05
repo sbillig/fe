@@ -52,7 +52,7 @@ fn aug_assign_prefers_add_assign_semantics() {
 
 #[test]
 fn indexed_aug_assign_uses_index_mut_and_add_assign() {
-    let mut items = core::ptr::MemArray<Divergent>::new_uninit(1)
+    let mut items = unsafe { core::ptr::MemArray<Divergent>::new_uninit(1) }
     items[0] = Divergent { value: 1 }
     let item_delta = Divergent { value: 2 }
     items[0] += item_delta

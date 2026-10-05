@@ -32,12 +32,12 @@ fn load_initialized_mixed() {
 
 // Rejected: zeroing a byte of the array invalidates its references.
 fn clobber_then_load(values: *[ref u256; 2]) {
-    ptr::zero_bytes(ptr::cast<[ref u256; 2], u8>(values), 1)
+    unsafe { ptr::zero_bytes(ptr::cast<[ref u256; 2], u8>(values), 1) }
     unsafe { consume(*values) }
 }
 
 fn clobber_other_then_load(values: *[ref u256; 2], other: *u8) {
-    ptr::zero_bytes(other, 1)
+    unsafe { ptr::zero_bytes(other, 1) }
     unsafe { consume(*values) }
 }
 

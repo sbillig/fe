@@ -8,7 +8,7 @@ impl StorageKey for AllocatingKey {
         32
     }
 
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         unsafe { *ptr::cast<u8, u256>(ptr) = self.value }
         let unrelated = ptr::alloc_bytes(32)
         ptr::zero_bytes(unrelated, 32)

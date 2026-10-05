@@ -3,7 +3,7 @@
 use core::ptr
 
 fn store_zero_read_index(cursor: mut u256, index: usize) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[0] = data.span()
@@ -25,7 +25,7 @@ pub fn zero_cell_wrong_index() -> u256 {
 }
 
 fn store_one_read_index(cursor: mut u256, index: usize) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[1] = data.span()
@@ -47,7 +47,7 @@ pub fn nonzero_cell_wrong_index() -> u256 {
 }
 
 fn store_index_read_index(cursor: mut u256, index: usize) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[index] = data.span()
@@ -63,7 +63,7 @@ pub fn same_symbolic_cell() -> u256 {
 }
 
 fn store_zero_read_zero(cursor: mut u256, index: usize) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[0] = data.span()
@@ -79,7 +79,7 @@ pub fn literal_zero_cell() -> u256 {
 }
 
 fn store_one_read_one(cursor: mut u256, index: usize) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[1] = data.span()
@@ -96,7 +96,7 @@ pub fn literal_nonzero_cell() -> u256 {
 
 // Rejected: a literal read of an unwritten member.
 fn store_zero_read_one(cursor: mut u256, index: usize) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[0] = data.span()
@@ -111,7 +111,7 @@ pub fn literal_wrong_nonzero_cell() -> u256 {
 
 // Rejected: a literal read of the other unwritten member.
 fn store_one_read_zero(cursor: mut u256, index: usize) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     children[1] = data.span()

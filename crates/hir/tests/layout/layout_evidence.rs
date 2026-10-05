@@ -835,8 +835,10 @@ impl<T> Ptr<T> {
         where T: Copy
     {
         let mut ptr = self
-        with (ptr) {
-            core::effect_ref::read(ptr)
+        unsafe {
+            with (ptr) {
+                core::effect_ref::read(ptr)
+            }
         }
     }
 }
@@ -844,8 +846,10 @@ impl<T> Ptr<T> {
 fn inspect<const ROOT: u256>() uses (ptr: Ptr<Rooted<ROOT>>) {}
 
 fn forward<const ROOT: u256>(ptr: Ptr<Rooted<ROOT>>) -> Rooted<ROOT> {
-    with (Ptr<Rooted<ROOT>> = ptr) {
-        inspect()
+    unsafe {
+        with (Ptr<Rooted<ROOT>> = ptr) {
+            inspect()
+        }
     }
     ptr.load()
 }

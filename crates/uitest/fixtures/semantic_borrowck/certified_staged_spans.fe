@@ -3,7 +3,7 @@ use core::ptr
 
 // Accepted: after a nonempty fill, member zero holds a fresh span, not the cursor.
 fn stage_and_read(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -23,7 +23,7 @@ pub fn run_stage_and_read(_ count: u256) -> u256 {
 
 // Accepted: a second loop reads every member within the certified bound.
 fn stage_and_sum(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -47,7 +47,7 @@ pub fn run_stage_and_sum(_ count: u256) -> u256 {
 }
 
 fn make_children(_ count: u256) -> ptr::MemArray<ptr::MemSpan> {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -90,7 +90,7 @@ pub fn run_read_returned_all(_ count: u256) -> u256 {
 }
 
 fn make_uninitialized() -> ptr::MemArray<ptr::MemSpan> {
-    ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
 }
 
 // Rejected: an unfilled returned array has no certified contents.
@@ -106,7 +106,7 @@ pub fn run_read_uninitialized() -> u256 {
 }
 
 fn maybe_children(_ count: u256, _ fill: bool) -> ptr::MemArray<ptr::MemSpan> {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     if !fill { return children }
     let mut i: u256 = 0
     while i < count {
@@ -132,7 +132,7 @@ pub fn run_read_maybe_filled(_ fill: bool) -> u256 {
 
 // Accepted: a nonempty loop that rewrites one cell leaves its last fresh span.
 fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(1)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(1) }
     let mut i: u256 = 0
     while i < count {
         let noise = ptr::MemBuffer::alloc(32)

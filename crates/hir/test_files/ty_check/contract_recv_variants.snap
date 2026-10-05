@@ -16,10 +16,10 @@ note:
    │     ^^^^^^^^ () | *<u8> | Withdraw | __fe_I | fn decode_field<Sol, u64, __fe_D> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field_at<Sol, u64> | mut __fe_D | u256 | u64
 
 note:
-   ┌─ contract_recv_variants.fe:31:41
+   ┌─ contract_recv_variants.fe:31:48
    │
-31 │           fn encode(own self, _ ptr: *u8) {
-   │ ╭─────────────────────────────────────────^
+31 │           unsafe fn encode(own self, _ ptr: *u8) {
+   │ ╭────────────────────────────────────────────────^
 32 │ │             let Self { to, amount } = self
 33 │ │             to.encode(ptr)
 34 │ │             amount.encode(core::ptr::offset_bytes(ptr, 32))
@@ -182,10 +182,10 @@ note:
    │                        ^^^^^^ u64
 
 note:
-   ┌─ contract_recv_variants.fe:61:41
+   ┌─ contract_recv_variants.fe:61:48
    │
-61 │           fn encode(own self, _ ptr: *u8) {
-   │ ╭─────────────────────────────────────────^
+61 │           unsafe fn encode(own self, _ ptr: *u8) {
+   │ ╭────────────────────────────────────────────────^
 62 │ │             let Self { addr } = self
 63 │ │             addr.encode(ptr)
 64 │ │         }
@@ -274,10 +274,10 @@ note:
    │                    ^^^^ u64
 
 note:
-   ┌─ contract_recv_variants.fe:93:37
+   ┌─ contract_recv_variants.fe:93:44
    │
-93 │       fn encode(own self, _ ptr: *u8) {
-   │ ╭─────────────────────────────────────^
+93 │       unsafe fn encode(own self, _ ptr: *u8) {
+   │ ╭────────────────────────────────────────────^
 94 │ │         let Self { key } = self
 95 │ │         key.encode(ptr)
 96 │ │     }

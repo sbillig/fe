@@ -890,6 +890,9 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         callee: CallableDef<'db>,
     },
+    UnsafeProviderRequiresUnsafe {
+        primary: DynLazySpan<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1067,6 +1070,7 @@ impl<'db> BodyDiag<'db> {
             Self::ConstFnEffectfulCall { .. } => 63,
             Self::UnsafeDerefRequiresUnsafe { .. } => 96,
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
+            Self::UnsafeProviderRequiresUnsafe { .. } => 98,
         }
     }
 }

@@ -6,7 +6,7 @@ use std::text::{concat_slice, TextBuilder}
 #[test]
 fn runtime_slice_and_empty() {
     assert!(concat_slice(MemSlice::empty()) == "")
-    let mut parts = MemArray<DynString>::new_uninit(4)
+    let mut parts = unsafe { MemArray<DynString>::new_uninit(4) }
     unsafe { *parts.ptr_at(0) = "ab" }
     unsafe { *parts.ptr_at(1) = "" }
     unsafe { *parts.ptr_at(2) = "cde" }

@@ -765,8 +765,10 @@ impl<T> EffectRef<T> for Ptr<T> {}
 fn needs() uses (logger: Logger) {}
 
 fn caller(p: own Ptr<Console>) {
-    with (Logger = p) {
-        needs()
+    unsafe {
+        with (Logger = p) {
+            needs()
+        }
     }
 }
 "#,
@@ -975,8 +977,10 @@ impl<T> EffectRef<T> for Ptr<T> {}
 fn needs() uses (logger: Logger) {}
 
 fn caller(p: Ptr<Console>) {
-    with (Logger = p) {
-        needs()
+    unsafe {
+        with (Logger = p) {
+            needs()
+        }
     }
 }
 "#,
@@ -2250,9 +2254,11 @@ fn needs() uses (store: Storage<u8>) {}
 
 fn caller() {
     let x = make()
-    with (x) {
-        needs()
-        take(ref x)
+    unsafe {
+        with (x) {
+            needs()
+            take(ref x)
+        }
     }
 }
 "#,
@@ -2319,9 +2325,11 @@ fn needs() uses (store: Storage<u8>) {}
 
 fn caller() {
     let x = make()
-    with (Storage<u8> = x) {
-        needs()
-        take(ref x)
+    unsafe {
+        with (Storage<u8> = x) {
+            needs()
+            take(ref x)
+        }
     }
 }
 "#,
@@ -2379,8 +2387,10 @@ impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
 fn needs() uses (store: Storage<u8>) {}
 
 fn caller(x: own Ptr<Storage<u8>>) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2450,8 +2460,10 @@ fn needs() uses (store: Storage<u8>) {}
 
 fn caller() {
     let x = make()
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2521,8 +2533,10 @@ fn needs() uses (store: Storage<u8>) {}
 
 fn caller() {
     let x = make()
-    with (Storage<u8> = x) {
-        needs()
+    unsafe {
+        with (Storage<u8> = x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2615,9 +2629,11 @@ fn needs() uses (logger: Logger) {}
 
 fn caller() {
     let x = make()
-    with (x) {
-        take(ref x)
-        needs()
+    unsafe {
+        with (x) {
+            take(ref x)
+            needs()
+        }
     }
 }
 "#,
@@ -2669,9 +2685,11 @@ fn needs() uses (logger: Logger) {}
 
 fn caller() {
     let x = make()
-    with (x) {
-        needs()
-        take(ref x)
+    unsafe {
+        with (x) {
+            needs()
+            take(ref x)
+        }
     }
 }
 "#,
@@ -2708,8 +2726,10 @@ impl Logger for Good {
 fn needs() uses (logger: Logger) {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2742,8 +2762,10 @@ impl Logger<u8> for Good {
 fn needs<T>() uses (logger: Logger<T>) {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2794,8 +2816,10 @@ where
 {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -2858,8 +2882,10 @@ where
 {}
 
 fn caller(x: own Good) {
-    with (x) {
-        needs()
+    unsafe {
+        with (x) {
+            needs()
+        }
     }
 }
 "#,
@@ -3896,8 +3922,10 @@ impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
 fn needs() uses (store: Storage<u8>) {}
 
 fn caller(x: own Ptr<Storage<u8>>) {
-    with (Storage<u8> = x) {
-        needs()
+    unsafe {
+        with (Storage<u8> = x) {
+            needs()
+        }
     }
 }
 "#,
@@ -5807,11 +5835,13 @@ fn bump_stor() uses (foo: mut Foo) {
 
 fn test_spaces() uses (st: mut RawStorage) {
     let mp = ptr::alloc<Foo>()
-    with (mp) {
-        bump_mem()
+    unsafe {
+        with (mp) {
+            bump_mem()
+        }
     }
 
-    let sp: StorPtr<Foo> = st.stor_ptr(0)
+    let sp: StorPtr<Foo> = unsafe { st.stor_ptr(0) }
     with (sp) {
         bump_stor()
     }
@@ -5873,7 +5903,7 @@ fn write_cell(_ value: u256) uses (cell: mut Cell) {
 }
 
 fn test_projected(slot: u256, value: u256) uses (evm: mut Evm) {
-    let holder = Holder { ptr: evm.stor_ptr(slot) }
+    let holder = unsafe { Holder { ptr: evm.stor_ptr(slot) } }
     with (holder.ptr) {
         write_cell(value)
     }

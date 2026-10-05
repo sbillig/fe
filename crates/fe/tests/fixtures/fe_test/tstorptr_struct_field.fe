@@ -15,7 +15,7 @@ struct Flagged {
 
 impl Flagged {
     fn attach(mut self, slot: u256) uses (evm: Evm) {
-        self.flag = evm.tstor_ptr<bool>(slot)
+        unsafe { self.flag = evm.tstor_ptr<bool>(slot) }
     }
 }
 

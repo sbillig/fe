@@ -1,14 +1,14 @@
 use core::ptr
 
 fn select(index: usize, first: *u256, second: *u256) -> *u256 {
-    let mut children = ptr::MemArray<*u256>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<*u256>::new_uninit(2) }
     children[0] = first
     children[1] = second
     children[index]
 }
 
 fn select_first(first: *u256, second: *u256) -> *u256 {
-    let mut children = ptr::MemArray<*u256>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<*u256>::new_uninit(2) }
     children[0] = first
     children[1] = second
     children[0]

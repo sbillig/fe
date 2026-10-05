@@ -97,7 +97,7 @@ fn replacement_initializes_a_clobbered_slot() {
     unsafe { *owner = 7 }
     let slot = ptr::alloc<ref u256>()
     let native = unsafe { ref *owner }
-    ptr::zero_bytes(ptr::byte_ptr(slot), 32)
+    unsafe { ptr::zero_bytes(ptr::byte_ptr(slot), 32) }
     replace_shared(slot, value: native)
     assert!(read_shared(slot) == 7)
 }

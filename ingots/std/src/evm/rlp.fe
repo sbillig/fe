@@ -34,8 +34,10 @@ pub fn encode_bytes(_ data: MemSpan) -> Bytes {
     let header = header_len(len)
     let out = ptr::alloc_bytes(header + len)
     write_header(out, offset: 0x80, len)
-    ptr::copy(dest: ptr::offset_bytes(out, header), source: data)
-    Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len))
+    unsafe {
+        ptr::copy(dest: ptr::offset_bytes(out, header), source: data)
+        Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len))
+    }
 }
 
 /// Encodes an integer as its big-endian bytes without leading zeros, so
@@ -48,7 +50,7 @@ pub fn encode_uint(_ value: u256) -> Bytes {
     let out = ptr::alloc_bytes(1 + len)
     unsafe { *out = (0x80 + len).downcast_truncate() }
     write_be(ptr::offset_bytes(out, 1), value, len)
-    Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: 1 + len))
+    unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: 1 + len)) }
 }
 
 /// Encodes an address as a 20-byte string. Reverts for a noncanonical
@@ -80,11 +82,11 @@ pub fn encode_list<const N: usize>(_ items: [Bytes; N]) -> Bytes {
     i = 0
     while i < N {
         let item = items[i].payload_span()
-        ptr::copy(dest: ptr::offset_bytes(out, offset), source: item)
+        unsafe { ptr::copy(dest: ptr::offset_bytes(out, offset), source: item) }
         offset += item.len()
         i += 1
     }
-    Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len))
+    unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: header + len)) }
 }
 
 fn header_len(_ len: u256) -> u256 {
@@ -195,7 +197,7 @@ impl Item {
                 Option::None => return Option::None
             }
         }
-        let items = MemArray<Item>::new_uninit(count)
+        let items = unsafe { MemArray<Item>::new_uninit(count) }
         rest = self.payload
         let mut i: usize = 0
         while !rest.is_empty() {

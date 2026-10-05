@@ -327,7 +327,7 @@ fn sealed_effect_identity_retains_bodyless_call_after_semantic_checks() {
         Utf8PathBuf::from("sealed_effect_trait_selection.fe"),
         r#"
 use std::evm::RawStorage
-fn access() -> u256 uses (raw: mut RawStorage) { raw.sload(0) }
+fn access() -> u256 uses (raw: mut RawStorage) { unsafe { raw.sload(0) } }
 "#,
     );
     let (module, _) = db.top_mod(file);

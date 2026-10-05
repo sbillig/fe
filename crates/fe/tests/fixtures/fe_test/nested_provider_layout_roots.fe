@@ -8,7 +8,7 @@ impl<T> Copy for Holder<T> {}
 
 impl<T> Holder<T> {
     fn attach(mut self, slot: u256) uses (evm: Evm) {
-        self.ptr = evm.stor_ptr(slot)
+        unsafe { self.ptr = evm.stor_ptr(slot) }
     }
 }
 
@@ -35,7 +35,7 @@ impl<T> Copy for TaggedHolder<T> {}
 
 impl<T> TaggedHolder<T> {
     fn attach(mut self, slot: u256) uses (evm: Evm) {
-        self.ptr = TaggedStorPtr { tag: 19, ptr: evm.stor_ptr(slot) }
+        unsafe { self.ptr = TaggedStorPtr { tag: 19, ptr: evm.stor_ptr(slot) } }
     }
 }
 

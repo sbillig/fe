@@ -3,7 +3,7 @@ use core::ptr
 // Rejected: zero bytes do not establish a native reference.
 fn read_zeroed_reference() -> u256 {
     let slot = ptr::alloc<ref u256>()
-    ptr::zero_bytes(ptr::byte_ptr(slot), 32)
+    unsafe { ptr::zero_bytes(ptr::byte_ptr(slot), 32) }
     let value: u256 = unsafe { *slot }
     value
 }
@@ -15,7 +15,7 @@ fn copy_reference_bytes() -> u256 {
     let source = ptr::alloc<ref u256>()
     unsafe { *source = ref *owner }
     let destination = ptr::alloc<ref u256>()
-    ptr::copy_raw(ptr::byte_ptr(destination), source: ptr::byte_ptr(source), len: 32)
+    unsafe { ptr::copy_raw(ptr::byte_ptr(destination), source: ptr::byte_ptr(source), len: 32) }
     let result: u256 = unsafe { *destination }
     result
 }

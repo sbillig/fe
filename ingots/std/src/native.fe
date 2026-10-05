@@ -27,7 +27,9 @@ pub struct Args { argc: i32, argv: **u8 }
 pub struct Arg { ptr: *u8, len: usize }
 
 impl Args {
-    pub fn new(_ argc: i32, _ argv: **u8) -> Self {
+    /// The caller must ensure that `argv` points to `argc` pointers to
+    /// NUL-terminated strings that stay live while the arguments are read.
+    pub unsafe fn new(_ argc: i32, _ argv: **u8) -> Self {
         core::assert(argc >= 0)
         Self { argc, argv }
     }

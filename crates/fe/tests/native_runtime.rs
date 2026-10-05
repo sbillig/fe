@@ -550,7 +550,7 @@ use std::native::Args
 fn __fe_native_main() -> i32 { 42 }
 pub fn main(argc: i32, argv: **u8) -> i32 {
     if argc == 0 { return __fe_native_main() }
-    let args = Args::new(argc, argv)
+    let args = unsafe { Args::new(argc, argv) }
     core::assert(args.len() == argc.downcast_unchecked())
     if argc == 1 { args.get(args.len()) }
     if argc == 2 {
@@ -873,7 +873,7 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
             false,
         ),
     ] {
-        fs::write(&source, format!("use core::ptr\npub fn main() -> i32 {{\nlet data = ptr::alloc_bytes(8)\nunsafe {{ *data = 42 }}\n{operation}\nunsafe {{ core::assert(*data == 42) }}\n0\n}}\n")).unwrap();
+        fs::write(&source, format!("use core::ptr\npub fn main() -> i32 {{\nlet data = ptr::alloc_bytes(8)\nunsafe {{ *data = 42 }}\nunsafe {{ {operation} }}\nunsafe {{ core::assert(*data == 42) }}\n0\n}}\n")).unwrap();
         for level in ["0", "1", "2"] {
             let out = temp.path().join(format!("{name}-{level}"));
             build(&source, &out, level, &[]);

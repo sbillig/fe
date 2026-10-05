@@ -21,7 +21,7 @@ pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
     i = 0
     while i < N {
         let part = parts[i].payload_span()
-        ptr::copy(dest: ptr::offset_bytes(data, offset), source: part)
+        unsafe { ptr::copy(dest: ptr::offset_bytes(data, offset), source: part) }
         offset += part.len()
         i += 1
     }
@@ -169,10 +169,12 @@ pub fn base64(_ data: MemSpan) -> DynString {
         let a = data.byte_at(i)
         let b = if i + 1 < len { data.byte_at(i + 1) } else { 0 }
         let c = if i + 2 < len { data.byte_at(i + 2) } else { 0 }
-        unsafe { *ptr::offset_bytes(dest, j) = base64_digit(a >> 2) }
-        unsafe { *ptr::offset_bytes(dest, j + 1) = base64_digit(((a & 3) << 4) | (b >> 4)) }
-        unsafe { *ptr::offset_bytes(dest, j + 2) = if i + 1 < len { base64_digit(((b & 15) << 2) | (c >> 6)) } else { 61 } }
-        unsafe { *ptr::offset_bytes(dest, j + 3) = if i + 2 < len { base64_digit(c & 63) } else { 61 } }
+        unsafe {
+            *ptr::offset_bytes(dest, j) = base64_digit(a >> 2)
+            *ptr::offset_bytes(dest, j + 1) = base64_digit(((a & 3) << 4) | (b >> 4))
+            *ptr::offset_bytes(dest, j + 2) = if i + 1 < len { base64_digit(((b & 15) << 2) | (c >> 6)) } else { 61 }
+            *ptr::offset_bytes(dest, j + 3) = if i + 2 < len { base64_digit(c & 63) } else { 61 }
+        }
         i += 3
         j += 4
     }
@@ -219,7 +221,7 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
         i += 4
         j += 3
     }
-    Option::Some(Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: out_len)))
+    Option::Some(Bytes::from_payload(source: unsafe { MemSpan::from_raw_parts(ptr: out, len: out_len) }))
 }
 
 fn base64_digit(_ value: u8) -> u8 {
@@ -359,7 +361,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         bytes += (used as u256 - 1) * 24
     }
     let out = ptr::alloc_bytes(zeros + bytes)
-    ptr::zero_bytes(out, zeros)
+    unsafe { ptr::zero_bytes(out, zeros) }
     let mut pos = zeros + bytes
     let mut k: usize = 0
     while pos > zeros {
@@ -373,7 +375,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         }
         k += 1
     }
-    let decoded = MemSpan::from_raw_parts(ptr: out, len: zeros + bytes)
+    let decoded = unsafe { MemSpan::from_raw_parts(ptr: out, len: zeros + bytes) }
     Option::Some(Bytes::from_payload(source: decoded))
 }
 
@@ -442,10 +444,12 @@ pub fn concat_slice(_ parts: ptr::MemSlice<DynString>) -> DynString {
     i = 0
     while i < parts.len() {
         let part = unsafe { (*parts.ptr_at(i)).payload_span() }
-        ptr::copy(
-            dest: ptr::offset_bytes(out.payload_span().ptr(), offset),
-            source: part,
-        )
+        unsafe {
+            ptr::copy(
+                dest: ptr::offset_bytes(out.payload_span().ptr(), offset),
+                source: part,
+            )
+        }
         offset += part.len()
         i += 1
     }

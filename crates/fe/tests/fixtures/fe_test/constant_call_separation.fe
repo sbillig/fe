@@ -4,7 +4,7 @@ struct Slot { pointer: *Option<Token> }
 struct Buffer { data: *u8, marker: u256 }
 fn clear_if(_ state: mut Buffer, clear: bool) {
     if clear {
-        ptr::zero_bytes(ptr: state.data, len: 1)
+        unsafe { ptr::zero_bytes(ptr: state.data, len: 1) }
     }
     state.marker = 1
 }

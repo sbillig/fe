@@ -6,8 +6,8 @@ fn a_valid_complete_raw_range_preserves_the_next_allocation() {
     unsafe { *first = [7; 32] }
     let second = ptr::alloc<u256>()
     unsafe { *second = 19 }
-    let span = MemSpan::from_raw_parts(ptr: ptr::byte_ptr(first), len: 32)
-    ptr::zero_bytes(span.ptr(), span.len())
+    let span = unsafe { MemSpan::from_raw_parts(ptr: ptr::byte_ptr(first), len: 32) }
+    unsafe { ptr::zero_bytes(span.ptr(), span.len()) }
     unsafe { assert!((*first)[31] == 0) }
     unsafe { assert!(*second == 19) }
 }

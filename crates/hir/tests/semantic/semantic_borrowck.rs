@@ -160,7 +160,7 @@ fn concrete(pointer: *Item) -> Item { generic<Consume>(pointer) }
 trait Operation { fn apply(slot: *ref u256) }
 struct Clobber {}
 impl Operation for Clobber {
-    fn apply(slot: *ref u256) { core::ptr::zero_bytes(core::ptr::byte_ptr(slot), 32) }
+    fn apply(slot: *ref u256) { unsafe { core::ptr::zero_bytes(core::ptr::byte_ptr(slot), 32) } }
 }
 fn generic<T: Operation>(slot: *ref u256) -> ref u256 { T::apply(slot)
 unsafe { *slot } }
@@ -338,7 +338,10 @@ fn operation_operands_preserve_distinct_owners_fields_and_copies() {
 
 #[test]
 fn physical_storage_intrinsics_conflict_with_native_storage_borrows() {
-    for operation in ["raw.sstore(slot: 0, value: 1)", "let value = raw.sload(0)"] {
+    for operation in [
+        "unsafe { raw.sstore(slot: 0, value: 1) }",
+        "let value = unsafe { raw.sload(0) }",
+    ] {
         for call in [operation, "access()", "forward()"] {
             let source = format!(
                 r#"
@@ -440,9 +443,9 @@ struct Key {
 impl Copy for Key {}
 impl StorageKey for Key {
     fn encoded_len(self) -> u256 { 32 }
-    fn write_key(ptr: *u8, self) {
+    unsafe fn write_key(ptr: *u8, self) {
         unsafe { *self.log = self.id }
-        u256::write_key(ptr, self.id)
+        unsafe { u256::write_key(ptr, self.id) }
     }
 }
 fn read(_ map: StorageMap<Key, u256, 7>, key: Key) -> u256 {
@@ -1622,7 +1625,7 @@ fn valid() {{
 #[test]
 fn physical_copy_ranges_preserve_extent_through_forwarding_and_restoration() {
     for copy in [
-        "ptr::copy_raw(destination, source, len)",
+        "unsafe { ptr::copy_raw(destination, source, len) }",
         "copy(destination, source, len)",
         "forward(destination, source, len)",
     ] {
@@ -1636,7 +1639,7 @@ fn physical_copy_ranges_preserve_extent_through_forwarding_and_restoration() {
                 let source = format!(
                     r#"
 use core::ptr
-fn copy(_ destination: *u8, _ source: *u8, _ len: u256) {{ ptr::copy_raw(destination, source, len) }}
+fn copy(_ destination: *u8, _ source: *u8, _ len: u256) {{ unsafe {{ ptr::copy_raw(destination, source, len) }} }}
 fn forward(_ destination: *u8, _ source: *u8, _ len: u256) {{ copy(destination, source, len) }}
 fn inspect() {{
     let base = ptr::alloc_bytes(96)
@@ -1673,7 +1676,7 @@ fn inspect() {{
 fn physical_intrinsic_byte_and_word_stores_have_distinct_extents() {
     for method in ["mstore8", "mstore"] {
         for call in [
-            format!("mem.{method}(addr: destination, value: 1)"),
+            format!("unsafe {{ mem.{method}(addr: destination, value: 1) }}"),
             "store(destination)".into(),
             "forward(destination)".into(),
         ] {
@@ -1681,7 +1684,7 @@ fn physical_intrinsic_byte_and_word_stores_have_distinct_extents() {
                 r#"
 use core::ptr
 use std::evm::RawMem
-fn store(_ destination: *u8) uses (mem: mut RawMem) {{ mem.{method}(addr: destination, value: 1) }}
+fn store(_ destination: *u8) uses (mem: mut RawMem) {{ unsafe {{ mem.{method}(addr: destination, value: 1) }} }}
 fn forward(_ destination: *u8) uses (mem: mut RawMem) {{ store(destination) }}
 fn inspect() uses (mem: mut RawMem) {{
     let base = ptr::alloc_bytes(96)
@@ -1713,7 +1716,7 @@ fn inspect() uses (mem: mut RawMem) {{
 #[test]
 fn physical_read_ranges_survive_recursive_summary_composition() {
     for call in [
-        "ptr::copy_raw(destination, source, len)",
+        "unsafe { ptr::copy_raw(destination, source, len) }",
         "copy(destination, source, len)",
         "repeat(destination, source, len, true)",
     ] {
@@ -1721,7 +1724,7 @@ fn physical_read_ranges_survive_recursive_summary_composition() {
             let source = format!(
                 r#"
 use core::ptr
-fn copy(_ destination: *u8, _ source: *u8, _ len: u256) {{ ptr::copy_raw(destination, source, len) }}
+fn copy(_ destination: *u8, _ source: *u8, _ len: u256) {{ unsafe {{ ptr::copy_raw(destination, source, len) }} }}
 fn repeat(_ destination: *u8, _ source: *u8, _ len: u256, _ again: bool) {{
     if again {{ repeat(destination, source, len, false) }} else {{ copy(destination, source, len) }}
 }}
@@ -1756,7 +1759,7 @@ fn physical_unknown_copy_length_is_not_an_empty_footprint() {
     let diagnostics = checked_borrow_diags(
         r#"
 use core::ptr
-fn copy(_ destination: *u8, _ source: *u8, _ len: u256) { ptr::copy_raw(destination, source, len) }
+fn copy(_ destination: *u8, _ source: *u8, _ len: u256) { unsafe { ptr::copy_raw(destination, source, len) } }
 fn inspect(len: u256) {
     let base = ptr::alloc_bytes(96)
     let value = ptr::alloc<u256>()
@@ -1967,7 +1970,7 @@ fn local(item: own Item) -> u256 { view(item) + view(item) }
 #[test]
 fn raw_copy_poststates_cannot_restore_entry_pointer_provenance() {
     for copy in [
-        "unsafe { *target = first }\nptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)",
+        "unsafe { *target = first }\nunsafe { ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32) }",
         "copy_slot(target, source, first)",
         "forward(target, source, first)",
         "overwrite_word(target, source, first)",
@@ -1978,7 +1981,7 @@ fn raw_copy_poststates_cannot_restore_entry_pointer_provenance() {
 use core::ptr
 fn copy_slot(target: **u256, source: **u256, first: *u256) {{
     unsafe {{ *target = first }}
-    ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
+    unsafe {{ ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32) }}
 }}
 fn forward(target: **u256, source: **u256, first: *u256) {{
     copy_slot(target, source, first)
@@ -1987,7 +1990,7 @@ fn loop_copy_slot(target: **u256, source: **u256, first: *u256) {{
     unsafe {{ *target = first }}
     let mut index: usize = 0
     while index < 2 {{
-        ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
+        unsafe {{ ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32) }}
         index += 1
     }}
 }}
@@ -2024,14 +2027,14 @@ fn definite_pointer_store_after_raw_copy_recovers_precise_contents() {
     // A further forwarding summary can conservatively join possibly aliased
     // source/target poststates. It is not an ordered trace of these stores.
     for copy in [
-        "ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)\nunsafe { *target = first }",
+        "unsafe { ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32) }\nunsafe { *target = first }",
         "copy_slot(target, source, first)",
     ] {
         let diagnostics = checked_borrow_diags(&format!(
             r#"
 use core::ptr
 fn copy_slot(target: **u256, source: **u256, first: *u256) {{
-    ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32)
+    unsafe {{ ptr::copy_raw(ptr::byte_ptr(target), source: ptr::byte_ptr(source), len: 32) }}
     unsafe {{ *target = first }}
 }}
 fn valid() {{
@@ -2074,7 +2077,7 @@ fn inspect() {{
     let slot = ptr::alloc<mut u256>()
     unsafe {{ *source = 0 }}
     unsafe {{ *slot = mut *owner }}
-    ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32)
+    unsafe {{ ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32) }}
     {restoration}
     let borrowed = {access}
     borrowed = 1
@@ -2547,7 +2550,7 @@ fn valid() {
     let slot = ptr::alloc<mut u256>()
     unsafe { *source = 0 }
     unsafe { *slot = mut *owner }
-    ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32)
+    unsafe { ptr::copy_raw(ptr::byte_ptr(slot), source: ptr::byte_ptr(source), len: 32) }
     let borrowed = forward(slot)
     borrowed = 1
 }
@@ -2576,7 +2579,7 @@ fn inspect() -> u256 {{
     unsafe {{ *owner = 7 }}
     let slot = ptr::alloc<{kind} u256>()
     let native = unsafe {{ {kind} *owner }}
-    ptr::zero_bytes(ptr::byte_ptr(slot), 32)
+    unsafe {{ ptr::zero_bytes(ptr::byte_ptr(slot), 32) }}
     {assignment}
     unsafe {{ *slot }}
 }}
@@ -2602,7 +2605,7 @@ fn inspect() -> u256 {{
     unsafe {{ *owner = 7 }}
     let slot = ptr::alloc<{kind} u256>()
     unsafe {{ *slot = {kind} *owner }}
-    ptr::zero_bytes(ptr::byte_ptr(slot), 32)
+    unsafe {{ ptr::zero_bytes(ptr::byte_ptr(slot), 32) }}
     {read}
 }}
 "#
@@ -2634,7 +2637,7 @@ fn native_validity_obligations_distinguish_disjoint_and_aliased_callers() {
 use core::ptr
 fn read(_ value: ref u256) -> u256 {{ value }}
 fn clobber(slot: *ref u256, destination: *u8) -> ref u256 {{
-    ptr::zero_bytes(destination, 32)
+    unsafe {{ ptr::zero_bytes(destination, 32) }}
     unsafe {{ *slot }}
 }}
 fn forward(slot: *ref u256, destination: *u8) -> ref u256 {{ clobber(slot, destination) }}
@@ -3360,7 +3363,7 @@ fn direct_read(p: *u256) -> u256 {
 }
 
 fn raw_mem_read(p: *u256) -> u256 uses (mem: RawMem) {
-    mem.mload(ptr::byte_ptr(p))
+    unsafe { mem.mload(ptr::byte_ptr(p)) }
 }
 "#,
     );
@@ -6400,8 +6403,8 @@ use std::evm::RawMem
 
 fn allocate(bytes: u256) -> *u8 uses (mem: mut RawMem) {
     let out = ptr::alloc_bytes(64)
-    mem.mstore(addr: out, value: bytes)
-    mem.mstore(addr: ptr::offset_bytes(out, 32), value: bytes)
+    unsafe { mem.mstore(addr: out, value: bytes) }
+    unsafe { mem.mstore(addr: ptr::offset_bytes(out, 32), value: bytes) }
     out
 }
 "#,
@@ -9966,7 +9969,7 @@ fn bad() {
     unsafe { *source = second }
     unsafe { *target = first }
     let borrowed = unsafe { mut *second }
-    core::ptr::copy_raw(core::ptr::byte_ptr(target), source: core::ptr::byte_ptr(source), len: 32)
+    unsafe { core::ptr::copy_raw(core::ptr::byte_ptr(target), source: core::ptr::byte_ptr(source), len: 32) }
     let alias = unsafe { mut *(*target) }
     borrowed = 1
     alias = 2
@@ -10212,7 +10215,7 @@ fn summarized_partially_initialized_heap_cells_keep_unknown_contents() {
         r#"
 use core::ptr
 fn staged(_ cursor: mut u256, _ count: u256, _ initialize: bool) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
         if initialize {
@@ -10241,7 +10244,7 @@ fn typed_heap_source(stored: &str, read: &str, caller: usize) -> String {
         r#"
 use core::ptr
 fn staged(cursor: mut u256, index: usize) -> u256 {{
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe {{ ptr::MemArray<ptr::MemSpan>::new_uninit(2) }}
     let data = ptr::MemBuffer::alloc(32)
     unsafe {{ *ptr::cast<u8, u256>(data.ptr()) = 7 }}
     children[{stored}] = data.span()
@@ -10296,7 +10299,7 @@ fn typed_heap_generic_summary_keeps_unknown_complement() {
             r#"
 use core::ptr
 fn staged(cursor: mut u256, index: usize) -> u256 {{
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe {{ ptr::MemArray<ptr::MemSpan>::new_uninit(2) }}
     let data = ptr::MemBuffer::alloc(32)
     unsafe {{ *ptr::cast<u8, u256>(data.ptr()) = 7 }}
     children[{stored}] = data.span()
@@ -10363,7 +10366,7 @@ fn typed_heap_selected_span_summary_preserves_both_branches() {
             r#"
 use core::ptr
 fn select(index: usize) -> ptr::MemSpan {{
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe {{ ptr::MemArray<ptr::MemSpan>::new_uninit(2) }}
     let data = ptr::MemBuffer::alloc(32)
     children[{written}] = data.span()
     children[index]
@@ -10924,7 +10927,7 @@ fn unrelated_loops_preserve_conditional_pointer_replacements() {
                     r#"
 use core::ptr
 fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
-    ptr::zero_bytes(destination, 32)
+    unsafe {{ ptr::zero_bytes(destination, 32) }}
     let pointer = unsafe {{ *slot }}
     {loops}
     {result}
@@ -10973,7 +10976,7 @@ fn unrelated_loops_preserve_native_invalidation_obligations() {
                 r#"
 use core::ptr
 fn work(slot: *ref u256, destination: *u8, n: u256) -> ref u256 {{
-    ptr::zero_bytes(destination, 32)
+    unsafe {{ ptr::zero_bytes(destination, 32) }}
     let pointer = unsafe {{ *slot }}
     let mut i: u256 = 0
     while i < n {{ i += 1 }}
@@ -11069,9 +11072,9 @@ fn writes_through_conditional_replacements_keep_their_prerequisite() {
                 r#"
 use core::ptr
 fn work(slot: **u256, second: **u256, destination: *u8) -> *u256 {{
-    ptr::zero_bytes(destination, 32)
+    unsafe {{ ptr::zero_bytes(destination, 32) }}
     let pointer = unsafe {{ *slot }}
-    ptr::zero_bytes(ptr::byte_ptr(pointer), 32)
+    unsafe {{ ptr::zero_bytes(ptr::byte_ptr(pointer), 32) }}
     unsafe {{ {returned} }}
 }}
 fn forward(slot: **u256, second: **u256, destination: *u8) -> *u256 {{
@@ -11765,7 +11768,7 @@ fn loops_preserve_offsets_of_invariant_conditional_replacements() {
                     r#"
 use core::ptr
 fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
-    ptr::zero_bytes(destination, 32)
+    unsafe {{ ptr::zero_bytes(destination, 32) }}
     let pointer = unsafe {{ *slot }}
     let mut result = ptr::offset(pointer, 1)
     let mut i: u256 = 0
@@ -11817,7 +11820,7 @@ fn work(slot: **u256, destination: *u8, n: u256) -> *u256 {{
     let mut result = unsafe {{ *slot }}
     let mut i: u256 = 0
     while i < n {{
-        ptr::zero_bytes(destination, 32)
+        unsafe {{ ptr::zero_bytes(destination, 32) }}
         unsafe {{ {body} }}
         i += 1
     }}
@@ -12186,7 +12189,7 @@ fn drive() -> u256 {
 use core::ptr
 fn sink() uses (slot: mut u256) {}
 fn foreign(value: mut u256, pointer: *u256) {
-    with (pointer) { sink() }
+    unsafe { with (pointer) { sink() } }
     value = 9
 }
 fn drive() {
@@ -12207,7 +12210,7 @@ fn drive() {
     let target = ptr::alloc<u256>()
     unsafe { *target = 0 }
     let native = unsafe { mut *target }
-    with (target) { sink() }
+    unsafe { with (target) { sink() } }
     native = 9
 }
 "#,
@@ -13061,7 +13064,7 @@ fn overwritten_pointer_requirements_forward_through_recursion() {
             r#"
 use core::ptr
 fn foreign(value: mut u256, cell: **u256, raw: *u8) {{
-    ptr::zero_bytes(raw, 32)
+    unsafe {{ ptr::zero_bytes(raw, 32) }}
     let p = unsafe {{ *cell }}
     unsafe {{ *p = 5 }}
     value = 9

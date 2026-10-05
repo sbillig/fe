@@ -5820,7 +5820,7 @@ fn fresh() -> mut u256 {
 }
 fn unchanged(slot: *ref u256) {}
 fn replaced(slot: *ref u256, value: ref u256) { unsafe { *slot = value } }
-fn clobbered(slot: *ref u256) { ptr::zero_bytes(ptr::byte_ptr(slot), 32) }
+fn clobbered(slot: *ref u256) { unsafe { ptr::zero_bytes(ptr::byte_ptr(slot), 32) } }
 fn take(pointer: *Item) -> Item { unsafe { *pointer } }
 fn restore(pointer: *Item) -> Item {
     let value = unsafe { *pointer }
@@ -5996,7 +5996,7 @@ use core::ptr
 fn lend(pointer: *u256) -> mut u256 { unsafe { mut *pointer } }
 fn clobber(slot: *ref u256) {
     let bytes = ptr::alloc_bytes(32)
-    ptr::copy_raw(ptr::byte_ptr(slot), bytes, 32)
+    unsafe { ptr::copy_raw(ptr::byte_ptr(slot), bytes, 32) }
 }
 "#,
         );

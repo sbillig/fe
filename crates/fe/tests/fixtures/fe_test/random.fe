@@ -114,7 +114,7 @@ fn shuffles_keep_every_element() {
         i += 1
     }
     with (Rng = rng) {
-        shuffle_slice(slice)
+        unsafe { shuffle_slice(slice) }
     }
     let mut total: u256 = 0
     let mut k: u256 = 0

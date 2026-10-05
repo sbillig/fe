@@ -1,7 +1,12 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::place::resolve_place_field;
+use crate::analysis::ty::corelib::resolve_core_trait;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
+use crate::analysis::ty::provider::{EffectHandleResolution, resolve_effect_handle};
+use crate::analysis::ty::trait_def::TraitInstId;
+use crate::analysis::ty::trait_resolution::{TraitSolveCx, is_goal_satisfiable};
 use crate::analysis::ty::ty_check::{BodyOwner, TypedBody};
+use crate::analysis::ty::ty_def::TyId;
 use crate::hir_def::{
     BlockKind, Body, CallableDef, Cond, CondId, Expr, ExprId, Partial, Stmt, StmtId, UnOp,
 };
@@ -9,7 +14,7 @@ use crate::hir_def::{
 /// Reports the unsafe operations of a body that are outside an unsafe
 /// context: an `unsafe { .. }` block, or the body of an `unsafe fn`. These are
 /// dereferencing a raw pointer, explicitly or by selecting a field through
-/// it, and calling an `unsafe fn`.
+/// it, calling an `unsafe fn`, and binding a raw-pointer effect provider.
 ///
 /// Nested items and anonymous const bodies are checked as their own owners,
 /// and never inherit an enclosing unsafe context.
@@ -68,6 +73,37 @@ impl<'db> UnsafeChecker<'db, '_> {
                 BodyDiag::UnsafeCallRequiresUnsafe {
                     primary: expr.span(self.body).into(),
                     callee,
+                }
+                .into(),
+            );
+        }
+    }
+
+    /// Reports a `with` binding whose provider is an effect handle that
+    /// provides its target through a raw pointer. Only the trusted handles of
+    /// `std` carry a numeric `Raw`; any other handle, including a generic one,
+    /// may give its effect access to memory nothing has checked. A handle that
+    /// cannot provide its target is only a value, and binding it is safe.
+    fn check_provider(&mut self, value: ExprId) {
+        let ty = self.typed_body.expr_ty(self.db, value);
+        let provider_ty = ty.as_view(self.db).unwrap_or(ty);
+        let scope = self.body.scope();
+        let assumptions = self.typed_body.assumptions();
+        if let EffectHandleResolution::Resolved {
+            target_ty, raw_ty, ..
+        } = resolve_effect_handle(self.db, scope, assumptions, provider_ty)
+            && raw_ty != TyId::u256(self.db)
+            && let Some(effect_ref) = resolve_core_trait(self.db, scope, &["EffectRef"])
+            && is_goal_satisfiable(
+                self.db,
+                TraitSolveCx::new(self.db, scope).with_assumptions(assumptions),
+                TraitInstId::new_simple(self.db, effect_ref, vec![provider_ty, target_ty]),
+            )
+            .is_satisfied()
+        {
+            self.diags.push(
+                BodyDiag::UnsafeProviderRequiresUnsafe {
+                    primary: value.span(self.body).into(),
                 }
                 .into(),
             );
@@ -175,9 +211,10 @@ impl<'db> UnsafeChecker<'db, '_> {
                 }
             }
             Expr::With(bindings, body) => {
-                bindings
-                    .iter()
-                    .for_each(|binding| self.check_expr(binding.value));
+                for binding in bindings {
+                    self.check_expr(binding.value);
+                    self.check_provider(binding.value);
+                }
                 self.check_expr(*body);
             }
             Expr::RecordInit(_, fields) => {

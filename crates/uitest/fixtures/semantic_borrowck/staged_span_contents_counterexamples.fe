@@ -3,7 +3,7 @@ use core::ptr
 
 // Rejected: a later store of an input span replaces the certified member.
 fn fill_and_overwrite(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(2) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -19,7 +19,7 @@ fn fill_and_overwrite(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u25
 pub fn run_fill_and_overwrite() -> u256 {
     let cursor = ptr::alloc<u256>()
     unsafe { *cursor = 0 }
-    let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
+    let incoming = unsafe { ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32) }
     unsafe { fill_and_overwrite(mut *cursor, incoming, 2) }
 }
 
@@ -31,13 +31,13 @@ fn read_input(_ cursor: mut u256, _ incoming: ptr::MemSpan) -> u256 {
 pub fn run_read_input() -> u256 {
     let cursor = ptr::alloc<u256>()
     unsafe { *cursor = 0 }
-    let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
+    let incoming = unsafe { ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32) }
     unsafe { read_input(mut *cursor, incoming) }
 }
 
 // Rejected: every member stores the cursor-aliasing input span.
 fn store_alias(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
         children[i as usize] = incoming
@@ -51,13 +51,13 @@ fn store_alias(_ cursor: mut u256, _ incoming: ptr::MemSpan, _ count: u256) -> u
 pub fn run_store_alias() -> u256 {
     let cursor = ptr::alloc<u256>()
     unsafe { *cursor = 0 }
-    let incoming = ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32)
+    let incoming = unsafe { ptr::MemSpan::from_raw_parts(ptr: ptr::byte_ptr(cursor), len: 32) }
     unsafe { store_alias(mut *cursor, incoming, 2) }
 }
 
 // Rejected: every member holds the same span, so two members alias.
 fn same_pointer(_ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let data = ptr::MemBuffer::alloc(32)
     unsafe { *ptr::cast<u8, u256>(data.ptr()) = 7 }
     let mut i: u256 = 0
@@ -76,7 +76,7 @@ pub fn run_same_pointer() -> u256 { same_pointer(2) }
 
 // Rejected: an opaque clobber after the fill invalidates certified members.
 fn fill_and_clobber(_ cursor: mut u256, _ count: u256) -> u256 {
-    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(count)
+    let mut children = unsafe { ptr::MemArray<ptr::MemSpan>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
         let data = ptr::MemBuffer::alloc(32)
@@ -84,7 +84,7 @@ fn fill_and_clobber(_ cursor: mut u256, _ count: u256) -> u256 {
         children[i as usize] = data.span()
         i += 1
     }
-    ptr::zero_bytes(ptr::byte_ptr(children.ptr()), 32)
+    unsafe { ptr::zero_bytes(ptr::byte_ptr(children.ptr()), 32) }
     if count == 0 { return 0 }
     let child = children[0]
     cursor += 1
@@ -99,10 +99,10 @@ fn discard(_ value: ref u256) {}
 
 // Rejected: zeroed bytes do not become native references in a loop.
 fn zero_cells(_ count: u256) {
-    let mut cells = ptr::MemArray<ref u256>::new_uninit(count)
+    let mut cells = unsafe { ptr::MemArray<ref u256>::new_uninit(count) }
     let mut i: u256 = 0
     while i < count {
-        ptr::zero_bytes(ptr::byte_ptr(cells.ptr_at(i as usize)), 32)
+        unsafe { ptr::zero_bytes(ptr::byte_ptr(cells.ptr_at(i as usize)), 32) }
         i += 1
     }
     if count == 0 { return }

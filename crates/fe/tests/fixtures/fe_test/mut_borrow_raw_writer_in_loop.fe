@@ -52,7 +52,7 @@ impl Writer {
     fn append(mut self, _ size: u256) -> *u8 {
         self.buffer.reserve(size)
         let len = self.buffer.len()
-        self.buffer.set_len(len + size)
+        unsafe { self.buffer.set_len(len + size) }
         ptr::offset_bytes(self.buffer.ptr(), len)
     }
 
@@ -64,7 +64,7 @@ impl Writer {
     fn bytes(mut self, _ data: MemSpan) {
         self.word(data.len())
         let at = self.append(data.len())
-        ptr::copy(dest: at, source: data)
+        unsafe { ptr::copy(dest: at, source: data) }
     }
 
     fn finish(own self) -> MemBuffer {

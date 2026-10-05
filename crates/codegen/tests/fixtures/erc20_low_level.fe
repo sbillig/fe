@@ -8,16 +8,16 @@ const ALLOWANCES_SALT: u256 = 1
 
 fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    ops.mstore(addr: data.ptr(), value)
+    unsafe { ops.mstore(addr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 
 fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
     let data = ptr::MemBuffer::alloc(96)
-    ops.mstore(addr: data.ptr(), value: 32) // offset to data
-    ops.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: len) // string length
-    ops.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: word)
+    unsafe { ops.mstore(addr: data.ptr(), value: 32) } // offset to data
+    unsafe { ops.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: len) } // string length
+    unsafe { ops.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: word) }
     ops.return_data(data: data.span())
 }
 
@@ -127,7 +127,7 @@ fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20<BALANCES_SALT,
 
 #[contract_init(Erc20Contract)]
 fn init() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = evm.stor_ptr(0)
+    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = unsafe { evm.stor_ptr(0) }
     with (erc20, Ctx = evm, RawOps = evm) {
         do_init()
     }
@@ -145,7 +145,7 @@ fn init() uses (evm: mut Evm) {
 
 #[contract_runtime(Erc20Contract)]
 fn runtime() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = evm.stor_ptr(0)
+    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = unsafe { evm.stor_ptr(0) }
     let selector = evm.calldataload(0) >> 224
     with (erc20, Ctx = evm, RawOps = evm) {
         match selector {

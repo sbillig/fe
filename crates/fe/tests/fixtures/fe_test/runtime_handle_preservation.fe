@@ -47,9 +47,11 @@ fn check_runtime_value(_ evm: mut Evm, value: u256) -> u256 {
 fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
     let raw = ptr::alloc<Word>()
     unsafe { *raw = Word { value: 120 } }
-    let sp: StorPtr<Empty> = evm.stor_ptr(7)
-    let mem = with (raw) {
-        mem_value()
+    let sp: StorPtr<Empty> = unsafe { evm.stor_ptr(7) }
+    let mem = unsafe {
+        with (raw) {
+            mem_value()
+        }
     }
     let storage = with (sp) {
         stor_handle_raw()
@@ -65,7 +67,7 @@ fn pointers_and_effect_handles_support_read_write() uses (evm: Evm) {
     unsafe { *mp = 41 }
     unsafe { assert!(*mp == 41) }
 
-    let sp: StorPtr<u256> = evm.stor_ptr(0xabc)
+    let sp: StorPtr<u256> = unsafe { evm.stor_ptr(0xabc) }
     sp.write(42)
     assert!(sp.read() == 42)
 }

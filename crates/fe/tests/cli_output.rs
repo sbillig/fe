@@ -773,7 +773,7 @@ fn test_cli_build_native_checked_arithmetic_still_traps() {
     source.push_str(
         r#"
 pub fn main(argc: i32, argv: **u8) -> i32 {
-    let args = Args::new(argc, argv)
+    let args = unsafe { Args::new(argc, argv) }
     if args.len() != 2 { return 97 }
     let arg = args.get(1)
     if arg.len() != 1 { return 97 }
@@ -2848,9 +2848,9 @@ impl core::abi::AbiSize for Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    fn encode(own self, _ ptr: *u8) {
-        core::abi::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 })
-        core::abi::store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: self.amount as u256)
+    unsafe fn encode(own self, _ ptr: *u8) {
+        unsafe { core::abi::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 }) }
+        unsafe { core::abi::store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: self.amount as u256) }
     }
 }
 

@@ -16,12 +16,12 @@ impl Ledger {
     }
 
     fn peek(mut self, _ slot: u256) -> u256 uses (raw: RawStorage) {
-        raw.sload(slot)
+        unsafe { raw.sload(slot) }
     }
 
     fn mixed(mut self, _ to: Address, slot: u256) uses (raw: mut RawStorage) {
         self.balances.set(key: to, value: 1)
-        raw.sstore(slot, value: self.balances.get(key: to))
+        unsafe { raw.sstore(slot, value: self.balances.get(key: to)) }
     }
 }
 
