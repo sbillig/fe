@@ -2639,8 +2639,35 @@ impl<'db> Borrowck<'db> {
             &births,
         );
         let overwrite = self.opaque_write(statement.id);
-        for access in accesses {
-            if access.access.kind == MemoryAccessKind::Write {
+        for (template, access) in call
+            .summary
+            .accesses
+            .iter()
+            .zip(accesses)
+            .filter(|(_, access)| access.access.kind == MemoryAccessKind::Write)
+        {
+            // Typed poststates already replay their writes and invalidate aliases.
+            // Havoc first would survive a weak destination update and invent
+            // corrupted contents. Prove coverage before caller substitution can
+            // turn one input into an existential selection of caller places.
+            let covered = template.extent == AccessExtent::Typed
+                && template.region.clauses().iter().all(|clause| {
+                    call.summary.mutable_inputs.iter().any(|update| {
+                        let destination = &update.destination;
+                        update.value.scope() == template.region.scope()
+                            && !destination.invalidated
+                            && !destination.source.is_widened()
+                            && matches!(&clause.payload.root, RegionRoot::External(source)
+                                if source == &destination.source)
+                            && clause.payload.views == destination.views
+                            && clause
+                                .payload
+                                .path
+                                .as_slice()
+                                .starts_with(destination.path.as_slice())
+                    })
+                });
+            if !covered {
                 state
                     .invalidate_memory(
                         &mut self.inventory.values,
