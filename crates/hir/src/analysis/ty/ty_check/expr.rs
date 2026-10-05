@@ -5015,6 +5015,17 @@ impl<'db> TyChecker<'db> {
             });
         }
 
+        // `IndexMut::index_mut` takes `mut self`: a place base must be
+        // writable, as the receiver of any `mut self` method call must be.
+        if !base_prop.is_mut
+            && !matches!(
+                base_prop.ty.as_capability(self.db),
+                Some((CapabilityKind::Mut, _))
+            )
+            && (self.env.expr_place(*base).is_some() || self.is_pointer_deref_expr(*base))
+        {
+            self.report_cannot_borrow_mut(*base, base.span(self.body()).into());
+        }
         let indexed = self.check_ops_trait(lhs, base_prop.ty, &IndexMutOp, Some(*index));
         if indexed.ty.has_invalid(self.db) {
             return Some(MutableIndexTarget {

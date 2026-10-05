@@ -83,7 +83,7 @@ fn test_first_class_memory_pointers() {
     assert(first.a == 5)
     assert(first.b == 16)
 
-    let raw_array = core::ptr::alloc_array<u256>(1)
+    let mut raw_array = core::ptr::alloc_array<u256>(1)
     raw_array[0] = 19
     assert(raw_array[0] == 19)
 
@@ -112,12 +112,12 @@ fn test_first_class_memory_pointers() {
     assert(zeroed[0] == 0)
 
     let pair = core::ptr::alloc<[u256; 2]>()
-    pair[0] = 13
-    pair[1] = 21
+    unsafe { (*pair)[0] = 13 }
+    unsafe { (*pair)[1] = 21 }
     let pair_bytes = core::ptr::byte_ptr(pair)
     let pair_words = core::ptr::cast<u8, u256>(pair_bytes)
-    assert(pair[0] == 13)
-    assert(pair[1] == 21)
+    unsafe { assert((*pair)[0] == 13) }
+    unsafe { assert((*pair)[1] == 21) }
     unsafe { assert(*pair_words + *core::ptr::offset(pair_words, 1) == 34) }
 }
 
@@ -171,14 +171,14 @@ fn test_subword_memory_pointer_roundtrip() {
 #[test]
 fn test_subword_static_array_pointer_roundtrip() {
     let pair = core::ptr::alloc<[u8; 4]>()
-    pair[0] = 9
-    pair[1] = 8
-    pair[2] = 7
-    pair[3] = 6
-    assert(pair[0] == 9)
-    assert(pair[1] == 8)
-    assert(pair[2] == 7)
-    assert(pair[3] == 6)
+    unsafe { (*pair)[0] = 9 }
+    unsafe { (*pair)[1] = 8 }
+    unsafe { (*pair)[2] = 7 }
+    unsafe { (*pair)[3] = 6 }
+    unsafe { assert((*pair)[0] == 9) }
+    unsafe { assert((*pair)[1] == 8) }
+    unsafe { assert((*pair)[2] == 7) }
+    unsafe { assert((*pair)[3] == 6) }
 }
 
 #[test]

@@ -25,7 +25,7 @@ pub fn sum_first_class_pointers() -> u256 {
     let roundtrip = core::ptr::cast<u8, Data>(byte_ptr)
     let first = unsafe { *roundtrip }
 
-    let raw_array = core::ptr::alloc_array<u256>(1)
+    let mut raw_array = core::ptr::alloc_array<u256>(1)
     raw_array[0] = 3
 
     let byte_alloc = core::ptr::alloc_bytes(1)
@@ -42,8 +42,8 @@ pub fn sum_first_class_pointers() -> u256 {
     zeroed[0] = 7
     zeroed.zero()
     let pair = core::ptr::alloc<[u256; 2]>()
-    pair[0] = 13
-    pair[1] = 21
+    unsafe { (*pair)[0] = 13 }
+    unsafe { (*pair)[1] = 21 }
     let pair_words = core::ptr::cast<u8, u256>(core::ptr::byte_ptr(pair))
     array_sum
         + raw_array[0]
@@ -53,7 +53,7 @@ pub fn sum_first_class_pointers() -> u256 {
         + byte_distance
         + field_sum
         + nested_sum
-        + pair[0]
-        + pair[1]
+        + unsafe { (*pair)[0] }
+        + unsafe { (*pair)[1] }
         + unsafe { *pair_words }
 }

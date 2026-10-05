@@ -1855,7 +1855,7 @@ fn owned_temporary_pointer_places_consume_the_selected_value() {
             "struct Pair { item: Item, other: u256 }",
             "(*identity(pointer)).item",
         ),
-        ("", "pointer[0]"),
+        ("", "(*pointer)[0]"),
     ] {
         let pointee = if declaration.is_empty() {
             "Item"

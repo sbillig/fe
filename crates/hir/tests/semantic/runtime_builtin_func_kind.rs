@@ -120,8 +120,8 @@ fn classifies_core_and_std_runtime_builtins() {
         .expect("failed to resolve std::evm::ops::revert_empty");
     let raw_mstore = resolve_lib_func_path(&db, func.scope(), "std::evm::effects::RawMem::mstore")
         .expect("failed to resolve std::evm::effects::RawMem::mstore");
-    let array_elem = resolve_lib_func_path(&db, func.scope(), "core::ptr::array_elem")
-        .expect("failed to resolve core::ptr::array_elem");
+    let mem_array_elem = resolve_lib_func_path(&db, func.scope(), "core::ptr::mem_array_elem")
+        .expect("failed to resolve core::ptr::mem_array_elem");
     let panic = resolve_lib_func_path(&db, func.scope(), "core::panic")
         .expect("failed to resolve core::panic");
     let keccak = resolve_lib_func_path(&db, func.scope(), "core::intrinsic::__keccak256")
@@ -219,13 +219,13 @@ fn classifies_core_and_std_runtime_builtins() {
         ]
     );
     assert!(is_std_evm_effect_method(&db, raw_mstore));
-    let array_elem_contract =
-        intrinsic_contract(&db, array_elem).expect("array element intrinsic contract");
+    let mem_array_elem_contract =
+        intrinsic_contract(&db, mem_array_elem).expect("array element intrinsic contract");
     assert_eq!(
-        array_elem_contract.pointer_return,
-        Some(IntrinsicPointerReturn::InputArrayElem)
+        mem_array_elem_contract.pointer_return,
+        Some(IntrinsicPointerReturn::InputMemArrayElem)
     );
-    assert_eq!(array_elem_contract.memory, None);
+    assert_eq!(mem_array_elem_contract.memory, None);
 }
 
 #[test]

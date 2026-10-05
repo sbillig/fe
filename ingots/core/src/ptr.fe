@@ -449,14 +449,6 @@ pub fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
 }
 
 #[inline(always)]
-fn array_elem<T, const N: usize>(_ ptr: *[T; N], _ index: usize) -> *T {
-    if index >= N {
-        index_out_of_bounds()
-    }
-    elem(cast<[T; N], T>(ptr), index)
-}
-
-#[inline(always)]
 fn mem_array_elem<T>(_ array: MemArray<T>, _ index: usize) -> *T {
     if index as u256 >= array.len {
         index_out_of_bounds()
@@ -469,25 +461,9 @@ fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
     offset(ptr, index as u256)
 }
 
-impl<T, const N: usize> Index<usize> for *[T; N] {
-    type Output = T
-
-    #[inline(always)]
-    fn index(self, _ index: usize) -> T {
-        unsafe { *array_elem(self, index) }
-    }
-}
-
-impl<T, const N: usize> IndexMut<usize> for *[T; N] {
-    type Output = T
-
-    #[inline(always)]
-    fn index_mut(self, _ index: usize) -> mut T {
-        unsafe { mut *array_elem(self, index) }
-    }
-}
-
-impl<T> Index<usize> for MemArray<T> {
+impl<T> Index<usize> for MemArray<T>
+    where T: Copy
+{
     type Output = T
 
     #[inline(always)]
@@ -500,7 +476,7 @@ impl<T> IndexMut<usize> for MemArray<T> {
     type Output = T
 
     #[inline(always)]
-    fn index_mut(self, _ index: usize) -> mut T {
+    fn index_mut(mut self, _ index: usize) -> mut T {
         unsafe { mut *mem_array_elem(self, index) }
     }
 }

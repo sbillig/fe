@@ -118,7 +118,7 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
     // Dynamic elements: the canonical size is only known after decoding.
     // Encode each element's tail once while sizing and copy the tails into
     // place afterwards, instead of decoding every element a second time.
-    let tails = ptr::alloc_array<MemSpan>(count)
+    let mut tails = ptr::alloc_array<MemSpan>(count)
     let mut size: u256 = 0
     let mut i: u256 = 0
     while i < count {

@@ -106,6 +106,6 @@ fn zero_cells(_ count: u256) {
         i += 1
     }
     if count == 0 { return }
-    discard(cells[0])
+    unsafe { discard(*cells.ptr_at(0)) }
 }
 pub fn run_zero_cells() { zero_cells(2) }

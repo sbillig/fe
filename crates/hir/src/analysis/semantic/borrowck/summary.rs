@@ -5750,7 +5750,7 @@ fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
             .methods(&db)
             .next()
             .unwrap();
-        let pointer_module = resolve_lib_func_path(&db, scope, "core::ptr::array_elem")
+        let pointer_module = resolve_lib_func_path(&db, scope, "core::ptr::mem_array_elem")
             .unwrap()
             .top_mod(&db);
         let pointer_methods: Vec<_> = pointer_module

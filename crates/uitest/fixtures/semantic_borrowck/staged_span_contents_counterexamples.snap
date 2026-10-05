@@ -48,7 +48,7 @@ error[16-0001]: borrow conflict in `fn run_fill_and_clobber`
    │     cannot immutably borrow this place while a mutable borrow is active
 
 error[16-0001]: borrow conflict in `fn zero_cells`
-    ┌─ staged_span_contents_counterexamples.fe:109:13
+    ┌─ staged_span_contents_counterexamples.fe:109:22
     │
-109 │     discard(cells[0])
-    │             ^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write
+109 │     unsafe { discard(*cells.ptr_at(0)) }
+    │                      ^^^^^^^^^^^^^^^^ cannot use a native borrow that is uninitialized or invalidated by a raw write

@@ -794,13 +794,8 @@ pub fn intrinsic_contract<'db>(
             memory: Some(READ_VALUE_0),
         });
     }
-    let pointer_return = if lib_func_matches(db, func, "core::ptr::array_elem") {
-        Some(IntrinsicPointerReturn::InputArrayElem)
-    } else if lib_func_matches(db, func, "core::ptr::mem_array_elem") {
-        Some(IntrinsicPointerReturn::InputMemArrayElem)
-    } else {
-        None
-    };
+    let pointer_return = lib_func_matches(db, func, "core::ptr::mem_array_elem")
+        .then_some(IntrinsicPointerReturn::InputMemArrayElem);
     let memory = raw_mem_contract(db, func);
     (pointer_return.is_some() || memory.is_some()).then_some(IntrinsicContract {
         pointer_return,
