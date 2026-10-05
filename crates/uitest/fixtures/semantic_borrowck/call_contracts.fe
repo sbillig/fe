@@ -67,3 +67,27 @@ fn borrow_flows_into_mutable_argument() -> u256 {
     b = 3
     slot.r
 }
+
+fn shared(_ value: mut u256) -> ref u256 {
+    ref value
+}
+
+// Rejected: a shared result is a new borrow; its mutable source cannot write
+// while it is live.
+fn shared_result_of_mutable_argument() -> u256 {
+    let mut x: u256 = 0
+    let a = mut x
+    let r = shared(a)
+    a = 1
+    r
+}
+
+// Accepted: the mutable source is usable again once the result is dead.
+fn shared_result_ends() -> u256 {
+    let mut x: u256 = 0
+    let a = mut x
+    let r = shared(a)
+    let v: u256 = r
+    a = 1
+    v
+}

@@ -1,4 +1,6 @@
 //! Liveness and the checks of a solved analysis.
+use std::collections::BTreeSet;
+
 use cranelift_entity::EntityRef;
 
 use super::{
@@ -34,6 +36,7 @@ use crate::{
 };
 
 type Diag<'db> = SemanticDiagnostic<'db>;
+type Moved = BTreeSet<(MoveKey, Path)>;
 
 /// The more precise of two origins for a diagnostic: an expression, then a
 /// statement, then the body.
@@ -251,25 +254,25 @@ impl<'db> Analysis<'_, 'db> {
         after
     }
 
-    /// Loans held by live values and live roots.
+    /// Loans held by live values and live roots, and by the contents of
+    /// storage those reach.
     fn live_loans(&self, state: &State, live: &Live) -> TokenSet {
-        let mut loans = TokenSet::new();
-        let mut add = |tokens: &[TokenId]| {
-            for &token in tokens {
-                if self.tokens[token as usize].is_loan()
-                    && let Err(index) = loans.binary_search(&token)
-                {
-                    loans.insert(index, token);
-                }
-            }
-        };
+        let mut held = TokenSet::new();
         for (value, _) in live.values.iter().enumerate().filter(|(_, live)| **live) {
-            add(&self.values[value]);
+            union_into(&mut held, &self.values[value]);
         }
         for (root, _) in live.roots.iter().enumerate().filter(|(_, live)| **live) {
-            add(&self.contents(state, root));
+            union_into(&mut held, &self.contents(state, root));
         }
-        loans
+        self.loans(state, &held)
+    }
+
+    /// The loans among `tokens` and everything they reach.
+    fn loans(&self, state: &State, tokens: &[TokenId]) -> TokenSet {
+        self.reachable(state, tokens)
+            .into_iter()
+            .filter(|token| self.tokens[*token as usize].is_loan())
+            .collect()
     }
 }
 
@@ -336,14 +339,18 @@ impl<'db> Analysis<'_, 'db> {
                 _ => Verb::Access,
             },
         };
+        // Operands are checked in order, so one operation cannot consume the
+        // same value twice.
+        let mut moved = point.before.moved.clone();
         for access in statement.kind.accesses(self.db, self.body) {
             match access.target {
                 AccessTarget::Value { operand, path } => {
-                    self.check_value_use(operand, path, point.before, statement.origin)?;
+                    let consume = access.kind == MemoryAccessKind::Move;
+                    self.check_value_use(operand, path, &mut moved, consume, statement.origin)?;
                 }
                 AccessTarget::Place(place) => {
                     let origin = specific_origin(place.origin, statement.origin);
-                    self.check_place_access(place, &access, verb, point, origin)?;
+                    self.check_place_access(place, &access, verb, point, &mut moved, origin)?;
                 }
             }
         }
@@ -374,25 +381,34 @@ impl<'db> Analysis<'_, 'db> {
         }
     }
 
+    /// Reject a use of a possibly moved value, then record its move.
     fn check_value_use(
         &self,
         operand: NOperand,
         path: Option<&NStructuralPath>,
-        state: &State,
+        moved: &mut Moved,
+        consume: bool,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
         let path = path.map(|path| self.path(&path.0)).unwrap_or_default();
         let key = MoveKey::Value(operand.value);
-        if let Some(moved) = state
-            .moved
+        if let Some(found) = moved
             .iter()
             .find(|(moved, moved_path)| *moved == key && paths_overlap(moved_path, &path))
         {
             return Err(self.moved_diag(
                 "cannot use a value after it was moved",
                 operand_origin(operand, origin),
-                moved,
+                found,
             ));
+        }
+        if consume
+            && self.body.values[operand.value.index()]
+                .ty
+                .as_capability(self.db)
+                .is_none()
+        {
+            moved.insert((key, path));
         }
         Ok(())
     }
@@ -416,6 +432,7 @@ impl<'db> Analysis<'_, 'db> {
         access: &OperationAccess<'_, 'db>,
         verb: Verb,
         point: &Point<'_>,
+        moved: &mut Moved,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
         let resolved = self.resolve(place);
@@ -424,7 +441,7 @@ impl<'db> Analysis<'_, 'db> {
         {
             let key = MoveKey::Root(root);
             let path = self.path(&place.path);
-            let moved = point.before.moved.iter().find(|(moved, moved_path)| {
+            let found = moved.iter().find(|(moved, moved_path)| {
                 *moved == key
                     && if access.kind == MemoryAccessKind::Write {
                         moved_path.len() < path.len() && path.starts_with(moved_path)
@@ -432,15 +449,18 @@ impl<'db> Analysis<'_, 'db> {
                         paths_overlap(moved_path, &path)
                     }
             });
-            if let Some(moved) = moved {
+            if let Some(found) = found {
                 let message = if access.kind == MemoryAccessKind::Write {
                     "cannot assign to part of a moved value"
-                } else if self.moved_at.contains_key(moved) {
+                } else if self.moved_at.contains_key(found) {
                     "cannot use a value after it was moved"
                 } else {
                     "cannot use a value before it is initialized"
                 };
-                return Err(self.moved_diag(message, origin, moved));
+                return Err(self.moved_diag(message, origin, found));
+            }
+            if access.kind == MemoryAccessKind::Move {
+                moved.insert((key, path));
             }
         }
         if access.kind == MemoryAccessKind::Move
@@ -485,15 +505,33 @@ impl<'db> Analysis<'_, 'db> {
             let Some(loan_kind) = self.loan_kind(point.after, loan) else {
                 continue;
             };
-            if data.zero_sized || access.kind == BorrowKind::Ref && loan_kind == BorrowKind::Ref {
-                continue;
-            }
-            if !access
-                .regions
-                .iter()
-                .any(|region| data.regions.iter().any(|loaned| loaned.overlaps(region)))
+            if data.zero_sized
+                || data.view && access.verb == Verb::Write
+                || access.kind == BorrowKind::Ref && loan_kind == BorrowKind::Ref
             {
                 continue;
+            }
+            let overlaps = |token: &Token<'db>| {
+                access
+                    .regions
+                    .iter()
+                    .any(|region| token.regions.iter().any(|loaned| loaned.overlaps(region)))
+            };
+            if !overlaps(data) {
+                continue;
+            }
+            // Point at the borrow of the same kind the conflicting loan was
+            // derived from, as a reborrow or a call result borrows its sources.
+            let mut seen = vec![loan];
+            let mut origin = data;
+            while let Some(&parent) = origin.parents.iter().find(|&&parent| {
+                !seen.contains(&parent)
+                    && access.authority.binary_search(&parent).is_err()
+                    && self.loan_kind(point.after, parent) == Some(loan_kind)
+                    && overlaps(&self.tokens[parent as usize])
+            }) {
+                seen.push(parent);
+                origin = &self.tokens[parent as usize];
             }
             let held = match loan_kind {
                 BorrowKind::Mut => "a mutable",
@@ -507,7 +545,7 @@ impl<'db> Analysis<'_, 'db> {
                     access.verb.describe()
                 ),
             );
-            diag.push_secondary("borrow created here".into(), self.span(data.origin));
+            diag.push_secondary("borrow created here".into(), self.span(origin.origin));
             return Err(diag);
         }
         Ok(())
@@ -663,7 +701,7 @@ impl<'db> Analysis<'_, 'db> {
         let regions = self.resolve(destination).regions;
         self.check_writable(&regions, destination.origin)?;
         let ty = self.body.values[value.value.index()].ty;
-        if self.carried(ty).borrows {
+        if self.carried(ty).borrowing() {
             for region in &regions {
                 if let Some(
                     space @ (ProviderAddressSpace::Storage | ProviderAddressSpace::Transient),
@@ -687,6 +725,8 @@ impl<'db> Analysis<'_, 'db> {
 
 /// One capability a call receives, for the pairwise argument check.
 struct CallInput<'db> {
+    /// The argument or effect it comes from.
+    arg: usize,
     regions: Vec<AbsPlace>,
     mutable: bool,
     origin: SemOrigin<'db>,
@@ -729,8 +769,11 @@ impl<'db> Analysis<'_, 'db> {
         point: &Point<'_>,
     ) -> Result<(), Diag<'db>> {
         let origin = statement.origin;
+        // Each argument reaches its own borrows and the borrows stored in the
+        // storage they refer to. Handles confer no exclusivity.
+        let is_borrow = |data: &Token<'db>| data.kind != TokenKind::Handle;
         let mut inputs = Vec::new();
-        for arg in args {
+        for (position, arg) in args.iter().enumerate() {
             let ty = self.body.values[arg.value.index()].ty;
             if !self.carried(ty).any()
                 || ty
@@ -739,14 +782,28 @@ impl<'db> Analysis<'_, 'db> {
             {
                 continue;
             }
-            let tokens = &self.values[arg.value.index()];
+            let direct = &self.values[arg.value.index()];
+            let mutable = self.arg_is_mutable(arg.value);
+            let arg_origin = operand_origin(*arg, origin);
             inputs.push(CallInput {
-                regions: self.token_regions(tokens, |_| true),
-                mutable: self.arg_is_mutable(arg.value),
-                origin: operand_origin(*arg, origin),
+                arg: position,
+                regions: self.token_regions(direct, is_borrow),
+                mutable,
+                origin: arg_origin,
             });
+            for contained in self.reachable(point.before, direct) {
+                let data = &self.tokens[contained as usize];
+                if is_borrow(data) && direct.binary_search(&contained).is_err() {
+                    inputs.push(CallInput {
+                        arg: position,
+                        regions: self.token_regions(&[contained], |_| true),
+                        mutable: mutable && data.is_mutable(),
+                        origin: arg_origin,
+                    });
+                }
+            }
         }
-        for effect in effect_args {
+        for (position, effect) in effect_args.iter().enumerate() {
             let regions = match &effect.arg {
                 NEffectArgValue::Place(place) if place.ty.is_zero_sized(self.db) => continue,
                 NEffectArgValue::Place(place) => self.resolve(place).regions,
@@ -755,6 +812,7 @@ impl<'db> Analysis<'_, 'db> {
                 }
             };
             inputs.push(CallInput {
+                arg: args.len() + position,
                 regions,
                 mutable: effect.required_mut,
                 origin,
@@ -762,7 +820,8 @@ impl<'db> Analysis<'_, 'db> {
         }
         for (position, input) in inputs.iter().enumerate() {
             for other in &inputs[position + 1..] {
-                if (input.mutable || other.mutable)
+                if input.arg != other.arg
+                    && (input.mutable || other.mutable)
                     && input
                         .regions
                         .iter()
@@ -817,8 +876,8 @@ impl<'db> Analysis<'_, 'db> {
         }
         for (position, arg) in args.iter().enumerate() {
             let ty = self.body.values[arg.value.index()].ty;
-            let mutable_regions =
-                self.token_regions(&self.values[arg.value.index()], |data| data.is_mutable());
+            let held = self.reachable(point.before, &self.values[arg.value.index()]);
+            let mutable_regions = self.token_regions(&held, |data| data.is_mutable());
             let arg_origin = operand_origin(*arg, origin);
             if position == 0 && receiver {
                 self.check_writable(&mutable_regions, arg_origin)?;
@@ -835,17 +894,9 @@ impl<'db> Analysis<'_, 'db> {
             } else {
                 self.require_memory(&mutable_regions, ty, arg_origin)?;
             }
-            if let Some((CapabilityKind::Mut, target)) = ty.as_capability(self.db)
-                && self.carried(target).any()
-            {
-                let own = &self.values[arg.value.index()];
-                let incoming: TokenSet = flow
-                    .iter()
-                    .copied()
-                    .filter(|token| own.binary_search(token).is_err())
-                    .collect();
-                let regions = self.token_regions(own, |_| true);
-                self.check_flow(&regions, target, &incoming, arg_origin)?;
+            for target in self.flow_targets(point.before, arg.value) {
+                let regions = self.token_regions(&[target], |_| true);
+                self.check_flow(&regions, ty, &self.incoming(&flow, target), arg_origin)?;
             }
         }
         for effect in effect_args.iter().filter(|effect| effect.required_mut) {
@@ -875,7 +926,10 @@ impl<'db> Analysis<'_, 'db> {
             }
         }
         if let Some(func) = callee_func {
-            self.check_state_effects(func, effect_args, point, origin)?;
+            // Borrows the call receives stay live while it runs.
+            let mut live = self.loans(point.before, &flow);
+            union_into(&mut live, point.live);
+            self.check_state_effects(func, effect_args, point.after, &live, origin)?;
         }
         Ok(())
     }
@@ -948,7 +1002,8 @@ impl<'db> Analysis<'_, 'db> {
         &self,
         func: Func<'db>,
         effect_args: &[NEffectArg<'db>],
-        point: &Point<'_>,
+        state: &State,
+        live: &TokenSet,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
         let Some(kind) = external_call_state_access(self.db, func).or_else(|| {
@@ -968,9 +1023,9 @@ impl<'db> Analysis<'_, 'db> {
         .map(|space| (space, kind));
         for (space, kind) in accesses {
             let kind = kind.borrow_kind();
-            for &loan in point.live {
+            for &loan in live {
                 let data = &self.tokens[loan as usize];
-                let Some(loan_kind) = self.loan_kind(point.after, loan) else {
+                let Some(loan_kind) = self.loan_kind(state, loan) else {
                     continue;
                 };
                 if !data.zero_sized
@@ -1003,14 +1058,18 @@ impl<'db> Analysis<'_, 'db> {
 
     fn check_terminator(&self, block: NBlockId, state: &State) -> Result<(), Diag<'db>> {
         let terminator = &self.body.blocks[block.index()].terminator;
+        let mut moved = state.moved.clone();
         if let Some(access) = terminator.kind.access(self.db, self.body)
             && let AccessTarget::Value { operand, path } = access.target
         {
-            self.check_value_use(operand, path, state, terminator.origin)?;
+            let consume = access.kind == MemoryAccessKind::Move;
+            self.check_value_use(operand, path, &mut moved, consume, terminator.origin)?;
         }
         for successor in terminator.kind.successors() {
+            let mut edge = moved.clone();
             for arg in &successor.args {
-                self.check_value_use(*arg, None, state, terminator.origin)?;
+                let consume = arg.mode == ReadMode::Move;
+                self.check_value_use(*arg, None, &mut edge, consume, terminator.origin)?;
             }
         }
         if let NTerminatorKind::Return(Some(value)) = &terminator.kind {
@@ -1021,8 +1080,7 @@ impl<'db> Analysis<'_, 'db> {
 
     fn check_return(&self, value: NOperand, origin: SemOrigin<'db>) -> Result<(), Diag<'db>> {
         let ty = self.body.values[value.value.index()].ty;
-        let carried = self.carried(ty);
-        if !carried.borrows {
+        if !self.carried(ty).borrowing() {
             return Ok(());
         }
         let direct = ty.as_capability(self.db).is_some();
@@ -1042,6 +1100,9 @@ impl<'db> Analysis<'_, 'db> {
             }
             for region in &data.regions {
                 match region.base {
+                    // A view borrows memory, which outlives the local owner
+                    // it was derived from once the body returns.
+                    Base::Root(root) if self.is_local_root(root.index()) && data.view => {}
                     Base::Root(root) if self.is_local_root(root.index()) => {
                         let local = self.local_storage(root.index());
                         return reject(if direct {

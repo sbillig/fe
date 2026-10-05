@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/semantic_borrowck.rs
-assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/moves.fe
 ---
@@ -66,3 +65,19 @@ error[16-0002]: move conflict in `fn assign_into_moved`
    │ │     ^^^^^^^^^^^^^^^^^^^^^^ cannot assign to part of a moved value
 87 │ │ }
    │ ╰─' value is moved here
+
+error[16-0002]: move conflict in `fn call_moves_twice`
+   ┌─ moves.fe:94:24
+   │
+94 │     consume_both(item, item)
+   │                  ----  ^^^^ cannot use a value after it was moved
+   │                  │
+   │                  value is moved here
+
+error[16-0002]: move conflict in `fn aggregate_moves_twice`
+    ┌─ moves.fe:100:24
+    │
+100 │     Pair { a: item, b: item }
+    │               ----     ^^^^ cannot use a value after it was moved
+    │               │
+    │               value is moved here

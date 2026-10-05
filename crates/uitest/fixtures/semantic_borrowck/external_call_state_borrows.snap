@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/semantic_borrowck.rs
-assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/external_call_state_borrows.fe
 ---
@@ -42,3 +41,12 @@ error[16-0001]: borrow conflict in `fn StaticMutBorrow::__init__`
 58 │ │             args: MemSpan::empty(), ret: mut output,
 59 │ │         )
    │ ╰─────────^ this call may read storage while a borrow of it is active
+
+error[16-0001]: borrow conflict in `fn CallReceivesBorrow::__init__`
+    ┌─ external_call_state_borrows.fe:106:24
+    │
+106 │         let observed = read_after_call(ref value)
+    │                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    │                        │               │
+    │                        │               borrow created here
+    │                        this call may write storage while a borrow of it is active

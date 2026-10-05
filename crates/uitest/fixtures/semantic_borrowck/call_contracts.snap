@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/semantic_borrowck.rs
-assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/call_contracts.fe
 ---
@@ -26,4 +25,12 @@ error[16-0001]: borrow conflict in `fn borrow_flows_into_mutable_argument`
 66 │     store(mut slot, ref b)
    │                     ----- borrow created here
 67 │     b = 3
+   │     ^^^^^ cannot write to this place while an immutable borrow is active
+
+error[16-0001]: borrow conflict in `fn shared_result_of_mutable_argument`
+   ┌─ call_contracts.fe:81:5
+   │
+80 │     let r = shared(a)
+   │             --------- borrow created here
+81 │     a = 1
    │     ^^^^^ cannot write to this place while an immutable borrow is active

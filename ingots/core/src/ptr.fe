@@ -1,5 +1,5 @@
 use super::intrinsic::size_of
-use super::marker::Copy
+use super::marker::{Borrows, Copy}
 use super::option::Option
 use super::ops::{Eq, Index, IndexMut}
 use super::panic_code
@@ -69,6 +69,9 @@ pub struct FixedMemBuffer<const N: usize> {
 
 impl<T> Copy for *T {}
 impl<T> Copy for MemSlice<T> {}
+
+/// A slice borrows the memory it views from the value it was derived from.
+impl<T> Borrows for MemSlice<T> {}
 
 impl<T> Eq for *T {
     fn eq(self, _ other: *T) -> bool {

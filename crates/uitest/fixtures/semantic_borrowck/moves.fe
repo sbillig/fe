@@ -85,3 +85,17 @@ fn assign_into_moved() {
     let moved = pair
     pair.a = Item { n: 3 }
 }
+
+fn consume_both(_ first: own Item, _ second: own Item) {}
+
+// Rejected: one call cannot move the same value twice.
+fn call_moves_twice() {
+    let item = Item { n: 1 }
+    consume_both(item, item)
+}
+
+// Rejected: one aggregate cannot move the same value twice.
+fn aggregate_moves_twice() -> Pair {
+    let item = Item { n: 1 }
+    Pair { a: item, b: item }
+}

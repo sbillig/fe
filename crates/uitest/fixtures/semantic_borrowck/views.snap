@@ -1,0 +1,35 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/views.fe
+---
+error[16-0001]: borrow conflict in `fn owner_mutated_while_viewed`
+   ┌─ views.fe:45:13
+   │
+44 │     let s = a.as_slice()
+   │             ------------ borrow created here
+45 │     let h = a.index_mut(0)
+   │             ^ cannot access this place while an immutable borrow is active
+
+error[16-0001]: borrow conflict in `fn wrapper_mutated_while_viewed`
+   ┌─ views.fe:56:5
+   │
+55 │     let s = table.view()
+   │             ------------ borrow created here
+56 │     table.set(1)
+   │     ^^^^^ cannot access this place while an immutable borrow is active
+
+error[16-0003]: invalid return borrow in `fn other`
+   ┌─ views.fe:36:56
+   │
+36 │       fn other(self, _ buffer: ref MemBuffer) -> MemSpan {
+   │ ╭────────────────────────────────────────────────────────^
+37 │ │         buffer.span()
+38 │ │     }
+   │ ╰─────^ a method can only return borrows derived from `self`
+
+error[16-0005]: noesc violation in `fn StoredView::__init__`
+   ┌─ views.fe:95:16
+   │
+95 │         span = buffer.span()
+   │                ^^^^^^^^^^^^^ cannot store `MemSlice<u8>` in storage

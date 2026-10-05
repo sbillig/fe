@@ -87,3 +87,22 @@ pub contract PrecompileMutBorrow {
         held = 1
     }
 }
+
+fn read_after_call(_ held: ref u256) -> u256 uses (call: mut Call) {
+    let mut output = MemBuffer::empty()
+    let outcome = call.raw_call(
+        addr: Address { inner: 1 }, gas: 100000, value: 0,
+        args: MemSpan::empty(), ret: mut output,
+    )
+    held
+}
+
+// Rejected: a storage borrow passed to a call that can reenter is live while
+// the call runs.
+pub contract CallReceivesBorrow {
+    mut value: u256,
+    init() uses (mut value, call: mut Call) {
+        value = 0
+        let observed = read_after_call(ref value)
+    }
+}

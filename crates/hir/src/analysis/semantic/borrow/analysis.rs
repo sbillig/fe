@@ -36,7 +36,7 @@ use crate::{
             provider::{ProviderAddressSpace, provider_semantics},
             trait_resolution::PredicateListId,
             ty_check::BodyOwner,
-            ty_def::{BorrowKind, CapabilityKind, TyId},
+            ty_def::{BorrowKind, TyId},
         },
     },
     hir_def::scope_graph::ScopeId,
@@ -71,6 +71,22 @@ pub(super) enum TokenKind {
     Handle,
 }
 
+impl TokenKind {
+    /// The kind of the capabilities a caller supplied through a value of a
+    /// type: one holding only handles names its providers without
+    /// exclusivity.
+    fn input(carried: Carried, effect: bool) -> Self {
+        if carried.borrowing() {
+            Self::Input {
+                mutable: carried.mut_borrows,
+                effect,
+            }
+        } else {
+            Self::Handle
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Token<'db> {
     pub kind: TokenKind,
@@ -81,6 +97,12 @@ pub(super) struct Token<'db> {
     pub origin: SemOrigin<'db>,
     /// A loan of a zero-sized place protects no data and never conflicts.
     pub zero_sized: bool,
+    /// Whether a mutable token's referent can hold capabilities, so a callee
+    /// given it may store other borrows there.
+    pub holds: bool,
+    /// A `Borrows` view's loan of the memory it views. Overwriting the place
+    /// it was derived from does not change that memory.
+    pub view: bool,
 }
 
 impl<'db> Token<'db> {
@@ -91,6 +113,8 @@ impl<'db> Token<'db> {
             parents: TokenSet::new(),
             origin,
             zero_sized: false,
+            holds: false,
+            view: false,
         }
     }
 
@@ -163,7 +187,8 @@ pub(super) struct Analysis<'a, 'db> {
     root_provider: Vec<Option<u32>>,
     pub tokens: Vec<Token<'db>>,
     pub values: Vec<TokenSet>,
-    input_tokens: FxHashMap<Base, TokenId>,
+    /// Input tokens by base, and whether they are handles.
+    input_tokens: FxHashMap<(Base, bool), TokenId>,
     pub statement_tokens: FxHashMap<(NBlockId, usize), TokenId>,
     /// Handles standing for effect places passed to a call.
     effect_tokens: FxHashMap<((NBlockId, usize), usize), TokenId>,
@@ -269,18 +294,18 @@ impl<'a, 'db> Analysis<'a, 'db> {
         (self.tokens.len() - 1) as TokenId
     }
 
-    /// The token for everything a caller supplied through `base`.
-    fn input_token(&mut self, base: Base, mutable: bool, effect: bool) -> TokenId {
-        if let Some(token) = self.input_tokens.get(&base) {
+    /// The token for everything a caller supplied through `base`, or for the
+    /// handles it supplied.
+    fn input_token(&mut self, base: Base, kind: TokenKind, holds: bool) -> TokenId {
+        let key = (base, kind == TokenKind::Handle);
+        if let Some(token) = self.input_tokens.get(&key) {
             return *token;
         }
-        let mut input = Token::new(
-            TokenKind::Input { mutable, effect },
-            SemOrigin::Body(self.body.template_owner),
-        );
+        let mut input = Token::new(kind, SemOrigin::Body(self.body.template_owner));
+        input.holds = holds;
         input.regions.insert(AbsPlace::new(base));
         let token = self.push_token(input);
-        self.input_tokens.insert(base, token);
+        self.input_tokens.insert(key, token);
         token
     }
 
@@ -313,7 +338,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
             if let Some(space) = space {
                 self.param_spaces.insert(param, space);
             }
-            let token = self.input_token(Base::Param(param), carried.mut_borrows, effect);
+            let token = self.input_token(
+                Base::Param(param),
+                TokenKind::input(carried, effect),
+                carried.mut_referents_hold,
+            );
             self.values[index] = TokenSet::from_iter([token]);
             if param == 0 && self.has_receiver {
                 self.self_carries = true;
@@ -345,8 +374,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 NRootKind::ParamPlace { param } => {
                     let carried = self.carried(root.ty);
                     if carried.any() {
-                        let token =
-                            self.input_token(Base::Param(*param), carried.mut_borrows, false);
+                        let token = self.input_token(
+                            Base::Param(*param),
+                            TokenKind::input(carried, false),
+                            carried.mut_referents_hold,
+                        );
                         state.contents[index] = TokenSet::from_iter([token]);
                     }
                     if *param == 0 && self.has_receiver && carried.any() {
@@ -356,7 +388,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 NRootKind::Provider { .. } => {
                     if self.carried(root.ty).any() {
                         let base = self.root_base(index);
-                        let token = self.input_token(base, true, true);
+                        let kind = TokenKind::Input {
+                            mutable: true,
+                            effect: true,
+                        };
+                        let token = self.input_token(base, kind, true);
                         state.contents[index] = TokenSet::from_iter([token]);
                     }
                 }
@@ -383,15 +419,66 @@ impl<'a, 'db> Analysis<'a, 'db> {
         path_of(path, |value| literal_index(self.db, self.body, value))
     }
 
+    /// `tokens` and every token they were reborrowed from.
     pub fn ancestors(&self, tokens: &[TokenId]) -> TokenSet {
+        self.closure(tokens, |token| self.tokens[token as usize].parents.clone())
+    }
+
+    /// `tokens` and every token held by the contents of storage they borrow:
+    /// a borrow of a wrapper keeps the borrows inside it live.
+    pub fn reachable(&self, state: &State, tokens: &[TokenId]) -> TokenSet {
+        self.closure(tokens, |token| {
+            let mut contents = TokenSet::new();
+            for region in &self.tokens[token as usize].regions {
+                if let Base::Root(root) = region.base {
+                    union_into(&mut contents, &self.contents(state, root.index()));
+                }
+            }
+            contents
+        })
+    }
+
+    fn closure(&self, tokens: &[TokenId], next: impl Fn(TokenId) -> TokenSet) -> TokenSet {
         let mut closure = tokens.iter().copied().collect::<TokenSet>();
-        let mut index = 0;
-        while index < closure.len() {
-            let parents = self.tokens[closure[index] as usize].parents.clone();
-            union_into(&mut closure, &parents);
-            index += 1;
+        let mut pending = closure.to_vec();
+        while let Some(token) = pending.pop() {
+            for found in next(token) {
+                if let Err(index) = closure.binary_search(&found) {
+                    closure.insert(index, found);
+                    pending.push(found);
+                }
+            }
         }
         closure
+    }
+
+    /// The mutable referents a call's argument exposes that can hold
+    /// capabilities: a callee may store any other capability it was given
+    /// there. Each target is excluded from what flows into itself.
+    pub fn flow_targets(&self, state: &State, value: NValueId) -> Vec<TokenId> {
+        if !self
+            .carried(self.body.values[value.index()].ty)
+            .mut_referents_hold
+        {
+            return Vec::new();
+        }
+        self.reachable(state, &self.values[value.index()])
+            .into_iter()
+            .filter(|token| {
+                let data = &self.tokens[*token as usize];
+                data.is_mutable() && data.holds
+            })
+            .collect()
+    }
+
+    /// What a call can leave in `target`: every capability it was given except
+    /// `target` and the loans it was borrowed from.
+    pub fn incoming(&self, flow: &[TokenId], target: TokenId) -> TokenSet {
+        let excluded = self.ancestors(&[target]);
+        flow.iter()
+            .copied()
+            .filter(|token| excluded.binary_search(token).is_err())
+            .collect()
     }
 
     pub fn resolve(&self, place: &NPlace<'db>) -> Resolved {
@@ -433,7 +520,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     /// Tokens a load from `regions` yields.
-    fn load_tokens(&mut self, state: &State, regions: &[AbsPlace]) -> TokenSet {
+    fn load_tokens(&mut self, state: &State, regions: &[AbsPlace], carried: Carried) -> TokenSet {
         let mut tokens = TokenSet::new();
         for region in regions {
             match region.base {
@@ -441,7 +528,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 Base::Provider(_) | Base::Param(_) => {
                     let effect =
                         !matches!(region.base, Base::Param(param) if param < self.param_count);
-                    let token = self.input_token(region.base, true, effect);
+                    let kind = TokenKind::input(carried, effect);
+                    let token = self.input_token(region.base, kind, true);
                     union_into(&mut tokens, &[token])
                 }
                 Base::Raw => false,
@@ -704,11 +792,12 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 self.operand_tokens(fields.iter().copied())
             }
             NExpr::Load { place, .. } => {
-                if !self.carried(self.body.values[result.index()].ty).any() {
+                let carried = self.carried(self.body.values[result.index()].ty);
+                if !carried.any() {
                     return TokenSet::new();
                 }
                 let resolved = self.resolve(place);
-                self.load_tokens(state, &resolved.regions)
+                self.load_tokens(state, &resolved.regions, carried)
             }
             NExpr::Borrow {
                 place,
@@ -793,26 +882,12 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         }
                     }
                 }
-                // Each `mut` referent that can hold capabilities may receive
-                // every other capability the call was given.
+                // Each mutable referent the call can reach that can hold
+                // capabilities may receive every other capability it was given.
                 for arg in args.iter() {
-                    if let Some((kind, target)) = self.body.values[arg.value.index()]
-                        .ty
-                        .as_capability(self.db)
-                        && kind == CapabilityKind::Mut
-                        && self.carried(target).any()
-                    {
-                        let own = &self.values[arg.value.index()];
-                        let incoming: TokenSet = flow
-                            .iter()
-                            .copied()
-                            .filter(|token| own.binary_search(token).is_err())
-                            .collect();
-                        let regions = own
-                            .iter()
-                            .flat_map(|token| self.tokens[*token as usize].regions.clone())
-                            .collect::<Vec<_>>();
-                        for region in regions {
+                    for target in self.flow_targets(state, arg.value) {
+                        let incoming = self.incoming(&flow, target);
+                        for region in self.tokens[target as usize].regions.clone() {
                             if let Base::Root(root) = region.base {
                                 union_into(&mut state.contents[root.index()], &incoming);
                             }
@@ -833,19 +908,78 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         }
                     }
                 }
-                let mut tokens = if self.callee_has_carrying_self(callee.key, args) {
-                    self.values[args[0].value.index()].clone()
-                } else {
-                    flow.clone()
-                };
-                union_into(&mut tokens, &handles);
                 let flow_handles: TokenSet = flow
                     .iter()
                     .copied()
                     .filter(|token| self.tokens[*token as usize].kind == TokenKind::Handle)
                     .collect();
-                union_into(&mut tokens, &flow_handles);
-                tokens
+                union_into(&mut handles, &flow_handles);
+                let carried = self.carried(self.body.values[result.index()].ty);
+                if !carried.borrowing() {
+                    return handles;
+                }
+                // The result is a new borrow of what it borrows from: the
+                // receiver if the callee has a capability-carrying `self`, and
+                // every capability argument otherwise. A `Borrows` view only
+                // views memory its sources reach: one derived through a
+                // capability whose target owns no memory borrows what that
+                // target holds, and not the target itself.
+                let view = !carried.borrows;
+                let source_args = if self.callee_has_carrying_self(callee.key, args) {
+                    &args[..1]
+                } else {
+                    &args[..]
+                };
+                let mut sources = TokenSet::new();
+                for arg in source_args {
+                    let direct = &self.values[arg.value.index()];
+                    if !view {
+                        union_into(&mut sources, direct);
+                        continue;
+                    }
+                    let reached = self.reachable(state, direct);
+                    let lends_holdings = self.body.values[arg.value.index()]
+                        .ty
+                        .as_capability(self.db)
+                        .is_some_and(|(_, target)| !self.carried(target).owns);
+                    let held: TokenSet = reached
+                        .into_iter()
+                        .filter(|token| !lends_holdings || direct.binary_search(token).is_err())
+                        .collect();
+                    union_into(&mut sources, &held);
+                }
+                sources.retain(|token| self.tokens[*token as usize].kind != TokenKind::Handle);
+                let token = match self.statement_tokens.get(&site) {
+                    Some(token) => *token,
+                    None => {
+                        let kind = if carried.mut_borrows {
+                            BorrowKind::Mut
+                        } else {
+                            BorrowKind::Ref
+                        };
+                        let mut loan = Token::new(TokenKind::Loan(kind), statement.origin);
+                        loan.holds = carried.mut_referents_hold;
+                        loan.view = view;
+                        let token = self.push_token(loan);
+                        self.statement_tokens.insert(site, token);
+                        token
+                    }
+                };
+                let regions: Vec<AbsPlace> = sources
+                    .iter()
+                    .flat_map(|source| self.tokens[*source as usize].regions.clone())
+                    .collect();
+                let zero_sized = sources
+                    .iter()
+                    .all(|source| self.tokens[*source as usize].zero_sized);
+                let loan = &mut self.tokens[token as usize];
+                loan.zero_sized = zero_sized;
+                for region in regions {
+                    *changed |= loan.regions.insert(region);
+                }
+                *changed |= union_into(&mut loan.parents, &sources);
+                union_into(&mut handles, &[token]);
+                handles
             }
             NExpr::CodeRegionRef { .. }
             | NExpr::Const(_)
@@ -887,6 +1021,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             None => {
                 let mut loan = Token::new(kind, origin);
                 loan.zero_sized = place.ty.is_zero_sized(self.db);
+                loan.holds = self.carried(place.ty).any();
                 let token = self.push_token(loan);
                 self.statement_tokens.insert(site, token);
                 token

@@ -80,3 +80,55 @@ pub contract Stored {
         iter = Option::Some(Iter::new(ref values))
     }
 }
+
+struct Slot { r: ref u256 }
+
+struct Writer { slot: mut Slot }
+
+fn read_slot(_ slot: mut Slot) -> u256 {
+    slot.r
+}
+
+fn read_both(_ slot: ref Slot, _ x: mut u256) -> u256 {
+    x = 1
+    slot.r
+}
+
+fn store_through(_ writer: own Writer, _ r: ref u256) {
+    let target = writer.slot
+    target = Slot { r }
+}
+
+// Rejected: a borrow of a wrapper keeps the borrows inside it live.
+fn wrapper_borrow_keeps_contents_live() -> u256 {
+    let mut x: u256 = 0
+    let mut slot = Slot { r: ref x }
+    let held = mut slot
+    x = 1
+    read_slot(held)
+}
+
+// Rejected: a call can reach the borrows inside a wrapper it is given.
+fn wrapper_contents_overlap_argument() -> u256 {
+    let mut x: u256 = 0
+    let slot = Slot { r: ref x }
+    read_both(ref slot, mut x)
+}
+
+// Rejected: a mutable borrow inside an aggregate argument receives the call's
+// other borrows.
+fn nested_mutable_argument_receives_borrows() -> u256 {
+    let a: u256 = 0
+    let mut b: u256 = 1
+    let mut slot = Slot { r: ref a }
+    store_through(Writer { slot: mut slot }, ref b)
+    b = 2
+    slot.r
+}
+
+// Rejected: a local borrow cannot reach caller storage through a mutable
+// borrow inside an aggregate argument.
+fn nested_mutable_argument_escape(_ slot: mut Slot) {
+    let local: u256 = 1
+    store_through(Writer { slot }, ref local)
+}

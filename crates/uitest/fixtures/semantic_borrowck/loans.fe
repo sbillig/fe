@@ -96,3 +96,15 @@ fn written_in_loop() {
     }
     set(h, 1)
 }
+
+// Accepted: an access through a reborrow is authorized by all its ancestors.
+fn nested_reborrows() -> u256 {
+    let mut x: u256 = 0
+    let a = mut x
+    let b = mut a
+    let c = mut b
+    c = 1
+    b = 2
+    a = 3
+    x
+}
