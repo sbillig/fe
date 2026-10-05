@@ -4859,6 +4859,40 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 )
             }
+
+            BodyDiag::UnsafeDerefRequiresUnsafe { primary } => primary_diag(
+                severity,
+                "dereference of raw pointer requires an `unsafe` block or function",
+                "dereference of raw pointer",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
+                let name = callee
+                    .name(db)
+                    .map_or("<unknown>", |n| n.data(db).as_str());
+                CompleteDiagnostic::new(
+                    severity,
+                    format!(
+                        "call to unsafe function `{name}` requires an `unsafe` block or function"
+                    ),
+                    vec![
+                        SubDiagnostic::new(
+                            LabelStyle::Primary,
+                            "call to unsafe function".to_string(),
+                            primary.resolve(db),
+                        ),
+                        SubDiagnostic::new(
+                            LabelStyle::Secondary,
+                            "callee defined here".to_string(),
+                            callee.name_span().resolve(db),
+                        ),
+                    ],
+                    vec![],
+                    error_code,
+                )
+            }
         }
     }
 }
@@ -5355,6 +5389,36 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: "trait requires these effects".to_string(),
+                            span: trait_m.name_span().resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::MethodUnsafeMismatch { trait_m, impl_m } => {
+                let (impl_label, trait_label) = if matches!(trait_m, CallableDef::Func(func) if func.is_unsafe(db))
+                {
+                    ("this method is not `unsafe`", "trait method is `unsafe`")
+                } else {
+                    ("this method is `unsafe`", "trait method is not `unsafe`")
+                };
+                CompleteDiagnostic {
+                    severity,
+                    message: format!(
+                        "method `{}` must match the unsafety of the trait method",
+                        impl_m.name(db).expect("methods have names").data(db),
+                    ),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: impl_label.to_string(),
+                            span: impl_m.name_span().resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: trait_label.to_string(),
                             span: trait_m.name_span().resolve(db),
                         },
                     ],

@@ -94,6 +94,7 @@ use super::{
         lower_hir_ty_deferred, resolve_callable_input_effect_key,
     },
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
+    unsafe_check::check_unsafe_ops,
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
@@ -1135,6 +1136,7 @@ fn infer_body_query<'db>(
 
     checker.run();
     let (mut diags, typed_body) = checker.finish();
+    diags.extend(check_unsafe_ops(db, owner, &typed_body));
     if let BodyOwner::Func(func) = owner
         && func.is_const(db)
         && !func.is_extern(db)

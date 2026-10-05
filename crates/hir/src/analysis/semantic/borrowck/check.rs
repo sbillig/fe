@@ -873,7 +873,7 @@ enum Maybe { Empty, Full(*u256) }
 fn read(value: own Maybe) -> u256 {
     match value {
         Maybe::Empty => 0,
-        Maybe::Full(pointer) => *pointer,
+        Maybe::Full(pointer) => unsafe { *pointer },
     }
 }
 fn root() -> u256 { read(value: Maybe::Full(pointer())) }
@@ -928,8 +928,8 @@ extern { fn unknown() -> *u256 }
 fn both() -> *u256 {
     let returned = unknown()
     let scratch = unknown()
-    *scratch = 1
-    *returned = 2
+    unsafe { *scratch = 1 }
+    unsafe { *returned = 2 }
     returned
 }
 "#,

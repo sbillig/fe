@@ -881,6 +881,15 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         callee: CallableDef<'db>,
     },
+
+    // Unsafe-check diagnostics ---------------------------------------------
+    UnsafeDerefRequiresUnsafe {
+        primary: DynLazySpan<'db>,
+    },
+    UnsafeCallRequiresUnsafe {
+        primary: DynLazySpan<'db>,
+        callee: CallableDef<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1056,6 +1065,8 @@ impl<'db> BodyDiag<'db> {
             Self::ConstFnEffectsNotAllowed(_) => 55,
             Self::ConstFnNonConstCall { .. } => 62,
             Self::ConstFnEffectfulCall { .. } => 63,
+            Self::UnsafeDerefRequiresUnsafe { .. } => 96,
+            Self::UnsafeCallRequiresUnsafe { .. } => 97,
         }
     }
 }
@@ -1196,6 +1207,11 @@ pub enum ImplDiag<'db> {
         impl_m: CallableDef<'db>,
     },
 
+    MethodUnsafeMismatch {
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
+    },
+
     MethodStricterBound {
         span: DynLazySpan<'db>,
         stricter_bounds: ThinVec<TraitInstId<'db>>,
@@ -1300,6 +1316,7 @@ impl ImplDiag<'_> {
             Self::MethodRetTyMismatch { .. } => 8,
             Self::MethodStricterBound { .. } => 9,
             Self::MethodEffectMismatch { .. } => 24,
+            Self::MethodUnsafeMismatch { .. } => 25,
             Self::InvalidSelfType { .. } => 10,
             Self::InherentImplIsNotAllowed { .. } => 11,
             Self::MissingAssociatedType { .. } => 12,

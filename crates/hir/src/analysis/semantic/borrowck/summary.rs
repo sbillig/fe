@@ -4219,14 +4219,14 @@ mod tests {
             r#"
 struct Node { value: u256, next: Option<*Node> }
 enum Link { Nil, Cons(*Node) }
-fn read_next_ptr(_ start: *Node) -> Option<*Node> { start.next }
+fn read_next_ptr(_ start: *Node) -> Option<*Node> { unsafe { start.next } }
 fn optional_next_value(_ start: *Node) -> u256 {
-    if let Option::Some(node) = start.next { node.value } else { 0 }
+    unsafe { if let Option::Some(node) = start.next { node.value } else { 0 } }
 }
 fn is_cons(_ link: Link) -> bool {
     match link { Link::Nil => false, Link::Cons(_) => true }
 }
-fn relink(_ node: *Node, _ next: Option<*Node>) { node.next = next }
+fn relink(_ node: *Node, _ next: Option<*Node>) { unsafe { node.next = next } }
 "#,
         );
         let (module, _) = db.top_mod(file);
@@ -5685,7 +5685,7 @@ impl Buffer {{
             Option::None => core::panic()
         }}
     }}
-    fn set(mut self, value: u256) {{ *self.data() = value }}
+    fn set(mut self, value: u256) {{ unsafe {{ *self.data() = value }} }}
 }}
 struct Frame {{ memory: Buffer, output: Buffer }}
 fn dispatch(frame: mut Frame, op: u256) {{ {branches} }}
@@ -5808,23 +5808,23 @@ fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
             r#"
 use core::ptr
 struct Item { n: u256 }
-fn raw(pointer: *u256) -> mut u256 { mut *pointer }
-fn cast_borrow<T>(pointer: *T) -> mut u256 { mut *ptr::cast<T, u256>(pointer) }
-fn cast_shared<T>(pointer: *T) -> ref u256 { ref *ptr::cast<T, u256>(pointer) }
+fn raw(pointer: *u256) -> mut u256 { unsafe { mut *pointer } }
+fn cast_borrow<T>(pointer: *T) -> mut u256 { unsafe { mut *ptr::cast<T, u256>(pointer) } }
+fn cast_shared<T>(pointer: *T) -> ref u256 { unsafe { ref *ptr::cast<T, u256>(pointer) } }
 fn shared(value: ref u256) -> ref u256 { value }
 fn exclusive(value: mut u256) -> mut u256 { value }
 fn fresh() -> mut u256 {
     let pointer = ptr::alloc<u256>()
-    *pointer = 1
-    mut *pointer
+    unsafe { *pointer = 1 }
+    unsafe { mut *pointer }
 }
 fn unchanged(slot: *ref u256) {}
-fn replaced(slot: *ref u256, value: ref u256) { *slot = value }
+fn replaced(slot: *ref u256, value: ref u256) { unsafe { *slot = value } }
 fn clobbered(slot: *ref u256) { ptr::zero_bytes(ptr::byte_ptr(slot), 32) }
-fn take(pointer: *Item) -> Item { *pointer }
+fn take(pointer: *Item) -> Item { unsafe { *pointer } }
 fn restore(pointer: *Item) -> Item {
-    let value = *pointer
-    *pointer = Item { n: 2 }
+    let value = unsafe { *pointer }
+    unsafe { *pointer = Item { n: 2 } }
     value
 }
 fn empty() -> [ref u256; 0] { [] }
@@ -5993,7 +5993,7 @@ fn empty() -> [Required; 0] { [] }
             "opaque_native_contracts.fe".into(),
             r#"
 use core::ptr
-fn lend(pointer: *u256) -> mut u256 { mut *pointer }
+fn lend(pointer: *u256) -> mut u256 { unsafe { mut *pointer } }
 fn clobber(slot: *ref u256) {
     let bytes = ptr::alloc_bytes(32)
     ptr::copy_raw(ptr::byte_ptr(slot), bytes, 32)
@@ -6048,7 +6048,7 @@ fn clobber(slot: *ref u256) {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
             "opaque_ownership_effects.fe".into(),
-            "struct Item { n: u256 }\nfn take(pointer: *Item) -> Item { *pointer }",
+            "struct Item { n: u256 }\nfn take(pointer: *Item) -> Item { unsafe { *pointer } }",
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);

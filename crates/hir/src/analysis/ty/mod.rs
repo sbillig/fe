@@ -63,6 +63,7 @@ pub mod ty_def;
 pub mod ty_error;
 pub mod ty_lower;
 pub mod unify;
+pub(crate) mod unsafe_check;
 pub mod visitor;
 
 pub use const_ty::CallableLayoutOwner;
