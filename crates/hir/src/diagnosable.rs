@@ -11,7 +11,9 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
-use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::diagnostics::{
+    TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+};
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
 use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
@@ -460,6 +462,31 @@ impl<'db> Trait<'db> {
             }
         }
         diags
+    }
+
+    /// Diagnostics for effect rows and result spaces given values in the
+    /// trait itself.
+    pub fn diags_access_defaults(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let rows = self
+            .rows(db)
+            .iter()
+            .filter(|row| row.effects.is_some())
+            .filter_map(|row| Some(("effect row", row.name.to_opt()?)));
+        let spaces = self
+            .spaces(db)
+            .iter()
+            .filter(|space| space.value.is_some())
+            .filter_map(|space| Some(("space", space.name.to_opt()?)));
+        rows.chain(spaces)
+            .map(|(kind, name)| {
+                TraitLowerDiag::AccessItemDefault {
+                    primary: self.span().name().into(),
+                    kind,
+                    name,
+                }
+                .into()
+            })
+            .collect()
     }
 
     /// Diagnostics for generic parameter issues (duplicates, defined in parent).
@@ -1805,6 +1832,7 @@ impl<'db> Diagnosable<'db> for Trait<'db> {
             }
         }
         out.extend(self.diags_assoc_defaults(db));
+        out.extend(self.diags_access_defaults(db));
         out.extend(self.diags_super_traits(db));
 
         for pred in WhereClauseOwner::Trait(self).clause(db).predicates(db) {

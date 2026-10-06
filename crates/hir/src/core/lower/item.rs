@@ -1,3 +1,4 @@
+use common::ingot::IngotKind;
 use parser::ast::{self, WhereClauseOwner as _, prelude::*};
 use salsa::Accumulator as _;
 
@@ -7,9 +8,9 @@ use super::{
 };
 use crate::{
     hir_def::{
-        AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
-        GenericParamListId, IdentId, Partial, PathId, TraitRefId, TupleTypeId, TypeBound, TypeId,
-        WhereClauseId, item::*,
+        AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId, GenericArg,
+        GenericArgListId, GenericParamListId, IdentId, Partial, PathId, TraitRefId, TupleTypeId,
+        TypeBound, TypeGenericArg, TypeId, TypeKind, WhereClauseId, item::*,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -610,10 +611,34 @@ fn lower_uses_params<'db>(
         .into_iter()
         .flatten()
         .chain(param)
-        .map(|p| EffectParam {
-            name: p.name().map(|n| IdentId::lower_token(ctxt, n.syntax())),
-            key_ty: TypeId::lower_ast_partial(ctxt, p.ty()),
-            is_mut: p.mut_token().is_some(),
+        .map(|p| {
+            let key_ty = TypeId::lower_ast_partial(ctxt, p.ty());
+            // `Field(T)` is the core marker `Field<T>`.
+            let key_ty = match (p.field_key(), key_ty) {
+                (Some(_), Partial::Present(handle)) => {
+                    let db = ctxt.db();
+                    let root = if ctxt.top_mod().ingot(db).kind(db) == IngotKind::Core {
+                        IdentId::make_ingot(db)
+                    } else {
+                        IdentId::new(db, "core".to_string())
+                    };
+                    let args = GenericArgListId::new(
+                        db,
+                        vec![GenericArg::Type(TypeGenericArg {
+                            ty: Partial::Present(handle),
+                        })],
+                        true,
+                    );
+                    let path = PathId::from_ident(db, root).push_str_args(db, "Field", args);
+                    Partial::Present(TypeId::new(db, TypeKind::Path(Partial::Present(path))))
+                }
+                (_, key_ty) => key_ty,
+            };
+            EffectParam {
+                name: p.name().map(|n| IdentId::lower_token(ctxt, n.syntax())),
+                key_ty,
+                is_mut: p.mut_token().is_some(),
+            }
         })
         .collect();
     EffectParamListId::new(ctxt.db(), data)

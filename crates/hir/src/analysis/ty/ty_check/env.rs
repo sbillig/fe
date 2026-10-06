@@ -1175,7 +1175,9 @@ impl<'db> TyChecker<'db> {
         };
         let span = match provider.origin {
             EffectOrigin::Param { site, index, .. } => effect_param_span(self.db, site, index),
-            EffectOrigin::With { value_expr } => value_expr.span(self.body()).into(),
+            EffectOrigin::With { value_expr } | EffectOrigin::Arg { expr: value_expr } => {
+                value_expr.span(self.body()).into()
+            }
         };
         let Some((witness, commit)) = self
             .build_keyed_witness_from_pattern_in_scope(
@@ -1369,6 +1371,11 @@ pub(crate) enum EffectOrigin<'db> {
     },
     With {
         value_expr: ExprId,
+    },
+    /// A call's argument whose place lies in an effect provider: the
+    /// authority `Field(T)` takes from the handle it passes.
+    Arg {
+        expr: ExprId,
     },
 }
 

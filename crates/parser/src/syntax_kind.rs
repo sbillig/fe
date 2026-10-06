@@ -525,6 +525,9 @@ pub enum SyntaxKind {
     UsesParamList,
     /// a single `uses` parameter
     UsesParam,
+    /// `Field(T)`: a `uses` key naming the storage field a handle of type `T`
+    /// names.
+    UsesFieldKey,
 
     /// `foo::Trait1 + Trait2`
     TypeBoundList,
@@ -835,6 +838,7 @@ impl SyntaxKind {
             SyntaxKind::UsesClause => "`uses` clause",
             SyntaxKind::UsesParamList => "`uses` parameter list",
             SyntaxKind::UsesParam => "`uses` parameter",
+            SyntaxKind::UsesFieldKey => "`Field` key",
             SyntaxKind::RecvArmList => "recv arm list",
             SyntaxKind::RecvArm => "recv arm",
             SyntaxKind::VisRestriction => "visibility restriction",

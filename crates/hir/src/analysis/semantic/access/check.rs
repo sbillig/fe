@@ -871,14 +871,18 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NEffectArgValue::Place(place) => place.ty,
             NEffectArgValue::Value(value) => self.body.values[value.value.index()].ty,
         };
-        let key = func
+        let requirement = func
             .effect_requirements(self.db)
             .iter()
-            .find(|requirement| requirement.binding_idx == effect.binding_idx)
-            .map(|requirement| match &requirement.key {
-                EffectRequirementKey::Type(_) => EffectRequirementKey::Type(arg_ty),
-                key => key.clone(),
-            });
+            .find(|requirement| requirement.binding_idx == effect.binding_idx);
+        let key = requirement.map(|requirement| match &requirement.key {
+            EffectRequirementKey::Type(_) => EffectRequirementKey::Type(arg_ty),
+            key => key.clone(),
+        });
+        // A zero-sized place holds nothing, but the handle a `Field(T)` key
+        // takes names its field wherever the handle lies.
+        let names_field = requirement
+            .is_some_and(|requirement| requirement.binding_ty.field_key_handle(self.db).is_some());
         if let Some(key) = key
             && let Some(access) = effect_key_state_access(
                 self.db,
@@ -895,7 +899,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
             });
         }
         let (regions, parents) = match &effect.arg {
-            NEffectArgValue::Place(place) if place.ty.is_zero_sized(self.db) => return None,
+            NEffectArgValue::Place(place) if place.ty.is_zero_sized(self.db) && !names_field => {
+                return None;
+            }
             NEffectArgValue::Place(place) => {
                 let resolved = self.resolve(place);
                 (resolved.regions, resolved.direct)

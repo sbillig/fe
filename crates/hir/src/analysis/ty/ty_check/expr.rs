@@ -1,3 +1,5 @@
+use std::iter;
+
 use either::Either;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::ToPrimitive;
@@ -1496,18 +1498,31 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn check_callable_effects(&mut self, expr: ExprId, callable: &mut Callable<'db>) {
-        let body = self.body();
-        let call_span: DynLazySpan<'db> = expr.span(body).into();
-        let args = self.resolve_callable_effects(call_span.clone(), callable);
+        let call_span: DynLazySpan<'db> = expr.span(self.body()).into();
+        let call_args = match expr.data(self.db, self.body()) {
+            Partial::Present(Expr::Call(_, args)) => args.iter().map(|arg| arg.expr).collect(),
+            Partial::Present(Expr::MethodCall(receiver, _, _, args)) => iter::once(*receiver)
+                .chain(args.iter().map(|arg| arg.expr))
+                .collect(),
+            Partial::Present(Expr::Bin(lhs, rhs, _) | Expr::AugAssign(lhs, rhs, _)) => {
+                vec![*lhs, *rhs]
+            }
+            Partial::Present(Expr::Un(inner, _)) => vec![*inner],
+            _ => Vec::new(),
+        };
+        let args = self.resolve_callable_effects(call_span, callable, &call_args);
         for arg in args {
             self.env.push_call_effect_arg(expr, arg);
         }
     }
 
+    /// Resolves the effects `callable` requires where it is called with the
+    /// argument expressions `call_args`, its receiver first.
     pub(super) fn resolve_callable_effects(
         &mut self,
         call_span: DynLazySpan<'db>,
         callable: &mut Callable<'db>,
+        call_args: &[ExprId],
     ) -> Vec<super::ResolvedEffectArg<'db>> {
         let CallableDef::Func(func) = callable.callable_def else {
             return Vec::new();
@@ -1528,7 +1543,9 @@ impl<'db> TyChecker<'db> {
             crate::core::semantic::EffectEnvView::new(EffectParamSite::Func(func));
 
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
-            EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
+            EffectOrigin::With { value_expr } | EffectOrigin::Arg { expr: value_expr } => {
+                Some(value_expr.span(body).into())
+            }
             EffectOrigin::Param { .. } => None,
         };
         // Each component of a callee row the call expands is resolved like the
@@ -1565,7 +1582,7 @@ impl<'db> TyChecker<'db> {
                 .copied()
                 .flatten();
 
-            match self.resolve_effect_query(func, req.clone(), query.clone(), call_span.clone()) {
+            match self.resolve_effect_query(req.clone(), query.clone(), call_args) {
                 EffectResolution::Chosen(evidence) => {
                     let (provider, arg_style, layout_view, key_kind, instantiated_key_ty) =
                         match *evidence {
@@ -1777,7 +1794,7 @@ impl<'db> TyChecker<'db> {
                         arg,
                         with_source: match provider.origin {
                             EffectOrigin::With { value_expr } => Some(value_expr),
-                            EffectOrigin::Param { .. } => None,
+                            EffectOrigin::Param { .. } | EffectOrigin::Arg { .. } => None,
                         },
                         pass_mode,
                         layout_view,
@@ -1942,10 +1959,9 @@ impl<'db> TyChecker<'db> {
 
     fn resolve_effect_query(
         &mut self,
-        func: Func<'db>,
         req: EffectRequirementDecl<'db>,
         query: EffectQuery<'db>,
-        call_span: DynLazySpan<'db>,
+        call_args: &[ExprId],
     ) -> EffectResolution<'db> {
         let mut viable: SmallVec<[EffectEvidence<'db>; 2]> = SmallVec::new();
         let effect_env = self.env.effect_env().clone();
@@ -2028,7 +2044,44 @@ impl<'db> TyChecker<'db> {
                 }
             }
         }
-        let _ = (func, call_span);
+        // Without a provider, `Field(T)` takes the authority of the first
+        // argument of type `T` whose place lies in an effect provider or in
+        // an access. A copy of a handle carries none.
+        if req.key_ty.field_key_handle(self.db).is_some()
+            && let EffectPatternKey::Type(type_query) = &query.key
+        {
+            for &arg in call_args {
+                let Some(prop) = self.env.typed_expr(arg) else {
+                    continue;
+                };
+                let authority = self.env.expr_place(arg).is_some_and(|place| {
+                    let PlaceBase::Binding(binding) = place.base;
+                    match (binding, self.env.binding_access(&binding)) {
+                        (LocalBinding::EffectParam { .. }, _) => true,
+                        (_, Some(BindingAccess::View)) => {
+                            !self.ty_is_copy(self.env.lookup_binding_ty(&binding))
+                        }
+                        (_, access) => access.is_some(),
+                    }
+                });
+                if !authority {
+                    continue;
+                }
+                let provider = ProvidedEffect {
+                    origin: EffectOrigin::Arg { expr: arg },
+                    ty: prop.ty.fold_with(self.db, &mut self.table),
+                    is_mut: prop.is_mut,
+                    binding: None,
+                };
+                if let Some(evidence) = self.evaluate_unkeyed_type_provider(
+                    type_query.clone(),
+                    provider,
+                    query.required_mut,
+                ) {
+                    return EffectResolution::Chosen(Box::new(evidence));
+                }
+            }
+        }
         EffectResolution::Missing
     }
 
@@ -2272,7 +2325,9 @@ impl<'db> TyChecker<'db> {
             | ProviderLayoutEvidence::ContractField => {}
         }
         let place = match provider.origin {
-            EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
+            EffectOrigin::With { value_expr } | EffectOrigin::Arg { expr: value_expr } => {
+                self.env.expr_place(value_expr)
+            }
             EffectOrigin::Param { .. } => provider
                 .binding
                 .map(|binding| Place::new(PlaceBase::Binding(binding))),
@@ -2299,7 +2354,9 @@ impl<'db> TyChecker<'db> {
         match arg_style {
             EffectArgStyle::Place => {
                 let place = match provider.origin {
-                    EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
+                    EffectOrigin::With { value_expr } | EffectOrigin::Arg { expr: value_expr } => {
+                        self.env.expr_place(value_expr)
+                    }
                     EffectOrigin::Param { .. } => provider
                         .binding
                         .map(|binding| Place::new(PlaceBase::Binding(binding))),
@@ -2314,13 +2371,15 @@ impl<'db> TyChecker<'db> {
                     super::EffectArg::Value(value_expr),
                     super::EffectPassMode::ByTempPlace,
                 ),
-                EffectOrigin::Param { .. } => {
+                EffectOrigin::Param { .. } | EffectOrigin::Arg { .. } => {
                     (super::EffectArg::Unknown, super::EffectPassMode::Unknown)
                 }
             },
             EffectArgStyle::Value => (
                 match provider.origin {
-                    EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
+                    EffectOrigin::With { value_expr } | EffectOrigin::Arg { expr: value_expr } => {
+                        super::EffectArg::Value(value_expr)
+                    }
                     EffectOrigin::Param { .. } => provider
                         .binding
                         .map_or(super::EffectArg::Unknown, super::EffectArg::Binding),
@@ -2597,7 +2656,8 @@ impl<'db> TyChecker<'db> {
         let binding = match arg {
             super::EffectArg::Place(place) => {
                 if !place.projections.is_empty()
-                    && let EffectOrigin::With { value_expr } = provided.origin
+                    && let EffectOrigin::With { value_expr }
+                    | EffectOrigin::Arg { expr: value_expr } = provided.origin
                 {
                     return Some(EffectProviderProvenance::Expr {
                         owner,
@@ -2613,10 +2673,12 @@ impl<'db> TyChecker<'db> {
         binding
             .map(|binding| EffectProviderProvenance::Binding { owner, binding })
             .or(match provided.origin {
-                EffectOrigin::With { value_expr } => Some(EffectProviderProvenance::Expr {
-                    owner,
-                    expr: value_expr,
-                }),
+                EffectOrigin::With { value_expr } | EffectOrigin::Arg { expr: value_expr } => {
+                    Some(EffectProviderProvenance::Expr {
+                        owner,
+                        expr: value_expr,
+                    })
+                }
                 EffectOrigin::Param { .. } => None,
             })
     }
@@ -5305,6 +5367,7 @@ impl<'db> TyChecker<'db> {
             checked_inputs.push(self.normalize_ty(rhs_ty));
         }
         callable.set_checked_input_tys(checked_inputs);
+        self.check_callable_effects(expr, &mut callable);
 
         let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
         let shape = callable

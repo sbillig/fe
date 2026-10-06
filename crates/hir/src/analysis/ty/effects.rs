@@ -234,6 +234,10 @@ pub(crate) fn lower_effect_key_schema<'db>(
     assumptions: PredicateListId<'db>,
     minter: &LoweringContext<'db>,
 ) -> ResolvedEffectKey<'db> {
+    // `Field(T)` is keyed by the handle type `T`.
+    if let Some(handle) = key_ty.field_key_handle(db) {
+        return lower_effect_key_schema(db, handle, scope, assumptions, minter);
+    }
     let TypeKind::Path(path) = key_ty.data(db) else {
         let carrier = normalize_from_assumptions(
             db,

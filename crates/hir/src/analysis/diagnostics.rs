@@ -3116,10 +3116,15 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         ),
                         span: primary.resolve(db),
                     }],
-                    notes: vec![format!(
-                        "provide it with `with ({} = value)` or require it via `uses {}`",
-                        key_str, key_str
-                    )],
+                    notes: vec![match key.field_key_handle(db) {
+                        Some(_) => "the authority over a storage field comes with a handle \
+                            argument that lies in an effect provider, such as a contract \
+                            field under `uses (mut store)`"
+                            .to_string(),
+                        None => format!(
+                            "provide it with `with ({key_str} = value)` or require it via `uses {key_str}`"
+                        ),
+                    }],
                     error_code,
                 }
             }
@@ -4932,6 +4937,21 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 "external trait cannot be implemented for external type",
                 "external trait cannot be implemented for external type",
                 impl_trait.span().resolve(db),
+                error_code,
+            ),
+
+            Self::AccessItemDefault {
+                primary,
+                kind,
+                name,
+            } => primary_diag(
+                Severity::Error,
+                format!("a trait's {kind} has no default"),
+                format!(
+                    "{kind} `{}` is given by each implementation, not the trait",
+                    name.data(db)
+                ),
+                primary.resolve(db),
                 error_code,
             ),
 

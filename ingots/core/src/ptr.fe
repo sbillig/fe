@@ -497,6 +497,7 @@ fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
 }
 
 impl<T> Index<usize> for MemArray<T> {
+    space S = memory
     type Output = T
 
     #[inline(always)]
@@ -506,8 +507,6 @@ impl<T> Index<usize> for MemArray<T> {
 }
 
 impl<T> IndexMut<usize> for MemArray<T> {
-    type Output = T
-
     #[inline(always)]
     fn index_mut(mut self, _ index: usize) -> mut T {
         unsafe { mut *mem_array_elem(self, index) }
@@ -515,6 +514,7 @@ impl<T> IndexMut<usize> for MemArray<T> {
 }
 
 impl<T> Index<usize> for MemSlice<T> {
+    space S = memory
     type Output = T
 
     #[inline(always)]

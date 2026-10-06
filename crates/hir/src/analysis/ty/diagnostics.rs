@@ -1143,6 +1143,13 @@ pub enum TraitLowerDiag<'db> {
     UnsafeLocalBoundBlanketImpl(ImplTrait<'db>),
     CyclicTraitRef(ImplTrait<'db>),
     CyclicSuperTraits(Vec<Trait<'db>>),
+    /// A trait's effect row or result space with a value: each
+    /// implementation gives its own.
+    AccessItemDefault {
+        primary: DynLazySpan<'db>,
+        kind: &'static str,
+        name: IdentId<'db>,
+    },
 }
 
 impl TraitLowerDiag<'_> {
@@ -1153,6 +1160,7 @@ impl TraitLowerDiag<'_> {
             Self::CyclicSuperTraits { .. } => 2,
             Self::CyclicTraitRef(_) => 3,
             Self::UnsafeLocalBoundBlanketImpl(_) => 4,
+            Self::AccessItemDefault { .. } => 5,
         }
     }
 }

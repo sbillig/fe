@@ -1124,8 +1124,15 @@ impl ToDoc for ast::UsesParam {
             doc = doc.append(alloc.text("mut "));
         }
 
-        if let Some(ty) = self.ty() {
-            doc = doc.append(ty.to_doc(ctx));
+        match (self.field_key(), self.ty()) {
+            (Some(_), Some(ty)) => {
+                doc = doc
+                    .append(alloc.text("Field("))
+                    .append(ty.to_doc(ctx))
+                    .append(alloc.text(")"));
+            }
+            (_, Some(ty)) => doc = doc.append(ty.to_doc(ctx)),
+            _ => {}
         }
 
         doc
