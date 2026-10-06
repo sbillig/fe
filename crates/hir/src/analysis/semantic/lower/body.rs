@@ -25,7 +25,7 @@ use crate::{
                 const_ty_or_abstract_from_inherent_const_use,
             },
             normalize::normalize_ty,
-            shape::Shape,
+            shape::{Shape, sum_payload_variant},
             ty_check::{
                 BodyOwner, Callable, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef,
                 LocalBinding, PathReadSemantics, RecordInitLowering, RecordLike,
@@ -583,6 +583,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Partial::Present(Expr::Bin(base, index, BinOp::Index)) => {
                 self.lower_call_like_expr(expr, ty, Some(*base), &[*index])
             }
+            Partial::Present(Expr::Try(inner)) => self.lower_try(expr, *inner, ty),
             Partial::Present(Expr::Block(stmts, _)) => {
                 let (tail, head) = stmts.split_last().expect("an access block has a tail");
                 for stmt in head {
@@ -615,6 +616,80 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 )
             }
         }
+    }
+
+    /// Lowers `inner?`: the payload of a `Some` or `Ok` (a payload grant when
+    /// `inner` is a sum shape), or else an exit with the empty variant,
+    /// carrying an `Err`'s error.
+    fn lower_try(&mut self, expr: ExprId, inner: ExprId, ty: TyId<'db>) -> SValueId {
+        let origin = SemOrigin::Expr(expr);
+        let value = self.lower_source(inner);
+        let sum_ty = self.locals[value.index()].ty;
+        let success = sum_payload_variant(self.db, self.body.scope(), sum_ty)
+            .expect("`?` applies to an `Option` or a `Result`");
+        let failure = 1 - success;
+        let is_success = self.emit_expr_with_origin(
+            origin,
+            TyId::bool(self.db),
+            SExpr::IsEnumVariant {
+                value: SOperand::synthetic(value),
+                variant: VariantIndex(success),
+            },
+        );
+        let success_bb = self.new_block();
+        let failure_bb = self.new_block();
+        self.set_terminator(
+            self.current,
+            origin,
+            STerminatorKind::Branch {
+                cond: SOperand::synthetic(is_success),
+                then_bb: success_bb,
+                else_bb: failure_bb,
+            },
+        );
+
+        self.switch_to(failure_bb);
+        let error = (failure == 0).then(|| {
+            SOperand::synthetic(self.emit_expr_with_origin(
+                origin,
+                sum_ty.generic_args(self.db)[0],
+                SExpr::ExtractEnumField {
+                    value: SOperand::synthetic(value),
+                    variant: VariantIndex(failure),
+                    field: FieldIndex(0),
+                },
+            ))
+        });
+        let exit_ty = match self.template_owner {
+            BodyOwner::Func(func) if let Some(shape) = func.return_shape(self.db) => {
+                shape.carrier_ty(self.db)
+            }
+            _ => self.typed_body.result_ty(),
+        };
+        let exit = self.emit_expr_with_origin(
+            origin,
+            exit_ty,
+            SExpr::EnumMake {
+                enum_ty: exit_ty,
+                variant: VariantIndex(failure),
+                fields: error.into_iter().collect(),
+            },
+        );
+        // The empty variant grants nothing, so no slide follows it.
+        let slide = self.slide.take();
+        self.exit(origin, Some(SOperand::synthetic(exit)));
+        self.slide = slide;
+
+        self.switch_to(success_bb);
+        self.emit_expr_with_origin(
+            origin,
+            ty,
+            SExpr::ExtractEnumField {
+                value: SOperand::synthetic(value),
+                variant: VariantIndex(success),
+                field: FieldIndex(0),
+            },
+        )
     }
 
     /// Lowers a projection's yield site to the carrier of what it grants.
@@ -729,6 +804,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match expr_data {
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
             Expr::Path(_) => self.lower_path_expr(expr),
+            Expr::Try(inner) => self.lower_try(expr, *inner, ty),
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 let fields = elems
                     .iter()

@@ -33,3 +33,7 @@ fn first(cell:mut Cell,o:Option<u256>)->u256 {
     }
     x+v
 }
+
+fn add(a:Option<u256>,b:Option<u256>)->Option<u256> {
+    Option::Some(a?+b?)
+}

@@ -102,6 +102,9 @@ pub enum SyntaxKind {
     Tilde,
     #[token("!")]
     Not,
+    /// `?`
+    #[token("?")]
+    Question,
     #[token("^")]
     Hat,
     /// `&`
@@ -267,6 +270,8 @@ pub enum SyntaxKind {
     UnExpr,
     /// `expr as Type`
     CastExpr,
+    /// `expr?`
+    TryExpr,
     /// `foo(x, y)`
     CallExpr,
     /// `foo!(x, y)`
@@ -626,6 +631,7 @@ impl SyntaxKind {
             SyntaxKind::Percent => "`%`",
             SyntaxKind::Tilde => "`~`",
             SyntaxKind::Not => "`!`",
+            SyntaxKind::Question => "`?`",
             SyntaxKind::Hat => "`^`",
             SyntaxKind::Amp => "`&`",
             SyntaxKind::Amp2 => "`&&`",
@@ -701,6 +707,7 @@ impl SyntaxKind {
             SyntaxKind::BinExpr => "binary expression",
             SyntaxKind::UnExpr => "unary expression",
             SyntaxKind::CastExpr => "cast expression",
+            SyntaxKind::TryExpr => "`?` expression",
             SyntaxKind::CallExpr => "function call expression",
             SyntaxKind::MacroCallExpr => "macro call expression",
             SyntaxKind::CallArg => "function call argument",

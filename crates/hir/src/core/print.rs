@@ -644,6 +644,11 @@ impl<'db> Expr<'db> {
                 format!("{} as {}", expr.pretty_print(db, body, indent), ty)
             }
 
+            Expr::Try(expr) => {
+                let expr = unwrap_partial_ref(expr.data(db, body), "Try::expr");
+                format!("{}?", expr.pretty_print(db, body, indent))
+            }
+
             Expr::Call(callee, args) => {
                 let callee_expr = unwrap_partial_ref(callee.data(db, body), "Call::callee");
                 let args_str = args

@@ -5152,7 +5152,10 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
-            Expr::Un(inner, _) | Expr::Cast(inner, _) | Expr::Field(inner, _) => {
+            Expr::Un(inner, _)
+            | Expr::Cast(inner, _)
+            | Expr::Field(inner, _)
+            | Expr::Try(inner) => {
                 self.collect_explicit_return_param_sources_in_expr(
                     db,
                     body,

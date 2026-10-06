@@ -228,7 +228,10 @@ impl<'db> ConstFnChecker<'db, '_> {
                 self.check_call_target(expr);
             }
 
-            Expr::Field(inner, _) | Expr::ArrayRep(inner, _) | Expr::Cast(inner, _) => {
+            Expr::Field(inner, _)
+            | Expr::ArrayRep(inner, _)
+            | Expr::Cast(inner, _)
+            | Expr::Try(inner) => {
                 self.check_expr(*inner);
             }
 

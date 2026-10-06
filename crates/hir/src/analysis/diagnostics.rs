@@ -3770,6 +3770,30 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::TryOnNonSum { primary, ty } => primary_diag(
+                Severity::Error,
+                "`?` needs an `Option` or a `Result`",
+                format!("this has type `{}`", ty.pretty_print(db)),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::TryReturnMismatch {
+                primary,
+                operand,
+                ret,
+            } => primary_diag(
+                Severity::Error,
+                "`?` cannot return from this function",
+                format!(
+                    "`?` on `{}` may exit early, but `{}` cannot carry its `None` or `Err`",
+                    operand.pretty_print(db),
+                    ret.pretty_print(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::YieldOutsideProjection { primary } => primary_diag(
                 Severity::Error,
                 "`yield` outside a projection",

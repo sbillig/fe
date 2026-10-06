@@ -302,8 +302,29 @@ pub fn lower_return_shape<'db>(
     }
 }
 
-/// The variant and type argument of a sum type that carries a shape:
-/// `Option::Some(T)` and `Result::Ok(T)` (`Result<E, T>`).
+/// The variant of `ty` that carries a payload, if `ty` is an `Option` or a
+/// `Result`: `Option::Some(T)` or `Result::Ok(T)` (`Result<E, T>`). The
+/// payload is the type argument with the variant's index; the other variant
+/// is empty or carries the error.
+pub(crate) fn sum_payload_variant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<u16> {
+    let is = |lib_path| {
+        resolve_lib_type_path(db, scope, lib_path)
+            .is_some_and(|lib| lib.base_ty(db) == ty.base_ty(db))
+    };
+    if is("core::option::Option") {
+        Some(0)
+    } else if is("core::result::Result") {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// The variant and type argument of a sum type that carries a shape.
 fn sum_shape_slot<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -315,17 +336,8 @@ fn sum_shape_slot<'db>(
         TypeKind::Path(Partial::Present(path.strip_generic_args(db))),
     );
     let ctor = lower_hir_ty(db, ctor_hir, scope, assumptions);
-    let is = |lib_path| {
-        resolve_lib_type_path(db, scope, lib_path)
-            .is_some_and(|lib| lib.base_ty(db) == ctor.base_ty(db))
-    };
-    if is("core::option::Option") {
-        Some((ctor, 0, 0))
-    } else if is("core::result::Result") {
-        Some((ctor, 1, 1))
-    } else {
-        None
-    }
+    let variant = sum_payload_variant(db, scope, ctor)?;
+    Some((ctor, variant, variant as usize))
 }
 
 fn sum_type_args<'db>(db: &'db dyn HirAnalysisDb, path: PathId<'db>) -> Option<Vec<HirTyId<'db>>> {

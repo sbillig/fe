@@ -183,7 +183,9 @@ impl<'db> UnsafeChecker<'db, '_> {
                 self.check_call_target(expr);
             }
 
-            Expr::Cast(inner, _) | Expr::ArrayRep(inner, _) => self.check_expr(*inner),
+            Expr::Cast(inner, _) | Expr::ArrayRep(inner, _) | Expr::Try(inner) => {
+                self.check_expr(*inner)
+            }
 
             Expr::Call(callee, args) => {
                 self.check_expr(*callee);

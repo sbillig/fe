@@ -653,6 +653,20 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// `?` on a value that is neither an `Option` nor a `Result`.
+    TryOnNonSum {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// `?` in a function whose return cannot carry the operand's `None` or
+    /// `Err`.
+    TryReturnMismatch {
+        primary: DynLazySpan<'db>,
+        operand: TyId<'db>,
+        ret: TyId<'db>,
+    },
+
     /// Array repetition literals (`[x; N]`) duplicate the element value.
     ///
     /// Duplicating a value requires that the element type implement `core::marker::Copy`.
@@ -1036,6 +1050,8 @@ impl<'db> BodyDiag<'db> {
             Self::YieldOutsideProjection { .. } => 100,
             Self::RefutableLetPattern { .. } => 101,
             Self::LetElseMustDiverge { .. } => 102,
+            Self::TryOnNonSum { .. } => 103,
+            Self::TryReturnMismatch { .. } => 104,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

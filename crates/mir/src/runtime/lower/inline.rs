@@ -96,6 +96,22 @@ fn inline_session<'db>(
 
     // The ramp runs in place of the call and continues after it.
     let after_call = split_block(body, block, stmt);
+    // With several yield sites, every slide is reachable from every yield:
+    // the locals a slide uses need a definition on each path, though the
+    // dispatch only enters the slide of the site the ramp took.
+    if site.is_some() {
+        for (local, class) in slide_locals(callee, &yields) {
+            push_stmt(
+                body,
+                block,
+                splice.origin,
+                RStmt::Assign {
+                    dst: splice.local(local),
+                    expr: RExpr::Placeholder { class },
+                },
+            );
+        }
+    }
     assert_eq!(args.len(), callee.signature.params.len());
     for (param, arg) in callee.signature.params.iter().zip(args) {
         push_stmt(
@@ -157,6 +173,41 @@ fn inline_session<'db>(
         };
         body.blocks[block.index()].terminator = dispatch;
     }
+}
+
+/// The SSA locals of `callee` its slides mention, with their classes.
+fn slide_locals<'db>(
+    callee: &RuntimeBody<'db>,
+    resumes: &[RBlockId],
+) -> Vec<(RLocalId, RuntimeClass<'db>)> {
+    let mut seen = vec![false; callee.blocks.len()];
+    let mut stack = resumes.to_vec();
+    let mut locals = std::collections::BTreeSet::new();
+    while let Some(block) = stack.pop() {
+        if std::mem::replace(&mut seen[block.index()], true) {
+            continue;
+        }
+        let mut data = callee.blocks[block.index()].clone();
+        for stmt in &mut data.stmts {
+            locals.extend(stmt.locals_mut().into_iter().map(|local| *local));
+        }
+        locals.extend(data.terminator.values_mut().into_iter().map(|value| *value));
+        stack.extend(data.terminator.successors());
+    }
+    locals
+        .into_iter()
+        .filter_map(|local| {
+            let data = &callee.locals[local.index()];
+            match (&data.carrier, &data.root) {
+                (RuntimeCarrier::Value(class), root)
+                    if !matches!(root, RuntimeLocalRoot::Slot(_)) =>
+                {
+                    Some((local, class.clone()))
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// A callee body being copied into a caller.

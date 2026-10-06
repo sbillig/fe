@@ -652,6 +652,7 @@ module.exports = grammar({
       $.instantiation_expression,
       $.field_expression,
       $.index_expression,
+      $.try_expression,
       // Path expressions: identifier and scoped paths directly in expression
       prec.left($.identifier),
       $.scoped_path,
@@ -878,6 +879,11 @@ module.exports = grammar({
       field('field', choice($.identifier, $.integer_literal)),
     )),
 
+    try_expression: $ => prec(PREC.POSTFIX, seq(
+      field('value', $._expression),
+      '?',
+    )),
+
     index_expression: $ => prec(PREC.POSTFIX, seq(
       field('value', $._expression),
       '[',
@@ -965,6 +971,7 @@ module.exports = grammar({
       $.instantiation_expression,
       $.field_expression,
       $.index_expression,
+      $.try_expression,
       prec.left($.identifier),
       $.scoped_path,
       'self',
@@ -1038,6 +1045,7 @@ module.exports = grammar({
       $.instantiation_expression,
       $.field_expression,
       $.index_expression,
+      $.try_expression,
       prec.left($.identifier),
       $.scoped_path,
       'self',
