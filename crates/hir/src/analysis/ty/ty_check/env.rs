@@ -97,6 +97,9 @@ pub(crate) struct TyCheckEnv<'db> {
     /// place base, or yielded. Any other use of `ref p`, `mut p` or a tuple or
     /// sum shape is a value use, which is an error.
     consumed_accesses: FxHashSet<ExprId>,
+    /// Places matched through the `mut` access their `mut` pattern bindings
+    /// open.
+    matched_places: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
 
@@ -168,6 +171,7 @@ impl<'db> TyCheckEnv<'db> {
             pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
             call_effect_args: SecondaryMap::new(),
             consumed_accesses: FxHashSet::default(),
+            matched_places: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_seq: SecondaryMap::new(),
             path_applications: Vec::new(),
@@ -664,6 +668,15 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn is_consumed_access(&self, expr: ExprId) -> bool {
         self.consumed_accesses.contains(&expr)
+    }
+
+    pub(super) fn open_matched_place(&mut self, expr: ExprId, prop: ExprProp<'db>) {
+        self.matched_places.insert(expr);
+        self.type_expr(expr, prop);
+    }
+
+    pub(super) fn is_matched_place(&self, expr: ExprId) -> bool {
+        self.matched_places.contains(&expr)
     }
 
     pub(super) fn record_yield_shape(&mut self, expr: ExprId, shape: Shape<'db>) {

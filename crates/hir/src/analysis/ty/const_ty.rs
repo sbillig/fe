@@ -2401,7 +2401,7 @@ pub(crate) fn origin_expr_for_const_eval_diag<'db>(
         SemOrigin::Stmt(stmt) => {
             stmt_primary_expr_for_const_eval_diag(db, body, stmt).unwrap_or_else(|| body.expr(db))
         }
-        SemOrigin::Body(_) | SemOrigin::Synthetic => body.expr(db),
+        SemOrigin::Pat(_) | SemOrigin::Body(_) | SemOrigin::Synthetic => body.expr(db),
     }
 }
 

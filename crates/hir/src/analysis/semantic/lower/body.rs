@@ -348,9 +348,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if let Some(&local) = self.binding_locals.get(&binding) {
             return local;
         }
+        // `mut` on an access binding names its access kind: the binding
+        // itself is never reassigned.
         let local = self.alloc_local(
             self.binding_ty(binding),
-            if binding.is_mut() {
+            if binding.is_mut() && self.typed_body.binding_access(binding).is_none() {
                 Mutability::Mutable
             } else {
                 Mutability::Immutable
@@ -563,23 +565,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .unwrap_or_else(|| panic!("access expression without a shape: {expr:?}"));
         let ty = shape.carrier_ty(self.db);
         match expr.data(self.db, self.body) {
-            Partial::Present(Expr::Un(inner, op @ (UnOp::Mut | UnOp::Ref))) => {
-                let kind = if *op == UnOp::Mut {
-                    BorrowKind::Mut
-                } else {
-                    BorrowKind::Ref
-                };
-                let place = self.lower_place(*inner);
-                self.emit_expr_with_origin(
-                    SemOrigin::Expr(expr),
-                    ty,
-                    SExpr::Borrow {
-                        place,
-                        kind,
-                        provider: prop.borrow_provider,
-                    },
-                )
-            }
             Partial::Present(Expr::Call(_, args)) => {
                 let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
                 self.lower_call_like_expr(expr, ty, None, &args)
@@ -601,7 +586,27 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 };
                 self.lower_access(*tail)
             }
-            _ => panic!("unexpected access expression: {expr:?}"),
+            // `ref p`, `mut p`, or a place matched through the `mut` access
+            // its `mut` pattern bindings open.
+            data => {
+                let Shape::Access(kind, _) = shape else {
+                    panic!("unexpected access expression: {expr:?}")
+                };
+                let place = match data {
+                    Partial::Present(Expr::Un(inner, UnOp::Mut | UnOp::Ref)) => *inner,
+                    _ => expr,
+                };
+                let place = self.lower_place(place);
+                self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    ty,
+                    SExpr::Borrow {
+                        place,
+                        kind,
+                        provider: prop.borrow_provider,
+                    },
+                )
+            }
         }
     }
 

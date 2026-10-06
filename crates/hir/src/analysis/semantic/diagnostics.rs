@@ -298,6 +298,7 @@ pub(crate) fn span_for_origin_from_body<'db>(
     match origin {
         SemOrigin::Expr(expr) => expr.span(body).resolve(db),
         SemOrigin::Stmt(stmt) => stmt.span(body).resolve(db),
+        SemOrigin::Pat(pat) => pat.span(body).resolve(db),
         SemOrigin::Body(owner) => owner.body(db).and_then(|body| body.span().resolve(db)),
         SemOrigin::Synthetic => None,
     }

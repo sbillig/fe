@@ -584,16 +584,7 @@ impl<'db> TyChecker<'db> {
             self.consume_access(*lhs);
 
             let place_ty = prop.ty;
-            let borrow_provider = self
-                .env
-                .expr_place(*lhs)
-                .and_then(|place| self.concrete_borrow_provider_for_place(&place));
-            let borrow_provider =
-                if borrow_provider.is_none() && self.env.is_pointer_place_expr(*lhs) {
-                    Some(super::ProviderAddressSpace::Memory)
-                } else {
-                    borrow_provider
-                };
+            let borrow_provider = self.access_provider(*lhs);
 
             let kind = if *op == UnOp::Mut {
                 if !prop.is_mut {
@@ -1108,6 +1099,7 @@ impl<'db> TyChecker<'db> {
     fn check_let_condition(&mut self, pat: PatId, scrutinee: ExprId) -> ExprProp<'db> {
         let scrutinee_ty = self.fresh_ty();
         let scrutinee_prop = self.check_expr(scrutinee, scrutinee_ty);
+        let scrutinee_prop = self.open_matched_place(scrutinee, scrutinee_prop, [pat]);
         let layout = self.pattern_layout_context(scrutinee);
         self.check_pat_with_layout(pat, scrutinee_prop.ty, layout.as_ref());
         self.bind_pattern_source(pat, scrutinee, &scrutinee_prop);
@@ -4678,6 +4670,8 @@ impl<'db> TyChecker<'db> {
         let Partial::Present(arms) = arms else {
             return ExprProp::invalid(self.db);
         };
+        let scrutinee_prop =
+            self.open_matched_place(*scrutinee, scrutinee_prop, arms.iter().map(|arm| arm.pat));
 
         let mut match_ty = expected;
         let mut first_provider: Option<super::ProviderAddressSpace> = None;

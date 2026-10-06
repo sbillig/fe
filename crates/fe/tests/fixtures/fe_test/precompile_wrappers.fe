@@ -89,7 +89,7 @@ uses (evm: mut Evm)
 }
 
 fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
-    match result {
+    match ref result {
         Result::Ok(recovered) => match recovered {
             Option::Some(addr) => addr,
             Option::None => {
@@ -105,7 +105,7 @@ fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
 }
 
 fn expect_no_recovery(_ result: Result<PrecompileError, Option<u256>>) {
-    match result {
+    match ref result {
         Result::Ok(recovered) => match recovered {
             Option::Some(_) => assert(false),
             Option::None => (),

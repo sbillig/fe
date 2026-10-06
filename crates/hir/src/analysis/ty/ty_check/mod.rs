@@ -1154,7 +1154,9 @@ fn blocked_const_detail<'db>(
         .and_then(|key| key.owner(db).body(db))
         .or_else(|| match info.origin {
             SemOrigin::Body(owner) => owner.body(db),
-            SemOrigin::Expr(_) | SemOrigin::Stmt(_) | SemOrigin::Synthetic => None,
+            SemOrigin::Expr(_) | SemOrigin::Stmt(_) | SemOrigin::Pat(_) | SemOrigin::Synthetic => {
+                None
+            }
         })
         .unwrap_or(body);
     let primary = origin_expr_for_const_eval_diag(db, origin_body, info.origin)
@@ -2868,10 +2870,98 @@ impl<'db> TyChecker<'db> {
     }
 
     /// Binds `pat` to what `source` grants: its accesses if it has a shape.
+    /// A matched place grants a `mut` access to each `mut` binding only.
     fn bind_pattern_source(&mut self, pat: PatId, source: ExprId, prop: &ExprProp<'db>) {
         if let Some(shape) = &prop.shape {
             self.consume_access(source);
-            self.bind_pattern_accesses(pat, shape);
+            if self.env.is_matched_place(source) {
+                self.bind_mut_pattern_accesses(pat);
+            } else {
+                self.bind_pattern_accesses(pat, shape);
+            }
+        }
+    }
+
+    /// The address space of the place an access of `expr` names, if known.
+    pub(super) fn access_provider(&self, expr: ExprId) -> Option<ProviderAddressSpace> {
+        self.env
+            .expr_place(expr)
+            .and_then(|place| self.concrete_borrow_provider_for_place(&place))
+            .or_else(|| {
+                self.env
+                    .is_pointer_place_expr(expr)
+                    .then_some(ProviderAddressSpace::Memory)
+            })
+    }
+
+    /// A `mut` binding in a pattern matched against a place opens a `mut`
+    /// access on the sub-place it binds, so the place is matched through a
+    /// `mut` access of it. Its other bindings still bind by value.
+    fn open_matched_place(
+        &mut self,
+        scrutinee: ExprId,
+        prop: ExprProp<'db>,
+        pats: impl IntoIterator<Item = PatId>,
+    ) -> ExprProp<'db> {
+        let Some(mut_pat) = pats.into_iter().find_map(|pat| self.first_mut_binding(pat)) else {
+            return prop;
+        };
+        if prop.shape.is_some() || !self.env.is_place_expr(scrutinee) {
+            return prop;
+        }
+        if !prop.is_mut {
+            self.report_cannot_borrow_mut(scrutinee, mut_pat.span(self.body()).into());
+            return prop;
+        }
+        let prop = ExprProp {
+            borrow_provider: self.access_provider(scrutinee),
+            shape: Some(Shape::Access(BorrowKind::Mut, prop.ty)),
+            ..prop
+        };
+        self.env.open_matched_place(scrutinee, prop.clone());
+        prop
+    }
+
+    fn first_mut_binding(&self, pat: PatId) -> Option<PatId> {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
+            return None;
+        };
+        match pat_data {
+            Pat::Path(_, true) => Some(pat),
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(..) => None,
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                pats.iter().find_map(|pat| self.first_mut_binding(*pat))
+            }
+            Pat::Record(_, fields) => fields
+                .iter()
+                .find_map(|field| self.first_mut_binding(field.pat)),
+            Pat::Or(lhs, rhs) => self
+                .first_mut_binding(*lhs)
+                .or_else(|| self.first_mut_binding(*rhs)),
+        }
+    }
+
+    fn bind_mut_pattern_accesses(&mut self, pat: PatId) {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
+            return;
+        };
+        match pat_data {
+            Pat::Path(_, true) => self.set_pattern_access(pat, BorrowKind::Mut),
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(..) => {}
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for pat in pats {
+                    self.bind_mut_pattern_accesses(*pat);
+                }
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    self.bind_mut_pattern_accesses(field.pat);
+                }
+            }
+            Pat::Or(lhs, rhs) => {
+                self.bind_mut_pattern_accesses(*lhs);
+                self.bind_mut_pattern_accesses(*rhs);
+            }
         }
     }
 

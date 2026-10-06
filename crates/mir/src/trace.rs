@@ -1025,6 +1025,6 @@ fn sem_origin_hir_key(
             )
             .expect("HIR stmt origin key must be valid"),
         ),
-        SemOrigin::Body(_) | SemOrigin::Synthetic => None,
+        SemOrigin::Pat(_) | SemOrigin::Body(_) | SemOrigin::Synthetic => None,
     }
 }
