@@ -2921,7 +2921,18 @@ impl<'db> TyChecker<'db> {
         let Some(mut_pat) = pats.into_iter().find_map(|pat| self.first_mut_binding(pat)) else {
             return prop;
         };
-        if prop.shape.is_some() || !self.env.is_place_expr(scrutinee) {
+        if !self.env.is_place_expr(scrutinee) {
+            return prop;
+        }
+        let prop = if !prop.is_mut && self.select_mut_place(scrutinee) {
+            self.env
+                .typed_expr(scrutinee)
+                .expect("selected place is typed")
+        } else {
+            prop
+        };
+        // A projection's result is destructured through its own access.
+        if prop.shape.is_some() {
             return prop;
         }
         if !prop.is_mut {

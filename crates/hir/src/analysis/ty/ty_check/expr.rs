@@ -211,12 +211,6 @@ enum AssignLhsStatus {
     NonAssignable,
 }
 
-struct MutableIndexTarget<'db> {
-    prop: ExprProp<'db>,
-    target_ty: TyId<'db>,
-    trait_lowered: bool,
-}
-
 #[derive(Debug, Clone, Default)]
 pub(super) struct EffectCommitPlan<'db> {
     key_match: Option<KeyMatchCommit<'db>>,
@@ -542,7 +536,7 @@ impl<'db> TyChecker<'db> {
         let Expr::Un(lhs, op) = expr_data else {
             unreachable!()
         };
-        let prop = self.check_expr_unknown(*lhs);
+        let mut prop = self.check_expr_unknown(*lhs);
         if prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
@@ -575,6 +569,9 @@ impl<'db> TyChecker<'db> {
         }
 
         if matches!(op, UnOp::Mut | UnOp::Ref) {
+            if *op == UnOp::Mut && self.select_mut_place(*lhs) {
+                prop = self.env.typed_expr(*lhs).expect("selected place is typed");
+            }
             if !self.env.is_place_expr(*lhs) {
                 self.push_diag(BodyDiag::BorrowFromNonPlace {
                     primary: expr.span(self.body()).into(),
@@ -4831,11 +4828,10 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        if let Some(unit) = self.check_index_mut_assign(*lhs, *rhs) {
-            return unit;
+        let mut typed_lhs = self.check_expr_unknown(*lhs);
+        if self.select_mut_place(*lhs) {
+            typed_lhs = self.env.typed_expr(*lhs).expect("selected place is typed");
         }
-
-        let typed_lhs = self.check_expr_unknown(*lhs);
         // The target is a place, possibly a projection's result.
         self.consume_access(*lhs);
         // Assignment is an expected-type boundary. In particular, an assigned
@@ -4854,100 +4850,6 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(TyId::unit(self.db), true)
     }
 
-    fn check_index_mut_assign(&mut self, lhs: ExprId, rhs: ExprId) -> Option<ExprProp<'db>> {
-        let target = self.check_index_mut_target(lhs)?;
-        if target.prop.ty.has_invalid(self.db) {
-            return Some(ExprProp::new(TyId::unit(self.db), true));
-        }
-
-        let mut rhs_prop = self.check_expr(rhs, target.target_ty);
-        rhs_prop.ty = self.unify_ty(
-            Typeable::Expr(rhs, rhs_prop.clone()),
-            rhs_prop.ty,
-            target.target_ty,
-        );
-
-        if !target.trait_lowered {
-            self.check_assign_lhs(lhs, &target.prop);
-        }
-
-        self.record_implicit_move_for_owned_expr(rhs, rhs_prop.ty);
-
-        Some(ExprProp::new(TyId::unit(self.db), true))
-    }
-
-    fn check_index_mut_target(&mut self, lhs: ExprId) -> Option<MutableIndexTarget<'db>> {
-        let Partial::Present(Expr::Bin(base, index, BinOp::Index)) = self.env.expr_data(lhs) else {
-            return None;
-        };
-
-        let base_prop = self.check_expr_unknown(*base);
-        self.consume_access(*base);
-        if base_prop.ty.has_invalid(self.db) {
-            return Some(MutableIndexTarget {
-                prop: ExprProp::invalid(self.db),
-                target_ty: TyId::invalid(self.db, InvalidCause::Other),
-                trait_lowered: false,
-            });
-        }
-
-        let base_place_ty = base_prop.ty;
-        if base_place_ty.is_array(self.db) {
-            let args = base_place_ty.generic_args(self.db);
-            let lhs_ty = args[0];
-            let index_ty = args[1].const_ty_ty(self.db).unwrap();
-            self.check_expr(*index, index_ty);
-            if let Some(index_value) = self.try_eval_static_int(*index, index_ty)
-                && let Some(len) = base_place_ty.array_len(self.db)
-                && index_value.data(self.db) >= &BigUint::from(len)
-            {
-                self.push_diag(BodyDiag::ArrayIndexOutOfBounds {
-                    primary: index.span(self.body()).into(),
-                    index: index_value,
-                    len,
-                })
-            }
-            let typed_lhs = ExprProp::new(lhs_ty, base_prop.is_mut);
-            self.unify_ty(
-                Typeable::Expr(lhs, typed_lhs.clone()),
-                typed_lhs.ty,
-                typed_lhs.ty,
-            );
-
-            return Some(MutableIndexTarget {
-                prop: typed_lhs,
-                target_ty: lhs_ty,
-                trait_lowered: false,
-            });
-        }
-
-        // `IndexMut::index_mut` takes `mut self`: a place base must be
-        // writable, as the receiver of any `mut self` method call must be.
-        if !base_prop.is_mut
-            && (self.env.expr_place(*base).is_some() || self.is_pointer_deref_expr(*base))
-        {
-            self.report_cannot_borrow_mut(*base, base.span(self.body()).into());
-        }
-        let indexed = self.check_ops_trait(lhs, base_prop.ty, &IndexMutOp, Some(*index));
-        if indexed.ty.has_invalid(self.db) {
-            return Some(MutableIndexTarget {
-                prop: indexed,
-                target_ty: TyId::invalid(self.db, InvalidCause::Other),
-                trait_lowered: true,
-            });
-        }
-
-        // `IndexMut::index_mut` is a `mut` projection: its result is the
-        // assigned place.
-        self.consume_access(lhs);
-        self.unify_ty(Typeable::Expr(lhs, indexed.clone()), indexed.ty, indexed.ty);
-        Some(MutableIndexTarget {
-            target_ty: indexed.ty,
-            prop: indexed,
-            trait_lowered: true,
-        })
-    }
-
     fn check_aug_assign(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::AugAssign(lhs, rhs, op) = expr_data else {
             unreachable!()
@@ -4955,21 +4857,16 @@ impl<'db> TyChecker<'db> {
 
         let unit = ExprProp::new(TyId::unit(self.db), true);
 
-        let (typed_lhs, lhs_place_ty, trait_lowered) =
-            if let Some(target) = self.check_index_mut_target(*lhs) {
-                (target.prop, target.target_ty, target.trait_lowered)
-            } else {
-                let typed_lhs = self.check_expr_unknown(*lhs);
-                self.consume_access(*lhs);
-                let lhs_place_ty = typed_lhs.ty;
-                (typed_lhs, lhs_place_ty, false)
-            };
+        let mut typed_lhs = self.check_expr_unknown(*lhs);
+        if self.select_mut_place(*lhs) {
+            typed_lhs = self.env.typed_expr(*lhs).expect("selected place is typed");
+        }
+        self.consume_access(*lhs);
+        let lhs_place_ty = typed_lhs.ty;
         if typed_lhs.ty.has_invalid(self.db) {
             return unit;
         }
-        if !trait_lowered
-            && self.check_assign_lhs(*lhs, &typed_lhs) == AssignLhsStatus::NonAssignable
-        {
+        if self.check_assign_lhs(*lhs, &typed_lhs) == AssignLhsStatus::NonAssignable {
             return unit;
         }
 
@@ -4998,7 +4895,7 @@ impl<'db> TyChecker<'db> {
     /// Resolve a core::ops trait method for an operator on a given LHS type and
     /// optionally check the RHS against the inferred method parameter type.
     /// Returns the fully-instantiated function type and concrete trait instance.
-    fn check_ops_trait(
+    pub(super) fn check_ops_trait(
         &mut self,
         expr: ExprId,
         lhs_ty: TyId<'db>,
@@ -5395,7 +5292,7 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn is_pointer_deref_expr(&self, expr: ExprId) -> bool {
+    pub(super) fn is_pointer_deref_expr(&self, expr: ExprId) -> bool {
         matches!(
             expr.data(self.db, self.body()),
             Partial::Present(Expr::Un(_, UnOp::Deref))
@@ -5704,7 +5601,7 @@ impl TraitOps for AugAssignOp {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct IndexMutOp;
+pub(super) struct IndexMutOp;
 
 impl TraitOps for IndexMutOp {
     fn triple(&self) -> [&str; 3] {

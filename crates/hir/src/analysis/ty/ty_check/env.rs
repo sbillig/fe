@@ -463,6 +463,13 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    /// Drops the call `expr` resolved to, so it can resolve to another.
+    pub(super) fn forget_call(&mut self, expr: ExprId) {
+        self.callables[expr] = None;
+        self.call_effect_args[expr] = None;
+        self.semantic_expr_lowering[expr] = None;
+    }
+
     pub(super) fn register_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) {
         if self.const_refs[expr].replace(const_ref).is_some() {
             panic!("const ref is already registered for the given expr")

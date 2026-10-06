@@ -619,7 +619,8 @@ impl<'db> Callable<'db> {
         };
 
         let mut checked_inputs = Vec::with_capacity(expected_arity);
-        for (i, (given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate() {
+        for (i, (mut given, expected)) in args.into_iter().zip(expected_arg_tys.iter()).enumerate()
+        {
             // Call labels are either explicit (`f(x: value)`) or inferred from a bare
             // identifier argument (`f(x)`), but not from arbitrary expressions (`f(10)`).
             // If the callee parameter has an unsuppressed label, the call must provide
@@ -670,6 +671,17 @@ impl<'db> Callable<'db> {
             // projection's result) is used as one; a receiver is accessed
             // implicitly; any other `mut` argument must be written `mut p`.
             let is_receiver = has_receiver && i == 0;
+            // A `mut self` receiver needs a mutable place.
+            if is_receiver
+                && mode == FuncParamMode::Mut
+                && !given.expr_prop.is_mut
+                && tc.select_mut_place(given.expr)
+            {
+                given.expr_prop = tc
+                    .env
+                    .typed_expr(given.expr)
+                    .expect("selected place is typed");
+            }
             let access = given.expr_prop.access();
             let mut diagnosed = false;
             match mode {
