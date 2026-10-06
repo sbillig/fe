@@ -54,9 +54,9 @@ error[8-0097]: call to unsafe function `encode` requires an `unsafe` block or fu
  23 │     value.encode(p)
     │     ^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/abi.fe:233:15
+    ┌─ src/abi.fe:228:15
     │
-233 │     unsafe fn encode(own self, _ ptr: *u8)
+228 │     unsafe fn encode(own self, _ ptr: *u8)
     │               ------ callee defined here
 
 error[8-0097]: call to unsafe function `alloc_array` requires an `unsafe` block or function

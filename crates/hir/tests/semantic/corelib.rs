@@ -481,7 +481,7 @@ fn string_literals_can_pick_up_dynstring_api_from_later_use() {
     let src = r#"
 pub fn root() -> u8 {
     let text = "hello-dynamic-api"
-    text.view().byte_at(0)
+    text.payload_span().byte_at(0)
 }
 "#;
 
@@ -521,7 +521,7 @@ fn long_string_literals_can_pick_up_dynstring_api_from_later_use() {
     let src = r#"
 pub fn root() -> u8 {
     let text = "hello-dynamic-api-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
-    text.view().byte_at(0)
+    text.payload_span().byte_at(0)
 }
 "#;
 

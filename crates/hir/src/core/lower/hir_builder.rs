@@ -235,22 +235,25 @@ where
 
     /// A generated generic parameter, named so that it cannot shadow a user
     /// type spelled `name` in the generated signature or body.
-    pub(super) fn type_param_with_trait_bound(
+    pub(super) fn type_params_with_trait_bounds<const N: usize>(
         &self,
-        name: &str,
-        bound: TraitRefId<'db>,
-    ) -> (GenericParamListId<'db>, TypeId<'db>) {
-        let db = self.db();
-        let ident = self.generated_ident(name);
-        let params = GenericParamListId::new(
-            db,
-            vec![GenericParam::Type(TypeGenericParam {
-                name: Partial::Present(ident),
-                bounds: vec![TypeBound::Trait(bound)],
-                default_ty: None,
-            })],
+        params: [(&str, TraitRefId<'db>); N],
+    ) -> (GenericParamListId<'db>, [TypeId<'db>; N]) {
+        let idents = params.map(|(name, bound)| (self.generated_ident(name), bound));
+        let list = GenericParamListId::new(
+            self.db(),
+            idents
+                .iter()
+                .map(|&(ident, bound)| {
+                    GenericParam::Type(TypeGenericParam {
+                        name: Partial::Present(ident),
+                        bounds: vec![TypeBound::Trait(bound)],
+                        default_ty: None,
+                    })
+                })
+                .collect::<Vec<_>>(),
         );
-        (params, self.ty_ident(ident))
+        (list, idents.map(|(ident, _)| self.ty_ident(ident)))
     }
 
     pub(super) fn param_own_self(&self) -> FuncParam<'db> {
@@ -876,34 +879,24 @@ where
         }
     }
 
+    /// `let target: ty = core::abi::decode_field<Sol, ty, D, I>(mut decoder, input)`.
     pub(super) fn decode_into(
         &mut self,
         target_ident: IdentId<'db>,
         ty: TypeId<'db>,
-        decoder_ident: IdentId<'db>,
-        decoder_ty: TypeId<'db>,
+        [decoder_ident, input_ident]: [IdentId<'db>; 2],
+        [decoder_ty, input_ty]: [TypeId<'db>; 2],
     ) {
         let db = self.db();
-        let decode_args = GenericArgListId::given(
-            db,
-            vec![
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(self.sol_ty()),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(ty),
-                }),
-                GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(decoder_ty),
-                }),
-            ],
-        );
+        let decode_args =
+            GenericArgListId::given_types(db, [self.sol_ty(), ty, decoder_ty, input_ty]);
         let decode_path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
             .push_str_args(db, "decode_field", decode_args);
         let decode_callee = self.path_expr(decode_path);
         let decoder_expr = self.mut_ident_expr(decoder_ident);
-        let decode_call = self.call_expr(decode_callee, vec![decoder_expr]);
+        let input_expr = self.ident_expr(input_ident);
+        let decode_call = self.call_expr(decode_callee, vec![decoder_expr, input_expr]);
 
         let bind_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, target_ident)),
