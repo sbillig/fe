@@ -195,6 +195,9 @@ pub enum SyntaxKind {
     /// `return`
     #[token("return")]
     ReturnKw,
+    /// `yield`
+    #[token("yield")]
+    YieldKw,
     /// `self`
     #[token("self")]
     SelfKw,
@@ -337,6 +340,8 @@ pub enum SyntaxKind {
 
     /// `return 1`
     ReturnStmt,
+    /// `yield mut x`
+    YieldStmt,
     /// `1`
     ExprStmt,
 
@@ -652,6 +657,7 @@ impl SyntaxKind {
             SyntaxKind::WhileKw => "`while`",
             SyntaxKind::PubKw => "`pub`",
             SyntaxKind::ReturnKw => "`return`",
+            SyntaxKind::YieldKw => "`yield`",
             SyntaxKind::SelfKw => "`self`",
             SyntaxKind::SelfTypeKw => "`Self`",
             SyntaxKind::StructKw => "`struct`",
@@ -727,6 +733,7 @@ impl SyntaxKind {
             SyntaxKind::ContinueStmt => "`continue` statement",
             SyntaxKind::BreakStmt => "`break` statement",
             SyntaxKind::ReturnStmt => "`return` statement",
+            SyntaxKind::YieldStmt => "`yield` statement",
             SyntaxKind::ExprStmt => "`expr` statement",
             SyntaxKind::WildCardPat => "wildcard pattern",
             SyntaxKind::RestPat => "`..` pattern",
@@ -874,6 +881,7 @@ impl SyntaxKind {
                 | SyntaxKind::WhileKw
                 | SyntaxKind::PubKw
                 | SyntaxKind::ReturnKw
+                | SyntaxKind::YieldKw
                 | SyntaxKind::SelfKw
                 | SyntaxKind::SelfTypeKw
                 | SyntaxKind::StructKw

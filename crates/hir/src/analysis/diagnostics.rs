@@ -3754,6 +3754,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::YieldOutsideProjection { primary } => primary_diag(
+                Severity::Error,
+                "`yield` outside a projection",
+                "only a function returning `ref`, `mut` or a yield shape can yield",
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::ShapeNotDestructured { primary } => primary_diag(
                 Severity::Error,
                 "a projection's yield shape must be destructured",

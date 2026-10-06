@@ -1025,7 +1025,160 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 self.check_terminator(block, &state)?;
             }
         }
+        self.check_yield_paths()?;
+        self.check_projection_recursion()?;
         self.check_yields()
+    }
+
+    /// Projections are inlined into their callers, so a projection may not
+    /// reach itself through projection calls.
+    fn check_projection_recursion(&self) -> Result<(), Diag<'db>> {
+        let owner = self.instance.key(self.db).owner(self.db);
+        if !self.instance.is_projection(self.db) {
+            return Ok(());
+        }
+        let mut explored = FxHashSet::default();
+        for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
+            if let NStatementKind::Define {
+                expr: NExpr::Call { callee, .. },
+                ..
+            } = &statement.kind
+                && reaches_owner(
+                    self.db,
+                    get_or_build_semantic_instance(self.db, callee.key),
+                    owner,
+                    &mut Vec::new(),
+                    &mut explored,
+                )
+            {
+                return Err(self.diag(
+                    SemanticDiagnosticKind::ProjectionRecursion,
+                    statement.origin,
+                    "this call reaches the projection again through projection calls, which \
+                     cannot be inlined"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// A projection yields exactly once on each path that completes.
+    fn check_yield_paths(&self) -> Result<(), Diag<'db>> {
+        const NOT_YET: u8 = 1;
+        const YIELDED: u8 = 2;
+        let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
+            return Ok(());
+        };
+        if func.body(self.db).is_none() || func.return_shape(self.db).is_none() {
+            return Ok(());
+        }
+        let mut entry = vec![0; self.body.blocks.len()];
+        entry[self.body.entry.index()] = NOT_YET;
+        let mut work = vec![self.body.entry];
+        while let Some(block) = work.pop() {
+            if self.diverges(block) {
+                continue;
+            }
+            let state = entry[block.index()];
+            let terminator = &self.body.blocks[block.index()].terminator;
+            let after = match terminator.kind {
+                NTerminatorKind::Yield { value, .. } if state & YIELDED != 0 => {
+                    return Err(self.diag(
+                        SemanticDiagnosticKind::YieldViolation,
+                        operand_origin(value, terminator.origin),
+                        "this path has already yielded".into(),
+                    ));
+                }
+                NTerminatorKind::Yield { .. } => YIELDED,
+                NTerminatorKind::Return(_) if state & NOT_YET != 0 => {
+                    return Err(self.diag(
+                        SemanticDiagnosticKind::YieldViolation,
+                        terminator.origin,
+                        "a projection must yield on every path that completes".into(),
+                    ));
+                }
+                _ => state,
+            };
+            for successor in self.successors(block) {
+                let merged = entry[successor.index()] | after;
+                if merged != entry[successor.index()] {
+                    entry[successor.index()] = merged;
+                    work.push(successor);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `mut` yields of session-owned places with no slide after them: writes
+    /// through them are discarded when the session finishes.
+    fn discarded_writes(&self) -> Vec<Diag<'db>> {
+        let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
+            return Vec::new();
+        };
+        let Some(shape) = func.return_shape(self.db) else {
+            return Vec::new();
+        };
+        let components = access_components(shape);
+        self.body
+            .blocks
+            .iter()
+            .filter_map(|block| match block.terminator.kind {
+                NTerminatorKind::Yield { value, ref resume } if !self.has_slide(resume.block) => {
+                    Some((value, block.terminator.origin))
+                }
+                _ => None,
+            })
+            .filter(|(value, _)| {
+                let held = &self.values[value.value.index()];
+                components.iter().any(|(path, kind)| {
+                    let mut tokens = held.iter().filter(|(_, rest)| rest == path).peekable();
+                    *kind == BorrowKind::Mut
+                        && tokens.peek().is_some()
+                        && tokens.all(|(token, _)| {
+                            self.tokens[*token as usize]
+                                .regions
+                                .iter()
+                                .all(|region| matches!(region.base, Base::Root(_)))
+                        })
+                })
+            })
+            .map(|(value, origin)| {
+                self.diag(
+                    SemanticDiagnosticKind::DiscardedWrites,
+                    operand_origin(value, origin),
+                    "this yields a place of the projection's own frame, and no code after the \
+                     yield writes it back"
+                        .into(),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether code that can write runs between resuming at `block` and
+    /// returning.
+    fn has_slide(&self, mut block: NBlockId) -> bool {
+        loop {
+            let data = &self.body.blocks[block.index()];
+            if data.statements.iter().any(|statement| {
+                matches!(
+                    statement.kind,
+                    NStatementKind::Store { .. }
+                        | NStatementKind::Define {
+                            expr: NExpr::Call { .. },
+                            ..
+                        }
+                )
+            }) {
+                return true;
+            }
+            match &data.terminator.kind {
+                NTerminatorKind::Goto(next) => block = next.block,
+                NTerminatorKind::Return(_) => return false,
+                _ => return true,
+            }
+        }
     }
 
     fn diag(
@@ -1594,6 +1747,37 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 }
 
+/// Whether `instance`, a callee, is a projection that reaches `owner` through
+/// projection calls. A function that recurs on the path is not explored
+/// further: its own check reports it, which also bounds polymorphic recursion.
+fn reaches_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    owner: BodyOwner<'db>,
+    path: &mut Vec<BodyOwner<'db>>,
+    explored: &mut FxHashSet<SemanticInstance<'db>>,
+) -> bool {
+    let instance_owner = instance.key(db).owner(db);
+    if !instance.is_projection(db) || path.contains(&instance_owner) || !explored.insert(instance) {
+        return false;
+    }
+    if instance_owner == owner {
+        return true;
+    }
+    path.push(instance_owner);
+    let reaches = instance.callees(db).iter().any(|callee| {
+        reaches_owner(
+            db,
+            get_or_build_semantic_instance(db, callee.key),
+            owner,
+            path,
+            explored,
+        )
+    });
+    path.pop();
+    reaches
+}
+
 /// The access components of a shape, by their path in its carrier.
 fn access_components(shape: &Shape<'_>) -> Vec<(Path, BorrowKind)> {
     fn walk(shape: &Shape<'_>, path: &mut Path, out: &mut Vec<(Path, BorrowKind)>) {
@@ -1657,8 +1841,9 @@ pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
-) -> Result<(), Diag<'db>> {
+) -> Result<Vec<Diag<'db>>, Diag<'db>> {
     let mut analysis = Analysis::new(db, instance, body, true);
     analysis.solve();
-    analysis.check()
+    analysis.check()?;
+    Ok(analysis.discarded_writes())
 }

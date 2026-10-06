@@ -57,6 +57,11 @@ impl<'db> Stmt<'db> {
                 (Stmt::Return(expr), HirOrigin::raw(&ast))
             }
 
+            ast::StmtKind::Yield(yield_) => {
+                let expr = Expr::push_to_body_opt(ctxt, yield_.expr());
+                (Stmt::Yield(expr), HirOrigin::raw(&ast))
+            }
+
             ast::StmtKind::Expr(expr) => {
                 let expr = Expr::push_to_body_opt(ctxt, expr.expr());
                 (Stmt::Expr(expr), HirOrigin::raw(&ast))

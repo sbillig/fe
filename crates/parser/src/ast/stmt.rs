@@ -13,6 +13,7 @@ ast_node! {
     | SK::ContinueStmt
     | SK::BreakStmt
     | SK::ReturnStmt
+    | SK::YieldStmt
     | SK::ExprStmt
 }
 impl Stmt {
@@ -25,6 +26,7 @@ impl Stmt {
             SK::ContinueStmt => StmtKind::Continue(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BreakStmt => StmtKind::Break(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ReturnStmt => StmtKind::Return(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::YieldStmt => StmtKind::Yield(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ExprStmt => StmtKind::Expr(AstNode::cast(self.syntax().clone()).unwrap()),
             _ => unreachable!(),
         }
@@ -133,6 +135,18 @@ impl ReturnStmt {
 }
 
 ast_node! {
+    /// `yield expr`
+    pub struct YieldStmt,
+    SK::YieldStmt
+}
+impl YieldStmt {
+    /// Returns the yielded expression.
+    pub fn expr(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct ExprStmt,
     SK::ExprStmt
 }
@@ -151,6 +165,7 @@ pub enum StmtKind {
     Continue(ContinueStmt),
     Break(BreakStmt),
     Return(ReturnStmt),
+    Yield(YieldStmt),
     Expr(ExprStmt),
 }
 

@@ -1096,6 +1096,7 @@ module.exports = grammar({
       field('value', choice(
         $._expression,
         $.match_arm_return,
+        $.match_arm_yield,
         $.match_arm_break,
         $.match_arm_continue,
       )),
@@ -1109,6 +1110,8 @@ module.exports = grammar({
       'return',
       optional(field('value', $._expression)),
     )),
+
+    match_arm_yield: $ => seq('yield', field('value', $._expression)),
 
     match_arm_break: $ => 'break',
 
@@ -1182,6 +1185,7 @@ module.exports = grammar({
       $.for_statement,
       $.while_statement,
       $.return_statement,
+      $.yield_statement,
       $.break_statement,
       $.continue_statement,
       $.expression_statement,
@@ -1221,6 +1225,12 @@ module.exports = grammar({
       optional(field('value', $._expression)),
       $._terminator,
     )),
+
+    yield_statement: $ => seq(
+      'yield',
+      field('value', $._expression),
+      $._terminator,
+    ),
 
     break_statement: $ => seq('break', $._terminator),
 

@@ -86,6 +86,7 @@ impl<'db> TyChecker<'db> {
             Stmt::Continue => self.check_continue(stmt, stmt_data),
             Stmt::Break => self.check_break(stmt, stmt_data),
             Stmt::Return(..) => self.check_return(stmt, stmt_data),
+            Stmt::Yield(expr) => self.check_yield(stmt, *expr),
             Stmt::Expr(expr) => self.check_expr(*expr, expected).ty,
         }
     }
@@ -436,13 +437,33 @@ impl<'db> TyChecker<'db> {
         let Stmt::Return(expr) = stmt_data else {
             unreachable!()
         };
+        // In a body with `yield` statements, a bare `return` ends the slide.
+        if expr.is_some() || !self.explicit_yields || self.projection_shape.is_none() {
+            self.check_exit_value(stmt, *expr);
+        }
+        TyId::never(self.db)
+    }
 
+    fn check_yield(&mut self, stmt: StmtId, expr: ExprId) -> TyId<'db> {
+        if self.projection_shape.is_some() {
+            self.check_exit_value(stmt, Some(expr));
+        } else {
+            self.check_expr(expr, self.expected);
+            self.push_diag(BodyDiag::YieldOutsideProjection {
+                primary: stmt.span(self.env.body()).into(),
+            });
+        }
+        TyId::unit(self.db)
+    }
+
+    /// Checks the value a `return` or `yield` ends its path with.
+    fn check_exit_value(&mut self, stmt: StmtId, expr: Option<ExprId>) {
         let (returned_expr, returned_prop, returned_ty, had_child_err) = if let Some(expr) = expr {
             let before = self.diags.len();
             let expected = self.fresh_ty();
-            let prop = self.check_expr(*expr, expected);
+            let prop = self.check_expr(expr, expected);
             let ty = expected.fold_with(self.db, &mut self.table);
-            (Some(*expr), Some(prop), ty, self.diags.len() > before)
+            (Some(expr), Some(prop), ty, self.diags.len() > before)
         } else {
             (None, None, TyId::unit(self.db), false)
         };
@@ -476,7 +497,5 @@ impl<'db> TyChecker<'db> {
         {
             self.first_return_borrow_provider.get_or_insert(provider);
         }
-
-        TyId::never(self.db)
     }
 }

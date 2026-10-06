@@ -768,7 +768,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let mut cases = Vec::with_capacity(dispatch.len());
         for arm in dispatch {
             let block = self.new_block();
-            cases.push((u32_scalar(arm.selector), block));
+            cases.push((uint_scalar(32, arm.selector.into()), block));
             self.blocks[block.index()].terminator = RTerminator::TerminalCall {
                 callee: arm.wrapper,
                 args: Box::default(),
@@ -1657,19 +1657,15 @@ fn selector_scalar_class<'db>() -> ScalarClass<'db> {
     }
 }
 
-fn u32_scalar(value: u32) -> ConstScalar {
+pub(crate) fn uint_scalar(bits: u16, value: u64) -> ConstScalar {
     ConstScalar::Int {
-        bits: 32,
+        bits,
         signed: false,
-        words: if value == 0 {
-            Vec::new()
-        } else {
-            value
-                .to_be_bytes()
-                .into_iter()
-                .skip_while(|byte| *byte == 0)
-                .collect()
-        },
+        words: value
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|byte| *byte == 0)
+            .collect(),
     }
 }
 

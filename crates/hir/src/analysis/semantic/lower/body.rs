@@ -199,6 +199,8 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) loop_stack: Vec<LoopScope>,
     /// How many yield sites enclose the expression being lowered.
     pub(super) yield_depth: u32,
+    /// The slide of the `yield` statement being lowered.
+    slide: Option<SBlockId>,
 }
 
 pub(super) struct BlockState<'db> {
@@ -285,6 +287,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             next_stmt_id: 0,
             loop_stack: Vec::new(),
             yield_depth: 0,
+            slide: None,
         };
         cx.collect_binding_locals();
         cx.current = cx.new_block();
@@ -495,7 +498,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// Ends the body on the current path with `value`. A projection yields
-    /// it instead, and returns when its session finishes.
+    /// it instead: its session resumes in the slide of the `yield` statement
+    /// being lowered, or else returns.
     fn exit(&mut self, origin: SemOrigin<'db>, value: Option<SOperand>) {
         let block = self.current;
         let Some(value) = value.filter(|_| self.instance.is_projection(self.db)) else {
@@ -504,7 +508,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         };
         let resume = self.new_block();
         self.set_terminator(block, origin, STerminatorKind::Yield { value, resume });
-        self.set_terminator(resume, origin, STerminatorKind::Return(None));
+        let after = self
+            .slide
+            .map_or(STerminatorKind::Return(None), STerminatorKind::Goto);
+        self.set_terminator(resume, origin, after);
         self.current = resume;
     }
 
@@ -1628,6 +1635,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }),
                     );
                 }
+            }
+            Stmt::Yield(expr) => {
+                let slide = self.new_block();
+                let outer = self.slide.replace(slide);
+                let _ = self.lower_expr(*expr);
+                self.slide = outer;
+                self.current = slide;
             }
             Stmt::Expr(expr) => {
                 let _ = self.lower_expr(*expr);

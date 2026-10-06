@@ -638,6 +638,11 @@ pub enum BodyDiag<'db> {
         shape: String,
     },
 
+    /// `yield` in a function that is not a projection.
+    YieldOutsideProjection {
+        primary: DynLazySpan<'db>,
+    },
+
     /// Array repetition literals (`[x; N]`) duplicate the element value.
     ///
     /// Duplicating a value requires that the element type implement `core::marker::Copy`.
@@ -1018,6 +1023,7 @@ impl<'db> BodyDiag<'db> {
             Self::AccessNotValue { .. } => 70,
             Self::ShapeNotDestructured { .. } => 72,
             Self::InvalidYield { .. } => 99,
+            Self::YieldOutsideProjection { .. } => 100,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

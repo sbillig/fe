@@ -45,6 +45,7 @@ fn nth_let(body: fe_hir::hir_def::Body<'_>, db: &HirAnalysisTestDb, idx: usize) 
                 | Stmt::Continue
                 | Stmt::Break
                 | Stmt::Return(..)
+                | Stmt::Yield(..)
                 | Stmt::Expr(..),
             )
             | Partial::Absent => None,

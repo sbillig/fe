@@ -2717,7 +2717,7 @@ fn ambiguous<const ROOT: u256>(left: Rooted<ROOT>, right: Rooted<ROOT>) -> u256 
             file_url,
             Some(
                 r#"
-fn invalid(result: mut u256) -> mut u256 {
+fn invalid(result: mut u256) -> u256 {
     missing = 1
     result
 }

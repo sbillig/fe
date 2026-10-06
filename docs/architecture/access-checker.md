@@ -37,8 +37,10 @@ flowchart TD
   access kind, a projection's return a shape. Semantic lowering represents an
   access by a *carrier* value (`View`, `BorrowRef`, `BorrowMut` types that
   exist only in the IR).
-- A projection's every exit is a `Yield` terminator whose resume block runs
-  the slide and returns. Each yield site yields on its own path.
+- A projection's every yield site is a `Yield` terminator whose resume block
+  runs the slide and returns. A tail or `return` yield has an empty slide; a
+  `yield` statement's slide is the code after it. Each yield site yields on
+  its own path.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its
@@ -116,7 +118,16 @@ A projection call opens a session: reservations for its arguments and its
 stack; they end at their `end`, in any order. In the projection's body, each
 component of every yield site must name places in one address space per
 instantiation, and the `mut` components of a split must be structurally
-disjoint.
+disjoint. Every path that completes yields exactly once. A `mut` yield of a
+place in the projection's own frame with no slide after it is a warning: its
+writes are discarded.
+
+At runtime every projection call is inlined into its caller
+(`mir/src/runtime/lower/inline.rs`): the ramp replaces the call, each `end`
+of the session runs its own copy of the slide, and a projection with several
+yield sites records which one its ramp took. A projection's grant has the
+runtime class its body yields. Recursion through projection calls cannot be
+inlined and is rejected by the checker.
 
 ## Moves and initialization
 

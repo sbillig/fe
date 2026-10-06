@@ -18,6 +18,7 @@ impl ToDoc for ast::Stmt {
             StmtKind::Continue(continue_stmt) => continue_stmt.to_doc(ctx),
             StmtKind::Break(break_stmt) => break_stmt.to_doc(ctx),
             StmtKind::Return(ret) => ret.to_doc(ctx),
+            StmtKind::Yield(yield_) => yield_.to_doc(ctx),
             StmtKind::Expr(expr_stmt) => expr_stmt.to_doc(ctx),
         }
     }
@@ -192,6 +193,17 @@ impl ToDoc for ast::ReturnStmt {
         );
 
         alloc.text("return").append(expr_doc)
+    }
+}
+
+impl ToDoc for ast::YieldStmt {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let expr_doc = self.expr().map_or_else(
+            || alloc.nil(),
+            |expr| alloc.text(" ").append(expr.to_doc(ctx)),
+        );
+        alloc.text("yield").append(expr_doc)
     }
 }
 

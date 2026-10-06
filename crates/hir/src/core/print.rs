@@ -1040,6 +1040,10 @@ impl<'db> Stmt<'db> {
                 }
             }
 
+            Stmt::Yield(expr_id) => {
+                let expr = unwrap_partial_ref(expr_id.data(db, body), "Yield::expr");
+                format!("yield {}", expr.pretty_print(db, body, indent))
+            }
             Stmt::Expr(expr_id) => {
                 let expr = unwrap_partial_ref(expr_id.data(db, body), "Stmt::Expr");
                 expr.pretty_print(db, body, indent)

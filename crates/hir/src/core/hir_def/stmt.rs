@@ -30,6 +30,9 @@ pub enum Stmt<'db> {
     Continue,
     Break,
     Return(Option<ExprId>),
+    /// A projection's `yield`; the statements after it on its path are its
+    /// slide.
+    Yield(ExprId),
     Expr(ExprId),
 }
 

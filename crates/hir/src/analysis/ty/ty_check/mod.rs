@@ -1296,6 +1296,9 @@ pub struct TyChecker<'db> {
     expected: TyId<'db>,
     /// The return shape of the projection being checked.
     projection_shape: Option<Shape<'db>>,
+    /// Whether the body yields with `yield` statements. Every yield is then
+    /// explicit, and the body's tail ends the slide.
+    explicit_yields: bool,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     first_return_borrow_provider: Option<ProviderAddressSpace>,
     diags: Vec<FuncBodyDiag<'db>>,
@@ -1354,10 +1357,14 @@ impl<'db> TyChecker<'db> {
         }
 
         let root_expr = self.env.body().expr(self.db);
-        self.check_expr(root_expr, self.expected);
-        match self.projection_shape.clone() {
-            Some(shape) => self.check_yield_site(root_expr, &shape),
-            None => self.record_implicit_move_for_owned_expr(root_expr, self.expected),
+        if self.explicit_yields && self.projection_shape.is_some() {
+            self.check_expr(root_expr, TyId::unit(self.db));
+        } else {
+            self.check_expr(root_expr, self.expected);
+            match self.projection_shape.clone() {
+                Some(shape) => self.check_yield_site(root_expr, &shape),
+                None => self.record_implicit_move_for_owned_expr(root_expr, self.expected),
+            }
         }
         self.check_access_uses();
     }
@@ -2468,12 +2475,18 @@ impl<'db> TyChecker<'db> {
             BodyOwner::Func(func) => func.return_shape(db).cloned(),
             _ => None,
         };
+        let explicit_yields = env
+            .body()
+            .stmts(db)
+            .values()
+            .any(|stmt| matches!(stmt, Partial::Present(crate::hir_def::Stmt::Yield(_))));
         Self {
             db,
             env,
             table,
             expected,
             projection_shape,
+            explicit_yields,
             effect_provider_keys: FxHashSet::default(),
             first_return_borrow_provider: None,
             diags: Vec::new(),
@@ -5063,7 +5076,7 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
-            crate::hir_def::Stmt::Return(Some(expr)) => {
+            crate::hir_def::Stmt::Return(Some(expr)) | crate::hir_def::Stmt::Yield(expr) => {
                 let mut visited_locals = FxHashSet::default();
                 if let Some(indices) = self.forwarded_return_param_sources_from_expr(
                     db,
