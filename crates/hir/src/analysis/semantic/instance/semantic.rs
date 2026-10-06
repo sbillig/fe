@@ -38,14 +38,15 @@ use crate::{
                 EffectProviderSpecialization, LocalBinding, ParamSite, ResolvedEffectArg,
                 SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
-            ty_def::{BorrowKind, CapabilityKind, InvalidCause, TyId},
+            ty_def::{BorrowKind, InvalidCause, TyId},
+            ty_is_copy,
             ty_lower::{
                 ParamSchemaId, SubstError, callable_layout_bundle_input_interface,
                 specialized_callable_layout_bundle_signature_with_normalizer,
             },
         },
     },
-    hir_def::{CallableDef, Expr, ExprId, Partial, scope_graph::ScopeId},
+    hir_def::{CallableDef, Expr, ExprId, FuncParamMode, Partial, scope_graph::ScopeId},
     semantic::{
         AssignedLayoutBindingEnv, EffectEnvView, EffectRequirement, EffectRequirementKey,
         LayoutViewKind, ProviderBinding, ProviderSource, ResolvedEffectBinding,
@@ -287,28 +288,19 @@ fn receiver_lowering_plan<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<ReceiverLoweringPlan<'db>> {
+    // A `mut self` receiver opens a `mut` access to the receiver place,
+    // unless the receiver already is an access (`mut p`, a projection call).
     let receiver = call_like_receiver_expr(expr_data)?;
-    let borrowed_ty = callable.arg_ty(db, 0)?;
-    let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
-    let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
-    let (kind, _) = borrowed_ty.as_capability(db)?;
-    // A `view` receiver (a parameter declared without `own`) is borrowed for
-    // a `ref self` method, as an explicit `ref` would borrow it.
-    let receiver_is_view = receiver_ty.as_view(db).is_some();
-    if !matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
-        || (receiver_ty.as_capability(db).is_some()
-            && !(kind == CapabilityKind::Ref && receiver_is_view))
+    if callable.callable_def().param_mode(db, 0) != FuncParamMode::Mut
+        || typed_body.expr_prop(db, receiver).shape.is_some()
     {
         return None;
     }
+    let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
     Some(ReceiverLoweringPlan {
-        borrowed_ty,
+        borrowed_ty: TyId::borrow_mut_of(db, receiver_ty),
         receiver_ty,
-        kind: match kind {
-            CapabilityKind::Mut => BorrowKind::Mut,
-            CapabilityKind::Ref => BorrowKind::Ref,
-            CapabilityKind::View => unreachable!(),
-        },
+        kind: BorrowKind::Mut,
     })
 }
 
@@ -1076,7 +1068,7 @@ impl<'db> SemanticInstance<'db> {
                 .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
-                self.key(db).typed_body(db).binding_ty(db, binding)
+                self.key(db).typed_body(db).binding_carrier_ty(db, binding)
             }
         }
     }
@@ -1097,10 +1089,25 @@ impl<'db> SemanticInstance<'db> {
                 idx,
                 ..
             } => effect_binding_ty_from_env(db, instantiated_effect_env(db, self), idx, None),
+            LocalBinding::Param {
+                mode: FuncParamMode::View,
+                ty,
+                ..
+            } if self.is_projection(db)
+                && ty_is_copy(db, self.normalization_scope(db), ty, self.assumptions(db)) =>
+            {
+                // A projection's `Copy` view parameter is a copy the session
+                // owns, never the caller's place.
+                ty
+            }
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
-                self.key(db).typed_body(db).binding_ty(db, binding)
+                self.key(db).typed_body(db).binding_carrier_ty(db, binding)
             }
         }
+    }
+
+    pub fn is_projection(self, db: &'db dyn HirAnalysisDb) -> bool {
+        matches!(self.key(db).owner(db), BodyOwner::Func(func) if func.is_projection(db))
     }
 
     #[salsa::tracked]
@@ -1176,7 +1183,15 @@ impl<'db> SemanticInstance<'db> {
     }
 
     #[salsa::tracked]
+    /// The semantic-IR result type: a projection returns the carriers of its
+    /// grants.
     pub fn normalized_result_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        if let BodyOwner::Func(func) = self.key(db).owner(db)
+            && let Some(shape) = func.return_shape(db)
+            && let Ok(ty) = instantiate_normalized_ty(db, self.key(db), shape.carrier_ty(db))
+        {
+            return ty;
+        }
         self.normalized_ty(db, self.key(db).typed_body(db).result_ty())
     }
 

@@ -277,10 +277,11 @@ fn compare_ty<'db>(
             trait_inst,
             false,
         );
-        // 4) Compare for equality
+        // 4) Compare for equality, including the parameter's mode.
         if !impl_m_ty.has_invalid(db)
-            && layout_shape_key(db, trait_m_ty_normalized)
+            && (layout_shape_key(db, trait_m_ty_normalized)
                 != layout_shape_key(db, impl_m_ty_normalized)
+                || trait_m.param_mode(db, idx) != impl_m.param_mode(db, idx))
         {
             sink.push(
                 ImplDiag::MethodArgTyMismatch {
@@ -326,10 +327,18 @@ fn compare_ty<'db>(
         trait_inst,
         false,
     );
+    // A projection's return modes are part of its signature.
+    let same_modes = match (impl_m.ret_shape(db), trait_m.ret_shape(db)) {
+        (Some(impl_shape), Some(trait_shape)) => impl_shape
+            .skip_binder()
+            .same_modes(trait_shape.skip_binder()),
+        (impl_shape, trait_shape) => impl_shape.is_none() && trait_shape.is_none(),
+    };
     if !impl_m_ret_ty.has_invalid(db)
         && !trait_m_ret_ty.has_invalid(db)
-        && layout_shape_key(db, trait_m_ret_ty_normalized)
+        && (layout_shape_key(db, trait_m_ret_ty_normalized)
             != layout_shape_key(db, impl_m_ret_ty_normalized)
+            || !same_modes)
     {
         sink.push(
             ImplDiag::MethodRetTyMismatch {

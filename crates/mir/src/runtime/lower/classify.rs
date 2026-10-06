@@ -2266,7 +2266,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     let Some(binding) = typed_body.param_binding(idx) else {
         return RuntimeParamPlan::Erased;
     };
-    let binding_ty = typed_body.binding_ty(db, binding);
+    let binding_ty = typed_body.binding_carrier_ty(db, binding);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let scope = env.scope;
     let assumptions = env.assumptions;
@@ -2389,7 +2389,7 @@ fn desired_read_only_view_param_plan<'db>(
     let Some(boundary) = boundary_spec_for_ty_in_env(
         db,
         env,
-        typed_body.binding_ty(db, binding),
+        typed_body.binding_carrier_ty(db, binding),
         AddressSpaceKind::Memory,
     ) else {
         return RuntimeParamPlan::Erased;
@@ -2862,10 +2862,10 @@ pub(crate) fn runtime_param_class<'db>(
     env: RuntimeTypeEnv<'db>,
     actual: RuntimeClass<'db>,
 ) -> RuntimeClass<'db> {
-    let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding));
+    let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_carrier_ty(db, binding));
     if runtime_abstract_param_ty(
         db,
-        typed_body.binding_ty(db, binding),
+        typed_body.binding_carrier_ty(db, binding),
         env.scope,
         env.assumptions,
     ) || matches!(
@@ -2899,7 +2899,7 @@ pub(crate) fn runtime_param_boundary<'db>(
             access,
             allow,
         } => {
-            let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding));
+            let ty = runtime_repr_ty_in_env(db, env, typed_body.binding_carrier_ty(db, binding));
             if binding.is_mut() && ty.as_enum(db).is_some() {
                 return RuntimeBoundarySpec::ExactTransport(RuntimeClass::object_ref(
                     layout_for_ty_in_env(db, env, ty),
@@ -2914,11 +2914,15 @@ pub(crate) fn runtime_param_boundary<'db>(
     }
 }
 
+/// The semantic-IR return type: a projection returns carriers.
 pub(crate) fn semantic_return_ty<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> TyId<'db> {
-    semantic.key(db).typed_body(db).result_ty()
+    match semantic.key(db).owner(db) {
+        BodyOwner::Func(func) if func.is_projection(db) => semantic.normalized_result_ty(db),
+        _ => semantic.key(db).typed_body(db).result_ty(),
+    }
 }
 
 pub(crate) fn default_return_class<'db>(
@@ -2927,8 +2931,8 @@ pub(crate) fn default_return_class<'db>(
 ) -> Option<RuntimeClass<'db>> {
     let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
-    let return_borrow_provider = typed_body
-        .result_ty()
+    let result_ty = semantic_return_ty(db, semantic);
+    let return_borrow_provider = result_ty
         .as_borrow(db)
         .and(typed_body.return_borrow_provider());
     let default_space =
@@ -2937,11 +2941,11 @@ pub(crate) fn default_return_class<'db>(
         return Some(provider_class_for_target_in_env(
             db,
             env,
-            Some(typed_body.result_ty()),
+            Some(result_ty),
             default_space,
         ));
     }
-    top_level_class_for_ty_in_env(db, env, typed_body.result_ty(), default_space)
+    top_level_class_for_ty_in_env(db, env, result_ty, default_space)
 }
 
 pub(crate) fn desired_runtime_return_plan<'db>(
@@ -2950,13 +2954,10 @@ pub(crate) fn desired_runtime_return_plan<'db>(
 ) -> RuntimeVisibleReturnPlan<'db> {
     let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
-    let return_borrow_provider = typed_body
-        .result_ty()
-        .as_borrow(db)
-        .and(typed_body.return_borrow_provider());
+    let ty = semantic_return_ty(db, semantic);
+    let return_borrow_provider = ty.as_borrow(db).and(typed_body.return_borrow_provider());
     let default_space =
         return_borrow_provider.map_or(AddressSpaceKind::Memory, address_space_from_provider);
-    let ty = typed_body.result_ty();
     if return_borrow_provider.is_some() {
         return RuntimeVisibleReturnPlan::PassActual;
     }

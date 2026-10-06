@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/pointer_first_class.fe
 ---
@@ -630,7 +631,7 @@ note:
    ┌─ pointer_first_class.fe:39:5
    │
 39 │     array[0] = 3
-   │     ^^^^^^^^ mut u256
+   │     ^^^^^^^^ u256
 
 note:
    ┌─ pointer_first_class.fe:39:5
@@ -660,7 +661,7 @@ note:
    ┌─ pointer_first_class.fe:40:5
    │
 40 │     array[1] = 5
-   │     ^^^^^^^^ mut u256
+   │     ^^^^^^^^ u256
 
 note:
    ┌─ pointer_first_class.fe:40:5

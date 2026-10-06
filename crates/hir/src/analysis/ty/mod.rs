@@ -54,6 +54,7 @@ pub mod pattern_ir;
 pub mod pattern_types;
 pub mod provider;
 pub(crate) mod scratch;
+pub mod shape;
 pub(crate) mod subst;
 pub mod trait_def;
 pub mod trait_lower;

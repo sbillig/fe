@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/desugar.rs
+source: crates/hir/tests/frontend/desugar.rs
+assertion_line: 28
 expression: output
 input_file: test_files/desugar/msg.fe
 ---
@@ -117,7 +118,7 @@ mod CounterMsg {
 
         #[inline(always)]
         fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>>(_ __fe_msg_decode_decoder: mut __fe_D) -> Self {
-            let val: u64 = core::abi::decode_field<std::abi::Sol, u64, __fe_D>(__fe_msg_decode_decoder)
+            let val: u64 = core::abi::decode_field<std::abi::Sol, u64, __fe_D>(mut __fe_msg_decode_decoder)
             return Self { val: val }
         }
 

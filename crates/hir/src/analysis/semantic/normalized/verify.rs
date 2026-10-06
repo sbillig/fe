@@ -23,7 +23,7 @@ use crate::{
         },
     },
     core::semantic::EffectEnvView,
-    hir_def::{ArithBinOp, BinOp, UnOp},
+    hir_def::{ArithBinOp, BinOp, CallableDef, FuncParamMode, UnOp},
 };
 
 use super::normalize::{structural_repack_mapping, structural_types_are_boundary_compatible};
@@ -325,7 +325,7 @@ fn verify_expr<'db>(
                 let origin = body.blocks[block.index()].statements[statement as usize].origin;
                 let valid_receiver = matches!((call_site, origin), (CallSiteId::Expr(call), SemOrigin::Expr(expr)) if call == expr)
                     && matches!(callee.key.owner(db), BodyOwner::Func(func)
-                        if func.receiver_ty(db).is_some_and(|ty| matches!(ty.skip_binder().as_borrow(db), Some((BorrowKind::Mut, _)))));
+                        if func.is_method(db) && CallableDef::Func(func).param_mode(db, 0) == FuncParamMode::Mut);
                 let mut aliases = FxHashSet::from_iter([result]);
                 loop {
                     let mut changed = false;

@@ -242,7 +242,7 @@ pub unsafe fn store_word(ptr: *u8, value: u256) {
 pub fn decode_or_revert<A: Abi, T, D>(d: mut D) -> T
     where T: Decode<A>, D: AbiDecoder<A>
 {
-    T::decode_payload(d)
+    T::decode_payload(mut d)
 }
 
 pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
@@ -317,7 +317,7 @@ pub fn decode_payload_root<A: Abi, T, D>(_ d: mut D) -> T
     where T: Decode<A>,
           D: AbiDecoder<A>
 {
-    T::decode_payload(d)
+    T::decode_payload(mut d)
 }
 
 pub fn decode_single_root<A: Abi, T, D>(_ d: mut D) -> T
@@ -344,7 +344,7 @@ pub fn decode_field<A: Abi, T, D>(_ d: mut D) -> T
         return value
     }
 
-    T::decode_payload(d)
+    T::decode_payload(mut d)
 }
 
 #[inline(always)]

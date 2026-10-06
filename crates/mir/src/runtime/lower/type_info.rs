@@ -1046,7 +1046,7 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd, _ holder: RefHolder) {}
         let binding = typed_body.param_binding(idx).expect("parameter binding");
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
         (
-            runtime_repr_ty_in_env(db, env, typed_body.binding_ty(db, binding)),
+            runtime_repr_ty_in_env(db, env, typed_body.binding_carrier_ty(db, binding)),
             env,
         )
     }

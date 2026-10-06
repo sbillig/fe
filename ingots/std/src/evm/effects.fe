@@ -387,7 +387,7 @@ pub trait Log: EvmCapabilitySeal {
     fn emit<E>(mut self, _ event: own E)
         where E: super::event::Event
     {
-        event.emit(self)
+        event.emit(mut self)
     }
 }
 

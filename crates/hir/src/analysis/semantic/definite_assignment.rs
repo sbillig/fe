@@ -34,7 +34,7 @@ use crate::{
         },
         ty::{
             ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
-            ty_def::{BorrowKind, CapabilityKind},
+            ty_def::BorrowKind,
         },
     },
     hir_def::{Contract, Func, FuncParamMode},
@@ -340,18 +340,15 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         let Some(LocalBinding::Param {
             site: ParamSite::Func(func),
             idx,
-            mode: FuncParamMode::View,
-            ty,
+            mode: FuncParamMode::Mut,
             ..
         }) = self.body.value(value)?.source
         else {
             return None;
         };
-        matches!(ty.as_capability(self.db), Some((CapabilityKind::Mut, _))).then(|| {
-            AssignedTarget::FuncParam {
-                func,
-                param_idx: idx as u32,
-            }
+        Some(AssignedTarget::FuncParam {
+            func,
+            param_idx: idx as u32,
         })
     }
 

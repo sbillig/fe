@@ -406,6 +406,7 @@ impl<'db> FuncParam<'db> {
         let mut result = String::new();
         let mode_prefix = match self.mode {
             FuncParamMode::View => "",
+            FuncParamMode::Mut => "mut ",
             FuncParamMode::Own => "own ",
         };
 

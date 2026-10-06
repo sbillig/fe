@@ -96,13 +96,9 @@ fn lower_hir_ty_impl<'db>(
             TyId::app(db, ptr, pointee)
         }
 
-        HirTyKind::Mode(mode, inner) => {
-            let inner = lower_child(*inner, 0);
-            match mode {
-                TypeMode::Mut => TyId::borrow_mut_of(db, inner),
-                TypeMode::Ref => TyId::borrow_ref_of(db, inner),
-                TypeMode::Own => inner,
-            }
+        HirTyKind::Mode(TypeMode::Own, inner) => lower_child(*inner, 0),
+        HirTyKind::Mode(TypeMode::Mut | TypeMode::Ref, _) => {
+            TyId::invalid(db, InvalidCause::ModeNotType)
         }
 
         HirTyKind::Path(path) => {

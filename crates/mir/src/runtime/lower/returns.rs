@@ -31,7 +31,7 @@ use super::{
     boundary::BoundaryMatcher,
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
-        desired_runtime_return_plan, selected_visible_return_for_operand,
+        desired_runtime_return_plan, selected_visible_return_for_operand, semantic_return_ty,
     },
     infer::{
         AssignmentSpace, CarrierInferer, ReturnClassLookup, join_reference_transports,
@@ -773,7 +773,7 @@ pub(crate) fn static_runtime_return_decision<'db>(
     semantic: SemanticInstance<'db>,
 ) -> StaticRuntimeReturnDecision<'db> {
     let typed_body = semantic.key(db).typed_body(db);
-    if typed_body.result_ty() == TyId::unit(db) {
+    if semantic_return_ty(db, semantic) == TyId::unit(db) {
         return StaticRuntimeReturnDecision::Known(None);
     }
     if !typed_body.forwarded_return_sources(db).is_empty() {

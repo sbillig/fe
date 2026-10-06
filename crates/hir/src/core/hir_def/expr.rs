@@ -222,7 +222,12 @@ impl<'db> CallArg<'db> {
             return Some(label);
         };
 
-        let Partial::Present(Expr::Path(Partial::Present(path))) = self.expr.data(db, body) else {
+        // `f(x)`, `f(ref x)` and `f(mut x)` are labeled `x`.
+        let mut expr = self.expr;
+        if let Partial::Present(Expr::Un(inner, UnOp::Ref | UnOp::Mut)) = expr.data(db, body) {
+            expr = *inner;
+        }
+        let Partial::Present(Expr::Path(Partial::Present(path))) = expr.data(db, body) else {
             return None;
         };
 
