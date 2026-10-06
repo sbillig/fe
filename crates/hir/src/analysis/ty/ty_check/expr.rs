@@ -1963,6 +1963,45 @@ impl<'db> TyChecker<'db> {
         query: EffectQuery<'db>,
         call_args: &[ExprId],
     ) -> EffectResolution<'db> {
+        // `Field(T)` takes the authority of the first argument of type `T`
+        // whose place lies in an effect provider or an access, since that
+        // handle names the field; a copy of a handle carries none. Otherwise
+        // a provider of type `T` gives it.
+        if req.key_ty.field_key_handle(self.db).is_some()
+            && let EffectPatternKey::Type(type_query) = &query.key
+        {
+            for &arg in call_args {
+                let Some(prop) = self.env.typed_expr(arg) else {
+                    continue;
+                };
+                let authority = self.env.expr_place(arg).is_some_and(|place| {
+                    let PlaceBase::Binding(binding) = place.base;
+                    match (binding, self.env.binding_access(&binding)) {
+                        (LocalBinding::EffectParam { .. }, _) => true,
+                        (_, Some(BindingAccess::View)) => {
+                            !self.ty_is_copy(self.env.lookup_binding_ty(&binding))
+                        }
+                        (_, access) => access.is_some(),
+                    }
+                });
+                if !authority {
+                    continue;
+                }
+                let provider = ProvidedEffect {
+                    origin: EffectOrigin::Arg { expr: arg },
+                    ty: prop.ty.fold_with(self.db, &mut self.table),
+                    is_mut: prop.is_mut,
+                    binding: None,
+                };
+                if let Some(evidence) = self.evaluate_unkeyed_type_provider(
+                    type_query.clone(),
+                    provider,
+                    query.required_mut,
+                ) {
+                    return EffectResolution::Chosen(Box::new(evidence));
+                }
+            }
+        }
         let mut viable: SmallVec<[EffectEvidence<'db>; 2]> = SmallVec::new();
         let effect_env = self.env.effect_env().clone();
         for frame in effect_env.lookup_effect_frames(&query, self) {
@@ -2041,44 +2080,6 @@ impl<'db> TyChecker<'db> {
                     if !viable.is_empty() {
                         return self.choose_effect_evidence(req.name, viable);
                     }
-                }
-            }
-        }
-        // Without a provider, `Field(T)` takes the authority of the first
-        // argument of type `T` whose place lies in an effect provider or in
-        // an access. A copy of a handle carries none.
-        if req.key_ty.field_key_handle(self.db).is_some()
-            && let EffectPatternKey::Type(type_query) = &query.key
-        {
-            for &arg in call_args {
-                let Some(prop) = self.env.typed_expr(arg) else {
-                    continue;
-                };
-                let authority = self.env.expr_place(arg).is_some_and(|place| {
-                    let PlaceBase::Binding(binding) = place.base;
-                    match (binding, self.env.binding_access(&binding)) {
-                        (LocalBinding::EffectParam { .. }, _) => true,
-                        (_, Some(BindingAccess::View)) => {
-                            !self.ty_is_copy(self.env.lookup_binding_ty(&binding))
-                        }
-                        (_, access) => access.is_some(),
-                    }
-                });
-                if !authority {
-                    continue;
-                }
-                let provider = ProvidedEffect {
-                    origin: EffectOrigin::Arg { expr: arg },
-                    ty: prop.ty.fold_with(self.db, &mut self.table),
-                    is_mut: prop.is_mut,
-                    binding: None,
-                };
-                if let Some(evidence) = self.evaluate_unkeyed_type_provider(
-                    type_query.clone(),
-                    provider,
-                    query.required_mut,
-                ) {
-                    return EffectResolution::Chosen(Box::new(evidence));
                 }
             }
         }

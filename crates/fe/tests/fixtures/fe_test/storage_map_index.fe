@@ -49,6 +49,39 @@ pub contract Counts {
     }
 }
 
+// Maps of one type in distinct effects: each index takes its own receiver's
+// field.
+pub contract Pair {
+    mut first: StorageMap<u256, u256>,
+    mut second: StorageMap<u256, u256>,
+
+    recv Counter {
+        Bump { key, by } -> u256 uses (mut first, mut second) {
+            first[key] += by
+            second[key] = first[key] + 1
+            first[key]
+        }
+        Get { key } -> u256 uses (first, second) {
+            first[key] * 100 + second[key]
+        }
+        Double { key } -> u256 uses (mut first) {
+            first[key] *= 2
+            first[key]
+        }
+    }
+}
+
+#[test]
+fn same_typed_maps() uses (evm: mut Evm) {
+    let addr = evm.create2<Pair>(value: 0, args: (), salt: 0)
+    let a: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Bump { key: 3, by: 4 })
+    assert!(a == 4)
+    let b: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Double { key: 3 })
+    assert!(b == 8)
+    let c: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: Counter::Get { key: 3 })
+    assert!(c == 805)
+}
+
 #[test]
 fn indexing_writes_back() uses (evm: mut Evm) {
     let addr = evm.create2<Counts>(value: 0, args: (), salt: 0)
