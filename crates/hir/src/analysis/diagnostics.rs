@@ -1645,6 +1645,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::UnknownResultSpace(span) => primary_diag(
+                Severity::Error,
+                "unknown result space",
+                "expected `memory`, `storage`, `transient`, `calldata`, `code`, a parameter, an effect, `target(p)`, or an associated space",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ModeNotType(span) => primary_diag(
                 Severity::Error,
                 "`ref` and `mut` are not types",
@@ -5516,6 +5524,39 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 format!(
                     "associated type `{}` is not defined in trait `{}`",
                     type_name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::AccessItemNotDefinedInTrait {
+                primary,
+                trait_,
+                kind,
+                name,
+            } => primary_diag(
+                severity,
+                format!("associated {kind} not defined in trait"),
+                format!(
+                    "associated {kind} `{}` is not defined in trait `{}`",
+                    name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::MissingAssociatedSpace {
+                primary,
+                trait_,
+                name,
+            } => primary_diag(
+                severity,
+                "missing associated space in trait implementation",
+                format!(
+                    "missing associated space `{}` from trait `{}`",
+                    name.data(db),
                     trait_.name(db).unwrap().data(db)
                 ),
                 primary.resolve(db),

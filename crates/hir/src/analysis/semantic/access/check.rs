@@ -1863,10 +1863,32 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 }
             }
         }
-        Ok(spaces
+        // A declared contract holds every yield, and is the contract of a
+        // component no yield shows.
+        let declared = self.instance.declared_result_spaces(self.db);
+        spaces
             .into_iter()
-            .map(|space| space.map(|(space, _)| space))
-            .collect())
+            .enumerate()
+            .map(|(index, inferred)| {
+                let declared = declared
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .and_then(|contract| self.instance.contract_space(self.db, contract));
+                match (inferred, declared) {
+                    (Some((space, origin)), Some(declared)) if space != declared => Err(self.diag(
+                        SemanticDiagnosticKind::TransportViolation,
+                        origin,
+                        format!(
+                            "this yield names {}, but the signature declares {}",
+                            space.pretty(),
+                            declared.pretty()
+                        ),
+                    )),
+                    (inferred, declared) => Ok(inferred.map(|(space, _)| space).or(declared)),
+                }
+            })
+            .collect()
     }
 }
 

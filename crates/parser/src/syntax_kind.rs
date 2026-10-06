@@ -74,6 +74,9 @@ pub enum SyntaxKind {
     /// `#`
     #[token("#")]
     Pound,
+    /// `@`
+    #[token("@")]
+    At,
     /// `// Comment`
     #[regex(r"//[^\n\r]*")]
     Comment,
@@ -417,6 +420,8 @@ pub enum SyntaxKind {
     TraitConstItem,
     /// `uses E` or `uses E = (storage: mut Store)`: an associated effect row
     TraitUsesItem,
+    /// `space S` or `space S = memory`: an associated result space
+    TraitSpaceItem,
     /// `{ fn foo() {..} }`
     TraitItemList,
     /// `impl Trait for Foo { .. }`
@@ -450,8 +455,10 @@ pub enum SyntaxKind {
     // Types. These are non-leaf nodes.
     /// `*i32`
     PtrType,
-    /// `ref T`, `mut T`, `own T`
+    /// `ref T`, `mut T`, `own T`, `ref T @S`
     ModeType,
+    /// `@S`, `@p` or `@target(p)`: a result-space contract
+    SpaceAnnotation,
     /// `foo::Type<T, U + 2>`
     PathType,
     /// `Self`
@@ -625,6 +632,7 @@ impl SyntaxKind {
             SyntaxKind::FatArrow => "`=>`",
             SyntaxKind::Underscore => "`_`",
             SyntaxKind::Pound => "`#`",
+            SyntaxKind::At => "`@`",
             SyntaxKind::Plus => "`+`",
             SyntaxKind::Minus => "`-`",
             SyntaxKind::Star => "`*`",
@@ -778,6 +786,7 @@ impl SyntaxKind {
             SyntaxKind::TraitTypeItem => "`trait` type item",
             SyntaxKind::TraitConstItem => "`trait` const item",
             SyntaxKind::TraitUsesItem => "`trait` effect row item",
+            SyntaxKind::TraitSpaceItem => "`trait` space item",
             SyntaxKind::ImplTrait => "`impl` trait block",
             SyntaxKind::Const => "const definition",
             SyntaxKind::StaticAssert => "static assertion",
@@ -792,6 +801,7 @@ impl SyntaxKind {
             SyntaxKind::ItemList => "item list",
             SyntaxKind::PtrType => "pointer type",
             SyntaxKind::ModeType => "mode type",
+            SyntaxKind::SpaceAnnotation => "result space",
             SyntaxKind::SelfType => "`Self` type",
             SyntaxKind::TupleType => "tuple type definition",
             SyntaxKind::NeverType => "never type",

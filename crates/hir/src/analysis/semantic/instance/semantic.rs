@@ -33,8 +33,9 @@ use crate::{
                 RootProviderRegistration, RootProviderScope, provider_semantics,
                 provider_semantics_for_specialized_call, registered_root_providers,
             },
+            result_space::{SpaceContract, SpaceKey, declared_result_spaces, resolve_space_key},
             subst::substitute_complete,
-            trait_def::MethodArgMapError,
+            trait_def::{MethodArgMapError, TraitInstId},
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
@@ -262,7 +263,7 @@ type InstantiatedEffectEnvData<'db> = (
     Vec<EffectRequirement<'db>>,
     Vec<ProviderBinding<'db>>,
     Vec<ResolvedEffectBinding>,
-    Vec<crate::analysis::ty::trait_def::TraitInstId<'db>>,
+    Vec<TraitInstId<'db>>,
     PredicateListId<'db>,
 );
 
@@ -277,7 +278,7 @@ pub struct InstantiatedEffectEnv<'db> {
     #[return_ref]
     pub resolutions: Vec<ResolvedEffectBinding>,
     #[return_ref]
-    pub forwarded_witnesses: Vec<crate::analysis::ty::trait_def::TraitInstId<'db>>,
+    pub forwarded_witnesses: Vec<TraitInstId<'db>>,
     pub assumptions: PredicateListId<'db>,
 }
 
@@ -1242,6 +1243,88 @@ impl<'db> SemanticInstance<'db> {
         bindings
     }
 
+    /// The result-space contracts the instance's return declares, per access
+    /// component: its own, or else its trait method's.
+    pub fn declared_result_spaces(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<Option<SpaceContract<'db>>> {
+        let BodyOwner::Func(func) = self.key(db).owner(db) else {
+            return Vec::new();
+        };
+        // The trait method's contracts, as far as they mean the same here:
+        // the trait's own spaces are the implementation's.
+        let inherited = func
+            .trait_method_def(db)
+            .zip(func.containing_impl_trait(db))
+            .map(|(method, impl_trait)| {
+                let trait_def = method.containing_trait(db);
+                let own = trait_def.map(|trait_def| {
+                    TraitInstId::new_simple(db, trait_def, trait_def.params(db).to_vec())
+                });
+                declared_result_spaces(db, method)
+                    .iter()
+                    .map(|contract| match (*contract)? {
+                        SpaceContract::Assoc(key) if Some(key.inst) == own => {
+                            Some(SpaceContract::Assoc(SpaceKey {
+                                inst: impl_trait.trait_inst_result(db).ok()?,
+                                ..key
+                            }))
+                        }
+                        SpaceContract::Assoc(_) | SpaceContract::Domain(_) => None,
+                        contract => Some(contract),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        declared_result_spaces(db, func)
+            .iter()
+            .enumerate()
+            .map(|(index, contract)| contract.or_else(|| inherited.get(index).copied().flatten()))
+            .collect()
+    }
+
+    /// The space a contract the instance's owner declares names here, where
+    /// the instance tells.
+    pub fn contract_space(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        contract: SpaceContract<'db>,
+    ) -> Option<ProviderAddressSpace> {
+        let key = self.key(db);
+        match contract {
+            SpaceContract::Space(space) => Some(space),
+            SpaceContract::Param(param) => Some(self.param_space(db, param)),
+            SpaceContract::Target(param) => {
+                let binding = key.typed_body(db).param_binding(param as usize)?;
+                provider_semantics(
+                    db,
+                    key.owner(db).scope(),
+                    self.assumptions(db),
+                    self.binding_ty(db, binding),
+                )
+                .address_space
+            }
+            SpaceContract::Domain(effect) => self
+                .effect_bindings(db)
+                .into_iter()
+                .find(|binding| {
+                    matches!(binding, LocalBinding::EffectParam { idx, .. } if *idx == effect as usize)
+                })
+                .and_then(|binding| resolved_provider_binding_for_instance_effect(db, self, binding))
+                .and_then(|provider| provider.semantics.address_space),
+            SpaceContract::Assoc(space) => resolve_space_key(
+                db,
+                SpaceKey {
+                    inst: instantiate_normalized_trait_inst(db, key, space.inst).ok()?,
+                    ..space
+                },
+                key.owner(db).scope(),
+                self.assumptions(db),
+            ),
+        }
+    }
+
     /// The bindings of the components of the rows the instance's effects
     /// name.
     pub fn row_component_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<LocalBinding<'db>> {
@@ -2143,7 +2226,7 @@ fn instantiated_effect_env_forwarded_witnesses<'db>(
     requirements: &[EffectRequirement<'db>],
     providers: &[ProviderBinding<'db>],
     resolutions: &[ResolvedEffectBinding],
-) -> Vec<crate::analysis::ty::trait_def::TraitInstId<'db>> {
+) -> Vec<TraitInstId<'db>> {
     let provider_by_idx = providers
         .iter()
         .map(|provider| (provider.provider_idx, provider.provider_ty))
@@ -2492,11 +2575,8 @@ fn instantiate_normalized_ty<'db>(
 fn instantiate_normalized_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
-    trait_inst: crate::analysis::ty::trait_def::TraitInstId<'db>,
-) -> Result<
-    crate::analysis::ty::trait_def::TraitInstId<'db>,
-    SemanticEffectEnvInstantiationError<'db>,
-> {
+    trait_inst: TraitInstId<'db>,
+) -> Result<TraitInstId<'db>, SemanticEffectEnvInstantiationError<'db>> {
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
     let trait_inst = instantiate_checked(db, key.owner(db), trait_inst, key.subst(db))?;
@@ -2510,7 +2590,7 @@ fn instantiate_normalized_trait_inst<'db>(
         .iter()
         .map(|(&name, &ty)| (name, normalize_ty(db, ty, scope, assumptions)))
         .collect::<IndexMap<_, _>>();
-    Ok(crate::analysis::ty::trait_def::TraitInstId::new(
+    Ok(TraitInstId::new(
         db,
         trait_inst.def(db),
         args,

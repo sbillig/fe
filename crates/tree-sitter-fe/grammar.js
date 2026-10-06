@@ -166,7 +166,8 @@ module.exports = grammar({
       optional(field('body', prec.dynamic(1, $.block))),
     )),
 
-    _function_signature: $ => seq(
+    // A `uses` right after a signature is its clause, not a trait row item.
+    _function_signature: $ => prec.right(seq(
       optional($.attribute_list),
       optional($.visibility),
       optional('unsafe'),
@@ -175,10 +176,14 @@ module.exports = grammar({
       field('name', $.identifier),
       optional($.generic_param_list),
       $.parameter_list,
-      optional(seq('->', field('return_type', $._type))),
+      optional(seq(
+        '->',
+        field('return_type', $._type),
+        optional(field('return_space', $.space_annotation)),
+      )),
       optional($.uses_clause),
       optional($.where_clause),
-    ),
+    )),
 
     parameter_list: $ => seq(
       '(',
@@ -409,8 +414,26 @@ module.exports = grammar({
         $.function_definition,
         $.trait_type_item,
         $.trait_const_item,
+        $.trait_uses_item,
+        $.trait_space_item,
       )),
       '}',
+    ),
+
+    // Associated effect row: `uses E`, or `uses E = (store: mut Store)`
+    trait_uses_item: $ => seq(
+      optional($.attribute_list),
+      'uses',
+      field('name', $.identifier),
+      optional(seq('=', choice($.uses_param_list, $.uses_param))),
+    ),
+
+    // Associated result space: `space S`, or `space S = memory`
+    trait_space_item: $ => seq(
+      optional($.attribute_list),
+      'space',
+      field('name', $.identifier),
+      optional(seq('=', field('value', $.path))),
     ),
 
     trait_type_item: $ => seq(
@@ -596,11 +619,19 @@ module.exports = grammar({
       $.qualified_path_type,
     ),
 
-    // Mode-prefixed type: ref Foo, mut Foo, own Foo
-    mode_type: $ => seq(
+    // Mode-prefixed type: ref Foo, mut Foo, own Foo, ref Foo @S
+    mode_type: $ => prec.right(seq(
       field('mode', choice('ref', 'mut', 'own')),
       field('type', $._type),
-    ),
+      optional(field('space', $.space_annotation)),
+    )),
+
+    // Result-space contract: @S, @B::S, @self, @target(p)
+    space_annotation: $ => prec.right(seq(
+      '@',
+      $.path,
+      optional(seq('(', $.path, ')')),
+    )),
 
     // Qualified path: <Type as Trait>::AssocType
     qualified_path_type: $ => prec.right(seq(

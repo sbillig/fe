@@ -775,6 +775,78 @@ impl<'db> ImplTrait<'db> {
         diags
     }
 
+    /// Diagnostics for effect rows and result spaces: each one the trait
+    /// declares, and every space given, naming a space.
+    pub fn diags_access_items(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        use ty::diagnostics::ImplDiag;
+        use ty::trait_lower::lower_impl_trait;
+
+        let Some(implementor) = lower_impl_trait(db, self) else {
+            return Vec::new();
+        };
+        let trait_ = implementor.trait_def(db);
+        let primary = || DynLazySpan::from(self.span().ty());
+        let rows = self.rows(db).iter().filter_map(|row| {
+            let name = row.name.to_opt()?;
+            (!trait_
+                .rows(db)
+                .iter()
+                .any(|row| row.name.to_opt() == Some(name)))
+            .then_some(("effect row", name))
+        });
+        let spaces = self.spaces(db).iter().filter_map(|space| {
+            let name = space.name.to_opt()?;
+            (!trait_
+                .spaces(db)
+                .iter()
+                .any(|space| space.name.to_opt() == Some(name)))
+            .then_some(("space", name))
+        });
+        let mut diags: Vec<TyDiagCollection<'db>> = rows
+            .chain(spaces)
+            .map(|(kind, name)| {
+                ImplDiag::AccessItemNotDefinedInTrait {
+                    primary: primary(),
+                    trait_,
+                    kind,
+                    name,
+                }
+                .into()
+            })
+            .collect();
+        for name in trait_
+            .spaces(db)
+            .iter()
+            .filter_map(|space| space.name.to_opt())
+        {
+            match self
+                .spaces(db)
+                .iter()
+                .find(|given| given.name.to_opt() == Some(name))
+                .and_then(|given| given.value)
+            {
+                None => diags.push(
+                    ImplDiag::MissingAssociatedSpace {
+                        primary: primary(),
+                        trait_,
+                        name,
+                    }
+                    .into(),
+                ),
+                Some(value)
+                    if value
+                        .to_opt()
+                        .and_then(|value| ty::result_space::impl_space_value(db, self, value))
+                        .is_none() =>
+                {
+                    diags.push(TyLowerDiag::UnknownResultSpace(primary()).into());
+                }
+                Some(_) => {}
+            }
+        }
+        diags
+    }
+
     /// Diagnostics for missing associated consts (required by the trait).
     pub fn diags_missing_assoc_consts(
         self,
@@ -1666,6 +1738,15 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         out.extend(self.diags_param_types(db));
         out.extend(self.diags_return(db));
         out.extend(self.diags_view_types(db));
+        // A result-space annotation names a space.
+        if self
+            .ret_spaces(db)
+            .iter()
+            .zip(ty::result_space::declared_result_spaces(db, self))
+            .any(|(annotation, contract)| annotation.is_some() && contract.is_none())
+        {
+            out.push(TyLowerDiag::UnknownResultSpace(self.span().ret_ty().into()).into());
+        }
 
         for pred in WhereClauseOwner::Func(self).clause(db).predicates(db) {
             out.extend(pred.diags(db));
@@ -1763,6 +1844,7 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         out.extend(self.diags_trait_ref_and_wf(db));
         out.extend(self.diags_assoc_types_wf(db));
         out.extend(self.diags_assoc_types(db));
+        out.extend(self.diags_access_items(db));
         out.extend(self.diags_assoc_types_bounds(db));
         out.extend(self.diags_missing_assoc_consts(db));
         out.extend(self.diags_assoc_consts(db));

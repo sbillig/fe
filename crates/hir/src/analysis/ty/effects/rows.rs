@@ -13,21 +13,17 @@ use salsa::Update;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        name_resolution::{PathRes, resolve_path},
         ty::{
             binder::Binder,
             effects::resolve_effect_key,
             fold::{TyFoldable, TyFolder},
             trait_def::{ImplementorOrigin, TraitInstId, resolve_trait_impl_instance},
-            trait_resolution::{
-                PredicateListId, Selection, TraitSolveCx,
-                constraint::{enclosing_trait, enclosing_trait_self_ty},
-            },
+            trait_resolution::{PredicateListId, Selection, TraitSolveCx},
             visitor::{TyVisitable, TyVisitor},
         },
     },
     core::semantic::{EffectRequirement, EffectRequirementKey, constraints_for},
-    hir_def::{IdentId, PathId, TypeId as HirTypeId, scope_graph::ScopeId},
+    hir_def::{IdentId, TypeId as HirTypeId, scope_graph::ScopeId},
 };
 
 /// Row `row` of a trait instance.
@@ -62,51 +58,6 @@ impl<'db> TyFoldable<'db> for RowKey<'db> {
             row: self.row,
         }
     }
-}
-
-/// The row a `uses` entry's path names: `E` or `Self::E` in a trait (or one
-/// of its supertraits), and `C::E` for a type `C` the scope bounds by a trait
-/// with row `E`.
-pub(crate) fn resolve_row_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    path: PathId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Option<RowKey<'db>> {
-    if !path.generic_args(db).is_empty(db) {
-        return None;
-    }
-    let name = path.ident(db).to_opt()?;
-    let self_ty = match path.parent(db) {
-        None => enclosing_trait_self_ty(db, scope)?,
-        Some(parent) => match resolve_path(db, parent, scope, assumptions, false).ok()? {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
-            _ => return None,
-        },
-    };
-    // A trait's own rows are its methods' whether or not their declarations
-    // assume `Self: Trait`.
-    let own = enclosing_trait(db, scope)
-        .filter(|_| enclosing_trait_self_ty(db, scope) == Some(self_ty))
-        .map(|trait_def| {
-            let inst = TraitInstId::new_simple(db, trait_def, trait_def.params(db).to_vec());
-            PredicateListId::new(db, vec![inst]).extend_all_bounds(db)
-        });
-    own.into_iter()
-        .chain([assumptions.extend_all_bounds(db)])
-        .flat_map(|list| list.list(db).iter().copied())
-        .filter(|inst| inst.self_ty(db) == self_ty)
-        .find_map(|inst| {
-            let row = inst
-                .def(db)
-                .rows(db)
-                .iter()
-                .position(|row| row.name.to_opt() == Some(name))?;
-            Some(RowKey {
-                inst,
-                row: row as u16,
-            })
-        })
 }
 
 /// A component of a row: an ordinary effect requirement, or another row.

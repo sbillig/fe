@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
-    GenericParam, GenericParamOwner, GenericParamView, ItemKind, Trait, TraitRefId, TypeBound,
-    WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
+    GenericParam, GenericParamOwner, GenericParamView, IdentId, ItemKind, PathId, Trait,
+    TraitRefId, TypeBound, WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use crate::{
     hir_def::{CallableDef, Func},
@@ -11,6 +11,7 @@ use either::Either;
 
 use crate::analysis::{
     HirAnalysisDb,
+    name_resolution::{PathRes, resolve_path},
     ty::{
         binder::Binder,
         const_ty::{ConstBodyLowering, HoleAnchor, LoweringContext},
@@ -616,6 +617,43 @@ pub(crate) fn enclosing_trait_self_ty<'db>(
     scope: ScopeId<'db>,
 ) -> Option<TyId<'db>> {
     collect_generic_params(db, enclosing_trait(db, scope)?.into()).trait_self(db)
+}
+
+/// The trait instance and item a path names, among the items `item` finds
+/// in a trait by name: `I` or `Self::I` in a trait (or one of its
+/// supertraits), and `X::I` for a type `X` the scope bounds by a trait with
+/// item `I`.
+pub(crate) fn resolve_assoc_item_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    item: impl Fn(Trait<'db>, IdentId<'db>) -> Option<usize>,
+) -> Option<(TraitInstId<'db>, usize)> {
+    if !path.generic_args(db).is_empty(db) {
+        return None;
+    }
+    let name = path.ident(db).to_opt()?;
+    let self_ty = match path.parent(db) {
+        None => enclosing_trait_self_ty(db, scope)?,
+        Some(parent) => match resolve_path(db, parent, scope, assumptions, false).ok()? {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            _ => return None,
+        },
+    };
+    // A trait's own items are its methods' whether or not their declarations
+    // assume `Self: Trait`.
+    let own = enclosing_trait(db, scope)
+        .filter(|_| enclosing_trait_self_ty(db, scope) == Some(self_ty))
+        .map(|trait_def| {
+            let inst = TraitInstId::new_simple(db, trait_def, trait_def.params(db).to_vec());
+            PredicateListId::new(db, vec![inst]).extend_all_bounds(db)
+        });
+    own.into_iter()
+        .chain([assumptions.extend_all_bounds(db)])
+        .flat_map(|list| list.list(db).iter().copied())
+        .filter(|inst| inst.self_ty(db) == self_ty)
+        .find_map(|inst| Some((inst, item(inst.def(db), name)?)))
 }
 
 /// The trait whose definition `scope` is in, outside any impl.

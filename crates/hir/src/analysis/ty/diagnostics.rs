@@ -66,6 +66,9 @@ pub enum TyLowerDiag<'db> {
     ExpectedStarKind(DynLazySpan<'db>),
     /// `ref T`/`mut T` outside a parameter or projection return.
     ModeNotType(DynLazySpan<'db>),
+    /// A result-space annotation, or an implementation's associated space,
+    /// that names no space.
+    UnknownResultSpace(DynLazySpan<'db>),
     /// An `own` parameter or a `mut` yield of a `#[view]` type.
     ViewTypeMode {
         span: DynLazySpan<'db>,
@@ -299,6 +302,7 @@ impl TyLowerDiag<'_> {
             Self::ExpectedStarKind(_) => 0,
             Self::ModeNotType(_) => 58,
             Self::ViewTypeMode { .. } => 59,
+            Self::UnknownResultSpace(_) => 60,
             Self::InvalidTypeArgKind { .. } => 1,
             Self::RecursiveType { .. } => 2,
             Self::GrowingRecursiveType(_) => 57,
@@ -1353,6 +1357,20 @@ pub enum ImplDiag<'db> {
         raw_ty: TyId<'db>,
         failure: ProviderLayoutFailure,
     },
+
+    /// An effect row or result space the trait does not declare.
+    AccessItemNotDefinedInTrait {
+        primary: DynLazySpan<'db>,
+        trait_: Trait<'db>,
+        kind: &'static str,
+        name: IdentId<'db>,
+    },
+
+    MissingAssociatedSpace {
+        primary: DynLazySpan<'db>,
+        trait_: Trait<'db>,
+        name: IdentId<'db>,
+    },
 }
 
 impl ImplDiag<'_> {
@@ -1384,6 +1402,8 @@ impl ImplDiag<'_> {
             Self::InherentConstShadowsFn { .. } => 21,
             Self::InvalidEffectHandleRaw { .. } => 22,
             Self::TypeNotDefinedInTrait { .. } => 23,
+            Self::AccessItemNotDefinedInTrait { .. } => 26,
+            Self::MissingAssociatedSpace { .. } => 27,
         }
     }
 }

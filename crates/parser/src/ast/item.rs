@@ -98,6 +98,12 @@ impl FuncSignature {
         support::child(self.syntax())
     }
 
+    /// The result-space contract of the return's access components that
+    /// declare none: `-> (usize, ref T) @S`.
+    pub fn ret_space(&self) -> Option<super::SpaceAnnotation> {
+        support::child(self.syntax())
+    }
+
     /// Returns the optional `uses` clause of the function.
     pub fn uses_clause(&self) -> Option<super::UsesClause> {
         support::child(self.syntax())
@@ -425,8 +431,31 @@ impl TraitUsesItem {
 }
 
 ast_node! {
+    /// `space S` in a trait definition, or `space S = memory` in a trait
+    /// implementation: an associated result space.
+    pub struct TraitSpaceItem,
+    SK::TraitSpaceItem,
+}
+impl super::AttrListOwner for TraitSpaceItem {}
+impl TraitSpaceItem {
+    /// Returns the name of the space.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| token.kind() == SK::Ident)
+            .nth(1)
+    }
+
+    /// The space an implementation gives, after `=`.
+    pub fn value(&self) -> Option<super::Path> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct TraitItem,
-    SK::Func | SK::TraitTypeItem | SK::TraitConstItem | SK::TraitUsesItem
+    SK::Func | SK::TraitTypeItem | SK::TraitConstItem | SK::TraitUsesItem | SK::TraitSpaceItem
 }
 impl TraitItem {
     pub fn kind(&self) -> TraitItemKind {
@@ -441,6 +470,9 @@ impl TraitItem {
             SK::TraitUsesItem => {
                 TraitItemKind::Uses(TraitUsesItem::cast(self.syntax().clone()).unwrap())
             }
+            SK::TraitSpaceItem => {
+                TraitItemKind::Space(TraitSpaceItem::cast(self.syntax().clone()).unwrap())
+            }
             _ => unreachable!(),
         }
     }
@@ -451,6 +483,7 @@ pub enum TraitItemKind {
     Type(TraitTypeItem),
     Const(TraitConstItem),
     Uses(TraitUsesItem),
+    Space(TraitSpaceItem),
 }
 
 ast_node! {

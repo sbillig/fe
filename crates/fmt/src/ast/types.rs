@@ -870,7 +870,14 @@ impl ToDoc for ast::ModeType {
                 ctx,
                 self.syntax(),
                 indent,
-                |node| ast::Type::cast(node).map(|ty| TokenPiece::new(ty.to_doc(ctx))),
+                |node| {
+                    ast::Type::cast(node.clone())
+                        .map(|ty| TokenPiece::new(ty.to_doc(ctx)))
+                        .or_else(|| {
+                            ast::SpaceAnnotation::cast(node)
+                                .map(|space| TokenPiece::new(space.to_doc(ctx)).space_before())
+                        })
+                },
                 |token| match token.kind() {
                     SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => {
                         Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
@@ -886,11 +893,34 @@ impl ToDoc for ast::ModeType {
                 .map_or_else(|| alloc.nil(), |inner| inner.to_doc(ctx));
         };
         let mode = alloc.text(ctx.token(&mode));
-        if let Some(inner) = self.inner() {
+        let mode = if let Some(inner) = self.inner() {
             mode.append(alloc.text(" ")).append(inner.to_doc(ctx))
         } else {
             mode
+        };
+        match self.space() {
+            Some(space) => mode.append(alloc.text(" ")).append(space.to_doc(ctx)),
+            None => mode,
         }
+    }
+}
+
+impl ToDoc for ast::SpaceAnnotation {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        let path = self
+            .path()
+            .map_or_else(|| alloc.nil(), |path| path.to_doc(ctx));
+        let target = self.target().map_or_else(
+            || alloc.nil(),
+            |target| {
+                alloc
+                    .text("(")
+                    .append(target.to_doc(ctx))
+                    .append(alloc.text(")"))
+            },
+        );
+        alloc.text("@").append(path).append(target)
     }
 }
 

@@ -10,7 +10,7 @@ use crate::analysis::ty::layout_holes::layout_hole_with_fallback_ty;
 use crate::analysis::ty::normalize::normalize_from_assumptions;
 use crate::analysis::ty::subst::substitute_complete;
 use crate::analysis::ty::trait_def::TraitInstId;
-use crate::analysis::ty::trait_resolution::PredicateListId;
+use crate::analysis::ty::trait_resolution::{PredicateListId, constraint::resolve_assoc_item_path};
 use crate::analysis::ty::ty_check::Callable;
 use crate::analysis::ty::ty_def::{TyBase, TyData, TyId};
 use crate::analysis::ty::ty_lower::{
@@ -275,8 +275,18 @@ pub(crate) fn lower_effect_key_schema<'db>(
             let schema = TraitKeySchema::from_canonical_trait_binding(db, trait_inst);
             ResolvedEffectKey::Trait(schema)
         }
-        _ => rows::resolve_row_path(db, key_path, scope, assumptions)
-            .map_or(ResolvedEffectKey::Other, ResolvedEffectKey::Row),
+        _ => resolve_assoc_item_path(db, key_path, scope, assumptions, |trait_def, name| {
+            trait_def
+                .rows(db)
+                .iter()
+                .position(|row| row.name.to_opt() == Some(name))
+        })
+        .map_or(ResolvedEffectKey::Other, |(inst, row)| {
+            ResolvedEffectKey::Row(rows::RowKey {
+                inst,
+                row: row as u16,
+            })
+        }),
     }
 }
 

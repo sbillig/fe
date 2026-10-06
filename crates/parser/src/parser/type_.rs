@@ -64,7 +64,33 @@ impl super::Parse for ModeTypeScope {
             None,
         )?;
         parser.bump();
-        parse_type(parser, None).map(|_| ())
+        parse_type(parser, None)?;
+        parse_space_annotation_opt(parser)
+    }
+}
+
+/// `@S`, `@p` or `@target(p)`, if present.
+pub(crate) fn parse_space_annotation_opt<S: TokenStream>(
+    parser: &mut Parser<S>,
+) -> Result<(), Recovery<ErrProof>> {
+    if parser.current_kind() == Some(SyntaxKind::At) {
+        parser.parse(SpaceAnnotationScope::default())?;
+    }
+    Ok(())
+}
+
+define_scope!(SpaceAnnotationScope, SpaceAnnotation);
+impl super::Parse for SpaceAnnotationScope {
+    type Error = Recovery<ErrProof>;
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::At);
+        parser.or_recover(|p| p.parse(PathScope::default()))?;
+        if parser.bump_if(SyntaxKind::LParen) {
+            parser.or_recover(|p| p.parse(PathScope::default()))?;
+            parser.bump_or_recover(SyntaxKind::RParen, "expected `)`")?;
+        }
+        Ok(())
     }
 }
 

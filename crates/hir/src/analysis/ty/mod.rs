@@ -53,6 +53,7 @@ pub mod pattern_analysis;
 pub mod pattern_ir;
 pub mod pattern_types;
 pub mod provider;
+pub mod result_space;
 pub(crate) mod scratch;
 pub mod shape;
 pub(crate) mod subst;

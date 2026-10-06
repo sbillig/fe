@@ -13,11 +13,11 @@ use super::{
 use crate::{
     HirDb,
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, Expr, ExprId, FieldDefListId, FuncModifiers,
-        FuncParam, FuncParamMode, FuncParamName, GenericArgListId, GenericParamListId, IdentId,
-        ImplTrait, LitKind, Partial, Pat, PathId, PathKind, Stmt, StringId, Struct,
-        TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound, TypeId, TypeKind, Visibility,
-        WhereClauseId, WhereClausePredicate, WherePredicate, expr::CallArg,
+        AccessItems, AssocConstDef, AttrListId, Body, BodyKind, Expr, ExprId, FieldDefListId,
+        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArgListId,
+        GenericParamListId, IdentId, ImplTrait, LitKind, Partial, Pat, PathId, PathKind, Stmt,
+        StringId, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeBound, TypeId, TypeKind,
+        Visibility, WhereClauseId, WhereClausePredicate, WherePredicate, expr::CallArg,
     },
     span::{AbiStructDesugared, HirOrigin},
 };
@@ -355,7 +355,7 @@ fn lower_static_abi_impl<'db>(
             where_clause,
             vec![],
             vec![],
-            vec![],
+            AccessItems::default(),
             builder.top_mod(),
             builder.origin(),
         )
@@ -661,7 +661,7 @@ fn lower_sol_compat_impl<'db>(
             where_clause,
             types,
             vec![sol_type],
-            vec![],
+            AccessItems::default(),
             builder.top_mod(),
             builder.origin(),
         )
