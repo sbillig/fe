@@ -2926,7 +2926,7 @@ fn selector_local_binding_init_expr<'db>(
     pat: PatId,
 ) -> Option<ExprId> {
     for (_, stmt) in body.stmts(db).iter() {
-        if let Partial::Present(Stmt::Let(stmt_pat, _, Some(init_expr))) = stmt
+        if let Partial::Present(Stmt::Let(stmt_pat, _, Some(init_expr), _)) = stmt
             && *stmt_pat == pat
         {
             return Some(*init_expr);

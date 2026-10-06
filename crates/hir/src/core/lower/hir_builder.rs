@@ -785,13 +785,13 @@ where
             Partial::Present(PathId::from_ident(db, tail_ident)),
             true,
         ));
-        self.emit_stmt(Stmt::Let(tail_pat, None, Some(head_size)));
+        self.emit_stmt(Stmt::Let(tail_pat, None, Some(head_size), None));
         let head_pos_pat = self.push_pat(Pat::Path(
             Partial::Present(PathId::from_ident(db, head_pos_ident)),
             true,
         ));
         let zero = self.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, 0))));
-        self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero)));
+        self.emit_stmt(Stmt::Let(head_pos_pat, None, Some(zero), None));
 
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
             let field_ident = self.generated_ident(&format!("field_{index}"));
@@ -803,7 +803,7 @@ where
                 self_expr,
                 Partial::Present(FieldIndex::Ident(field)),
             ));
-            self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver)));
+            self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver), None));
             let encode_field_args = GenericArgListId::given(
                 db,
                 vec![
@@ -909,7 +909,7 @@ where
             Partial::Present(PathId::from_ident(db, target_ident)),
             false,
         ));
-        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call), None));
     }
 
     pub(super) fn decode_from_into(
@@ -964,7 +964,7 @@ where
             Partial::Present(PathId::from_ident(db, target_ident)),
             false,
         ));
-        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call)));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(ty), Some(decode_call), None));
     }
 
     pub(super) fn bind_input_len(&mut self, target_ident: IdentId<'db>, input_ident: IdentId<'db>) {
@@ -983,7 +983,7 @@ where
                 IdentId::new(db, "u256".to_string()),
             ))),
         );
-        self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call)));
+        self.emit_stmt(Stmt::Let(bind_pat, Some(u256_ty), Some(len_call), None));
     }
 
     pub(super) fn return_record_self(&mut self, fields: &[IdentId<'db>]) {

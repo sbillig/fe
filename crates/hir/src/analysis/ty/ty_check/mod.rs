@@ -4358,7 +4358,8 @@ impl<'db> TypedBody<'db> {
         let body = self.body()?;
 
         for (_, stmt) in body.stmts(db).iter() {
-            if let Partial::Present(crate::hir_def::Stmt::Let(stmt_pat, _, Some(init_expr))) = stmt
+            if let Partial::Present(crate::hir_def::Stmt::Let(stmt_pat, _, Some(init_expr), _)) =
+                stmt
                 && let Some(projection) = self.binding_projection_in_pat(*stmt_pat, pat)
             {
                 return Some(BindingSource {
@@ -5030,15 +5031,17 @@ impl<'db> TypedBody<'db> {
         };
 
         match stmt_data {
-            crate::hir_def::Stmt::Let(_, _, Some(init)) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    db,
-                    body,
-                    *init,
-                    out,
-                    saw_non_param,
-                    seen,
-                );
+            crate::hir_def::Stmt::Let(_, _, Some(init), else_) => {
+                for expr in std::iter::once(init).chain(else_) {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        *expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
             }
             crate::hir_def::Stmt::For(_, iter, loop_body, _) => {
                 self.collect_explicit_return_param_sources_in_expr(
@@ -5098,7 +5101,7 @@ impl<'db> TypedBody<'db> {
                 saw_non_param,
                 seen,
             ),
-            crate::hir_def::Stmt::Let(_, _, None)
+            crate::hir_def::Stmt::Let(_, _, None, _)
             | crate::hir_def::Stmt::Return(None)
             | crate::hir_def::Stmt::Continue
             | crate::hir_def::Stmt::Break => {}

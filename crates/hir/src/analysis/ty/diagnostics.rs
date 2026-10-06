@@ -643,6 +643,16 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// A `let` without `else` whose pattern may not match.
+    RefutableLetPattern {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// The `else` block of a `let … else` can complete.
+    LetElseMustDiverge {
+        primary: DynLazySpan<'db>,
+    },
+
     /// Array repetition literals (`[x; N]`) duplicate the element value.
     ///
     /// Duplicating a value requires that the element type implement `core::marker::Copy`.
@@ -1024,6 +1034,8 @@ impl<'db> BodyDiag<'db> {
             Self::ShapeNotDestructured { .. } => 72,
             Self::InvalidYield { .. } => 99,
             Self::YieldOutsideProjection { .. } => 100,
+            Self::RefutableLetPattern { .. } => 101,
+            Self::LetElseMustDiverge { .. } => 102,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

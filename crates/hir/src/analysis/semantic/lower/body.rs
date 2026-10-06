@@ -1599,7 +1599,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let origin = SemOrigin::Stmt(stmt);
 
         match stmt_data {
-            Stmt::Let(pat, _, init) => {
+            Stmt::Let(pat, _, init, else_) => {
                 if let Some(init) = init {
                     let value = if matches!(
                         pat.data(self.db, self.body),
@@ -1609,7 +1609,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     } else {
                         self.lower_scrutinee(*init)
                     };
-                    self.bind_pattern(*pat, value);
+                    match else_ {
+                        Some(else_) if !self.pattern_is_irrefutable(*pat) => {
+                            let then_bb = self.new_block();
+                            let else_bb = self.new_block();
+                            self.lower_pattern_branch(*pat, value, then_bb, else_bb);
+                            self.switch_to(else_bb);
+                            let _ = self.lower_expr(*else_);
+                            self.switch_to(then_bb);
+                        }
+                        _ => self.bind_pattern(*pat, value),
+                    }
                 }
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),

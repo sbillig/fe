@@ -15,7 +15,11 @@ impl<'db> Stmt<'db> {
                     .type_annotation()
                     .map(|ty| TypeId::lower_ast(ctxt.f_ctxt, ty));
                 let init = let_.initializer().map(|init| Expr::lower_ast(ctxt, init));
-                (Stmt::Let(pat, ty, init), HirOrigin::raw(&ast))
+                let else_ = let_
+                    .else_block()
+                    .and_then(|block| ast::Expr::cast(block.syntax().clone()))
+                    .map(|block| Expr::lower_ast(ctxt, block));
+                (Stmt::Let(pat, ty, init, else_), HirOrigin::raw(&ast))
             }
             ast::StmtKind::For(for_) => {
                 super::item::validate_for_loop_attrs(ctxt.f_ctxt, for_.attr_list());

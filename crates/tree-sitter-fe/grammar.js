@@ -1202,7 +1202,11 @@ module.exports = grammar({
       optional('mut'),
       field('name', $._pattern),
       optional(seq(':', field('type', $._type))),
-      optional(seq('=', field('value', $._expression))),
+      optional(seq(
+        '=',
+        field('value', $._expression),
+        optional(seq('else', field('alternative', $.block))),
+      )),
       $._terminator,
     ),
 

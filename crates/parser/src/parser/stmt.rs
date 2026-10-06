@@ -82,6 +82,9 @@ impl super::Parse for LetStmtScope {
 
         if parser.bump_if(SyntaxKind::Eq) {
             parse_continuation_expr(parser)?;
+            if parser.bump_if(SyntaxKind::ElseKw) {
+                parser.parse(BlockExprScope::default())?;
+            }
         }
         Ok(())
     }

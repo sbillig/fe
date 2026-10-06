@@ -980,7 +980,7 @@ impl<'db> Stmt<'db> {
     /// Pretty-prints a statement.
     pub fn pretty_print(&self, db: &'db dyn HirDb, body: Body<'db>, indent: usize) -> String {
         match self {
-            Stmt::Let(pat, ty, init) => {
+            Stmt::Let(pat, ty, init, else_) => {
                 let pat = unwrap_partial_ref(pat.data(db, body), "Let::pat");
                 let mut result = format!("let {}", pat.pretty_print(db, body));
 
@@ -993,6 +993,12 @@ impl<'db> Stmt<'db> {
                     let init_expr = unwrap_partial_ref(init.data(db, body), "Let::init");
                     result.push_str(" = ");
                     result.push_str(&init_expr.pretty_print(db, body, indent));
+                }
+
+                if let Some(else_) = else_ {
+                    let else_expr = unwrap_partial_ref(else_.data(db, body), "Let::else");
+                    result.push_str(" else ");
+                    result.push_str(&else_expr.pretty_print(db, body, indent));
                 }
 
                 result

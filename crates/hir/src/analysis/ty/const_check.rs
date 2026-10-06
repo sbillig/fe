@@ -151,10 +151,10 @@ impl<'db> ConstFnChecker<'db, '_> {
         };
 
         match stmt_data {
-            Stmt::Let(pat, _ty, init) => {
+            Stmt::Let(pat, _ty, init, else_) => {
                 self.check_let_pat(*pat);
-                if let Some(init) = init {
-                    self.check_expr(*init);
+                for expr in init.iter().chain(else_) {
+                    self.check_expr(*expr);
                 }
             }
             Stmt::For(pat, iter, body, _) => {

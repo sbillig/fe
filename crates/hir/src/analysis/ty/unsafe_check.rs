@@ -116,9 +116,9 @@ impl<'db> UnsafeChecker<'db, '_> {
         };
 
         match stmt_data {
-            Stmt::Let(_, _, init) => {
-                if let Some(init) = init {
-                    self.check_expr(*init);
+            Stmt::Let(_, _, init, else_) => {
+                for expr in init.iter().chain(else_) {
+                    self.check_expr(*expr);
                 }
             }
             Stmt::For(_, iter, body, _) => {

@@ -53,6 +53,15 @@ impl LetStmt {
     pub fn initializer(&self) -> Option<super::Expr> {
         support::child(self.syntax())
     }
+
+    /// Returns the block of a `let … else`, which runs when the pattern does
+    /// not match.
+    pub fn else_block(&self) -> Option<super::BlockExpr> {
+        self.syntax()
+            .children_with_tokens()
+            .skip_while(|child| child.kind() != SK::ElseKw)
+            .find_map(|child| child.into_node().and_then(super::BlockExpr::cast))
+    }
 }
 
 ast_node! {

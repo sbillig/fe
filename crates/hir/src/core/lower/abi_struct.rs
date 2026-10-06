@@ -292,7 +292,7 @@ fn lower_abi_span_impl<'db>(
                     Partial::Present(PathId::from_ident(db, end_ident)),
                     true,
                 ));
-                body.emit_stmt(Stmt::Let(end_pat, Some(u256_ty), Some(frame_end)));
+                body.emit_stmt(Stmt::Let(end_pat, Some(u256_ty), Some(frame_end), None));
 
                 // end = abi_record_field_end<Sol, F, I>(input, pos, head_pos, input_len, end)
                 for (idx, (_, field_ty)) in field_specs.iter().copied().enumerate() {

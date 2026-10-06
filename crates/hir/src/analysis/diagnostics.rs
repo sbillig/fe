@@ -3754,6 +3754,22 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::RefutableLetPattern { primary } => primary_diag(
+                Severity::Error,
+                "refutable pattern in `let`",
+                "this pattern may not match; handle the other cases with `let … else`",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::LetElseMustDiverge { primary } => primary_diag(
+                Severity::Error,
+                "`let … else` block must diverge",
+                "this block must return, break, continue or revert",
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::YieldOutsideProjection { primary } => primary_diag(
                 Severity::Error,
                 "`yield` outside a projection",

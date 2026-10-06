@@ -92,7 +92,7 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_let(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
-        let Stmt::Let(pat, ascription, expr) = stmt_data else {
+        let Stmt::Let(pat, ascription, expr, else_) = stmt_data else {
             unreachable!()
         };
 
@@ -117,6 +117,23 @@ impl<'db> TyChecker<'db> {
                 self.bind_pattern_source(*pat, *expr, &prop);
             } else if self.pattern_binds_any(*pat) {
                 self.record_implicit_move_for_owned_expr(*expr, prop.ty);
+            }
+            if let Some(else_) = else_ {
+                let else_ty = self
+                    .check_expr_unknown(*else_)
+                    .ty
+                    .fold_with(self.db, &mut self.table);
+                if !else_ty.is_never(self.db) && !else_ty.has_invalid(self.db) {
+                    self.push_diag(BodyDiag::LetElseMustDiverge {
+                        primary: else_.span(self.body()).into(),
+                    });
+                }
+            } else if let Some(root) = self.env.pattern_store().root(*pat)
+                && !self.env.pattern_store().is_irrefutable(self.db, root)
+            {
+                self.push_diag(BodyDiag::RefutableLetPattern {
+                    primary: pat.span(self.body()).into(),
+                });
             }
         } else {
             let ascription = ascription.unwrap_or_else(|| self.fresh_ty());

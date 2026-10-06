@@ -37,7 +37,7 @@ impl ToDoc for ast::LetStmt {
             .type_annotation()
             .map_or_else(|| alloc.nil(), |ty| alloc.text(": ").append(ty.to_doc(ctx)));
 
-        match self.initializer() {
+        let let_doc = match self.initializer() {
             Some(init) if is_chain(&init) => {
                 // Use BlockDoc to handle the entire let statement as a unit
                 let prefix = alloc
@@ -54,6 +54,12 @@ impl ToDoc for ast::LetStmt {
                 .append(alloc.text(" = "))
                 .append(init.to_doc(ctx)),
             None => alloc.text("let ").append(pat).append(ty_doc),
+        };
+        match self.else_block() {
+            Some(block) => let_doc
+                .append(alloc.text(" else "))
+                .append(block.to_doc(ctx)),
+            None => let_doc,
         }
     }
 }
