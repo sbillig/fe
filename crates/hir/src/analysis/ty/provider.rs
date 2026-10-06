@@ -411,6 +411,14 @@ pub struct RootProviderRegistration<'db> {
     pub provider_ty: TyId<'db>,
 }
 
+impl RootProviderRegistration<'_> {
+    /// A function's root providers are numbered down from the top, clear of
+    /// its effects' providers, which share their effects' slots.
+    pub fn func_provider_idx(&self) -> u32 {
+        u32::MAX - self.idx
+    }
+}
+
 pub fn registered_root_providers<'db>(
     db: &'db dyn HirAnalysisDb,
     site: EffectParamSite<'db>,

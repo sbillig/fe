@@ -1,5 +1,6 @@
 use super::{
     adt_def::AdtCycleMember,
+    effects::rows::RowKey,
     provider::{ProviderAddressSpace, ProviderLayoutFailure},
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
@@ -476,6 +477,13 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
         key: HirTypeId<'db>,
+    },
+
+    /// A call needs an abstract row, which only the caller's own can supply.
+    MissingRow {
+        primary: DynLazySpan<'db>,
+        func: Func<'db>,
+        row: RowKey<'db>,
     },
 
     AmbiguousEffect {
@@ -1068,6 +1076,7 @@ impl<'db> BodyDiag<'db> {
             Self::TryOnNonSum { .. } => 103,
             Self::TryReturnMismatch { .. } => 104,
             Self::ViewInstantiation { .. } => 105,
+            Self::MissingRow { .. } => 106,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

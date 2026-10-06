@@ -674,7 +674,7 @@ pub struct Func<'db> {
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub(in crate::core) params_list: Partial<FuncParamListId<'db>>,
-    pub(crate) effects: EffectParamListId<'db>,
+    pub(crate) declared_effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
     pub(in crate::core) modifiers: FuncModifiers,
     pub body: Option<Body<'db>>,
@@ -1191,6 +1191,8 @@ pub struct Trait<'db> {
     pub(in crate::core) types: Vec<AssocTyDecl<'db>>,
     #[return_ref]
     pub(in crate::core) consts: Vec<AssocConstDecl<'db>>,
+    #[return_ref]
+    pub rows: Vec<AssocRow<'db>>,
 
     pub top_mod: TopLevelMod<'db>,
 
@@ -1245,6 +1247,15 @@ pub struct AssocTyDecl<'db> {
     pub default: Option<TypeId<'db>>,
 }
 
+/// An associated effect row: `uses E` in a trait, with an optional default
+/// `uses E = (..)`, or `uses E = (..)` in an implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct AssocRow<'db> {
+    pub name: Partial<IdentId<'db>>,
+    /// The row's effects, if given.
+    pub effects: Option<EffectParamListId<'db>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDecl<'db> {
     pub attributes: AttrListId<'db>,
@@ -1268,6 +1279,8 @@ pub struct ImplTrait<'db> {
     pub(crate) types: Vec<AssocTyDef<'db>>,
     #[return_ref]
     pub(in crate::core) consts: Vec<AssocConstDef<'db>>,
+    #[return_ref]
+    pub rows: Vec<AssocRow<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]

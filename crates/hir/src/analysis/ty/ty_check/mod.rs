@@ -78,7 +78,7 @@ use super::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
-    effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
+    effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
     layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
@@ -1454,7 +1454,9 @@ impl<'db> TyChecker<'db> {
                     key_ty,
                     self.env.assumptions(),
                 ),
-                ResolvedEffectKey::Type(_) | ResolvedEffectKey::Trait(_)
+                ResolvedEffectKey::Type(_)
+                    | ResolvedEffectKey::Trait(_)
+                    | ResolvedEffectKey::Row(_)
             ) {
                 self.push_diag(BodyDiag::InvalidEffectKey {
                     owner: EffectParamOwner::Func(func),
@@ -1550,7 +1552,9 @@ impl<'db> TyChecker<'db> {
                             });
                         }
                     }
-                    ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
+                    ResolvedEffectKey::Row(_)
+                    | ResolvedEffectKey::Invalid
+                    | ResolvedEffectKey::Other => {
                         self.push_diag(BodyDiag::InvalidEffectKey {
                             owner,
                             key: key_ty,
@@ -3438,6 +3442,9 @@ pub struct ResolvedEffectArg<'db> {
     pub instantiated_key_ty: Option<TyId<'db>>,
     pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
+    /// For a component of one of the callee's rows, or a row it forwards,
+    /// where it sits: `binding_idx` numbers it only in the call's view.
+    pub row_path: Option<RowPath>,
 }
 
 /// Resolved reference for a `const`-valued path expression.
@@ -5504,10 +5511,15 @@ impl<'db> TypedBody<'db> {
     /// or if no body is available.
     ///
     /// This is used by the language server for goto-definition on local variables.
-    pub fn expr_binding_def_span(&self, func: Func<'db>, expr: ExprId) -> Option<DynLazySpan<'db>> {
+    pub fn expr_binding_def_span(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+        expr: ExprId,
+    ) -> Option<DynLazySpan<'db>> {
         let body = self.tables.body?;
         let binding = self.expr_binding(expr)?;
-        Some(binding.def_span_with(body, func))
+        Some(binding.def_span_with(db, body, func))
     }
 
     /// Like `expr_binding_def_span` but takes a `Body` directly.
@@ -5515,11 +5527,12 @@ impl<'db> TypedBody<'db> {
     /// Use this when the body may not belong to a function (e.g., contract bodies).
     pub fn expr_binding_def_span_in_body(
         &self,
+        db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
     ) -> Option<DynLazySpan<'db>> {
         let binding = self.expr_binding(expr)?;
-        Some(binding.def_span_in_body(body))
+        Some(binding.def_span_in_body(db, body))
     }
 
     /// Get the binding kind for an expression that references a local binding.

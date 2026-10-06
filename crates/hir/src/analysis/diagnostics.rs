@@ -3116,6 +3116,31 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::MissingRow { primary, func, row } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
+                let row = format!(
+                    "{}::{}",
+                    row.inst.self_ty(db).pretty_print(db),
+                    row.name(db).map_or("<row>", |name| name.data(db))
+                );
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("missing effect row `{row}` required by `{func_name}`"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{func_name}` requires the row `{row}`"),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "a row whose implementation is not known here is forwarded: require it via `uses {row}`"
+                    )],
+                    error_code,
+                }
+            }
+
             Self::AmbiguousEffect { primary, func, key } => {
                 let func_name = func
                     .name(db)

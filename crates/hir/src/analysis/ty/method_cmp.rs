@@ -89,9 +89,12 @@ pub(super) fn compare_impl_method<'db>(
     // method with the trait method.
     let mut err = !compare_arg_label(db, impl_m, trait_m, sink);
 
-    let (param_subst, effect_pairs) = trait_to_impl_param_subst(db, impl_m, trait_m, trait_inst);
-    if let (CallableDef::Func(_), CallableDef::Func(trait_func)) = (impl_m, trait_m)
-        && effect_pairs.len() != trait_func.effect_requirements(db).len()
+    let (param_subst, effect_pairs, trait_effects) =
+        trait_to_impl_param_subst(db, impl_m, trait_m, trait_inst);
+    if matches!(
+        (impl_m, trait_m),
+        (CallableDef::Func(_), CallableDef::Func(_))
+    ) && effect_pairs.len() != trait_effects
     {
         sink.push(ImplDiag::MethodEffectMismatch { trait_m, impl_m }.into());
         err = true;
@@ -369,12 +372,14 @@ fn insert_param_mapping<'db>(
         .expect("method parameter correspondence must agree");
 }
 
+/// The trait method's params as the impl method's, the pairs of their
+/// effects, and how many effects the trait method has for the impl.
 fn trait_to_impl_param_subst<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
-) -> (PartialSubst<'db>, Vec<(usize, usize)>) {
+) -> (PartialSubst<'db>, Vec<(usize, usize)>, usize) {
     let schema = ParamSchemaId::callable(db, trait_m);
     let mut out = PartialSubst::new(db, ParamDomainId::full(db, schema));
 
@@ -440,7 +445,7 @@ fn trait_to_impl_param_subst<'db>(
         }
     }
 
-    let effect_pairs = map_effect_provider_params_by_identity(
+    let (effect_pairs, trait_effects) = map_effect_provider_params_by_identity(
         db,
         &mut out,
         impl_m,
@@ -450,7 +455,7 @@ fn trait_to_impl_param_subst<'db>(
         &impl_layout,
     );
 
-    (out, effect_pairs)
+    (out, effect_pairs, trait_effects)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
@@ -469,7 +474,7 @@ pub(crate) fn method_param_correspondence<'db>(
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> MethodParamCorrespondence {
-    let (mapping, trait_effect_to_body) =
+    let (mapping, trait_effect_to_body, _) =
         trait_to_impl_param_subst(db, impl_m, trait_m, trait_inst);
     let impl_params = impl_m.params(db);
     let mut body_to_trait = vec![None; impl_params.len()];
@@ -505,20 +510,43 @@ fn map_effect_provider_params_by_identity<'db>(
     trait_inst: TraitInstId<'db>,
     trait_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
     impl_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
-) -> Vec<(usize, usize)> {
+) -> (Vec<(usize, usize)>, usize) {
     let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
-    let trait_entries = collect_effect_provider_entries(
+    // An impl method splices the impl's own rows into its effects: a trait
+    // method's entry naming one pairs with the splice, not by identity.
+    let impl_func = match impl_m {
+        CallableDef::Func(func) => Some(func),
+        CallableDef::VariantCtor(_) => None,
+    };
+    let trait_entries: Vec<_> = collect_effect_provider_entries(
         db,
         trait_m,
         Some(out),
         trait_inst,
         impl_m.scope(),
         assumptions,
-    );
-    let impl_entries =
-        collect_effect_provider_entries(db, impl_m, None, trait_inst, impl_m.scope(), assumptions);
+    )
+    .into_iter()
+    .filter(|entry| {
+        !entry.identity.key_row.is_some_and(|row| {
+            row.inst.def(db) == trait_inst.def(db)
+                && row
+                    .name(db)
+                    .zip(impl_func)
+                    .is_some_and(|(name, func)| func.row_splice(db, name).is_some())
+        })
+    })
+    .collect();
+    let impl_entries: Vec<_> =
+        collect_effect_provider_entries(db, impl_m, None, trait_inst, impl_m.scope(), assumptions)
+            .into_iter()
+            .filter(|entry| {
+                !impl_func.is_some_and(|func| func.effect_from_row(db, entry.effect_idx))
+            })
+            .collect();
     let mut used_impl_entries = vec![false; impl_entries.len()];
     let mut effect_pairs = Vec::new();
+    let trait_effects = trait_entries.len();
 
     for trait_entry in trait_entries {
         let Some((impl_idx, impl_entry)) =
@@ -551,7 +579,7 @@ fn map_effect_provider_params_by_identity<'db>(
             }
         }
     }
-    effect_pairs
+    (effect_pairs, trait_effects)
 }
 
 fn collect_effect_provider_entries<'db>(
@@ -596,6 +624,15 @@ fn collect_effect_provider_entries<'db>(
                             instantiate_trait_method_template(
                                 db,
                                 Binder::bind(method.generic_owner(), key_trait),
+                                subst,
+                            ),
+                        )
+                    }
+                    crate::core::semantic::EffectRequirementKey::Row(row) => {
+                        crate::core::semantic::EffectRequirementKey::Row(
+                            instantiate_trait_method_template(
+                                db,
+                                Binder::bind(method.generic_owner(), row),
                                 subst,
                             ),
                         )
@@ -708,6 +745,18 @@ fn effect_identity_matches<'db>(
                 trait_effect_key_matches_with(db, trait_key_trait, impl_key_trait, |lhs, rhs| {
                     effect_identity_tys_match(db, lhs, rhs)
                 })
+            }
+            _ => false,
+        },
+        EffectKeyKind::Row => match (trait_identity.key_row, impl_identity.key_row) {
+            (Some(trait_row), Some(impl_row)) => {
+                trait_row.row == impl_row.row
+                    && trait_effect_key_matches_with(
+                        db,
+                        trait_row.inst,
+                        impl_row.inst,
+                        |lhs, rhs| effect_identity_tys_match(db, lhs, rhs),
+                    )
             }
             _ => false,
         },
@@ -1062,8 +1111,22 @@ fn compare_constraints<'db>(
         trait_inst,
         true,
     );
+    // A row's components bound their providers as the row's implementation
+    // requires; the trait method's row stands for them.
+    let row_providers: Vec<TyId<'db>> = match impl_m {
+        CallableDef::Func(func) => place_effect_provider_param_index_map(db, func)
+            .iter()
+            .enumerate()
+            .filter(|(effect, _)| func.effect_from_row(db, *effect))
+            .filter_map(|(_, param)| impl_m.params(db).get((*param)?).copied())
+            .collect(),
+        CallableDef::VariantCtor(_) => Vec::new(),
+    };
     let mut unsatisfied_goals = ThinVec::new();
     for &goal in impl_m_constraints.list(db) {
+        if row_providers.contains(&goal.self_ty(db)) {
+            continue;
+        }
         // Source-level concrete assumptions are rejected, so the solver does
         // not consult assumptions for concrete goals. Method comparison can
         // legitimately produce a concrete goal after substituting the owning

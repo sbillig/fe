@@ -299,7 +299,7 @@ pub(crate) fn resolve_local_source_span<'db>(
                 .ok()?
                 .local(local)
                 .and_then(|local| local.source)
-                .and_then(|source| source.def_span_in_body(body).resolve(db))
+                .and_then(|source| source.def_span_in_body(db, body).resolve(db))
         })
         .or_else(|| hir_body.and_then(|body| body.span().resolve(db)))
 }

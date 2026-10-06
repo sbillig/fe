@@ -24,6 +24,7 @@ use crate::hir_def::{CallableDef, Func, Partial, PathId, TypeId as HirTypeId, Ty
 pub mod elaborate;
 pub mod match_;
 pub mod model;
+pub mod rows;
 
 pub use model::{
     BarrierReason, EffectBarrier, EffectFamily, EffectForwarder, EffectPatternKey, EffectQuery,
@@ -41,6 +42,7 @@ pub use model::{
 pub enum EffectKeyKind {
     Type,
     Trait,
+    Row,
     Other,
 }
 
@@ -48,6 +50,7 @@ pub enum EffectKeyKind {
 pub(crate) enum ResolvedEffectKey<'db> {
     Type(TypeKeySchema<'db>),
     Trait(TraitKeySchema<'db>),
+    Row(rows::RowKey<'db>),
     Invalid,
     Other,
 }
@@ -64,11 +67,13 @@ pub struct CanonicalEffectIdentity<'db> {
     pub key_kind: EffectKeyKind,
     pub key_ty: Option<TyId<'db>>,
     pub key_trait: Option<TraitInstId<'db>>,
+    pub key_row: Option<rows::RowKey<'db>>,
     pub key_syntax: HirTypeId<'db>,
     pub is_mut: bool,
 }
 
 impl<'db> ResolvedEffectKey<'db> {
+    /// The key's kind and type or trait; a row has neither.
     pub(crate) fn into_parts(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -76,7 +81,20 @@ impl<'db> ResolvedEffectKey<'db> {
         match self {
             Self::Type(schema) => (EffectKeyKind::Type, Some(schema.carrier), None),
             Self::Trait(schema) => (EffectKeyKind::Trait, None, Some(schema.into_trait_inst(db))),
-            Self::Invalid | Self::Other => (EffectKeyKind::Other, None, None),
+            Self::Row(_) | Self::Invalid | Self::Other => (EffectKeyKind::Other, None, None),
+        }
+    }
+
+    pub(crate) fn into_requirement_key(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> crate::core::semantic::EffectRequirementKey<'db> {
+        use crate::core::semantic::EffectRequirementKey;
+        match self {
+            Self::Type(schema) => EffectRequirementKey::Type(schema.carrier),
+            Self::Trait(schema) => EffectRequirementKey::Trait(schema.into_trait_inst(db)),
+            Self::Row(row) => EffectRequirementKey::Row(row),
+            Self::Invalid | Self::Other => EffectRequirementKey::Other,
         }
     }
 }
@@ -146,6 +164,17 @@ pub(crate) fn canonical_effect_identity_for_binding<'db>(
         }),
         key_trait: binding.key.key_trait().map(|trait_key| {
             canonicalize_effect_trait_key(db, trait_key, scope, assumptions, assoc_evidence, mode)
+        }),
+        key_row: binding.key.key_row().map(|row| rows::RowKey {
+            inst: canonicalize_effect_trait_key(
+                db,
+                row.inst,
+                scope,
+                assumptions,
+                assoc_evidence,
+                mode,
+            ),
+            row: row.row,
         }),
         key_syntax: binding.binding_ty,
         is_mut: binding.is_mut,
@@ -246,7 +275,8 @@ pub(crate) fn lower_effect_key_schema<'db>(
             let schema = TraitKeySchema::from_canonical_trait_binding(db, trait_inst);
             ResolvedEffectKey::Trait(schema)
         }
-        _ => ResolvedEffectKey::Other,
+        _ => rows::resolve_row_path(db, key_path, scope, assumptions)
+            .map_or(ResolvedEffectKey::Other, ResolvedEffectKey::Row),
     }
 }
 

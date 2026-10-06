@@ -1174,7 +1174,7 @@ impl<'db> TyChecker<'db> {
             return false;
         };
         let span = match provider.origin {
-            EffectOrigin::Param { site, index, .. } => effect_param_span(site, index),
+            EffectOrigin::Param { site, index, .. } => effect_param_span(self.db, site, index),
             EffectOrigin::With { value_expr } => value_expr.span(self.body()).into(),
         };
         let Some((witness, commit)) = self
@@ -1250,7 +1250,11 @@ pub enum ParamSite<'db> {
     EffectField(EffectParamSite<'db>),
 }
 
-fn param_span(site: ParamSite<'_>, idx: usize) -> DynLazySpan<'_> {
+fn param_span<'db>(
+    db: &'db dyn HirAnalysisDb,
+    site: ParamSite<'db>,
+    idx: usize,
+) -> DynLazySpan<'db> {
     match site {
         ParamSite::Func(func) => func.span().params().param(idx).name().into(),
         ParamSite::ContractInit(contract) => contract
@@ -1260,7 +1264,7 @@ fn param_span(site: ParamSite<'_>, idx: usize) -> DynLazySpan<'_> {
             .param(idx)
             .name()
             .into(),
-        ParamSite::EffectField(effect_site) => effect_param_span(effect_site, idx),
+        ParamSite::EffectField(effect_site) => effect_param_span(db, effect_site, idx),
     }
 }
 
@@ -1310,9 +1314,18 @@ fn effect_param_name<'db>(
     }
 }
 
-fn effect_param_span(site: EffectParamSite<'_>, idx: usize) -> DynLazySpan<'_> {
+fn effect_param_span<'db>(
+    db: &'db dyn HirAnalysisDb,
+    site: EffectParamSite<'db>,
+    idx: usize,
+) -> DynLazySpan<'db> {
     match site {
-        EffectParamSite::Func(func) => func.span().effects().param_idx(idx).name().into(),
+        EffectParamSite::Func(func) => func
+            .span()
+            .effects()
+            .param_idx(func.effect_origin(db, idx))
+            .name()
+            .into(),
         EffectParamSite::Contract(contract) => {
             contract.span().effects().param_idx(idx).name().into()
         }
@@ -1552,8 +1565,8 @@ impl<'db> LocalBinding<'db> {
     pub(super) fn def_span(&self, env: &TyCheckEnv<'db>) -> DynLazySpan<'db> {
         match self {
             LocalBinding::Local { pat, .. } => pat.span(env.body).into(),
-            LocalBinding::Param { site, idx, .. } => param_span(*site, *idx),
-            LocalBinding::EffectParam { site, idx, .. } => effect_param_span(*site, *idx),
+            LocalBinding::Param { site, idx, .. } => param_span(env.db, *site, *idx),
+            LocalBinding::EffectParam { site, idx, .. } => effect_param_span(env.db, *site, *idx),
         }
     }
 
@@ -1561,16 +1574,25 @@ impl<'db> LocalBinding<'db> {
     ///
     /// This is used by `TypedBody::expr_binding_def_span` to get the definition
     /// span without needing a full `TyCheckEnv`.
-    pub(super) fn def_span_with(&self, body: Body<'db>, _func: Func<'db>) -> DynLazySpan<'db> {
-        self.def_span_in_body(body)
+    pub(super) fn def_span_with(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        _func: Func<'db>,
+    ) -> DynLazySpan<'db> {
+        self.def_span_in_body(db, body)
     }
 
     /// Get the definition span for this binding given just the body.
-    pub(crate) fn def_span_in_body(&self, body: Body<'db>) -> DynLazySpan<'db> {
+    pub(crate) fn def_span_in_body(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+    ) -> DynLazySpan<'db> {
         match self {
             LocalBinding::Local { pat, .. } => pat.span(body).into(),
-            LocalBinding::Param { site, idx, .. } => param_span(*site, *idx),
-            LocalBinding::EffectParam { site, idx, .. } => effect_param_span(*site, *idx),
+            LocalBinding::Param { site, idx, .. } => param_span(db, *site, *idx),
+            LocalBinding::EffectParam { site, idx, .. } => effect_param_span(db, *site, *idx),
         }
     }
 }

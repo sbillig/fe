@@ -1,0 +1,302 @@
+//! Associated effect rows.
+//!
+//! A trait declares a row, `uses E`, and each implementation gives its
+//! effects, `uses E = (storage: mut RawStorage)`, or none. A `uses E` entry of
+//! a trait method, or `uses C::E` for a type `C` bounded by the trait, names
+//! the row of a trait instance. Where the instance's implementation is known
+//! the row expands to its components: effects, and rows that expand in turn.
+//! A row that does not expand is matched by identity: a call forwards the
+//! caller's own. In an implementation's own methods, `uses E` is spliced
+//! into the method's effects (`Func::effects`).
+use salsa::Update;
+
+use crate::{
+    analysis::{
+        HirAnalysisDb,
+        name_resolution::{PathRes, resolve_path},
+        ty::{
+            binder::Binder,
+            effects::resolve_effect_key,
+            fold::{TyFoldable, TyFolder},
+            trait_def::{ImplementorOrigin, TraitInstId, resolve_trait_impl_instance},
+            trait_resolution::{
+                PredicateListId, Selection, TraitSolveCx,
+                constraint::{enclosing_trait, enclosing_trait_self_ty},
+            },
+            visitor::{TyVisitable, TyVisitor},
+        },
+    },
+    core::semantic::{EffectRequirement, EffectRequirementKey, constraints_for},
+    hir_def::{IdentId, PathId, TypeId as HirTypeId, scope_graph::ScopeId},
+};
+
+/// Row `row` of a trait instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct RowKey<'db> {
+    pub inst: TraitInstId<'db>,
+    pub row: u16,
+}
+
+impl<'db> RowKey<'db> {
+    pub fn name(self, db: &'db dyn HirAnalysisDb) -> Option<IdentId<'db>> {
+        self.inst.def(db).rows(db)[self.row as usize].name.to_opt()
+    }
+}
+
+impl<'db> TyVisitable<'db> for RowKey<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.inst.visit_with(visitor)
+    }
+}
+
+impl<'db> TyFoldable<'db> for RowKey<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        RowKey {
+            inst: self.inst.fold_with(db, folder),
+            row: self.row,
+        }
+    }
+}
+
+/// The row a `uses` entry's path names: `E` or `Self::E` in a trait (or one
+/// of its supertraits), and `C::E` for a type `C` the scope bounds by a trait
+/// with row `E`.
+pub(crate) fn resolve_row_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<RowKey<'db>> {
+    if !path.generic_args(db).is_empty(db) {
+        return None;
+    }
+    let name = path.ident(db).to_opt()?;
+    let self_ty = match path.parent(db) {
+        None => enclosing_trait_self_ty(db, scope)?,
+        Some(parent) => match resolve_path(db, parent, scope, assumptions, false).ok()? {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            _ => return None,
+        },
+    };
+    // A trait's own rows are its methods' whether or not their declarations
+    // assume `Self: Trait`.
+    let own = enclosing_trait(db, scope)
+        .filter(|_| enclosing_trait_self_ty(db, scope) == Some(self_ty))
+        .map(|trait_def| {
+            let inst = TraitInstId::new_simple(db, trait_def, trait_def.params(db).to_vec());
+            PredicateListId::new(db, vec![inst]).extend_all_bounds(db)
+        });
+    own.into_iter()
+        .chain([assumptions.extend_all_bounds(db)])
+        .flat_map(|list| list.list(db).iter().copied())
+        .filter(|inst| inst.self_ty(db) == self_ty)
+        .find_map(|inst| {
+            let row = inst
+                .def(db)
+                .rows(db)
+                .iter()
+                .position(|row| row.name.to_opt() == Some(name))?;
+            Some(RowKey {
+                inst,
+                row: row as u16,
+            })
+        })
+}
+
+/// A component of a row: an ordinary effect requirement, or another row.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct RowComponent<'db> {
+    pub name: IdentId<'db>,
+    pub key: EffectRequirementKey<'db>,
+    pub is_mut: bool,
+    pub key_syntax: HirTypeId<'db>,
+}
+
+/// Where a row component sits: the requirement entry whose row it descends
+/// from, and its index in each row on the way down. A path names the same
+/// component in every view of a requirement, however far each view expands
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct RowPath {
+    pub entry: u32,
+    pub steps: Vec<u32>,
+}
+
+impl RowPath {
+    pub fn entry(entry: u32) -> Self {
+        Self {
+            entry,
+            steps: Vec::new(),
+        }
+    }
+
+    fn child(&self, index: usize) -> Self {
+        let mut steps = self.steps.clone();
+        steps.push(index as u32);
+        Self {
+            entry: self.entry,
+            steps,
+        }
+    }
+
+    /// `self` with its prefix `from` replaced by `to`, if it has that prefix.
+    pub fn rebase(&self, from: &RowPath, to: &RowPath) -> Option<RowPath> {
+        (self.entry == from.entry && self.steps.starts_with(&from.steps)).then(|| RowPath {
+            entry: to.entry,
+            steps: to
+                .steps
+                .iter()
+                .chain(&self.steps[from.steps.len()..])
+                .copied()
+                .collect(),
+        })
+    }
+}
+
+/// A component of the rows a function's requirements name, as one view
+/// expands them: an effect, or a row the view cannot expand.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct RowComponentRequirement<'db> {
+    pub path: RowPath,
+    pub requirement: EffectRequirement<'db>,
+}
+
+/// The rows among a function's effect requirements, as one view expands
+/// them: each as far as the view selects the implementations involved.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
+pub struct RowExpansion<'db> {
+    /// The components, depth first in entry order, as effect requirements
+    /// numbered after the function's own. Numbers are particular to the
+    /// view; paths are not.
+    pub components: Vec<RowComponentRequirement<'db>>,
+    /// The entries whose rows the view cannot expand at all.
+    pub abstract_rows: Vec<(u32, RowKey<'db>)>,
+}
+
+impl<'db> RowExpansion<'db> {
+    /// Whether the row entry `entry` names stays abstract.
+    pub fn is_abstract(&self, entry: u32) -> bool {
+        self.abstract_rows
+            .iter()
+            .any(|(abstract_entry, _)| *abstract_entry == entry)
+    }
+
+    pub fn component(&self, path: &RowPath) -> Option<&RowComponentRequirement<'db>> {
+        self.components
+            .iter()
+            .find(|component| component.path == *path)
+    }
+}
+
+pub fn expand_rows<'db>(
+    db: &'db dyn HirAnalysisDb,
+    requirements: &[EffectRequirement<'db>],
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> RowExpansion<'db> {
+    let mut next = requirements
+        .iter()
+        .map(|requirement| requirement.binding_idx + 1)
+        .max()
+        .unwrap_or(0);
+    let mut out = RowExpansion::default();
+    for requirement in requirements {
+        let Some(row) = requirement.key.key_row() else {
+            continue;
+        };
+        let Some(components) = direct_row_components(db, row, scope, assumptions) else {
+            out.abstract_rows.push((requirement.binding_idx, row));
+            continue;
+        };
+        let entry = RowPath::entry(requirement.binding_idx);
+        let mut pending: Vec<_> = components
+            .into_iter()
+            .enumerate()
+            .rev()
+            .map(|(index, component)| (entry.child(index), component))
+            .collect();
+        while let Some((path, component)) = pending.pop() {
+            if let Some(inner) = component.key.key_row()
+                && let Some(components) = direct_row_components(db, inner, scope, assumptions)
+            {
+                pending.extend(
+                    components
+                        .into_iter()
+                        .enumerate()
+                        .rev()
+                        .map(|(index, component)| (path.child(index), component)),
+                );
+                continue;
+            }
+            out.components.push(RowComponentRequirement {
+                path,
+                requirement: EffectRequirement {
+                    binding_name: component.name,
+                    key: component.key,
+                    is_mut: component.is_mut,
+                    binding_site: requirement.binding_site,
+                    binding_idx: next,
+                    binding_ty: component.key_syntax,
+                },
+            });
+            next += 1;
+        }
+    }
+    out
+}
+
+/// The components `key`'s implementation gives its row, if the scope
+/// selects the implementation.
+fn direct_row_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: RowKey<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<Vec<RowComponent<'db>>> {
+    let Selection::Unique(resolved) = resolve_trait_impl_instance(
+        db,
+        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+        key.inst,
+    ) else {
+        return None;
+    };
+    let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db) else {
+        return None;
+    };
+    let name = key.name(db)?;
+    let Some(effects) = impl_trait
+        .rows(db)
+        .iter()
+        .find(|row| row.name.to_opt() == Some(name))
+        .and_then(|row| row.effects)
+    else {
+        return Some(Vec::new());
+    };
+    let impl_scope = impl_trait.scope();
+    let impl_assumptions = constraints_for(db, impl_trait.into());
+    let args = resolved.impl_args(db);
+    effects
+        .data(db)
+        .iter()
+        .map(|effect| {
+            let key_syntax = effect.key_ty.to_opt()?;
+            let key = resolve_effect_key(db, key_syntax, impl_scope, impl_assumptions)
+                .into_requirement_key(db);
+            let key = Binder::bind(impl_trait.into(), key).instantiate(db, args);
+            Some(RowComponent {
+                name: effect
+                    .name
+                    .or_else(|| key_syntax.as_path(db)?.ident(db).to_opt())?,
+                key,
+                is_mut: effect.is_mut,
+                key_syntax,
+            })
+        })
+        .collect()
+}

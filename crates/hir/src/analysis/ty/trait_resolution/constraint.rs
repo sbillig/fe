@@ -615,12 +615,18 @@ pub(crate) fn enclosing_trait_self_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
 ) -> Option<TyId<'db>> {
+    collect_generic_params(db, enclosing_trait(db, scope)?.into()).trait_self(db)
+}
+
+/// The trait whose definition `scope` is in, outside any impl.
+pub(crate) fn enclosing_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<crate::hir_def::Trait<'db>> {
     let mut item = Some(scope.item());
     while let Some(current) = item {
         match current {
-            ItemKind::Trait(trait_) => {
-                return collect_generic_params(db, trait_.into()).trait_self(db);
-            }
+            ItemKind::Trait(trait_) => return Some(trait_),
             // `Self` inside impls resolves to the implementor type directly.
             ItemKind::Impl(_) | ItemKind::ImplTrait(_) => return None,
             _ => {}

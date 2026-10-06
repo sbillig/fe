@@ -721,7 +721,7 @@ impl super::Parse for SuperTraitListScope {
     }
 }
 
-define_scope! { TraitItemListScope, TraitItemList, (RBrace, Newline, UnsafeKw, FnKw, TypeKw, ConstKw) }
+define_scope! { TraitItemListScope, TraitItemList, (RBrace, Newline, UnsafeKw, FnKw, TypeKw, ConstKw, UsesKw) }
 impl super::Parse for TraitItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -755,6 +755,27 @@ impl super::Parse for TraitTypeItemScope {
             parse_type(parser, None)?;
         }
 
+        Ok(())
+    }
+}
+
+define_scope! { TraitUsesItemScope, TraitUsesItem }
+impl super::Parse for TraitUsesItemScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.set_newline_as_trivia(false);
+        parser.bump_expected(SyntaxKind::UsesKw);
+        parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Eq]);
+        if parser.find_and_pop(
+            SyntaxKind::Ident,
+            ExpectedKind::Name(SyntaxKind::TraitUsesItem),
+        )? {
+            parser.bump();
+        }
+        if parser.bump_if(SyntaxKind::Eq) {
+            super::func::parse_uses_row(parser)?;
+        }
         Ok(())
     }
 }
@@ -843,7 +864,7 @@ impl super::Parse for ImplScope {
     }
 }
 
-define_scope! { ImplTraitItemListScope, TraitItemList, (RBrace, UnsafeKw, FnKw, TypeKw, ConstKw) }
+define_scope! { ImplTraitItemListScope, TraitItemList, (RBrace, UnsafeKw, FnKw, TypeKw, ConstKw, UsesKw) }
 impl super::Parse for ImplTraitItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -1072,9 +1093,12 @@ fn parse_trait_item_block<S: TokenStream>(
             Some(SyntaxKind::ConstKw) => {
                 parser.parse_cp(TraitConstItemScope::default(), checkpoint)?;
             }
+            Some(SyntaxKind::UsesKw) => {
+                parser.parse_cp(TraitUsesItemScope::default(), checkpoint)?;
+            }
             _ => {
                 let proof = parser.error_msg_on_current_token(
-                    "only `fn`, `type`, or `const` is allowed in this block",
+                    "only `fn`, `type`, `const`, or `uses` is allowed in this block",
                 );
                 parser.try_recover().map_err(|r| r.add_err_proof(proof))?;
             }

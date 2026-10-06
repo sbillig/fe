@@ -539,7 +539,9 @@ pub struct ResolvedMethodInstance<'db> {
     body: Option<Func<'db>>,
     body_args: Vec<TyId<'db>>,
     body_to_nominal: Vec<Option<usize>>,
-    effect_pairs: Vec<(usize, usize)>,
+    /// The declaration's effects paired with the body's, absent when the body
+    /// is the declaration.
+    effect_pairs: Option<Vec<(usize, usize)>>,
     normalization_scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 }
@@ -599,8 +601,8 @@ impl<'db> ResolvedMethodInstance<'db> {
         &self.body_args
     }
 
-    pub fn effect_pairs(&self) -> &[(usize, usize)] {
-        &self.effect_pairs
+    pub fn effect_pairs(&self) -> Option<&[(usize, usize)]> {
+        self.effect_pairs.as_deref()
     }
 
     pub fn origin(&self, db: &'db dyn HirAnalysisDb) -> ImplementorOrigin<'db> {
@@ -609,13 +611,15 @@ impl<'db> ResolvedMethodInstance<'db> {
 
     /// Rebase an already-completed nominal method instance into the selected
     /// body schema. Inherited values come from implementation selection; the
-    /// method's own and hidden slots are matched by structural role.
+    /// method's own and hidden slots are matched by structural role, and
+    /// checked effect inputs by `effect_pairs`.
     pub fn complete_body_args(
         &self,
         db: &'db dyn HirAnalysisDb,
         nominal_args: &[TyId<'db>],
         checked_inputs: Option<&[TyId<'db>]>,
         checked_effect_inputs: Option<&[(usize, TyId<'db>)]>,
+        effect_pairs: &[(usize, usize)],
     ) -> Result<CompleteSubst<'db>, MethodArgMapError<'db>> {
         let body = self.body.ok_or(MethodArgMapError::MissingBody)?;
         let nominal_schema = param_schema(db, self.declaration.into(), ParamBasis::Full);
@@ -648,7 +652,11 @@ impl<'db> ResolvedMethodInstance<'db> {
             if let Some(nominal_slot) = self.body_to_nominal.get(body_slot).copied().flatten() {
                 args.bind(db, key, nominal_args[nominal_slot])
                     .expect("selected nominal parameter key");
-            } else if !matches!(key, ParamKey::CallableLayout { .. }) {
+            } else if !matches!(key, ParamKey::CallableLayout { .. })
+                // The call provides the effects of an implementation's rows.
+                && !matches!(key, ParamKey::EffectProvider { func, effect_idx }
+                    if func.effect_from_row(db, effect_idx))
+            {
                 return Err(MethodArgMapError::MissingNominalRole(key));
             }
         }
@@ -681,7 +689,7 @@ impl<'db> ResolvedMethodInstance<'db> {
                 .into_iter()
                 .flatten()
                 .map(|&(nominal, ty)| {
-                    self.effect_pairs
+                    effect_pairs
                         .iter()
                         .find(|(index, _)| *index == nominal)
                         .map(|&(_, body_idx)| (CallableInputLayoutHoleOrigin::Effect(body_idx), ty))
@@ -756,7 +764,7 @@ pub fn resolve_trait_method_instance<'db>(
         |(func, args)| (Some(func), args),
     );
     let (body_to_nominal, effect_pairs) = body.map_or_else(
-        || (Vec::new(), Vec::new()),
+        || (Vec::new(), Some(Vec::new())),
         |body| {
             if body == declaration {
                 (
@@ -765,9 +773,7 @@ pub fn resolve_trait_method_instance<'db>(
                         .len())
                         .map(Some)
                         .collect(),
-                    (0..body.effect_requirements(db).len())
-                        .map(|idx| (idx, idx))
-                        .collect(),
+                    None,
                 )
             } else {
                 let correspondence = method_param_correspondence(
@@ -780,7 +786,7 @@ pub fn resolve_trait_method_instance<'db>(
                 );
                 (
                     correspondence.body_to_trait_slots,
-                    correspondence.trait_effect_to_body,
+                    Some(correspondence.trait_effect_to_body),
                 )
             }
         },

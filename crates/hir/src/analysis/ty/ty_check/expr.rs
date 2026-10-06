@@ -4,10 +4,13 @@ use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
-use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex,
-    IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, StmtId, UnOp,
-    VariantKind, WithBinding,
+use crate::core::{
+    hir_def::{
+        ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId,
+        FieldIndex, Func, IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt,
+        StmtId, UnOp, VariantKind, WithBinding,
+    },
+    semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
 };
 use crate::span::DynLazySpan;
 
@@ -47,13 +50,15 @@ use crate::analysis::ty::{
             contains_projection_or_invalid_query_state, effect_requirement_decls_for_callable,
             finalize_stored_effect_key, query_contains_unresolved_inference,
         },
+        instantiate_trait_effect_key,
         match_::{
             KeyMatchCommit, apply_key_match_commit, instantiate_trait_pattern_in,
             instantiate_trait_pattern_in_with_bindings, query_matches_forwarder,
             query_matches_witness,
         },
-        place_effect_provider_param_index_map, stored_value_contains_implicit_layout_params,
-        stored_value_contains_out_of_scope_params,
+        normalize_effect_identity_trait, place_effect_provider_param_index_map,
+        rows::{RowExpansion, RowKey, RowPath, expand_rows},
+        stored_value_contains_implicit_layout_params, stored_value_contains_out_of_scope_params,
     },
     fold::{TyFoldable as _, TyFolder},
     normalize::normalize_with_trait_evidence,
@@ -105,6 +110,7 @@ use crate::analysis::{
 use crate::hir_def::{FieldParent, ItemKind, scope_graph::ScopeId};
 use crate::semantic::{
     FieldStorageLayout, LayoutProjection, LayoutViewError, LayoutViewKind, ProviderBinding,
+    ProviderSource,
 };
 use common::indexmap::IndexMap;
 
@@ -1525,7 +1531,30 @@ impl<'db> TyChecker<'db> {
             EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
             EffectOrigin::Param { .. } => None,
         };
-        let reqs = effect_requirement_decls_for_callable(self.db, callable.callable_def);
+        // Each component of a callee row the call expands is resolved like the
+        // callee's own effects, in a slot numbered after them.
+        let rows = self.callee_rows(callable, func);
+        // A row has no provider of its own: its reserved provider slot is `()`.
+        for requirement in func.effective_effect_requirements(self.db) {
+            if requirement.key.key_row().is_some()
+                && let Some(Some(slot)) =
+                    callee_provider_arg_idx_by_effect.get(requirement.binding_idx as usize)
+                && let Some(&provider_var) = callable.generic_args().get(*slot)
+            {
+                self.table.unify(provider_var, TyId::unit(self.db)).ok();
+            }
+        }
+        let row_paths: FxHashMap<u32, RowPath> = rows
+            .components
+            .iter()
+            .map(|component| (component.requirement.binding_idx, component.path.clone()))
+            .collect();
+        let reqs: Vec<_> = effect_requirement_decls_for_callable(self.db, callable.callable_def)
+            .into_iter()
+            .chain(rows.components.iter().filter_map(|component| {
+                EffectRequirementDecl::from_effect_requirement(self.db, &component.requirement)
+            }))
+            .collect();
         for (param_idx, req) in reqs.iter().enumerate() {
             let key_ty = req.key_ty;
             let Some(query) = build_effect_query_for_call(self, callable, req) else {
@@ -1709,12 +1738,23 @@ impl<'db> TyChecker<'db> {
                             "effect arg provider space must be explicit for {pass_mode:?} at {key_ty:?}"
                         );
                     }
-                    if let Some(resolved_binding) =
-                        callee_effect_env.resolved_binding(self.db, req.binding_idx as usize)
-                    {
-                        let provider_idx = resolved_binding.provider.provider_idx;
+                    let slot = if row_paths.contains_key(&req.binding_idx) {
+                        Some((
+                            req.binding_idx,
+                            ProviderSource::UsesParam {
+                                site: EffectParamSite::Func(func),
+                                requirement_idx: req.binding_idx,
+                            },
+                        ))
+                    } else {
+                        callee_effect_env
+                            .resolved_binding(self.db, req.binding_idx as usize)
+                            .map(|binding| (binding.provider.provider_idx, binding.provider.source))
+                    };
+                    if let Some(slot) = slot {
+                        let provider_idx = slot.0;
                         let specialization = self.specialize_effect_provider_binding(
-                            resolved_binding.provider,
+                            slot,
                             provider,
                             &arg,
                             pass_mode,
@@ -1746,6 +1786,7 @@ impl<'db> TyChecker<'db> {
                         instantiated_key_ty,
                         provider_target_ty,
                         provider: provider_space,
+                        row_path: row_paths.get(&req.binding_idx).cloned(),
                     });
                 }
                 EffectResolution::BlockedByBarrier => {}
@@ -1765,6 +1806,40 @@ impl<'db> TyChecker<'db> {
                 }
             }
         }
+        // A row that stays abstract is the caller's own row, forwarded.
+        let effects = func.effective_effect_requirements(self.db);
+        let forwarded = rows
+            .abstract_rows
+            .iter()
+            .map(|&(entry, row)| (&effects[entry as usize], RowPath::entry(entry), row))
+            .chain(rows.components.iter().filter_map(|component| {
+                let row = component.requirement.key.key_row()?;
+                Some((&component.requirement, component.path.clone(), row))
+            }));
+        for (requirement, path, row) in forwarded {
+            match self.own_row_binding(row) {
+                Some(binding) => resolved_args.push(super::ResolvedEffectArg {
+                    param_idx: resolved_args.len(),
+                    binding_idx: requirement.binding_idx,
+                    key: requirement.binding_ty,
+                    arg: super::EffectArg::Binding(binding),
+                    with_source: None,
+                    pass_mode: super::EffectPassMode::ByValue,
+                    layout_view: super::EffectArgLayoutView::Direct,
+                    required_mut: requirement.is_mut,
+                    key_kind: EffectKeyKind::Row,
+                    instantiated_key_ty: None,
+                    provider_target_ty: None,
+                    provider: None,
+                    row_path: Some(path),
+                }),
+                None => self.push_diag(BodyDiag::MissingRow {
+                    primary: call_span.clone(),
+                    func,
+                    row,
+                }),
+            }
+        }
         let mut providers = specialized_providers.into_values().collect::<Vec<_>>();
         providers.sort_by_key(|provider| provider.provider.provider_idx);
         *callable.effect_providers_mut() = providers;
@@ -1772,10 +1847,71 @@ impl<'db> TyChecker<'db> {
         resolved_args
     }
 
+    /// The callee's rows as this call instantiates them.
+    fn callee_rows(&mut self, callable: &Callable<'db>, func: Func<'db>) -> RowExpansion<'db> {
+        let requirements: Vec<_> = func
+            .effective_effect_requirements(self.db)
+            .iter()
+            .map(|requirement| match requirement.key {
+                SemanticEffectRequirementKey::Row(row) => {
+                    let inst = instantiate_trait_effect_key(self.db, row.inst, callable)
+                        .fold_with(self.db, &mut self.table);
+                    let inst = normalize_effect_identity_trait(
+                        self.db,
+                        inst,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        callable.trait_inst(),
+                    );
+                    EffectRequirement {
+                        key: SemanticEffectRequirementKey::Row(RowKey { inst, row: row.row }),
+                        ..requirement.clone()
+                    }
+                }
+                _ => requirement.clone(),
+            })
+            .collect();
+        expand_rows(
+            self.db,
+            &requirements,
+            self.env.scope(),
+            self.env.assumptions(),
+        )
+    }
+
+    /// The caller's own effect binding for the abstract row `row`.
+    fn own_row_binding(&self, row: RowKey<'db>) -> Option<LocalBinding<'db>> {
+        let super::BodyOwner::Func(caller) = self.env.owner() else {
+            return None;
+        };
+        caller
+            .effective_effect_requirements(self.db)
+            .iter()
+            .find(|requirement| {
+                requirement.key.key_row().is_some_and(|own| {
+                    own.row == row.row
+                        && normalize_effect_identity_trait(
+                            self.db,
+                            own.inst,
+                            self.env.scope(),
+                            self.env.assumptions(),
+                            None,
+                        ) == row.inst
+                })
+            })
+            .map(|requirement| LocalBinding::EffectParam {
+                site: requirement.binding_site,
+                idx: requirement.binding_idx as usize,
+                binding_name: requirement.binding_name,
+                provider_idx: requirement.binding_idx,
+                is_mut: requirement.is_mut,
+            })
+    }
+
     fn instantiate_callable_effect_layout_args(
         &mut self,
         callable: &mut Callable<'db>,
-        callee: crate::hir_def::Func<'db>,
+        callee: Func<'db>,
         effect_idx: usize,
         actual_key_ty: TyId<'db>,
     ) {
@@ -1790,7 +1926,7 @@ impl<'db> TyChecker<'db> {
 
     fn resolve_effect_query(
         &mut self,
-        func: crate::hir_def::Func<'db>,
+        func: Func<'db>,
         req: EffectRequirementDecl<'db>,
         query: EffectQuery<'db>,
         call_span: DynLazySpan<'db>,
@@ -2341,7 +2477,7 @@ impl<'db> TyChecker<'db> {
 
     fn specialize_effect_provider_binding(
         &mut self,
-        slot: ProviderBinding<'db>,
+        (slot_idx, source): (u32, ProviderSource<'db>),
         provided: ProvidedEffect<'db>,
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
@@ -2352,8 +2488,7 @@ impl<'db> TyChecker<'db> {
             .effect_provider_provenance(provided, arg)
             .unwrap_or_else(|| {
                 panic!(
-                    "missing call-site provider provenance for {:?} in {:?}",
-                    slot.provider_idx,
+                    "missing call-site provider provenance for {slot_idx:?} in {:?}",
                     self.env.owner(),
                 )
             });
@@ -2389,16 +2524,16 @@ impl<'db> TyChecker<'db> {
                         },
                     );
                     ProviderBinding {
-                        provider_idx: slot.provider_idx,
+                        provider_idx: slot_idx,
                         provider_ty,
                         is_mut: provided.is_mut,
-                        source: slot.source,
+                        source,
                         semantics,
                         layout_env: None,
                     }
                 },
                 |provider| ProviderBinding {
-                    provider_idx: slot.provider_idx,
+                    provider_idx: slot_idx,
                     ..provider
                 },
             );
@@ -4264,7 +4399,7 @@ impl<'db> TyChecker<'db> {
     fn specialize_callable_layout_origin(
         &self,
         callable: &mut Callable<'db>,
-        func: crate::hir_def::Func<'db>,
+        func: Func<'db>,
         expr: ExprId,
         origin: crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin,
     ) {
@@ -4284,7 +4419,7 @@ impl<'db> TyChecker<'db> {
     fn specialize_callable_layout_context(
         &self,
         callable: &mut Callable<'db>,
-        func: crate::hir_def::Func<'db>,
+        func: Func<'db>,
         origin: crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin,
         field: &FieldStorageLayout<'db>,
         view: LayoutViewKind,
@@ -4335,7 +4470,7 @@ impl<'db> TyChecker<'db> {
     fn specialize_callable_effect_layout_projections(
         &self,
         callable: &mut Callable<'db>,
-        callee: crate::hir_def::Func<'db>,
+        callee: Func<'db>,
         effect_idx: usize,
         provider: ProvidedEffect<'db>,
         arg: &super::EffectArg<'db>,

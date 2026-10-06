@@ -355,6 +355,7 @@ fn lower_static_abi_impl<'db>(
             where_clause,
             vec![],
             vec![],
+            vec![],
             builder.top_mod(),
             builder.origin(),
         )
@@ -660,6 +661,7 @@ fn lower_sol_compat_impl<'db>(
             where_clause,
             types,
             vec![sol_type],
+            vec![],
             builder.top_mod(),
             builder.origin(),
         )

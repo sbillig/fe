@@ -1185,7 +1185,7 @@ impl<'db> Func<'db> {
         }
 
         // Effects
-        result.push_str(&self.effects(db).pretty_print(db));
+        result.push_str(&self.declared_effects(db).pretty_print(db));
 
         // Where clause
         result.push_str(&self.where_clause(db).pretty_print(db));

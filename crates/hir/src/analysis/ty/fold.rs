@@ -603,6 +603,7 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
             instantiated_key_ty: self.instantiated_key_ty.map(|ty| ty.fold_with(db, folder)),
             provider_target_ty: self.provider_target_ty.map(|ty| ty.fold_with(db, folder)),
             provider: self.provider,
+            row_path: self.row_path,
         }
     }
 }

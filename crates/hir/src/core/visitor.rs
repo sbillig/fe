@@ -558,7 +558,7 @@ pub fn walk_func<'db, V>(
     // Effects (uses clause)
     ctxt.with_new_ctxt(
         |span| span.sig().effects(),
-        |ctxt| visitor.visit_effect_param_list(ctxt, func.effects(ctxt.db)),
+        |ctxt| visitor.visit_effect_param_list(ctxt, func.declared_effects(ctxt.db)),
     );
 }
 

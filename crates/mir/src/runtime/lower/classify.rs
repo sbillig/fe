@@ -1996,22 +1996,10 @@ pub(crate) fn runtime_effect_binding_plan_for_binding_idx<'db>(
     semantic: SemanticInstance<'db>,
     binding_idx: u32,
 ) -> Option<RuntimeEffectBindingPlan<'db>> {
-    let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
-        return None;
-    };
-    let resolved = hir::semantic::EffectEnvView::new(EffectParamSite::Func(func))
-        .resolved_binding(db, binding_idx as usize)?;
-    runtime_effect_binding_plan(
-        db,
-        semantic,
-        LocalBinding::EffectParam {
-            site: resolved.requirement.binding_site,
-            idx: resolved.requirement.binding_idx as usize,
-            binding_name: resolved.requirement.binding_name,
-            provider_idx: resolved.provider.provider_idx,
-            is_mut: resolved.requirement.is_mut,
-        },
-    )
+    let binding = semantic.effect_bindings(db).into_iter().find(|binding| {
+        matches!(binding, LocalBinding::EffectParam { idx, .. } if *idx == binding_idx as usize)
+    })?;
+    runtime_effect_binding_plan(db, semantic, binding)
 }
 
 pub(crate) fn runtime_visible_binding_class<'db>(

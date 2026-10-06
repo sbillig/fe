@@ -573,35 +573,46 @@ pub(super) fn lower_uses_clause_opt<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     uses: Option<ast::UsesClause>,
 ) -> EffectParamListId<'db> {
-    use crate::hir_def::{EffectParam, EffectParamListId};
+    let (list, param) = uses.map_or((None, None), |uses| (uses.param_list(), uses.param()));
+    lower_uses_params(ctxt, list, param)
+}
 
-    let mut data: Vec<EffectParam<'db>> = Vec::new();
+/// Lowers the effects of a `uses` clause or row: a list or a single entry.
+fn lower_uses_params<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    list: Option<ast::UsesParamList>,
+    param: Option<ast::UsesParam>,
+) -> EffectParamListId<'db> {
+    use crate::hir_def::EffectParam;
 
-    if let Some(uses) = uses {
-        if let Some(list) = uses.param_list() {
-            for p in list {
-                let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
-                let is_mut = p.mut_token().is_some();
-                let key_ty = TypeId::lower_ast_partial(ctxt, p.ty());
-                data.push(EffectParam {
-                    name,
-                    key_ty,
-                    is_mut,
-                });
-            }
-        } else if let Some(p) = uses.param() {
-            let name = p.name().map(|n| IdentId::lower_token(ctxt, n.syntax()));
-            let is_mut = p.mut_token().is_some();
-            let key_ty = TypeId::lower_ast_partial(ctxt, p.ty());
-            data.push(EffectParam {
-                name,
-                key_ty,
-                is_mut,
-            });
+    let data: Vec<_> = list
+        .into_iter()
+        .flatten()
+        .chain(param)
+        .map(|p| EffectParam {
+            name: p.name().map(|n| IdentId::lower_token(ctxt, n.syntax())),
+            key_ty: TypeId::lower_ast_partial(ctxt, p.ty()),
+            is_mut: p.mut_token().is_some(),
+        })
+        .collect();
+    EffectParamListId::new(ctxt.db(), data)
+}
+
+impl<'db> AssocRow<'db> {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitUsesItem) -> Self {
+        validate_unsupported_item_attrs(
+            ctxt,
+            ast.attr_list(),
+            "uses",
+            ast.name().map(|name| name.text().to_string()),
+        );
+        AssocRow {
+            name: IdentId::lower_token_partial(ctxt, ast.name()),
+            effects: ast
+                .eq()
+                .map(|_| lower_uses_params(ctxt, ast.param_list(), ast.param())),
         }
     }
-
-    EffectParamListId::new(ctxt.db(), data)
 }
 
 impl<'db> Enum<'db> {
@@ -737,6 +748,7 @@ impl<'db> Trait<'db> {
 
         let mut types = vec![];
         let mut consts = vec![];
+        let mut rows = vec![];
 
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
@@ -769,6 +781,7 @@ impl<'db> Trait<'db> {
                         );
                         consts.push(AssocConstDecl::lower_ast(ctxt, c));
                     }
+                    ast::TraitItemKind::Uses(row) => rows.push(AssocRow::lower_ast(ctxt, row)),
                 };
             }
         }
@@ -784,6 +797,7 @@ impl<'db> Trait<'db> {
             where_clause,
             types,
             consts,
+            rows,
             ctxt.top_mod(),
             origin,
         );
@@ -833,6 +847,7 @@ impl<'db> ImplTrait<'db> {
 
         let mut types = vec![];
         let mut consts = vec![];
+        let mut rows = vec![];
         if let Some(item_list) = ast.item_list() {
             for impl_item in item_list {
                 match impl_item.kind() {
@@ -864,6 +879,7 @@ impl<'db> ImplTrait<'db> {
                         );
                         consts.push(AssocConstDef::lower_ast(ctxt, c));
                     }
+                    ast::TraitItemKind::Uses(row) => rows.push(AssocRow::lower_ast(ctxt, row)),
                 };
             }
         }
@@ -878,6 +894,7 @@ impl<'db> ImplTrait<'db> {
             where_clause,
             types,
             consts,
+            rows,
             ctxt.top_mod(),
             origin,
         );

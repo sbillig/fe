@@ -61,9 +61,14 @@ impl<'db> EffectParamOwner<'db> {
         }
     }
 
-    pub fn effect_param_ty_span(self, _db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
+    pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
         match self {
-            EffectParamOwner::Func(func) => func.span().effects().param_idx(idx).ty().into(),
+            EffectParamOwner::Func(func) => func
+                .span()
+                .effects()
+                .param_idx(func.effect_origin(db, idx))
+                .ty()
+                .into(),
             EffectParamOwner::Contract(contract) => {
                 contract.span().effects().param_idx(idx).ty().into()
             }
@@ -233,9 +238,14 @@ impl<'db> BodyOwner<'db> {
         }
     }
 
-    pub fn effect_param_ty_span(self, _db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
+    pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
         match self {
-            BodyOwner::Func(func) => func.span().effects().param_idx(idx).ty().into(),
+            BodyOwner::Func(func) => func
+                .span()
+                .effects()
+                .param_idx(func.effect_origin(db, idx))
+                .ty()
+                .into(),
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => DynLazySpan::invalid(),
             BodyOwner::ContractInit { contract } => contract
                 .span()

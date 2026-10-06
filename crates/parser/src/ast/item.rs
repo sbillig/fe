@@ -396,8 +396,37 @@ impl TraitConstItem {
 }
 
 ast_node! {
+    /// `uses E` in a trait definition, optionally with a default row, or
+    /// `uses E = (store: mut Store)` in a trait implementation.
+    pub struct TraitUsesItem,
+    SK::TraitUsesItem,
+}
+impl super::AttrListOwner for TraitUsesItem {}
+impl TraitUsesItem {
+    /// Returns the name of the row
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    /// Whether the item gives the row's effects, after `=`.
+    pub fn eq(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Eq)
+    }
+
+    /// `= (a: A, b: mut B)`
+    pub fn param_list(&self) -> Option<super::UsesParamList> {
+        support::child(self.syntax())
+    }
+
+    /// `= A` or `= mut A`
+    pub fn param(&self) -> Option<super::UsesParam> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     pub struct TraitItem,
-    SK::Func | SK::TraitTypeItem | SK::TraitConstItem
+    SK::Func | SK::TraitTypeItem | SK::TraitConstItem | SK::TraitUsesItem
 }
 impl TraitItem {
     pub fn kind(&self) -> TraitItemKind {
@@ -409,6 +438,9 @@ impl TraitItem {
             SK::TraitConstItem => {
                 TraitItemKind::Const(TraitConstItem::cast(self.syntax().clone()).unwrap())
             }
+            SK::TraitUsesItem => {
+                TraitItemKind::Uses(TraitUsesItem::cast(self.syntax().clone()).unwrap())
+            }
             _ => unreachable!(),
         }
     }
@@ -418,6 +450,7 @@ pub enum TraitItemKind {
     Func(Func),
     Type(TraitTypeItem),
     Const(TraitConstItem),
+    Uses(TraitUsesItem),
 }
 
 ast_node! {

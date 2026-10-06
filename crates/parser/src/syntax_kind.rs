@@ -415,6 +415,8 @@ pub enum SyntaxKind {
     TraitTypeItem,
     /// `const FOO: Ty` or `const FOO: Ty = expr`
     TraitConstItem,
+    /// `uses E` or `uses E = (storage: mut Store)`: an associated effect row
+    TraitUsesItem,
     /// `{ fn foo() {..} }`
     TraitItemList,
     /// `impl Trait for Foo { .. }`
@@ -775,6 +777,7 @@ impl SyntaxKind {
             SyntaxKind::TraitItemList => "`trait` item list",
             SyntaxKind::TraitTypeItem => "`trait` type item",
             SyntaxKind::TraitConstItem => "`trait` const item",
+            SyntaxKind::TraitUsesItem => "`trait` effect row item",
             SyntaxKind::ImplTrait => "`impl` trait block",
             SyntaxKind::Const => "const definition",
             SyntaxKind::StaticAssert => "static assertion",

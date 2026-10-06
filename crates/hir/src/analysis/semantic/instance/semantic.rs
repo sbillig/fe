@@ -4,6 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     analysis::{
         HirAnalysisDb,
+        place::{Place, PlaceBase},
         semantic::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SemOrigin, SemanticBody,
             SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
@@ -20,13 +21,17 @@ use crate::{
             CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutOwner,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
-            effects::place_effect_provider_param_index_map,
+            effects::{
+                EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
+                rows::{RowExpansion, RowKey, RowPath, expand_rows},
+            },
             fold::TyFoldable,
             instantiate_trait_self,
             normalize::normalize_ty,
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
-                RootProviderScope, provider_semantics, provider_semantics_for_specialized_call,
+                RootProviderRegistration, RootProviderScope, provider_semantics,
+                provider_semantics_for_specialized_call, registered_root_providers,
             },
             subst::substitute_complete,
             trait_def::MethodArgMapError,
@@ -34,7 +39,8 @@ use crate::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::{
-                BodyOwner, Callable, ConstIntrinsicKind, EffectParamSite,
+                BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgLayoutView,
+                EffectParamSite, EffectPassMode, EffectProviderProvenance,
                 EffectProviderSpecialization, LocalBinding, ParamSite, ResolvedEffectArg,
                 SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
@@ -382,6 +388,155 @@ fn provisional_for_loop_call_sites<'db>(
     ProvisionalCallSiteData { sites, diagnostic }
 }
 
+/// A call's row arguments in the instance's view. The call numbered the
+/// components of the callee's rows as its own view expanded them; the
+/// instance renumbers them by path. A row the call forwards passes as the
+/// components the instance expands it to, each from the caller's component
+/// at the same place in the caller's own row. What stays abstract carries
+/// nothing and is dropped.
+fn expand_row_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    callable: &Callable<'db>,
+    args: &[ResolvedEffectArg<'db>],
+) -> (Callable<'db>, Vec<ResolvedEffectArg<'db>>) {
+    let mut callable = callable.clone();
+    let CallableDef::Func(func) = callable.callable_def() else {
+        return (callable, args.to_vec());
+    };
+    if args.iter().all(|arg| arg.row_path.is_none()) {
+        return (callable, args.to_vec());
+    }
+    let key = instance.key(db);
+    let scope = key.owner(db).scope();
+    let assumptions = semantic_instance_base_assumptions_for_key(db, key);
+    let requirements: Vec<_> = func
+        .effective_effect_requirements(db)
+        .iter()
+        .map(|requirement| match requirement.key {
+            EffectRequirementKey::Row(row) => EffectRequirement {
+                key: EffectRequirementKey::Row(RowKey {
+                    inst: normalize_ty(
+                        db,
+                        instantiate_trait_effect_key(db, row.inst, &callable),
+                        scope,
+                        assumptions,
+                    ),
+                    row: row.row,
+                }),
+                ..requirement.clone()
+            },
+            _ => requirement.clone(),
+        })
+        .collect();
+    let callee_rows = expand_rows(db, &requirements, scope, assumptions);
+    let caller_rows = row_expansion_for_key(db, key);
+    let caller_providers = instantiated_effect_env(db, instance)
+        .map(|env| env.providers(db).clone())
+        .unwrap_or_default();
+    let mut slots = FxHashMap::default();
+    let mut expanded = Vec::with_capacity(args.len());
+    let mut forwarded_providers = Vec::new();
+    for arg in args {
+        let Some(path) = &arg.row_path else {
+            expanded.push(arg.clone());
+            continue;
+        };
+        if arg.key_kind != EffectKeyKind::Row {
+            if let Some(component) = callee_rows.component(path) {
+                let slot = component.requirement.binding_idx;
+                slots.insert(arg.binding_idx, slot);
+                expanded.push(ResolvedEffectArg {
+                    binding_idx: slot,
+                    ..arg.clone()
+                });
+            }
+            continue;
+        }
+        let EffectArg::Binding(LocalBinding::EffectParam { idx, .. }) = arg.arg else {
+            continue;
+        };
+        let own = RowPath::entry(idx as u32);
+        for callee in &callee_rows.components {
+            let Some(caller) = callee
+                .path
+                .rebase(path, &own)
+                .and_then(|path| caller_rows.component(&path))
+                .filter(|_| callee.requirement.key.key_row().is_none())
+            else {
+                continue;
+            };
+            let slot = caller.requirement.binding_idx;
+            let binding = LocalBinding::EffectParam {
+                site: caller.requirement.binding_site,
+                idx: slot as usize,
+                binding_name: caller.requirement.binding_name,
+                provider_idx: slot,
+                is_mut: caller.requirement.is_mut,
+            };
+            let Some(provider) = caller_providers
+                .iter()
+                .find(|provider| provider.provider_idx == slot)
+            else {
+                continue;
+            };
+            let (arg_value, pass_mode) = match provider.semantics.transport {
+                ProviderTransport::ByValue => {
+                    (EffectArg::Binding(binding), EffectPassMode::ByValue)
+                }
+                ProviderTransport::ByPlace | ProviderTransport::ByTempPlace => (
+                    EffectArg::Place(Place::new(PlaceBase::Binding(binding))),
+                    EffectPassMode::ByPlace,
+                ),
+            };
+            let target = callee.requirement.binding_idx;
+            expanded.push(ResolvedEffectArg {
+                param_idx: expanded.len(),
+                binding_idx: target,
+                key: callee.requirement.binding_ty,
+                arg: arg_value,
+                with_source: None,
+                pass_mode,
+                layout_view: EffectArgLayoutView::Direct,
+                required_mut: callee.requirement.is_mut,
+                key_kind: callee.requirement.key.kind(),
+                instantiated_key_ty: callee.requirement.key.key_ty(),
+                provider_target_ty: provider.semantics.target_ty,
+                provider: provider.semantics.address_space,
+                row_path: Some(callee.path.clone()),
+            });
+            forwarded_providers.push(EffectProviderSpecialization {
+                provider: ProviderBinding {
+                    provider_idx: target,
+                    source: ProviderSource::UsesParam {
+                        site: EffectParamSite::Func(func),
+                        requirement_idx: target,
+                    },
+                    ..provider.clone()
+                },
+                provenance: EffectProviderProvenance::Binding {
+                    owner: key.owner(db),
+                    binding,
+                },
+            });
+        }
+    }
+    // The call's providers for the components it resolved, renumbered.
+    for specialization in callable.effect_providers_mut() {
+        let provider = &mut specialization.provider;
+        if let ProviderSource::UsesParam {
+            requirement_idx, ..
+        } = &mut provider.source
+            && let Some(&slot) = slots.get(requirement_idx)
+        {
+            *requirement_idx = slot;
+            provider.provider_idx = slot;
+        }
+    }
+    callable.effect_providers_mut().extend(forwarded_providers);
+    (callable, expanded)
+}
+
 /// Plans a call before provider refinement. The first argument-mapping
 /// failure is recorded in `diagnostic`; the site then keeps its nominal
 /// effect order.
@@ -394,6 +549,9 @@ fn provisional_call_site<'db>(
     origin: SemOrigin<'db>,
     diagnostic: &mut Option<SemanticDiagnosticId<'db>>,
 ) -> CallSiteLowering<'db> {
+    let (callable, nominal_effect_args) =
+        expand_row_args(db, instance, callable, nominal_effect_args);
+    let (callable, nominal_effect_args) = (&callable, nominal_effect_args.as_slice());
     let mut report = |error| {
         diagnostic.get_or_insert_with(|| method_arg_map_diagnostic(db, instance, error, origin));
     };
@@ -474,7 +632,7 @@ fn final_call_site_data<'db>(
             .effect_providers(db)
             .param_spaces(db)
             .is_empty()
-        || !owner_effect_bindings(db, instance.key(db).owner(db)).is_empty()
+        || !instance.effect_bindings(db).is_empty()
     {
         match provisional_call_site_provider_refinements(db, instance).clone() {
             CallSiteRefinements::Refined(refinements) => refinements,
@@ -737,6 +895,9 @@ fn finalize_call_site<'db>(
     origin: SemOrigin<'db>,
     same_assumptions: bool,
 ) -> Result<(), SemanticDiagnosticId<'db>> {
+    let (callable, nominal_effect_args) =
+        expand_row_args(db, instance, callable, nominal_effect_args);
+    let (callable, nominal_effect_args) = (&callable, nominal_effect_args.as_slice());
     // A plain call without provider refinements or effect providers, under the
     // provisional assumptions, resolves exactly as its provisional plan did:
     // the provider resolution modes differ only for providers and for selected
@@ -1021,6 +1182,12 @@ impl<'db> SemanticInstance<'db> {
                 let requirement = EffectEnvView::new(site)
                     .requirements(db)
                     .into_iter()
+                    .chain(
+                        row_expansion_for_key(db, self.key(db))
+                            .components
+                            .iter()
+                            .map(|component| component.requirement.clone()),
+                    )
                     .find(|requirement| requirement.binding_idx as usize == idx);
                 let requirement_ty = requirement
                     .as_ref()
@@ -1031,9 +1198,11 @@ impl<'db> SemanticInstance<'db> {
                         .map(|provider| provider.provider_ty);
                 match requirement.as_ref().map(|requirement| &requirement.key) {
                     Some(EffectRequirementKey::Trait(_)) => provider_ty.or(requirement_ty),
-                    Some(EffectRequirementKey::Type(_) | EffectRequirementKey::Other) => {
-                        requirement_ty.or(provider_ty)
-                    }
+                    Some(
+                        EffectRequirementKey::Type(_)
+                        | EffectRequirementKey::Row(_)
+                        | EffectRequirementKey::Other,
+                    ) => requirement_ty.or(provider_ty),
                     None => None,
                 }
                 .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
@@ -1042,6 +1211,57 @@ impl<'db> SemanticInstance<'db> {
                 self.key(db).typed_body(db).binding_carrier_ty(db, binding)
             }
         }
+    }
+
+    /// The effect requirements a call to the instance supplies: its declared
+    /// ones other than rows, then the components of the rows it expands.
+    pub fn call_effect_requirements(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<EffectRequirement<'db>> {
+        let key = self.key(db);
+        effect_param_site(key.owner(db))
+            .map(|site| EffectEnvView::new(site).requirements(db))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|requirement| requirement.key.key_row().is_none())
+            .chain(
+                row_expansion_for_key(db, key)
+                    .components
+                    .iter()
+                    .map(|component| component.requirement.clone()),
+            )
+            .collect()
+    }
+
+    /// The bindings of the instance's effects: its owner's declared effects,
+    /// then the components of the rows they name.
+    pub fn effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<LocalBinding<'db>> {
+        let mut bindings = owner_effect_bindings(db, self.key(db).owner(db));
+        bindings.extend(self.row_component_bindings(db));
+        bindings
+    }
+
+    /// The bindings of the components of the rows the instance's effects
+    /// name.
+    pub fn row_component_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<LocalBinding<'db>> {
+        row_expansion_for_key(db, self.key(db))
+            .components
+            .iter()
+            .filter(|component| {
+                matches!(
+                    component.requirement.key.kind(),
+                    EffectKeyKind::Type | EffectKeyKind::Trait
+                )
+            })
+            .map(|component| LocalBinding::EffectParam {
+                site: component.requirement.binding_site,
+                idx: component.requirement.binding_idx as usize,
+                binding_name: component.requirement.binding_name,
+                provider_idx: component.requirement.binding_idx,
+                is_mut: component.requirement.is_mut,
+            })
+            .collect()
     }
 
     #[salsa::tracked]
@@ -1411,16 +1631,14 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
     requirement_idx: u32,
 ) -> Option<u32> {
     match site {
-        EffectParamSite::Func(func) => {
-            let explicit_provider_count = place_effect_provider_param_index_map(db, func)
-                .iter()
-                .filter(|param_idx| param_idx.is_some())
-                .count() as u32;
-            place_effect_provider_param_index_map(db, func)
-                .get(requirement_idx as usize)
-                .and_then(|param_idx| param_idx.map(|_| requirement_idx))
-                .or(Some(explicit_provider_count))
-        }
+        EffectParamSite::Func(func) => place_effect_provider_param_index_map(db, func)
+            .get(requirement_idx as usize)
+            .and_then(|param_idx| param_idx.map(|_| requirement_idx))
+            .or_else(|| {
+                registered_root_providers(db, site)
+                    .first()
+                    .map(RootProviderRegistration::func_provider_idx)
+            }),
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
@@ -1562,12 +1780,13 @@ fn effect_binding_ty_from_env<'db>(
         })
         .or_else(|| instantiated_resolved_binding(env, db, idx).map(|binding| binding.provider));
     match requirement.as_ref().map(|requirement| &requirement.key) {
-        Some(crate::core::semantic::EffectRequirementKey::Trait(_)) => provider
+        Some(EffectRequirementKey::Trait(_)) => provider
             .map(|binding| binding.provider_ty)
             .or_else(|| requirement.and_then(|requirement| requirement.key.binding_ty(db))),
         Some(
-            crate::core::semantic::EffectRequirementKey::Type(_)
-            | crate::core::semantic::EffectRequirementKey::Other,
+            EffectRequirementKey::Type(_)
+            | EffectRequirementKey::Row(_)
+            | EffectRequirementKey::Other,
         ) => requirement
             .and_then(|requirement| requirement.key.binding_ty(db))
             .or_else(|| provider.map(|binding| binding.provider_ty)),
@@ -1630,7 +1849,9 @@ fn specialized_root_provider_target_ty<'db>(
 ) -> Option<TyId<'db>> {
     match requirement.key {
         EffectRequirementKey::Trait(_) => Some(root_provider.provider_ty),
-        EffectRequirementKey::Type(_) | EffectRequirementKey::Other => {
+        EffectRequirementKey::Type(_)
+        | EffectRequirementKey::Row(_)
+        | EffectRequirementKey::Other => {
             requirement_provider_target_ty(db, scope, assumptions, requirement)
                 .or(root_provider.semantics.target_ty)
         }
@@ -1785,6 +2006,33 @@ pub fn validate_instantiated_effect_env_key<'db>(
     instantiate_effect_env_data_for_key(db, key).map(|_| ())
 }
 
+/// The rows an instance's effects name. Their components are effect
+/// requirements of the instance's own, numbered after its declared ones,
+/// each resolved to the provider of the same index.
+#[salsa::tracked(return_ref)]
+pub fn row_expansion_for_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> RowExpansion<'db> {
+    let Some(site) = effect_param_site(key.owner(db)) else {
+        return RowExpansion::default();
+    };
+    let Ok(requirements) = EffectEnvView::new(site)
+        .requirements(db)
+        .into_iter()
+        .map(|requirement| instantiate_effect_requirement(db, key, requirement))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return RowExpansion::default();
+    };
+    expand_rows(
+        db,
+        &requirements,
+        key.owner(db).scope(),
+        semantic_instance_base_assumptions_for_key(db, key),
+    )
+}
+
 fn instantiate_effect_env_data_for_key<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
@@ -1795,12 +2043,22 @@ fn instantiate_effect_env_data_for_key<'db>(
     };
     let base_assumptions = semantic_instance_base_assumptions_for_key(db, key);
     let view = EffectEnvView::new(site);
+    let components = &row_expansion_for_key(db, key).components;
     let requirements = view
         .requirements(db)
         .into_iter()
         .map(|requirement| instantiate_effect_requirement(db, key, requirement))
+        .chain(
+            components
+                .iter()
+                .map(|component| Ok(component.requirement.clone())),
+        )
         .collect::<Result<Vec<_>, _>>()?;
-    let resolutions = view.resolutions(db);
+    let mut resolutions = view.resolutions(db);
+    resolutions.extend(components.iter().map(|component| ResolvedEffectBinding {
+        requirement_idx: component.requirement.binding_idx,
+        provider_idx: component.requirement.binding_idx,
+    }));
     let providers =
         instantiate_provider_bindings_for_key(db, key, site, view.providers(db), &resolutions)?;
     let forwarded_witnesses =
@@ -1850,15 +2108,22 @@ fn instantiate_provider_bindings_for_key<'db>(
             );
         }
     }
-    canonical
+    let mut providers = canonical
         .into_iter()
         .map(|provider| {
             specializations
-                .get(&provider.provider_idx)
-                .cloned()
+                .remove(&provider.provider_idx)
                 .map_or_else(|| instantiate_provider_binding(db, key, provider), Ok)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    // The providers a call gave the instance's row components.
+    providers.extend(
+        row_expansion_for_key(db, key)
+            .components
+            .iter()
+            .filter_map(|component| specializations.remove(&component.requirement.binding_idx)),
+    );
+    Ok(providers)
 }
 
 pub(crate) fn semantic_instance_base_assumptions_for_key<'db>(
@@ -2037,7 +2302,7 @@ fn root_provider_satisfies_effect_requirement<'db>(
                 GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
             )
         }
-        EffectRequirementKey::Other => false,
+        EffectRequirementKey::Row(_) | EffectRequirementKey::Other => false,
     }
 }
 
@@ -2138,6 +2403,10 @@ fn instantiate_effect_requirement_key<'db>(
         EffectRequirementKey::Trait(trait_inst) => {
             EffectRequirementKey::Trait(instantiate_normalized_trait_inst(db, key, trait_inst)?)
         }
+        EffectRequirementKey::Row(row) => EffectRequirementKey::Row(RowKey {
+            inst: instantiate_normalized_trait_inst(db, key, row.inst)?,
+            row: row.row,
+        }),
         EffectRequirementKey::Other => EffectRequirementKey::Other,
     })
 }
@@ -2156,7 +2425,7 @@ fn instantiate_provider_binding<'db>(
             registration,
         } => ProviderSource::RootProvider {
             scope,
-            registration: crate::analysis::ty::provider::RootProviderRegistration {
+            registration: RootProviderRegistration {
                 provider_ty: instantiate_normalized_ty(db, key, registration.provider_ty)?,
                 ..registration
             },
