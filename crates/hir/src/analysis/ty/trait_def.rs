@@ -476,9 +476,19 @@ fn instantiate_selected_impl<'db>(
         });
     }
 
+    // The selection proved the goal's associated-type bindings, which only
+    // normalization relates to the implementation's; its arguments follow
+    // from the trait's.
     let mut table = UnificationTable::new(db);
     let instantiated = table.instantiate_with_fresh_vars(selected);
-    table.unify(instantiated.trait_inst(db), inst).ok()?;
+    for (&impl_arg, &arg) in instantiated
+        .trait_inst(db)
+        .args(db)
+        .iter()
+        .zip(inst.args(db))
+    {
+        table.unify(impl_arg, arg).ok()?;
+    }
     Some(ResolvedImplInstance {
         selected,
         instantiated: instantiated.fold_with(db, &mut table),

@@ -1147,9 +1147,12 @@ pub fn walk_stmt<'db, V>(
             }
         }
 
-        Stmt::For(pat_id, cond_id, for_body_id, _unroll) => {
+        Stmt::For(pat_id, cond_id, driver_id, for_body_id, _unroll) => {
             visit_node_in_body!(visitor, ctxt, pat_id, pat);
             visit_node_in_body!(visitor, ctxt, cond_id, expr);
+            if let Some(driver_id) = driver_id {
+                visit_node_in_body!(visitor, ctxt, driver_id, expr);
+            }
             visit_node_in_body!(visitor, ctxt, for_body_id, expr);
         }
 

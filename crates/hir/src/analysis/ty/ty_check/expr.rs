@@ -16,7 +16,7 @@ use crate::span::DynLazySpan;
 
 use super::{
     CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArgLayoutView,
-    PatternLayoutContext, RecordLike, Typeable, ValuePathRef,
+    PatternLayoutContext, RecordLike, RowArg, Typeable, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
@@ -1786,7 +1786,10 @@ impl<'db> TyChecker<'db> {
                         instantiated_key_ty,
                         provider_target_ty,
                         provider: provider_space,
-                        row_path: row_paths.get(&req.binding_idx).cloned(),
+                        row_arg: row_paths
+                            .get(&req.binding_idx)
+                            .cloned()
+                            .map(RowArg::Component),
                     });
                 }
                 EffectResolution::BlockedByBarrier => {}
@@ -1818,7 +1821,7 @@ impl<'db> TyChecker<'db> {
             }));
         for (requirement, path, row) in forwarded {
             match self.own_row_binding(row) {
-                Some(binding) => resolved_args.push(super::ResolvedEffectArg {
+                Some((binding, own)) => resolved_args.push(super::ResolvedEffectArg {
                     param_idx: resolved_args.len(),
                     binding_idx: requirement.binding_idx,
                     key: requirement.binding_ty,
@@ -1831,7 +1834,7 @@ impl<'db> TyChecker<'db> {
                     instantiated_key_ty: None,
                     provider_target_ty: None,
                     provider: None,
-                    row_path: Some(path),
+                    row_arg: Some(RowArg::Forwarded { callee: path, own }),
                 }),
                 None => self.push_diag(BodyDiag::MissingRow {
                     primary: call_span.clone(),
@@ -1879,33 +1882,46 @@ impl<'db> TyChecker<'db> {
         )
     }
 
-    /// The caller's own effect binding for the abstract row `row`.
-    fn own_row_binding(&self, row: RowKey<'db>) -> Option<LocalBinding<'db>> {
+    /// The caller's own effect binding that forwards the abstract row `row`,
+    /// with where `row` sits in it: an entry naming it, or an entry whose row
+    /// expands to it here.
+    fn own_row_binding(&self, row: RowKey<'db>) -> Option<(LocalBinding<'db>, RowPath)> {
         let super::BodyOwner::Func(caller) = self.env.owner() else {
             return None;
         };
-        caller
-            .effective_effect_requirements(self.db)
+        let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
+        let names_row = |requirement: &EffectRequirement<'db>| {
+            requirement.key.key_row().is_some_and(|own| {
+                own.row == row.row
+                    && normalize_effect_identity_trait(self.db, own.inst, scope, assumptions, None)
+                        == row.inst
+            })
+        };
+        let requirements = caller.effective_effect_requirements(self.db);
+        let path = match requirements
             .iter()
-            .find(|requirement| {
-                requirement.key.key_row().is_some_and(|own| {
-                    own.row == row.row
-                        && normalize_effect_identity_trait(
-                            self.db,
-                            own.inst,
-                            self.env.scope(),
-                            self.env.assumptions(),
-                            None,
-                        ) == row.inst
-                })
-            })
-            .map(|requirement| LocalBinding::EffectParam {
-                site: requirement.binding_site,
-                idx: requirement.binding_idx as usize,
-                binding_name: requirement.binding_name,
-                provider_idx: requirement.binding_idx,
-                is_mut: requirement.is_mut,
-            })
+            .find(|requirement| names_row(requirement))
+        {
+            Some(requirement) => RowPath::entry(requirement.binding_idx),
+            None => {
+                expand_rows(self.db, requirements, scope, assumptions)
+                    .components
+                    .into_iter()
+                    .find(|component| names_row(&component.requirement))?
+                    .path
+            }
+        };
+        let entry = requirements
+            .iter()
+            .find(|requirement| requirement.binding_idx == path.entry)?;
+        let binding = LocalBinding::EffectParam {
+            site: entry.binding_site,
+            idx: entry.binding_idx as usize,
+            binding_name: entry.binding_name,
+            provider_idx: entry.binding_idx,
+            is_mut: entry.is_mut,
+        };
+        Some((binding, path))
     }
 
     fn instantiate_callable_effect_layout_args(

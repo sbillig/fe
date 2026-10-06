@@ -2,6 +2,7 @@ use ingot::option::Option
 use ingot::marker::Copy
 use ingot::ops::{WrappingAdd, WrappingSub}
 use ingot::ptr::{MemArray, MemSlice}
+use ingot::assert
 
 /// A collection a loop traverses by cursor, projecting each element in turn.
 ///
@@ -23,6 +24,26 @@ pub trait Collection {
 
     /// The element at `c`.
     fn at(self, _ c: Self::Cursor) -> ref Self::Item @S uses E
+
+    /// Each element with its index: `for (i, x) in xs.enumerate()`.
+    fn enumerate(self) -> Enumerate<Identity> {
+        enumerate()
+    }
+
+    /// The first `n` elements.
+    fn take(self, _ n: usize) -> Take<Identity> {
+        take(n)
+    }
+
+    /// The elements after the first `n`.
+    fn skip(self, _ n: usize) -> Skip<Identity> {
+        skip(n)
+    }
+
+    /// Every `k`th element.
+    fn step_by(self, _ k: usize) -> StepBy<Identity> {
+        step_by(k)
+    }
 }
 
 /// A collection whose elements a loop can mutate in place.
@@ -42,6 +63,11 @@ pub trait Bidirectional: Collection {
 
     /// The position before `c`, if any.
     fn prev(self, _ c: Self::Cursor) -> Option<Self::Cursor> uses E
+
+    /// Each element from the last to the first.
+    fn reversed(self) -> Reversed {
+        reversed()
+    }
 }
 
 // A valid cursor is below the collection's length, so stepping from it
@@ -190,4 +216,373 @@ impl<T> Bidirectional for MemSlice<T> {
     fn prev(self, _ c: usize) -> Option<usize> {
         prev_index(c)
     }
+}
+
+/// A traversal of a base collection `B` that a loop holds and passes to each
+/// call. A driver stores its state and parameters, never the base, so it is
+/// an ordinary value: built, stored, returned and reused.
+pub trait Driver<B: Collection> {
+    /// The driver's own effects; each method declares the base's.
+    uses E
+    type State: Copy
+    type Item
+    /// What the driver yields beside each element, such as its index.
+    type Extra = ()
+
+    fn start(self, _ base: B) -> Option<Self::State> uses (B::E, E)
+
+    fn next(self, _ base: B, _ s: Self::State) -> Option<Self::State> uses (B::E, E)
+
+    fn at(self, _ base: B, _ s: Self::State) -> (Self::Extra, ref Self::Item) @B::S uses (B::E, E)
+}
+
+/// A driver whose elements a loop can mutate in place.
+pub trait DriverMut<B: CollectionMut>: Driver<B> {
+    fn at(self, _ base: mut B, _ s: Self::State) -> (Self::Extra, mut Self::Item) @B::S uses (B::EM, E)
+}
+
+/// A traversal that produces an owned value at each position, so non-`Copy`
+/// results can be collected.
+pub trait Producer<B: Collection> {
+    uses E
+    type State: Copy
+    type Out
+
+    fn start(self, _ base: B) -> Option<Self::State> uses (B::E, E)
+
+    fn next(self, _ base: B, _ s: Self::State) -> Option<Self::State> uses (B::E, E)
+
+    fn produce(mut self, _ base: B, _ s: Self::State) -> Self::Out uses (B::E, E)
+}
+
+/// The traversal `for x in xs` runs: each element in order.
+pub struct Identity {}
+
+impl Copy for Identity {}
+
+impl<B: Collection> Driver<B> for Identity {
+    type State = B::Cursor
+    type Item = B::Item
+
+    #[inline(always)]
+    fn start(self, _ base: B) -> Option<B::Cursor> uses B::E {
+        base.start()
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: B::Cursor) -> Option<B::Cursor> uses B::E {
+        base.next(s)
+    }
+
+    #[inline(always)]
+    fn at(self, _ base: B, _ s: B::Cursor) -> ((), ref B::Item) uses B::E {
+        ((), Collection::at(base, s))
+    }
+}
+
+impl<B: CollectionMut> DriverMut<B> for Identity {
+    #[inline(always)]
+    fn at(self, _ base: mut B, _ s: B::Cursor) -> ((), mut B::Item) uses B::EM {
+        ((), CollectionMut::at(mut base, s))
+    }
+}
+
+/// Each element from the last to the first.
+pub struct Reversed {}
+
+impl Copy for Reversed {}
+
+impl<B: Bidirectional> Driver<B> for Reversed {
+    type State = B::Cursor
+    type Item = B::Item
+
+    #[inline(always)]
+    fn start(self, _ base: B) -> Option<B::Cursor> uses B::E {
+        base.last()
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: B::Cursor) -> Option<B::Cursor> uses B::E {
+        base.prev(s)
+    }
+
+    #[inline(always)]
+    fn at(self, _ base: B, _ s: B::Cursor) -> ((), ref B::Item) uses B::E {
+        ((), Collection::at(base, s))
+    }
+}
+
+impl<B: Bidirectional + CollectionMut> DriverMut<B> for Reversed {
+    #[inline(always)]
+    fn at(self, _ base: mut B, _ s: B::Cursor) -> ((), mut B::Item) uses B::EM {
+        ((), CollectionMut::at(mut base, s))
+    }
+}
+
+/// Each element of the inner traversal with its index.
+pub struct Enumerate<D> {
+    inner: D,
+}
+
+impl<D: Copy> Copy for Enumerate<D> {}
+
+impl<B: Collection, D: Driver<B>> Driver<B> for Enumerate<D> {
+    uses E = D::E
+    type State = (usize, D::State)
+    type Item = D::Item
+    type Extra = usize
+
+    #[inline(always)]
+    fn start(self, _ base: B) -> Option<(usize, D::State)> uses (B::E, E) {
+        match self.inner.start(base) {
+            Option::Some(s) => Option::Some((0, s))
+            Option::None => Option::None
+        }
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: (usize, D::State)) -> Option<(usize, D::State)> uses (B::E, E) {
+        match self.inner.next(base, s.1) {
+            Option::Some(next) => Option::Some((s.0 + 1, next))
+            Option::None => Option::None
+        }
+    }
+
+    #[inline(always)]
+    fn at(self, _ base: B, _ s: (usize, D::State)) -> (usize, ref D::Item) uses (B::E, E) {
+        let (_, item) = Driver<B>::at(self.inner, base, s.1)
+        (s.0, item)
+    }
+}
+
+impl<B: CollectionMut, D: DriverMut<B>> DriverMut<B> for Enumerate<D> {
+    #[inline(always)]
+    fn at(self, _ base: mut B, _ s: (usize, D::State)) -> (usize, mut D::Item) uses (B::EM, E) {
+        let (_, item) = DriverMut<B>::at(self.inner, mut base, s.1)
+        (s.0, item)
+    }
+}
+
+/// The first `n` elements of the inner traversal.
+pub struct Take<D> {
+    n: usize,
+    inner: D,
+}
+
+impl<D: Copy> Copy for Take<D> {}
+
+impl<B: Collection, D: Driver<B>> Driver<B> for Take<D> {
+    uses E = D::E
+    type State = (usize, D::State)
+    type Item = D::Item
+    type Extra = D::Extra
+
+    #[inline(always)]
+    fn start(self, _ base: B) -> Option<(usize, D::State)> uses (B::E, E) {
+        if self.n == 0 {
+            return Option::None
+        }
+        match self.inner.start(base) {
+            Option::Some(s) => Option::Some((1, s))
+            Option::None => Option::None
+        }
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: (usize, D::State)) -> Option<(usize, D::State)> uses (B::E, E) {
+        if s.0 >= self.n {
+            return Option::None
+        }
+        match self.inner.next(base, s.1) {
+            Option::Some(next) => Option::Some((s.0 + 1, next))
+            Option::None => Option::None
+        }
+    }
+
+    #[inline(always)]
+    fn at(self, _ base: B, _ s: (usize, D::State)) -> (D::Extra, ref D::Item) uses (B::E, E) {
+        Driver<B>::at(self.inner, base, s.1)
+    }
+}
+
+impl<B: CollectionMut, D: DriverMut<B>> DriverMut<B> for Take<D> {
+    #[inline(always)]
+    fn at(self, _ base: mut B, _ s: (usize, D::State)) -> (D::Extra, mut D::Item) uses (B::EM, E) {
+        DriverMut<B>::at(self.inner, mut base, s.1)
+    }
+}
+
+/// The inner traversal after its first `n` elements.
+pub struct Skip<D> {
+    n: usize,
+    inner: D,
+}
+
+impl<D: Copy> Copy for Skip<D> {}
+
+impl<B: Collection, D: Driver<B>> Driver<B> for Skip<D> {
+    uses E = D::E
+    type State = D::State
+    type Item = D::Item
+    type Extra = D::Extra
+
+    #[inline(always)]
+    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
+        let mut state = self.inner.start(base)
+        let mut skipped = 0
+        while skipped < self.n {
+            state = match state {
+                Option::Some(s) => self.inner.next(base, s)
+                Option::None => return Option::None
+            }
+            skipped += 1
+        }
+        state
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
+        self.inner.next(base, s)
+    }
+
+    #[inline(always)]
+    fn at(self, _ base: B, _ s: D::State) -> (D::Extra, ref D::Item) uses (B::E, E) {
+        Driver<B>::at(self.inner, base, s)
+    }
+}
+
+impl<B: CollectionMut, D: DriverMut<B>> DriverMut<B> for Skip<D> {
+    #[inline(always)]
+    fn at(self, _ base: mut B, _ s: D::State) -> (D::Extra, mut D::Item) uses (B::EM, E) {
+        DriverMut<B>::at(self.inner, mut base, s)
+    }
+}
+
+/// Every `k`th element of the inner traversal, from its first.
+pub struct StepBy<D> {
+    k: usize,
+    inner: D,
+}
+
+impl<D: Copy> Copy for StepBy<D> {}
+
+impl<B: Collection, D: Driver<B>> Driver<B> for StepBy<D> {
+    uses E = D::E
+    type State = D::State
+    type Item = D::Item
+    type Extra = D::Extra
+
+    #[inline(always)]
+    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
+        self.inner.start(base)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
+        let mut state = Option::Some(s)
+        let mut stepped = 0
+        while stepped < self.k {
+            state = match state {
+                Option::Some(s) => self.inner.next(base, s)
+                Option::None => return Option::None
+            }
+            stepped += 1
+        }
+        state
+    }
+
+    #[inline(always)]
+    fn at(self, _ base: B, _ s: D::State) -> (D::Extra, ref D::Item) uses (B::E, E) {
+        Driver<B>::at(self.inner, base, s)
+    }
+}
+
+impl<B: CollectionMut, D: DriverMut<B>> DriverMut<B> for StepBy<D> {
+    #[inline(always)]
+    fn at(self, _ base: mut B, _ s: D::State) -> (D::Extra, mut D::Item) uses (B::EM, E) {
+        DriverMut<B>::at(self.inner, mut base, s)
+    }
+}
+
+/// Owned copies of the `Copy` items of a driver, with what it yields beside
+/// them.
+pub struct Copied<D> {
+    inner: D,
+}
+
+impl<D: Copy> Copy for Copied<D> {}
+
+impl<B: Collection, D: Driver<B>> Producer<B> for Copied<D>
+    where D::Item: Copy, D::Extra: Copy
+{
+    uses E = D::E
+    type State = D::State
+    type Out = (D::Extra, D::Item)
+
+    #[inline(always)]
+    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
+        self.inner.start(base)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
+        self.inner.next(base, s)
+    }
+
+    #[inline(always)]
+    fn produce(mut self, _ base: B, _ s: D::State) -> (D::Extra, D::Item) uses (B::E, E) {
+        let (extra, item) = Driver<B>::at(self.inner, base, s)
+        (extra, item)
+    }
+}
+
+/// The combinators every driver has.
+pub trait Adapt {
+    fn enumerate(own self) -> Enumerate<Self> {
+        Enumerate { inner: self }
+    }
+
+    fn take(own self, _ n: usize) -> Take<Self> {
+        Take { n, inner: self }
+    }
+
+    fn skip(own self, _ n: usize) -> Skip<Self> {
+        Skip { n, inner: self }
+    }
+
+    fn step_by(own self, _ k: usize) -> StepBy<Self> {
+        assert(k > 0)
+        StepBy { k, inner: self }
+    }
+
+    fn copied(own self) -> Copied<Self> {
+        Copied { inner: self }
+    }
+}
+
+impl Adapt for Identity {}
+impl Adapt for Reversed {}
+impl<D> Adapt for Enumerate<D> {}
+impl<D> Adapt for Take<D> {}
+impl<D> Adapt for Skip<D> {}
+impl<D> Adapt for StepBy<D> {}
+
+pub fn reversed() -> Reversed {
+    Reversed {}
+}
+
+pub fn enumerate() -> Enumerate<Identity> {
+    Identity {}.enumerate()
+}
+
+pub fn take(_ n: usize) -> Take<Identity> {
+    Identity {}.take(n)
+}
+
+pub fn skip(_ n: usize) -> Skip<Identity> {
+    Identity {}.skip(n)
+}
+
+pub fn step_by(_ k: usize) -> StepBy<Identity> {
+    Identity {}.step_by(k)
 }

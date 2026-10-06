@@ -23,7 +23,7 @@ use crate::{
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effects::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
-                rows::{RowExpansion, RowKey, RowPath, expand_rows},
+                rows::{RowExpansion, RowKey, expand_rows},
             },
             fold::TyFoldable,
             instantiate_trait_self,
@@ -45,7 +45,7 @@ use crate::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgLayoutView,
                 EffectParamSite, EffectPassMode, EffectProviderProvenance,
                 EffectProviderSpecialization, ForLoopStep, LocalBinding, ParamSite,
-                ResolvedEffectArg, SemanticExprLowering, SmirLoweringIssue, TypedBody,
+                ResolvedEffectArg, RowArg, SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
             ty_def::{InvalidCause, TyId},
             ty_is_copy,
@@ -405,7 +405,7 @@ fn expand_row_args<'db>(
     let CallableDef::Func(func) = callable.callable_def() else {
         return (callable, args.to_vec());
     };
-    if args.iter().all(|arg| arg.row_path.is_none()) {
+    if args.iter().all(|arg| arg.row_arg.is_none()) {
         return (callable, args.to_vec());
     }
     let key = instance.key(db);
@@ -439,29 +439,28 @@ fn expand_row_args<'db>(
     let mut expanded = Vec::with_capacity(args.len());
     let mut forwarded_providers = Vec::new();
     for arg in args {
-        let Some(path) = &arg.row_path else {
-            expanded.push(arg.clone());
-            continue;
-        };
-        if arg.key_kind != EffectKeyKind::Row {
-            if let Some(component) = callee_rows.component(path) {
-                let slot = component.requirement.binding_idx;
-                slots.insert(arg.binding_idx, slot);
-                expanded.push(ResolvedEffectArg {
-                    binding_idx: slot,
-                    ..arg.clone()
-                });
+        let (path, own) = match &arg.row_arg {
+            None => {
+                expanded.push(arg.clone());
+                continue;
             }
-            continue;
-        }
-        let EffectArg::Binding(LocalBinding::EffectParam { idx, .. }) = arg.arg else {
-            continue;
+            Some(RowArg::Component(path)) => {
+                if let Some(component) = callee_rows.component(path) {
+                    let slot = component.requirement.binding_idx;
+                    slots.insert(arg.binding_idx, slot);
+                    expanded.push(ResolvedEffectArg {
+                        binding_idx: slot,
+                        ..arg.clone()
+                    });
+                }
+                continue;
+            }
+            Some(RowArg::Forwarded { callee, own }) => (callee, own),
         };
-        let own = RowPath::entry(idx as u32);
         for callee in &callee_rows.components {
             let Some(caller) = callee
                 .path
-                .rebase(path, &own)
+                .rebase(path, own)
                 .and_then(|path| caller_rows.component(&path))
                 .filter(|_| callee.requirement.key.key_row().is_none())
             else {
@@ -504,7 +503,7 @@ fn expand_row_args<'db>(
                 instantiated_key_ty: callee.requirement.key.key_ty(),
                 provider_target_ty: provider.semantics.target_ty,
                 provider: provider.semantics.address_space,
-                row_path: Some(callee.path.clone()),
+                row_arg: Some(RowArg::Component(callee.path.clone())),
             });
             forwarded_providers.push(EffectProviderSpecialization {
                 provider: ProviderBinding {

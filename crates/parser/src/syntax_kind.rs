@@ -339,6 +339,8 @@ pub enum SyntaxKind {
     LetStmt,
     /// `for x in y {..}`
     ForStmt,
+    /// `by d` in `for x in y by d {..}`
+    ForDriver,
     /// `while expr {..}`
     WhileStmt,
     /// `continue`
@@ -746,6 +748,7 @@ impl SyntaxKind {
             SyntaxKind::AugAssignExpr => "augmented assignment expression",
             SyntaxKind::LetStmt => "`let` statement",
             SyntaxKind::ForStmt => "`for` statement",
+            SyntaxKind::ForDriver => "`for` driver",
             SyntaxKind::WhileStmt => "`while` statement",
             SyntaxKind::ContinueStmt => "`continue` statement",
             SyntaxKind::BreakStmt => "`break` statement",

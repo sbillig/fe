@@ -30,9 +30,7 @@ use crate::{
         },
     },
     core::semantic::constraints_for,
-    hir_def::{
-        Func, IdentId, ImplTrait, ItemKind, PathId, SpaceAnnotation, Trait, scope_graph::ScopeId,
-    },
+    hir_def::{Func, IdentId, ImplTrait, PathId, SpaceAnnotation, Trait, scope_graph::ScopeId},
 };
 
 /// Associated space `space` of a trait instance.
@@ -159,23 +157,10 @@ fn space_key<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<SpaceKey<'db>> {
-    let impl_trait = match scope.item() {
-        ItemKind::Func(func) => func.containing_impl_trait(db),
-        ItemKind::ImplTrait(impl_trait) => Some(impl_trait),
-        _ => None,
-    };
-    let own_impl = impl_trait
-        .filter(|_| path.parent(db).is_none_or(|parent| parent.is_self_ty(db)))
-        .and_then(|impl_trait| impl_trait.trait_inst_result(db).ok());
-    let (inst, space) = match own_impl {
-        Some(inst) => (
-            inst,
-            space_index(db, inst.def(db), path.ident(db).to_opt()?)?,
-        ),
-        None => resolve_assoc_item_path(db, path, scope, assumptions, |trait_def, name| {
+    let (inst, space) =
+        resolve_assoc_item_path(db, path, scope, assumptions, |trait_def, name| {
             space_index(db, trait_def, name)
-        })?,
-    };
+        })?;
     Some(SpaceKey {
         inst,
         space: space as u16,

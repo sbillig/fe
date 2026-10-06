@@ -49,8 +49,10 @@ impl<'db> TyChecker<'db> {
                 }
             }
             Expr::With(_, body) => self.check_yield_site(*body, shape),
-            _ => self.check_yield_leaf(expr, data, shape),
+            _ => return self.check_yield_leaf(expr, data, shape),
         }
+        // It yields what its tails do.
+        self.env.consume_access(expr);
     }
 
     fn check_yield_leaf(&mut self, expr: ExprId, data: &Expr<'db>, shape: &Shape<'db>) {

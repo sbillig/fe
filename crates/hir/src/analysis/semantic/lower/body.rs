@@ -206,6 +206,8 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) current: SBlockId,
     pub(super) next_stmt_id: u32,
     pub(super) loop_stack: Vec<LoopScope>,
+    /// Loop bases, evaluated once before the method chain that drives them.
+    loop_bases: FxHashMap<ExprId, SValueId>,
     /// How many yield sites enclose the expression being lowered.
     pub(super) yield_depth: u32,
     /// The slide of the `yield` statement being lowered.
@@ -295,6 +297,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             current: SBlockId::from_u32(0),
             next_stmt_id: 0,
             loop_stack: Vec::new(),
+            loop_bases: FxHashMap::default(),
             yield_depth: 0,
             slide: None,
         };
@@ -390,6 +393,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         source: Option<LocalBinding<'db>>,
     ) -> SLocalId {
         let id = SLocalId::from_u32(self.locals.len() as u32);
+        // Later stages read local types as the instance's: `B::Item` is the
+        // element type it selects.
+        let ty = normalize_ty(self.db, ty, self.body.scope(), self.assumptions);
         let role = source.map_or_else(ordinary_direct_value_role, |binding| {
             self.binding_role(binding)
         });
@@ -1467,6 +1473,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// place is guarded by a `ref` access until its own access opens after
     /// the arguments; a temporary root is hoisted into a local.
     fn prepare_receiver(&mut self, receiver: ExprId, callable: &Callable<'db>) -> Receiver<'db> {
+        if let Some(&base) = self.loop_bases.get(&receiver) {
+            return Receiver::Value(base);
+        }
         let mode = callable.callable_def().param_mode(self.db, 0);
         if mode == FuncParamMode::Own {
             return Receiver::Value(self.lower_expr(receiver));
@@ -1713,7 +1722,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
-            Stmt::For(pat, iter, body_expr, _) => self.lower_for(stmt, *pat, *iter, *body_expr),
+            Stmt::For(pat, _, _, body_expr, _) => self.lower_for(stmt, *pat, *body_expr),
             Stmt::Continue => {
                 let is_reachable = !self.is_terminated(self.current);
                 let scope = self.loop_stack.last_mut().expect("continue outside loop");
@@ -1773,11 +1782,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.switch_to(exit_bb);
     }
 
-    /// Lowers `for pat in base { body }` to the `Collection` protocol. Each
-    /// cursor is tested where it is produced, so only the cursor itself is
-    /// carried around the loop; the next cursor is taken before the body,
-    /// and `continue` goes straight to its test.
-    fn lower_for(&mut self, stmt: StmtId, pat: PatId, iter: ExprId, body_expr: ExprId) {
+    /// Lowers `for pat in base by d { body }` to the protocol its plan
+    /// selects: the collection's own, or the driver's. Each state is tested
+    /// where it is produced, so only the state itself is carried around the
+    /// loop; the next state is taken before the body, and `continue` goes
+    /// straight to its test.
+    fn lower_for(&mut self, stmt: StmtId, pat: PatId, body_expr: ExprId) {
         let sites = self
             .for_loop_call_sites
             .get(stmt.index())
@@ -1786,10 +1796,28 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let plan = self
             .typed_body
             .for_loop_plan(stmt)
-            .unwrap_or_else(|| panic!("missing collection protocol for for-loop {stmt:?}"));
+            .unwrap_or_else(|| panic!("missing loop protocol for for-loop {stmt:?}"));
         // The base the loop holds: its value, or the carrier of its access.
-        let base = self.lower_source(iter);
-        let base_operand = SOperand::expr(base, iter);
+        let base = self.lower_source(plan.base);
+        let base_operand = SOperand::expr(base, plan.base);
+        self.loop_bases.insert(plan.base, base);
+        // The driver, evaluated once. A producer advances its own copy.
+        let driver = plan.driver.map(|driver| {
+            let value = SOperand::expr(self.lower_source(driver), driver);
+            if plan.item != ForLoopItem::Produced {
+                return value;
+            }
+            let ty = self.locals[value.value.index()].ty;
+            let temp = self.alloc_local(ty, Mutability::Mutable, None);
+            self.push_synthetic_stmt(SStmtKind::Assign {
+                dst: temp,
+                expr: SExpr::Forward(value),
+            });
+            SOperand::synthetic(temp)
+        });
+        // The calls take the driver first, then the base, then the state.
+        let inputs: Vec<_> = driver.into_iter().chain([base_operand]).collect();
+        let with_state = |state| [&inputs[..], &[SOperand::synthetic(state)]].concat();
         let call = |this: &mut Self, step, args: Vec<SOperand>, ty| {
             let site = sites.site(step);
             let effect_args = this.lower_effect_arg_slice(&site.effect_args);
@@ -1799,31 +1827,28 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     call_site: CallSiteId::ForLoop(stmt, step),
                     callee: site
                         .callee
-                        .expect("a collection protocol call lowers to a semantic callee"),
+                        .expect("a loop protocol call lowers to a semantic callee"),
                     args: args.into_boxed_slice(),
                     effect_args,
                 },
             )
         };
-        let normalize =
-            |this: &Self, ty| normalize_ty(this.db, ty, this.body.scope(), this.assumptions);
-        let state_ty = normalize(self, plan.call(ForLoopStep::Start).callable.ret_ty(self.db));
-        let cursor_ty = normalize(self, plan.cursor_ty);
-        let item_ty = normalize(self, plan.item_ty);
+        let option_ty = plan.call(ForLoopStep::Start).callable.ret_ty(self.db);
+        let shape = &plan.shape;
         let some = VariantIndex(
-            sum_payload_variant(self.db, self.body.scope(), state_ty)
-                .expect("a cursor is an `Option`"),
+            sum_payload_variant(self.db, self.body.scope(), option_ty)
+                .expect("a loop state is an `Option`"),
         );
-        let cursor = self.alloc_temp(cursor_ty);
+        let state = self.alloc_temp(plan.state_ty);
         let body_bb = self.new_block();
         let latch_bb = self.new_block();
         let exit_bb = self.new_block();
-        // Enters the body with the cursor `state` holds, or leaves the loop.
-        let test = |this: &mut Self, state| {
+        // Enters the body with the state `next` holds, or leaves the loop.
+        let test = |this: &mut Self, next| {
             let is_some = this.emit_expr(
                 TyId::bool(this.db),
                 SExpr::IsEnumVariant {
-                    value: SOperand::synthetic(state),
+                    value: SOperand::synthetic(next),
                     variant: some,
                 },
             );
@@ -1838,16 +1863,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             );
             this.switch_to(load_bb);
             this.push_synthetic_stmt(SStmtKind::Assign {
-                dst: cursor,
+                dst: state,
                 expr: SExpr::ExtractEnumField {
-                    value: SOperand::synthetic(state),
+                    value: SOperand::synthetic(next),
                     variant: some,
                     field: FieldIndex(0),
                 },
             });
             this.set_synthetic_terminator(this.current, STerminatorKind::Goto(body_bb));
         };
-        let first = call(self, ForLoopStep::Start, vec![base_operand], state_ty);
+        let first = call(self, ForLoopStep::Start, inputs.clone(), option_ty);
         test(self, first);
 
         self.loop_stack.push(LoopScope {
@@ -1856,36 +1881,71 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             has_reachable_continue: false,
         });
         self.switch_to(body_bb);
-        let next = call(
-            self,
-            ForLoopStep::Next,
-            vec![base_operand, SOperand::synthetic(cursor)],
-            state_ty,
-        );
-        let kind = match plan.item {
-            ForLoopItem::Copy => BorrowKind::Ref,
-            ForLoopItem::Access(kind) => kind,
+        let next = call(self, ForLoopStep::Next, with_state(state), option_ty);
+        let mut at_args = with_state(state);
+        // `produce` advances the driver through a `mut` access.
+        if let (Some(temp), Some(driver)) = (driver, plan.driver)
+            && plan.item == ForLoopItem::Produced
+        {
+            let ty = self.locals[temp.value.index()].ty;
+            let place = SPlace::new(temp.value);
+            at_args[0] = SOperand::synthetic(self.emit_borrow(driver, place, BorrowKind::Mut, ty));
+        }
+        let yielded = call(self, ForLoopStep::At, at_args, shape.carrier_ty(self.db));
+        // The part of what the step yields that the pattern binds.
+        let (element, element_shape) = match shape {
+            Shape::Tuple(parts) if plan.binds_element => (
+                self.emit_expr(
+                    parts[1].carrier_ty(self.db),
+                    SExpr::Field {
+                        base: SOperand::synthetic(yielded),
+                        field: FieldIndex(1),
+                    },
+                ),
+                &parts[1],
+            ),
+            shape => (yielded, shape),
         };
-        let element = call(
-            self,
-            ForLoopStep::At,
-            vec![base_operand, SOperand::synthetic(cursor)],
-            Shape::Access(kind, item_ty).carrier_ty(self.db),
-        );
         // A copy ends the element's session before the body runs.
         let element = match plan.item {
-            ForLoopItem::Copy => self.emit_expr(
-                item_ty,
-                SExpr::ReadPlace {
-                    place: SPlace::new(element),
-                },
-            ),
-            ForLoopItem::Access(_) => element,
+            ForLoopItem::Copy => {
+                let read = |this: &mut Self, carrier, shape: &Shape<'db>| match shape {
+                    Shape::Access(_, ty) => this.emit_expr(
+                        *ty,
+                        SExpr::ReadPlace {
+                            place: SPlace::new(carrier),
+                        },
+                    ),
+                    _ => carrier,
+                };
+                match element_shape {
+                    Shape::Tuple(parts) => {
+                        let fields = parts
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, part)| {
+                                let field = self.emit_expr(
+                                    part.carrier_ty(self.db),
+                                    SExpr::Field {
+                                        base: SOperand::synthetic(element),
+                                        field: FieldIndex(idx as u16),
+                                    },
+                                );
+                                SOperand::synthetic(read(self, field, part))
+                            })
+                            .collect();
+                        let ty = element_shape.erased_ty(self.db);
+                        self.emit_expr(ty, SExpr::AggregateMake { ty, fields })
+                    }
+                    shape => read(self, element, shape),
+                }
+            }
+            ForLoopItem::Access(_) | ForLoopItem::Produced => element,
         };
         if plan.element_layout_backing_source {
             self.locals[element.index()].layout_backing_sources = vec![LayoutBackingSource {
                 target: Vec::new(),
-                source: LayoutBackingPlace::Local(SPlace::dynamic_index(base, cursor)),
+                source: LayoutBackingPlace::Local(SPlace::dynamic_index(base, state)),
             }];
             self.assigned_layout_backing_sources[element.index()] = true;
         }

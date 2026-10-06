@@ -73,6 +73,7 @@
 
 [
   "as"
+  "by"
   "const"
   "contract"
   "else"

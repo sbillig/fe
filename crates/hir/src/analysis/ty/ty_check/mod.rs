@@ -3444,7 +3444,17 @@ pub struct ResolvedEffectArg<'db> {
     pub provider: Option<ProviderAddressSpace>,
     /// For a component of one of the callee's rows, or a row it forwards,
     /// where it sits: `binding_idx` numbers it only in the call's view.
-    pub row_path: Option<RowPath>,
+    pub row_arg: Option<RowArg>,
+}
+
+/// Where an effect argument sits among the callee's rows.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum RowArg {
+    /// A component of one of the callee's rows.
+    Component(RowPath),
+    /// One of the callee's rows, which the call forwards from the caller's
+    /// own row at `own`: one of its entries, or a component of one.
+    Forwarded { callee: RowPath, own: RowPath },
 }
 
 /// Resolved reference for a `const`-valued path expression.
@@ -5083,15 +5093,17 @@ impl<'db> TypedBody<'db> {
                     );
                 }
             }
-            crate::hir_def::Stmt::For(_, iter, loop_body, _) => {
-                self.collect_explicit_return_param_sources_in_expr(
-                    db,
-                    body,
-                    *iter,
-                    out,
-                    saw_non_param,
-                    seen,
-                );
+            crate::hir_def::Stmt::For(_, iter, driver, loop_body, _) => {
+                for expr in [*iter].into_iter().chain(*driver) {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        db,
+                        body,
+                        expr,
+                        out,
+                        saw_non_param,
+                        seen,
+                    );
+                }
                 self.collect_explicit_return_param_sources_in_expr(
                     db,
                     body,
