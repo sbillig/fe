@@ -220,12 +220,12 @@ fn test_memory_prefix_zero_pads_short_spans() {
     backing[0] = 0x44
     backing[1] = 0xff
 
-    let short = backing.span().truncate(len: 1)
+    let short = backing.span().head(1)
     let short_prefix = prefix(input: short)
     assert!(short_prefix.len == 1)
     assert!(short_prefix.word0 == 0x44 << 248)
 
-    let empty_prefix = prefix(input: short.truncate(len: 0))
+    let empty_prefix = prefix(input: short.head(0))
     assert!(empty_prefix.len == 0)
     assert!(empty_prefix.word0 == 0)
 }

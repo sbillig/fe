@@ -2267,19 +2267,18 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     let Some(binding) = typed_body.param_binding(idx) else {
         return RuntimeParamPlan::Erased;
     };
-    let binding_ty = typed_body.binding_carrier_ty(db, binding);
+    let binding_ty = semantic.binding_ty(db, binding);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let scope = env.scope;
     let assumptions = env.assumptions;
-    let semantic_binding_ty = semantic.binding_ty(db, binding);
-    if effect_handle_transport_class_for_ty_in_env(db, env, semantic_binding_ty).is_some() {
-        let representation_ty = semantic_binding_ty
+    if effect_handle_transport_class_for_ty_in_env(db, env, binding_ty).is_some() {
+        let representation_ty = binding_ty
             .as_capability(db)
-            .map_or(semantic_binding_ty, |(_, target)| target);
+            .map_or(binding_ty, |(_, target)| target);
         if runtime_zero_sized_ty(db, representation_ty, scope, assumptions) {
             return RuntimeParamPlan::Erased;
         }
-        return boundary_spec_for_ty_in_env(db, env, semantic_binding_ty, AddressSpaceKind::Memory)
+        return boundary_spec_for_ty_in_env(db, env, binding_ty, AddressSpaceKind::Memory)
             .map(|boundary| match boundary {
                 RuntimeBoundarySpec::BorrowLike {
                     pointee,
@@ -2335,6 +2334,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
             ..
         }
     ) && binding_ty.as_capability(db).is_none()
+        && !semantic.binding_is_session_copy(db, binding)
     {
         desired_read_only_view_param_plan(db, typed_body, binding, env, binding_ty)
     } else if let Some((CapabilityKind::View, inner)) = interface_ty.as_capability(db) {
