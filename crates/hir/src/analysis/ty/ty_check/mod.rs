@@ -65,7 +65,9 @@ pub use stmt::ForLoopSeq;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
-use crate::analysis::place::{Place, PlaceBase, PlaceProjection, is_pointer_place_expr};
+use crate::analysis::place::{
+    Place, PlaceBase, PlaceProjection, is_grant_place_expr, is_pointer_place_expr,
+};
 
 use super::{
     LayoutBundlePath, LayoutBundlePathStep,
@@ -4123,6 +4125,9 @@ impl<'db> TypedBody<'db> {
         self.expr_place(expr).is_some()
             || self.tables.body.is_some_and(|body| {
                 is_pointer_place_expr(db, body, expr, &mut |expr| self.expr_ty(db, expr))
+                    || is_grant_place_expr(db, body, expr, &|expr| {
+                        self.expr_prop(db, expr).access().is_some()
+                    })
             })
     }
 

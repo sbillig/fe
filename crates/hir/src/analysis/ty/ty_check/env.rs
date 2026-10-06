@@ -1,5 +1,5 @@
 use crate::{
-    analysis::place::{Place, is_pointer_place_expr},
+    analysis::place::{Place, is_grant_place_expr, is_pointer_place_expr},
     hir_def::{
         BinOp, Body, Contract, Expr, ExprId, Func, IdentId, Partial, Pat, PatId, Stmt, StmtId,
         UnOp, scope_graph::ScopeId,
@@ -429,9 +429,19 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     /// Returns `true` if `expr` is an assignable, borrowable location: a
-    /// binding-rooted place, or memory addressed by a pointer.
+    /// binding-rooted place, memory addressed by a pointer, or a place in a
+    /// projection's grant.
     pub(super) fn is_place_expr(&self, expr: ExprId) -> bool {
-        self.expr_place(expr).is_some() || self.is_pointer_place_expr(expr)
+        self.expr_place(expr).is_some()
+            || self.is_pointer_place_expr(expr)
+            || self.is_grant_place(expr)
+    }
+
+    pub(super) fn is_grant_place(&self, expr: ExprId) -> bool {
+        is_grant_place_expr(self.db, self.body, expr, &|expr| {
+            self.typed_expr(expr)
+                .is_some_and(|prop| prop.access().is_some())
+        })
     }
 
     pub(super) fn is_pointer_place_expr(&self, expr: ExprId) -> bool {

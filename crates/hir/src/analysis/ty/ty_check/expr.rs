@@ -5389,7 +5389,7 @@ impl<'db> TyChecker<'db> {
             Expr::Path(..) | Expr::Field(..) => true,
             Expr::Bin(_, _, op) if *op == BinOp::Index => true,
             Expr::Un(_, UnOp::Deref) => true,
-            _ => false,
+            _ => self.env.is_grant_place(expr),
         }
     }
 
