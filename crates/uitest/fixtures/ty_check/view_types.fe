@@ -1,0 +1,37 @@
+// A `#[view]` type is only ever reached through accesses: it admits no
+// `own` parameter and no `mut` yield.
+#[view]
+struct Span {
+    start: u256,
+    len: u256,
+}
+
+struct Owner {
+    span: Span,
+}
+
+fn owned(_ span: own Span) {}
+
+fn viewed(_ span: Span) -> u256 {
+    span.len
+}
+
+impl Owner {
+    fn span(self) -> ref Span {
+        ref self.span
+    }
+
+    fn span_mut(mut self) -> mut Span {
+        mut self.span
+    }
+
+    fn both(mut self) -> (ref Span, mut Span) {
+        (ref self.span, mut self.span)
+    }
+}
+
+#[view(read)]
+struct Malformed {}
+
+#[view]
+fn not_a_type() {}

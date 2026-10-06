@@ -1,0 +1,35 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/view_types.fe
+---
+error[12-0001]: unsupported `#[view]` attribute on fn `not_a_type`
+   ┌─ view_types.fe:36:1
+   │
+36 │ #[view]
+   │ ^^^^^^^ `#[view]` is only supported on structs and enums
+
+error[12-0002]: invalid `#[view]` attribute form on struct `Malformed`
+   ┌─ view_types.fe:33:1
+   │
+33 │ #[view(read)]
+   │ ^^^^^^^^^^^^^ expected `#[view]`
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:13:10
+   │
+13 │ fn owned(_ span: own Span) {}
+   │          ^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:24:30
+   │
+24 │     fn span_mut(mut self) -> mut Span {
+   │                              ^^^^^^^^ a `#[view]` type cannot be yielded by `mut`
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ view_types.fe:28:26
+   │
+28 │     fn both(mut self) -> (ref Span, mut Span) {
+   │                          ^^^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be yielded by `mut`

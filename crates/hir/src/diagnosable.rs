@@ -15,10 +15,12 @@ use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, Ty
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
 use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
+use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
-use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+use crate::analysis::ty::ty_def::{BorrowKind, InvalidCause, TyId};
 use crate::analysis::ty::ty_error::{collect_ty_lower_errors, emit_invalid_ty_error};
 use crate::analysis::ty::ty_lower::generic_param_owner_assumptions;
+use crate::hir_def::params::FuncParamMode;
 use crate::hir_def::{
     Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
     GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
@@ -374,6 +376,48 @@ impl<'db> Func<'db> {
                 );
             }
         }
+        diags
+    }
+
+    /// A `#[view]` type admits no `own` parameter and no `mut` yield.
+    pub fn diags_view_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        fn mut_yields<'db>(shape: &Shape<'db>, out: &mut Vec<TyId<'db>>) {
+            match shape {
+                Shape::Access(BorrowKind::Mut, ty) => out.push(*ty),
+                Shape::Access(BorrowKind::Ref, _) | Shape::Owned(_) => {}
+                Shape::Tuple(elems) => elems.iter().for_each(|elem| mut_yields(elem, out)),
+                Shape::Sum { payload, .. } => mut_yields(payload, out),
+            }
+        }
+        let is_view = |ty: TyId<'db>| {
+            ty.base_ty(db)
+                .adt_ref(db)
+                .is_some_and(|adt| adt.is_view(db))
+        };
+        let mut diags: Vec<TyDiagCollection<'db>> = self
+            .params(db)
+            .filter(|param| param.mode(db) == FuncParamMode::Own && is_view(param.ty(db)))
+            .map(|param| {
+                TyLowerDiag::ViewTypeMode {
+                    span: param.span().into(),
+                    ty: param.ty(db),
+                    mode: "an `own` parameter",
+                }
+                .into()
+            })
+            .collect();
+        let mut yielded = Vec::new();
+        if let Some(shape) = self.return_shape(db) {
+            mut_yields(shape, &mut yielded);
+        }
+        diags.extend(yielded.into_iter().filter(|ty| is_view(*ty)).map(|ty| {
+            TyLowerDiag::ViewTypeMode {
+                span: self.span().ret_ty().into(),
+                ty,
+                mode: "yielded by `mut`",
+            }
+            .into()
+        }));
         diags
     }
 
@@ -1614,6 +1658,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         out.extend(self.diags_parameters(db));
         out.extend(self.diags_param_types(db));
         out.extend(self.diags_return(db));
+        out.extend(self.diags_view_types(db));
 
         for pred in WhereClauseOwner::Func(self).clause(db).predicates(db) {
             out.extend(pred.diags(db));

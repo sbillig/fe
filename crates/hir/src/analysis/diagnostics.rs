@@ -1637,6 +1637,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let error_code = GlobalErrorCode::new(DiagnosticPass::TypeDefinition, self.local_code());
         match self {
+            Self::ViewTypeMode { span, ty, mode } => primary_diag(
+                Severity::Error,
+                format!("`{}` is a `#[view]` type", ty.pretty_print(db)),
+                format!("a `#[view]` type cannot be {mode}"),
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ModeNotType(span) => primary_diag(
                 Severity::Error,
                 "`ref` and `mut` are not types",

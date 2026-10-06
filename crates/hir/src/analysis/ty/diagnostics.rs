@@ -65,6 +65,12 @@ pub enum TyLowerDiag<'db> {
     ExpectedStarKind(DynLazySpan<'db>),
     /// `ref T`/`mut T` outside a parameter or projection return.
     ModeNotType(DynLazySpan<'db>),
+    /// An `own` parameter or a `mut` yield of a `#[view]` type.
+    ViewTypeMode {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        mode: &'static str,
+    },
     InvalidTypeArgKind {
         span: DynLazySpan<'db>,
         expected: Option<Kind>,
@@ -291,6 +297,7 @@ impl TyLowerDiag<'_> {
         match self {
             Self::ExpectedStarKind(_) => 0,
             Self::ModeNotType(_) => 58,
+            Self::ViewTypeMode { .. } => 59,
             Self::InvalidTypeArgKind { .. } => 1,
             Self::RecursiveType { .. } => 2,
             Self::GrowingRecursiveType(_) => 57,
