@@ -39,6 +39,18 @@ impl Cell {
         self.set(tmp)
     }
 
+    // The ramp's own sessions finish on every exit: returning the empty
+    // variant runs the inner write-back but no outer slide.
+    fn maybe_via(mut self, _ present: bool) -> Option<mut u256> {
+        let x = self.cached()
+        x += 5
+        if !present {
+            return Option::None
+        }
+        yield Option::Some(mut x)
+        self.v *= 2
+    }
+
     // A projection whose yield is another projection's grant: the inner
     // session ends with the outer one.
     fn via(mut self) -> mut u256 {
@@ -108,6 +120,21 @@ fn optional_projection_slides_only_when_present() {
         x += 100
     }
     assert!(cell.v == 3)
+}
+
+#[test]
+fn empty_variant_finishes_the_ramp_sessions() {
+    let mut cell = Cell { v: 1 }
+    if let Option::Some(x) = cell.maybe_via(true) {
+        x += 1
+    }
+    assert!(cell.v == 14)
+
+    let mut other = Cell { v: 1 }
+    if let Option::Some(x) = other.maybe_via(false) {
+        x += 100
+    }
+    assert!(other.v == 6)
 }
 
 #[test]

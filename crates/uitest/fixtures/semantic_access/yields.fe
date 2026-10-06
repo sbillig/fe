@@ -19,6 +19,15 @@ impl Cell {
         self.depth += 1
     }
 
+    // Rejected: the empty variant is returned only during the ramp.
+    fn late_empty(mut self, _ c: bool) -> Option<mut u256> {
+        yield Option::Some(mut self.v)
+        if c {
+            return Option::None
+        }
+        self.depth += 1
+    }
+
     // Rejected: a second yield on one path.
     fn twice(mut self) -> mut u256 {
         yield mut self.v

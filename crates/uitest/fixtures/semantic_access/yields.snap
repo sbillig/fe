@@ -4,62 +4,68 @@ assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_access/yields.fe
 ---
-error[16-0011]: invalid yield in `fn twice`
-   ┌─ yields.fe:25:15
+error[16-0011]: invalid yield in `fn late_empty`
+   ┌─ yields.fe:26:20
    │
-25 │         yield mut self.v
+26 │             return Option::None
+   │                    ^^^^^^^^^^^^ a projection returns its empty variant only before it yields
+
+error[16-0011]: invalid yield in `fn twice`
+   ┌─ yields.fe:34:15
+   │
+34 │         yield mut self.v
    │               ^^^^^^^^^^ this path has already yielded
 
 error[16-0011]: invalid yield in `fn missing`
-   ┌─ yields.fe:29:49
+   ┌─ yields.fe:38:49
    │
-29 │       fn missing(mut self, _ c: bool) -> mut u256 {
+38 │       fn missing(mut self, _ c: bool) -> mut u256 {
    │ ╭─────────────────────────────────────────────────^
-30 │ │         if c {
-31 │ │             yield mut self.v
-32 │ │         }
-33 │ │         self.v += 1
-34 │ │     }
+39 │ │         if c {
+40 │ │             yield mut self.v
+41 │ │         }
+42 │ │         self.v += 1
+43 │ │     }
    │ ╰─────^ a projection must yield on every path that completes
 
 error[16-0011]: invalid yield in `fn in_loop`
-   ┌─ yields.fe:37:38
+   ┌─ yields.fe:46:38
    │
-37 │       fn in_loop(mut self) -> mut u256 {
+46 │       fn in_loop(mut self) -> mut u256 {
    │ ╭──────────────────────────────────────^
-38 │ │         while self.depth > 0 {
-39 │ │             yield mut self.v
-40 │ │             self.depth -= 1
-41 │ │         }
-42 │ │     }
+47 │ │         while self.depth > 0 {
+48 │ │             yield mut self.v
+49 │ │             self.depth -= 1
+50 │ │         }
+51 │ │     }
    │ ╰─────^ a projection must yield on every path that completes
 
 warning[16-0012]: discarded writes in `fn discarded`
-   ┌─ yields.fe:47:9
+   ┌─ yields.fe:56:9
    │
-47 │         mut tmp
+56 │         mut tmp
    │         ^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back
 
 warning[16-0012]: discarded writes in `fn discarded_stmt`
-   ┌─ yields.fe:52:15
+   ┌─ yields.fe:61:15
    │
-52 │         yield mut tmp
+61 │         yield mut tmp
    │               ^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back
 
 error[16-0013]: recursion through a projection in `fn deep`
-   ┌─ yields.fe:61:13
+   ┌─ yields.fe:70:13
    │
-61 │             self.deep()
+70 │             self.deep()
    │             ^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
 
 error[16-0013]: recursion through a projection in `fn ping`
-   ┌─ yields.fe:66:9
+   ┌─ yields.fe:75:9
    │
-66 │         self.pong()
+75 │         self.pong()
    │         ^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
 
 error[16-0013]: recursion through a projection in `fn pong`
-   ┌─ yields.fe:70:9
+   ┌─ yields.fe:79:9
    │
-70 │         self.ping()
+79 │         self.ping()
    │         ^^^^^^^^^^^ this call reaches the projection again through projection calls, which cannot be inlined
