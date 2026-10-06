@@ -34,7 +34,7 @@ use super::{
     },
     infer::{
         AssignmentSpace, CarrierInferer, ReturnClassLookup, join_reference_transports,
-        merge_runtime_class,
+        merge_runtime_class, runtime_class_has_zero_sized_payload,
     },
     interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
@@ -199,10 +199,7 @@ fn projection_return_class<'db>(
 ) -> Option<RuntimeClass<'db>> {
     let semantic = key.semantic(db)?;
     let body = RuntimeSemanticBody::admitted(db, semantic).ok()?;
-    let summary = RuntimeReturnSummary::build(db, semantic, &body);
-    evaluate_runtime_return_class(db, &summary, key.params(db), &mut |callee_key| {
-        declaration_runtime_return_class(db, callee_key)
-    })
+    runtime_return_class_for_body(db, key, &body)
 }
 
 pub(crate) fn runtime_return_class_for_body<'db>(
@@ -824,7 +821,13 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
         else {
             return summary.default_return_class.clone();
         };
-        returned.push(selected.class);
+        // A value with a zero-sized payload is erased, like its carrier.
+        if !runtime_class_has_zero_sized_payload(db, &selected.class) {
+            returned.push(selected.class);
+        }
+    }
+    if returned.is_empty() {
+        return None;
     }
     let Some(class) = merged_return_class(
         db,
