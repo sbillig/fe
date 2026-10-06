@@ -593,6 +593,8 @@ impl<'db> TyChecker<'db> {
                     self.report_cannot_borrow_mut(*lhs, expr.span(self.body()).into());
                     return ExprProp::invalid(self.db);
                 }
+                let ty = place_ty.fold_with(self.db, &mut self.table);
+                self.check_view_mut_access(ty, expr.span(self.body()).into());
                 BorrowKind::Mut
             } else {
                 BorrowKind::Ref

@@ -5546,6 +5546,17 @@ impl<'db> FieldView<'db> {
             );
             return out;
         }
+        if ty.is_view(db) {
+            out.push(
+                TyLowerDiag::ViewTypeMode {
+                    span: span.clone(),
+                    ty,
+                    mode: "a field",
+                }
+                .into(),
+            );
+            return out;
+        }
 
         // Trait-bound well-formedness for field type.
         let owner_item = self.owner_item();

@@ -1,5 +1,5 @@
 use super::intrinsic::size_of
-use super::marker::{Borrows, Copy}
+use super::marker::Copy
 use super::option::Option
 use super::ops::{Eq, Index, IndexMut}
 use super::panic_code
@@ -36,11 +36,13 @@ pub struct MemArray<T> {
     len: u256,
 }
 
-/// A copyable read-only view over typed values in linear memory.
+/// A read-only view over typed values in linear memory.
 ///
-/// A slice does not own or allocate its memory. Constructing one from raw parts
-/// asserts that the entire range is valid linear memory for the lifetime of the
-/// operation using it.
+/// A slice does not own or allocate its memory: it exists only as the result
+/// of a projection, a view of the owner the projection's session reserves.
+/// Constructing one from raw parts asserts that the entire range is valid
+/// linear memory for that session.
+#[view]
 pub struct MemSlice<T> {
     ptr: *T,
     len: u256,
@@ -68,10 +70,6 @@ pub struct FixedMemBuffer<const N: usize> {
 }
 
 impl<T> Copy for *T {}
-impl<T> Copy for MemSlice<T> {}
-
-/// A slice borrows the memory it views from the value it was derived from.
-impl<T> Borrows for MemSlice<T> {}
 
 impl<T> Eq for *T {
     fn eq(self, _ other: *T) -> bool {

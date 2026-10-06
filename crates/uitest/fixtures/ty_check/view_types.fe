@@ -1,33 +1,91 @@
-// A `#[view]` type is only ever reached through accesses: it admits no
-// `own` parameter and no `mut` yield.
-#[view]
-struct Span {
-    start: u256,
-    len: u256,
+// A `#[view]` type exists only behind view parameters and `ref` results.
+mod views {
+    #[view]
+    pub struct Span {
+        pub start: u256,
+        pub len: u256,
+    }
+
+    pub struct Owner {
+        pub start: u256,
+        pub len: u256,
+    }
+
+    impl Owner {
+        // Its defining module builds a span as a session-owned temporary.
+        pub fn span(self) -> ref Span {
+            let span = Span { start: self.start, len: self.len }
+            ref span
+        }
+    }
+
+    fn swap<T>(_ a: mut T, _ b: mut T) {}
+
+    fn reaccess() {
+        let mut a = Span { start: 0, len: 1 }
+        let mut b = Span { start: 1, len: 1 }
+        swap(mut a, mut b)
+    }
 }
 
-struct Owner {
-    span: Span,
-}
-
-fn owned(_ span: own Span) {}
+use views::{Owner, Span}
 
 fn viewed(_ span: Span) -> u256 {
     span.len
 }
 
-impl Owner {
-    fn span(self) -> ref Span {
-        ref self.span
-    }
+fn owned(_ span: own Span) {}
 
-    fn span_mut(mut self) -> mut Span {
-        mut self.span
-    }
+fn inout(_ span: mut Span) {}
 
-    fn both(mut self) -> (ref Span, mut Span) {
-        (ref self.span, mut self.span)
-    }
+trait Make {
+    fn make() -> Span
+    fn span_mut(mut self) -> mut Span
+    fn both(mut self) -> (ref Span, mut Span)
+}
+
+struct Holder {
+    span: Span,
+}
+
+enum Either {
+    Left(Span),
+    Right,
+}
+
+fn pair(_ p: (Span, u256)) {}
+
+fn maybe(_ s: Option<Span>) {}
+
+type Spans = [Span; 2]
+
+fn spans(_ s: Spans) {}
+
+impl Copy for Span {}
+
+fn outside() -> u256 {
+    let span = Span { start: 0, len: 0 }
+    span.len
+}
+
+fn take<T>(_ x: own T) {}
+
+fn take_viewed(owner: Owner) {
+    take(owner.span())
+}
+
+trait HasSpan {
+    type S
+}
+
+impl HasSpan for Owner {
+    type S = Span
+}
+
+fn take_assoc<T: HasSpan>(_ x: own T::S) {}
+
+fn take_assoc_viewed(owner: Owner) {
+    take_assoc<Owner>(owner.span())
 }
 
 #[view(read)]

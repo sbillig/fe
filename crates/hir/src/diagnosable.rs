@@ -17,10 +17,9 @@ use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
-use crate::analysis::ty::ty_def::{BorrowKind, InvalidCause, TyId};
+use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::{collect_ty_lower_errors, emit_invalid_ty_error};
 use crate::analysis::ty::ty_lower::generic_param_owner_assumptions;
-use crate::hir_def::params::FuncParamMode;
 use crate::hir_def::{
     Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
     GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
@@ -379,46 +378,25 @@ impl<'db> Func<'db> {
         diags
     }
 
-    /// A `#[view]` type admits no `own` parameter and no `mut` yield.
+    /// A `#[view]` type is taken only by view parameters and `ref` results.
     pub fn diags_view_types(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        fn mut_yields<'db>(shape: &Shape<'db>, out: &mut Vec<TyId<'db>>) {
-            match shape {
-                Shape::Access(BorrowKind::Mut, ty) => out.push(*ty),
-                Shape::Access(BorrowKind::Ref, _) | Shape::Owned(_) => {}
-                Shape::Tuple(elems) => elems.iter().for_each(|elem| mut_yields(elem, out)),
-                Shape::Sum { payload, .. } => mut_yields(payload, out),
-            }
-        }
-        let is_view = |ty: TyId<'db>| {
-            ty.base_ty(db)
-                .adt_ref(db)
-                .is_some_and(|adt| adt.is_view(db))
-        };
-        let mut diags: Vec<TyDiagCollection<'db>> = self
-            .params(db)
-            .filter(|param| param.mode(db) == FuncParamMode::Own && is_view(param.ty(db)))
-            .map(|param| {
-                TyLowerDiag::ViewTypeMode {
-                    span: param.span().into(),
-                    ty: param.ty(db),
-                    mode: "an `own` parameter",
-                }
-                .into()
-            })
-            .collect();
-        let mut yielded = Vec::new();
-        if let Some(shape) = self.return_shape(db) {
-            mut_yields(shape, &mut yielded);
-        }
-        diags.extend(yielded.into_iter().filter(|ty| is_view(*ty)).map(|ty| {
-            TyLowerDiag::ViewTypeMode {
-                span: self.span().ret_ty().into(),
-                ty,
-                mode: "yielded by `mut`",
-            }
-            .into()
-        }));
-        diags
+        let normalize =
+            |ty| ty::normalize::normalize_ty(db, ty, self.scope(), self.assumptions(db));
+        let params = self.params(db).filter_map(|param| {
+            let (ty, position) =
+                ty::shape::view_param_misuse(db, param.mode(db), normalize(param.ty(db)))?;
+            Some((param.span().into(), ty, position))
+        });
+        let ret = self
+            .return_shape(db)
+            .cloned()
+            .unwrap_or_else(|| Shape::Owned(normalize(self.return_ty(db))))
+            .view_misuse(db)
+            .map(|(ty, position)| (self.span().ret_ty().into(), ty, position));
+        params
+            .chain(ret)
+            .map(|(span, ty, mode)| TyLowerDiag::ViewTypeMode { span, ty, mode }.into())
+            .collect()
     }
 
     /// Diagnostics for function parameter types:
@@ -702,6 +680,24 @@ impl<'db> Impl<'db> {
 }
 
 impl<'db> ImplTrait<'db> {
+    /// A `#[view]` type has no copies.
+    fn diags_view_copy(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implementor: ImplementorId<'db>,
+    ) -> Option<TyDiagCollection<'db>> {
+        let ty = implementor.self_ty(db);
+        let copy = ty::corelib::resolve_core_trait(db, self.scope(), &["marker", "Copy"])?;
+        (ty.is_view(db) && implementor.trait_def(db) == copy).then(|| {
+            TyLowerDiag::ViewTypeMode {
+                span: self.span().ty().into(),
+                ty,
+                mode: "`Copy`",
+            }
+            .into()
+        })
+    }
+
     fn diags_effect_handle_raw(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1222,6 +1218,17 @@ impl<'db> VariantView<'db> {
                     TyLowerDiag::NormalTypeExpected {
                         span: span.clone().into(),
                         given: ty,
+                    }
+                    .into(),
+                );
+                continue;
+            }
+            if ty.is_view(db) {
+                out.push(
+                    TyLowerDiag::ViewTypeMode {
+                        span: span.clone().into(),
+                        ty,
+                        mode: "a field",
                     }
                     .into(),
                 );
@@ -1752,6 +1759,7 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         let mut out = validity_diags;
         out.extend(implementor.diags_method_conformance(db));
         out.extend(self.diags_effect_handle_raw(db, implementor));
+        out.extend(self.diags_view_copy(db, implementor));
         out.extend(self.diags_trait_ref_and_wf(db));
         out.extend(self.diags_assoc_types_wf(db));
         out.extend(self.diags_assoc_types(db));

@@ -3802,6 +3802,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::ViewInstantiation {
+                primary,
+                ty,
+                position,
+            } => primary_diag(
+                Severity::Error,
+                format!(
+                    "this call instantiates its callee at the `#[view]` type `{}`",
+                    ty.pretty_print(db)
+                ),
+                format!("a `#[view]` type cannot be {position}"),
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::YieldOutsideProjection { primary } => primary_diag(
                 Severity::Error,
                 "`yield` outside a projection",

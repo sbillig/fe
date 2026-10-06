@@ -540,7 +540,7 @@ impl CallOutcome {
         self.success
     }
 
-    pub fn returndata(self) -> MemSpan {
+    pub fn returndata(self) -> ref MemSpan {
         self.returndata.span()
     }
 

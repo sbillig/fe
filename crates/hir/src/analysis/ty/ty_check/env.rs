@@ -797,6 +797,10 @@ impl<'db> TyCheckEnv<'db> {
         self.pat_ty[pat] = Some(ty);
     }
 
+    pub(super) fn pat_ty(&self, pat: PatId) -> Option<TyId<'db>> {
+        self.pat_ty.get(pat).copied().flatten()
+    }
+
     pub(super) fn alloc_validated_pat(&mut self, pat: ValidatedPat<'db>) -> ValidatedPatId {
         self.pattern_store.alloc(pat)
     }

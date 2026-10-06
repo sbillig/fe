@@ -21,7 +21,8 @@ use super::{
 use crate::{
     analysis::HirAnalysisDb,
     hir_def::{
-        GenericArg, Partial, PathId, TypeId as HirTyId, TypeKind, TypeMode, scope_graph::ScopeId,
+        FuncParamMode, GenericArg, Partial, PathId, TypeId as HirTyId, TypeKind, TypeMode,
+        scope_graph::ScopeId,
     },
     span::types::LazyTySpan,
 };
@@ -41,7 +42,54 @@ pub enum Shape<'db> {
     },
 }
 
+/// A `#[view]` type exists only behind view and `ref` accesses: `ty` takes
+/// one wrongly if it is a part of another type, or if it is one and the
+/// position it is in would make it `whole`. Returns the view type and what
+/// the position would make it.
+fn view_misuse<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    whole: Option<&'static str>,
+) -> Option<(TyId<'db>, &'static str)> {
+    match ty.view_part(db) {
+        Some(view) => Some((view, "part of another type")),
+        None => whole
+            .filter(|_| ty.is_view(db))
+            .map(|position| (ty, position)),
+    }
+}
+
+/// A `#[view]` type a parameter of `mode` and type `ty` takes wrongly: as an
+/// `own` or `mut` parameter, or as part of another type.
+pub fn view_param_misuse<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mode: FuncParamMode,
+    ty: TyId<'db>,
+) -> Option<(TyId<'db>, &'static str)> {
+    let whole = match mode {
+        FuncParamMode::Own => Some("an `own` parameter"),
+        FuncParamMode::Mut => Some("a `mut` parameter"),
+        FuncParamMode::View => None,
+    };
+    view_misuse(db, ty, whole)
+}
+
 impl<'db> Shape<'db> {
+    /// A `#[view]` type this return takes wrongly: by value, by a `mut`
+    /// yield, or as part of another type.
+    pub fn view_misuse(&self, db: &'db dyn HirAnalysisDb) -> Option<(TyId<'db>, &'static str)> {
+        match self {
+            Self::Owned(ty) => view_misuse(db, *ty, Some("returned by value")),
+            Self::Access(kind, ty) => view_misuse(
+                db,
+                *ty,
+                (*kind == BorrowKind::Mut).then_some("yielded by `mut`"),
+            ),
+            Self::Tuple(elems) => elems.iter().find_map(|elem| elem.view_misuse(db)),
+            Self::Sum { payload, .. } => payload.view_misuse(db),
+        }
+    }
+
     /// Whether this shape grants an access, i.e. whether a function returning
     /// it is a projection.
     pub fn has_access(&self) -> bool {

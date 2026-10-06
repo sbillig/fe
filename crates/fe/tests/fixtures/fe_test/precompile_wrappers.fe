@@ -34,7 +34,7 @@ const ECRECOVER_HIGH_S: u256 = 0xf7874d0f35046703c2f0438cb6ee7eade417b862f21e5aa
 type MemBuffer = ptr::MemBuffer
 type MemSpan = ptr::MemSpan
 
-fn buffer(_ ptr: *u8, _ len: u256) -> MemSpan {
+fn buffer(_ ptr: *u8, _ len: u256) -> ref MemSpan {
     unsafe { MemSpan::from_raw_parts(ptr, len) }
 }
 

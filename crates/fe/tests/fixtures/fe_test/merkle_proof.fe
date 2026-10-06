@@ -13,7 +13,7 @@ use core::ptr::{self, MemSlice}
 use std::abi::{Bytes32, DynArray, FixedBytes, MemVec}
 use std::evm::{Evm, merkle}
 
-fn words<const N: usize>(_ values: [u256; N]) -> MemSlice<u256> {
+fn words<const N: usize>(_ values: [u256; N]) -> ref MemSlice<u256> {
     let mut array = unsafe { ptr::alloc_array<u256>(N as u256) }
     let mut i: usize = 0
     for value in values {
@@ -23,7 +23,7 @@ fn words<const N: usize>(_ values: [u256; N]) -> MemSlice<u256> {
     array.as_slice()
 }
 
-fn empty() -> MemSlice<u256> {
+fn empty() -> ref MemSlice<u256> {
     MemSlice<u256>::empty()
 }
 

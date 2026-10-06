@@ -26,7 +26,7 @@ use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::method_table::ProbedMethod;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
-use crate::analysis::ty::shape::Shape;
+use crate::analysis::ty::shape::{Shape, view_param_misuse};
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
@@ -2937,6 +2937,17 @@ impl<'db> TyChecker<'db> {
         prop
     }
 
+    /// A `#[view]` type is never accessed by `mut`.
+    pub(super) fn check_view_mut_access(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) {
+        if ty.is_view(self.db) {
+            self.push_diag(TyDiagCollection::from(TyLowerDiag::ViewTypeMode {
+                span,
+                ty,
+                mode: "accessed by `mut`",
+            }));
+        }
+    }
+
     fn first_mut_binding(&self, pat: PatId) -> Option<PatId> {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
             return None;
@@ -3050,6 +3061,12 @@ impl<'db> TyChecker<'db> {
         match pat_data {
             Pat::Path(..) => {
                 if let Some(LocalBinding::Local { .. }) = self.env.pat_binding(pat) {
+                    if kind == BorrowKind::Mut
+                        && let Some(ty) = self.env.pat_ty(pat)
+                    {
+                        let ty = ty.fold_with(self.db, &mut self.table);
+                        self.check_view_mut_access(ty, pat.span(self.body()).into());
+                    }
                     self.env
                         .set_pat_binding_mode(pat, PatBindingMode::Access(kind));
                 }
@@ -5903,6 +5920,19 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             self.check_unknown(callable_ty, span.into());
         }
 
+        match expr_data {
+            Expr::RecordInit(..) => {
+                let ty = self.body.expr_prop(self.db, expr).ty;
+                self.check_view_construction(ty, ctxt.span().unwrap().into());
+            }
+            Expr::Call(..) | Expr::MethodCall(..) => {
+                if let Some(callable) = self.body.callable_expr(expr).cloned() {
+                    self.check_view_call(&callable, expr, ctxt.span().unwrap().into());
+                }
+            }
+            _ => {}
+        }
+
         walk_expr(self, ctxt, expr);
     }
 
@@ -5979,6 +6009,68 @@ impl<'db> TyCheckerFinalizer<'db> {
         if !skip_diag {
             let diag = BodyDiag::TypeAnnotationNeeded { span, ty };
             self.diags.push(diag.into())
+        }
+    }
+
+    /// A `#[view]` value is built only in its type's module, by the
+    /// projections that yield it.
+    fn check_view_construction(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) {
+        let db = self.db;
+        if ty.is_view(db)
+            && let Some(adt) = ty.base_ty(db).adt_ref(db)
+            && let Some(module) = adt.scope().parent_module(db)
+            && let Some(body) = self.body.body()
+            && !body.scope().is_transitive_child_of(db, module)
+        {
+            let diag = TyLowerDiag::ViewTypeMode {
+                span,
+                ty,
+                mode: "constructed outside its defining module",
+            };
+            self.diags.push(TyDiagCollection::from(diag).into());
+        }
+    }
+
+    /// A call constructing a `#[view]` value, or instantiating its callee at
+    /// a `#[view]` type in a position a view type cannot take.
+    fn check_view_call(&mut self, callable: &Callable<'db>, expr: ExprId, span: DynLazySpan<'db>) {
+        let db = self.db;
+        if let CallableDef::VariantCtor(_) = callable.callable_def {
+            let ty = self.body.expr_prop(db, expr).ty;
+            return self.check_view_construction(ty, span);
+        }
+        // A callee's declared signature is checked where it is declared.
+        let def = callable.callable_def;
+        if callable.generic_args().is_empty()
+            || matches!(def, CallableDef::Func(func) if !func.diags_view_types(db).is_empty())
+        {
+            return;
+        }
+        let Some(body) = self.body.body() else {
+            return;
+        };
+        let (scope, assumptions) = (body.scope(), self.assumptions);
+        let mut params = (0..).map_while(|idx| {
+            let ty = normalize_ty(db, callable.arg_ty(db, idx)?, scope, assumptions);
+            Some((def.param_mode(db, idx), ty))
+        });
+        let misuse = params
+            .find_map(|(mode, ty)| view_param_misuse(db, mode, ty))
+            .or_else(|| {
+                let ret = callable
+                    .ret_shape(db)
+                    .unwrap_or_else(|| Shape::Owned(callable.ret_ty(db)));
+                normalize_ty(db, ret, scope, assumptions).view_misuse(db)
+            });
+        if let Some((ty, position)) = misuse {
+            self.diags.push(
+                BodyDiag::ViewInstantiation {
+                    primary: span,
+                    ty,
+                    position,
+                }
+                .into(),
+            );
         }
     }
 

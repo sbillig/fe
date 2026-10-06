@@ -674,6 +674,14 @@ pub enum BodyDiag<'db> {
         ret: TyId<'db>,
     },
 
+    /// A call instantiates its callee at a `#[view]` type in a position a
+    /// view type cannot take.
+    ViewInstantiation {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        position: &'static str,
+    },
+
     /// Array repetition literals (`[x; N]`) duplicate the element value.
     ///
     /// Duplicating a value requires that the element type implement `core::marker::Copy`.
@@ -1059,6 +1067,7 @@ impl<'db> BodyDiag<'db> {
             Self::LetElseMustDiverge { .. } => 102,
             Self::TryOnNonSum { .. } => 103,
             Self::TryReturnMismatch { .. } => 104,
+            Self::ViewInstantiation { .. } => 105,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,
