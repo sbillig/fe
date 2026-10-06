@@ -19,3 +19,23 @@ fn example() {
     assert!(w.p.x == 10)
     assert!(p.x == 10)
 }
+
+fn whole_return(value: Pair) -> Pair {
+    value
+}
+
+fn whole_let(value: Pair) {
+    let copied: Pair = value
+}
+
+fn whole_assign(value: Pair, target: mut Pair) {
+    target = value
+}
+
+fn whole_generic<T>(value: T) -> T {
+    value
+}
+
+fn copy_and_own(value: u256, owned: own Pair) -> (u256, Pair) {
+    (value, owned)
+}
