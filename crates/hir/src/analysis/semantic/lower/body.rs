@@ -28,8 +28,8 @@ use crate::{
             shape::{Shape, sum_payload_variant},
             ty_check::{
                 BodyOwner, Callable, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef,
-                LocalBinding, PathReadSemantics, RecordInitLowering, RecordLike,
-                SemanticExprLowering, TypedBody, ValuePathRef,
+                ForLoopItem, ForLoopStep, LocalBinding, PathReadSemantics, RecordInitLowering,
+                RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
             },
             ty_def::{BorrowKind, TyData, TyId},
             ty_is_copy,
@@ -38,7 +38,7 @@ use crate::{
     hir_def::{
         ArithBinOp, Body, CallArg, CallableDef, Cond, CondId, Expr, ExprId, Field as HirField,
         LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId,
-        expr::{BinOp, CompBinOp, LogicalBinOp, UnOp},
+        expr::{BinOp, LogicalBinOp, UnOp},
         params::FuncParamMode,
     },
 };
@@ -1773,127 +1773,137 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.switch_to(exit_bb);
     }
 
+    /// Lowers `for pat in base { body }` to the `Collection` protocol. Each
+    /// cursor is tested where it is produced, so only the cursor itself is
+    /// carried around the loop; the next cursor is taken before the body,
+    /// and `continue` goes straight to its test.
     fn lower_for(&mut self, stmt: StmtId, pat: PatId, iter: ExprId, body_expr: ExprId) {
-        let for_loop_call_sites = self
+        let sites = self
             .for_loop_call_sites
             .get(stmt.index())
             .and_then(|sites| sites.as_ref())
             .unwrap_or_else(|| panic!("missing staged callee refs for for-loop {stmt:?}"));
-        let seq = self
+        let plan = self
             .typed_body
-            .for_loop_seq(stmt)
-            .unwrap_or_else(|| panic!("missing Seq resolution for for-loop {stmt:?}"));
-        let iter_value = self.lower_expr(iter);
-        let iter_operand = SOperand::expr(iter_value, iter);
-        let usize_ty = seq.len_callable.ret_ty(self.db);
-        let elem_ty = seq.elem_ty;
-        let idx_local = self.alloc_temp(usize_ty);
-        self.push_synthetic_stmt(SStmtKind::Assign {
-            dst: idx_local,
-            expr: SExpr::Const(SConst::from_trusted_source(
-                self.db,
-                int_const(self.db, usize_ty, BigInt::default()),
-            )),
-        });
-        let len_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.len.effect_args);
-        let len_value = self.emit_expr(
-            usize_ty,
-            SExpr::Call {
-                call_site: CallSiteId::ForLoopLen(stmt),
-                callee: for_loop_call_sites
-                    .len
-                    .callee
-                    .expect("Seq::len should lower to a semantic callee"),
-                args: vec![iter_operand].into_boxed_slice(),
-                effect_args: len_effect_args,
-            },
+            .for_loop_plan(stmt)
+            .unwrap_or_else(|| panic!("missing collection protocol for for-loop {stmt:?}"));
+        // The base the loop holds: its value, or the carrier of its access.
+        let base = self.lower_source(iter);
+        let base_operand = SOperand::expr(base, iter);
+        let call = |this: &mut Self, step, args: Vec<SOperand>, ty| {
+            let site = sites.site(step);
+            let effect_args = this.lower_effect_arg_slice(&site.effect_args);
+            this.emit_expr(
+                ty,
+                SExpr::Call {
+                    call_site: CallSiteId::ForLoop(stmt, step),
+                    callee: site
+                        .callee
+                        .expect("a collection protocol call lowers to a semantic callee"),
+                    args: args.into_boxed_slice(),
+                    effect_args,
+                },
+            )
+        };
+        let normalize =
+            |this: &Self, ty| normalize_ty(this.db, ty, this.body.scope(), this.assumptions);
+        let state_ty = normalize(self, plan.call(ForLoopStep::Start).callable.ret_ty(self.db));
+        let cursor_ty = normalize(self, plan.cursor_ty);
+        let item_ty = normalize(self, plan.item_ty);
+        let some = VariantIndex(
+            sum_payload_variant(self.db, self.body.scope(), state_ty)
+                .expect("a cursor is an `Option`"),
         );
-
-        let cond_bb = self.new_block();
+        let cursor = self.alloc_temp(cursor_ty);
         let body_bb = self.new_block();
-        let advance_bb = self.new_block();
+        let latch_bb = self.new_block();
         let exit_bb = self.new_block();
-        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
-
-        self.switch_to(cond_bb);
-        let cond = self.emit_expr(
-            TyId::bool(self.db),
-            SExpr::Binary {
-                op: BinOp::Comp(CompBinOp::Lt),
-                lhs: SOperand::synthetic(idx_local),
-                rhs: SOperand::synthetic(len_value),
-            },
-        );
-        self.set_synthetic_terminator(
-            self.current,
-            STerminatorKind::Branch {
-                cond: SOperand::synthetic(cond),
-                then_bb: body_bb,
-                else_bb: exit_bb,
-            },
-        );
+        // Enters the body with the cursor `state` holds, or leaves the loop.
+        let test = |this: &mut Self, state| {
+            let is_some = this.emit_expr(
+                TyId::bool(this.db),
+                SExpr::IsEnumVariant {
+                    value: SOperand::synthetic(state),
+                    variant: some,
+                },
+            );
+            let load_bb = this.new_block();
+            this.set_synthetic_terminator(
+                this.current,
+                STerminatorKind::Branch {
+                    cond: SOperand::synthetic(is_some),
+                    then_bb: load_bb,
+                    else_bb: exit_bb,
+                },
+            );
+            this.switch_to(load_bb);
+            this.push_synthetic_stmt(SStmtKind::Assign {
+                dst: cursor,
+                expr: SExpr::ExtractEnumField {
+                    value: SOperand::synthetic(state),
+                    variant: some,
+                    field: FieldIndex(0),
+                },
+            });
+            this.set_synthetic_terminator(this.current, STerminatorKind::Goto(body_bb));
+        };
+        let first = call(self, ForLoopStep::Start, vec![base_operand], state_ty);
+        test(self, first);
 
         self.loop_stack.push(LoopScope {
-            continue_bb: advance_bb,
+            continue_bb: latch_bb,
             break_bb: exit_bb,
             has_reachable_continue: false,
         });
         self.switch_to(body_bb);
-        let get_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.get.effect_args);
-        let elem = self.emit_expr(
-            elem_ty,
-            SExpr::Call {
-                call_site: CallSiteId::ForLoopGet(stmt),
-                callee: for_loop_call_sites
-                    .get
-                    .callee
-                    .expect("Seq::get should lower to a semantic callee"),
-                args: vec![iter_operand, SOperand::synthetic(idx_local)].into_boxed_slice(),
-                effect_args: get_effect_args,
-            },
+        let next = call(
+            self,
+            ForLoopStep::Next,
+            vec![base_operand, SOperand::synthetic(cursor)],
+            state_ty,
         );
-        if seq.element_layout_backing_source {
-            self.locals[elem.index()].layout_backing_sources = vec![LayoutBackingSource {
+        let kind = match plan.item {
+            ForLoopItem::Copy => BorrowKind::Ref,
+            ForLoopItem::Access(kind) => kind,
+        };
+        let element = call(
+            self,
+            ForLoopStep::At,
+            vec![base_operand, SOperand::synthetic(cursor)],
+            Shape::Access(kind, item_ty).carrier_ty(self.db),
+        );
+        // A copy ends the element's session before the body runs.
+        let element = match plan.item {
+            ForLoopItem::Copy => self.emit_expr(
+                item_ty,
+                SExpr::ReadPlace {
+                    place: SPlace::new(element),
+                },
+            ),
+            ForLoopItem::Access(_) => element,
+        };
+        if plan.element_layout_backing_source {
+            self.locals[element.index()].layout_backing_sources = vec![LayoutBackingSource {
                 target: Vec::new(),
-                source: LayoutBackingPlace::Local(SPlace::dynamic_index(iter_value, idx_local)),
+                source: LayoutBackingPlace::Local(SPlace::dynamic_index(base, cursor)),
             }];
-            self.assigned_layout_backing_sources[elem.index()] = true;
+            self.assigned_layout_backing_sources[element.index()] = true;
         }
-        self.bind_pattern(pat, elem);
+        self.bind_pattern(pat, element);
         let _ = self.lower_expr(body_expr);
         let falls_through = !self.is_terminated(self.current);
         if falls_through {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(advance_bb));
+            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(latch_bb));
         }
         let scope = self.loop_stack.pop().expect("for loop scope");
         if falls_through || scope.has_reachable_continue {
-            // Both normal fallthrough and `continue` must advance the sequence.
-            self.switch_to(advance_bb);
-            let one = self.emit_expr(
-                usize_ty,
-                SExpr::Const(SConst::from_trusted_source(
-                    self.db,
-                    int_const(self.db, usize_ty, BigInt::from(1u8)),
-                )),
-            );
-            let next = self.emit_expr(
-                usize_ty,
-                SExpr::Binary {
-                    op: BinOp::Arith(ArithBinOp::Add),
-                    lhs: SOperand::synthetic(idx_local),
-                    rhs: SOperand::synthetic(one),
-                },
-            );
-            self.push_synthetic_stmt(SStmtKind::Assign {
-                dst: idx_local,
-                expr: SExpr::UseValue(SOperand::synthetic(next)),
-            });
-            self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
+            self.switch_to(latch_bb);
+            test(self, next);
         } else {
-            // Every body path leaves the loop, so nothing reaches the advance
-            // block. Close it like a dead `if`/`match` join rather than leaving
-            // it to read `idx_local` from a block unreachable from entry.
-            self.set_synthetic_terminator(advance_bb, STerminatorKind::Goto(advance_bb));
+            // Every body path leaves the loop, so nothing reaches the latch.
+            // Close it like a dead `if`/`match` join rather than leaving it to
+            // read `next` from a block unreachable from entry.
+            self.set_synthetic_terminator(latch_bb, STerminatorKind::Goto(latch_bb));
         }
         self.switch_to(exit_bb);
     }

@@ -8,7 +8,8 @@
 //! space of the resource a handle parameter names, `@d` for an effect
 //! domain's, or an associated space, `@S` or `@B::S`. A trait declares an
 //! associated space, `space S`, and each implementation gives it: a space by
-//! name, or another associated space (`space S = B::S`). The access check
+//! name, `self` for where the implementing value lies, or another associated
+//! space (`space S = B::S`). The access check
 //! holds each instance's yields to the contracts its signature declares, and
 //! an implementation's to its trait method's.
 use salsa::Update;
@@ -24,6 +25,7 @@ use crate::{
             trait_resolution::{
                 PredicateListId, Selection, TraitSolveCx, constraint::resolve_assoc_item_path,
             },
+            ty_def::TyId,
             visitor::{TyVisitable, TyVisitor},
         },
     },
@@ -180,13 +182,21 @@ fn space_key<'db>(
     })
 }
 
-/// The space `key` is where the scope selects the implementations involved.
+/// What an associated space is, once the implementations involved are known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedSpace<'db> {
+    Space(ProviderAddressSpace),
+    /// Where the value of this type lies: the implementation said `self`.
+    Owner(TyId<'db>),
+}
+
+/// What `key` is where the scope selects the implementations involved.
 pub fn resolve_space_key<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SpaceKey<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> Option<ProviderAddressSpace> {
+) -> Option<ResolvedSpace<'db>> {
     let Selection::Unique(resolved) = resolve_trait_impl_instance(
         db,
         TraitSolveCx::new(db, scope).with_assumptions(assumptions),
@@ -205,27 +215,39 @@ pub fn resolve_space_key<'db>(
         .value?
         .to_opt()?;
     match impl_space_value(db, impl_trait, value)? {
-        SpaceContract::Assoc(inner) => {
+        SpaceValue::Space(space) => Some(ResolvedSpace::Space(space)),
+        SpaceValue::Owner => Some(ResolvedSpace::Owner(key.inst.self_ty(db))),
+        SpaceValue::Assoc(inner) => {
             let inner =
                 Binder::bind(impl_trait.into(), inner).instantiate(db, resolved.impl_args(db));
             resolve_space_key(db, inner, scope, assumptions)
         }
-        SpaceContract::Space(space) => Some(space),
-        SpaceContract::Param(_) | SpaceContract::Target(_) | SpaceContract::Domain(_) => None,
     }
 }
 
-/// The space an implementation's `space S = value` gives: a space by name,
-/// or another associated space.
+/// The space an implementation gives in `space S = value`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpaceValue<'db> {
+    Space(ProviderAddressSpace),
+    /// `self`: where the implementing value itself lies, as for an owner
+    /// whose elements are its own parts.
+    Owner,
+    /// Another associated space: `B::S`.
+    Assoc(SpaceKey<'db>),
+}
+
 pub fn impl_space_value<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
     value: PathId<'db>,
-) -> Option<SpaceContract<'db>> {
+) -> Option<SpaceValue<'db>> {
+    if value.as_ident(db).is_some_and(|name| name.is_self(db)) {
+        return Some(SpaceValue::Owner);
+    }
     value
         .as_ident(db)
         .and_then(|name| named_space(db, name))
-        .map(SpaceContract::Space)
+        .map(SpaceValue::Space)
         .or_else(|| {
             space_key(
                 db,
@@ -233,6 +255,6 @@ pub fn impl_space_value<'db>(
                 impl_trait.scope(),
                 constraints_for(db, impl_trait.into()),
             )
-            .map(SpaceContract::Assoc)
+            .map(SpaceValue::Assoc)
         })
 }

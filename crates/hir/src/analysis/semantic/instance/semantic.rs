@@ -33,7 +33,9 @@ use crate::{
                 RootProviderRegistration, RootProviderScope, provider_semantics,
                 provider_semantics_for_specialized_call, registered_root_providers,
             },
-            result_space::{SpaceContract, SpaceKey, declared_result_spaces, resolve_space_key},
+            result_space::{
+                ResolvedSpace, SpaceContract, SpaceKey, declared_result_spaces, resolve_space_key,
+            },
             subst::substitute_complete,
             trait_def::{MethodArgMapError, TraitInstId},
             trait_resolution::{
@@ -42,8 +44,8 @@ use crate::{
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgLayoutView,
                 EffectParamSite, EffectPassMode, EffectProviderProvenance,
-                EffectProviderSpecialization, LocalBinding, ParamSite, ResolvedEffectArg,
-                SemanticExprLowering, SmirLoweringIssue, TypedBody,
+                EffectProviderSpecialization, ForLoopStep, LocalBinding, ParamSite,
+                ResolvedEffectArg, SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
             ty_def::{InvalidCause, TyId},
             ty_is_copy,
@@ -209,8 +211,14 @@ pub struct CallSiteLowering<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct ForLoopCallSites<'db> {
-    pub len: CallSiteLowering<'db>,
-    pub get: CallSiteLowering<'db>,
+    /// The protocol's calls, in `ForLoopStep` order.
+    pub sites: [CallSiteLowering<'db>; 3],
+}
+
+impl<'db> ForLoopCallSites<'db> {
+    pub fn site(&self, step: ForLoopStep) -> &CallSiteLowering<'db> {
+        &self.sites[step as usize]
+    }
 }
 
 /// The address space of the place a call supplies to one of its callee's
@@ -361,29 +369,21 @@ fn provisional_for_loop_call_sites<'db>(
     let mut sites = vec![None; body.stmts(db).len()];
     let mut diagnostic = None;
     for (stmt, _) in body.stmts(db).iter() {
-        let Some(seq) = typed_body.for_loop_seq(stmt) else {
+        let Some(plan) = typed_body.for_loop_plan(stmt) else {
             continue;
         };
-        let origin = SemOrigin::Stmt(stmt);
         sites[stmt.index()] = Some(ForLoopCallSites {
-            len: provisional_call_site(
-                db,
-                instance,
-                &seq.len_callable,
-                &seq.len_effect_args,
-                assumptions,
-                origin,
-                &mut diagnostic,
-            ),
-            get: provisional_call_site(
-                db,
-                instance,
-                &seq.get_callable,
-                &seq.get_effect_args,
-                assumptions,
-                origin,
-                &mut diagnostic,
-            ),
+            sites: plan.calls.each_ref().map(|call| {
+                provisional_call_site(
+                    db,
+                    instance,
+                    &call.callable,
+                    &call.effect_args,
+                    assumptions,
+                    SemOrigin::Stmt(stmt),
+                    &mut diagnostic,
+                )
+            }),
         });
     }
     ProvisionalCallSiteData { sites, diagnostic }
@@ -719,29 +719,22 @@ fn finalize_call_sites<'db>(
         else {
             continue;
         };
-        let Some(seq) = typed_body.for_loop_seq(stmt) else {
+        let Some(plan) = typed_body.for_loop_plan(stmt) else {
             continue;
         };
-        finalize_call_site(
-            db,
-            instance,
-            &seq.len_callable,
-            &mut sites.len,
-            &seq.len_effect_args,
-            refinements(CallSiteId::ForLoopLen(stmt)),
-            SemOrigin::Stmt(stmt),
-            same_assumptions,
-        )?;
-        finalize_call_site(
-            db,
-            instance,
-            &seq.get_callable,
-            &mut sites.get,
-            &seq.get_effect_args,
-            refinements(CallSiteId::ForLoopGet(stmt)),
-            SemOrigin::Stmt(stmt),
-            same_assumptions,
-        )?;
+        for step in ForLoopStep::ALL {
+            let call = plan.call(step);
+            finalize_call_site(
+                db,
+                instance,
+                &call.callable,
+                &mut sites.sites[step as usize],
+                &call.effect_args,
+                refinements(CallSiteId::ForLoop(stmt, step)),
+                SemOrigin::Stmt(stmt),
+                same_assumptions,
+            )?;
+        }
     }
     Ok(())
 }
@@ -809,7 +802,8 @@ fn call_sites_have_effect_args<'db>(
         || for_loop_call_sites
             .iter()
             .flatten()
-            .any(|sites| !sites.len.effect_args.is_empty() || !sites.get.effect_args.is_empty())
+            .flat_map(|sites| &sites.sites)
+            .any(|site| !site.effect_args.is_empty())
 }
 
 fn rebase_effect_args<'db>(
@@ -1313,7 +1307,7 @@ impl<'db> SemanticInstance<'db> {
                 })
                 .and_then(|binding| resolved_provider_binding_for_instance_effect(db, self, binding))
                 .and_then(|provider| provider.semantics.address_space),
-            SpaceContract::Assoc(space) => resolve_space_key(
+            SpaceContract::Assoc(space) => match resolve_space_key(
                 db,
                 SpaceKey {
                     inst: instantiate_normalized_trait_inst(db, key, space.inst).ok()?,
@@ -1321,7 +1315,20 @@ impl<'db> SemanticInstance<'db> {
                 },
                 key.owner(db).scope(),
                 self.assumptions(db),
-            ),
+            )? {
+                ResolvedSpace::Space(space) => Some(space),
+                // The parameter holding the owner, if one alone does.
+                ResolvedSpace::Owner(owner) => {
+                    let typed_body = key.typed_body(db);
+                    let mut params = (0..)
+                        .map_while(|idx| Some((idx, typed_body.param_binding(idx)?)))
+                        .filter(|(_, binding)| self.binding_ty(db, *binding) == owner);
+                    match (params.next(), params.next()) {
+                        (Some((param, _)), None) => Some(self.param_space(db, param as u32)),
+                        _ => None,
+                    }
+                }
+            },
         }
     }
 
@@ -1371,7 +1378,8 @@ impl<'db> SemanticInstance<'db> {
     }
 
     /// Whether `binding` is a projection's `Copy` view parameter: a copy the
-    /// session owns, never the caller's place.
+    /// session owns, never the caller's place. A copy of code or calldata,
+    /// which nothing writes, is the place itself.
     pub fn binding_is_session_copy(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1382,9 +1390,14 @@ impl<'db> SemanticInstance<'db> {
             LocalBinding::Param {
                 mode: FuncParamMode::View,
                 ty,
+                idx,
                 ..
             } if self.is_projection(db)
                 && ty_is_copy(db, self.normalization_scope(db), ty, self.assumptions(db))
+                && !matches!(
+                    self.param_space(db, idx as u32),
+                    ProviderAddressSpace::Code | ProviderAddressSpace::Calldata
+                )
         )
     }
 
@@ -2012,20 +2025,13 @@ fn collect_callees<'db>(
 ) -> Vec<SemanticCalleeRef<'db>> {
     let mut seen = FxHashSet::default();
     let mut callees = Vec::new();
-    for site in call_sites.iter().flatten() {
+    for site in call_sites.iter().flatten().chain(
+        for_loop_call_sites
+            .iter()
+            .flatten()
+            .flat_map(|sites| &sites.sites),
+    ) {
         if let Some(callee) = site.callee
-            && seen.insert(callee.key)
-        {
-            callees.push(callee);
-        }
-    }
-    for sites in for_loop_call_sites.iter().flatten() {
-        if let Some(callee) = sites.len.callee
-            && seen.insert(callee.key)
-        {
-            callees.push(callee);
-        }
-        if let Some(callee) = sites.get.callee
             && seen.insert(callee.key)
         {
             callees.push(callee);

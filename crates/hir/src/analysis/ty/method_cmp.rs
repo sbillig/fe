@@ -13,6 +13,7 @@ use super::{
     effects::{
         CanonicalEffectIdentity, EffectKeyCanonMode, EffectKeyKind,
         canonical_effect_identity_for_binding, place_effect_provider_param_index_map,
+        rows::row_is_empty,
     },
     fold::{TyFoldable, TyFolder},
     layout_holes::{
@@ -89,12 +90,12 @@ pub(super) fn compare_impl_method<'db>(
     // method with the trait method.
     let mut err = !compare_arg_label(db, impl_m, trait_m, sink);
 
-    let (param_subst, effect_pairs, trait_effects) =
+    let (param_subst, _, effects_paired) =
         trait_to_impl_param_subst(db, impl_m, trait_m, trait_inst);
     if matches!(
         (impl_m, trait_m),
         (CallableDef::Func(_), CallableDef::Func(_))
-    ) && effect_pairs.len() != trait_effects
+    ) && !effects_paired
     {
         sink.push(ImplDiag::MethodEffectMismatch { trait_m, impl_m }.into());
         err = true;
@@ -373,13 +374,14 @@ fn insert_param_mapping<'db>(
 }
 
 /// The trait method's params as the impl method's, the pairs of their
-/// effects, and how many effects the trait method has for the impl.
+/// effects, and whether every effect of the trait method has its pair. An
+/// impl method's extra effects are stricter bounds.
 fn trait_to_impl_param_subst<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
-) -> (PartialSubst<'db>, Vec<(usize, usize)>, usize) {
+) -> (PartialSubst<'db>, Vec<(usize, usize)>, bool) {
     let schema = ParamSchemaId::callable(db, trait_m);
     let mut out = PartialSubst::new(db, ParamDomainId::full(db, schema));
 
@@ -445,7 +447,7 @@ fn trait_to_impl_param_subst<'db>(
         }
     }
 
-    let (effect_pairs, trait_effects) = map_effect_provider_params_by_identity(
+    let (effect_pairs, effects_paired) = map_effect_provider_params_by_identity(
         db,
         &mut out,
         impl_m,
@@ -455,7 +457,7 @@ fn trait_to_impl_param_subst<'db>(
         &impl_layout,
     );
 
-    (out, effect_pairs, trait_effects)
+    (out, effect_pairs, effects_paired)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
@@ -510,10 +512,11 @@ fn map_effect_provider_params_by_identity<'db>(
     trait_inst: TraitInstId<'db>,
     trait_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
     impl_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
-) -> (Vec<(usize, usize)>, usize) {
+) -> (Vec<(usize, usize)>, bool) {
     let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
     // An impl method splices the impl's own rows into its effects: a trait
-    // method's entry naming one pairs with the splice, not by identity.
+    // method's entry naming one pairs with the splice, not by identity. A row
+    // known to be empty needs no entry at all.
     let impl_func = match impl_m {
         CallableDef::Func(func) => Some(func),
         CallableDef::VariantCtor(_) => None,
@@ -529,11 +532,12 @@ fn map_effect_provider_params_by_identity<'db>(
     .into_iter()
     .filter(|entry| {
         !entry.identity.key_row.is_some_and(|row| {
-            row.inst.def(db) == trait_inst.def(db)
-                && row
-                    .name(db)
-                    .zip(impl_func)
-                    .is_some_and(|(name, func)| func.row_splice(db, name).is_some())
+            row_is_empty(db, row, impl_m.scope(), assumptions)
+                || row.inst.def(db) == trait_inst.def(db)
+                    && row
+                        .name(db)
+                        .zip(impl_func)
+                        .is_some_and(|(name, func)| func.row_splice(db, name).is_some())
         })
     })
     .collect();
@@ -579,7 +583,8 @@ fn map_effect_provider_params_by_identity<'db>(
             }
         }
     }
-    (effect_pairs, trait_effects)
+    let paired = effect_pairs.len() == trait_effects;
+    (effect_pairs, paired)
 }
 
 fn collect_effect_provider_entries<'db>(

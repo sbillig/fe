@@ -1,75 +1,108 @@
 use salsa::Update;
 
-use crate::analysis::HirAnalysisDb;
-use crate::core::hir_def::{Expr, ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId, UnOp};
+use crate::analysis::{
+    HirAnalysisDb,
+    name_resolution::method_selection::{MethodCandidate, select_method_candidate},
+};
+use crate::core::hir_def::{Expr, ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId, Trait, UnOp};
+use crate::span::DynLazySpan;
 
-use super::{Callable, LocalBinding, TyChecker, instantiate_trait_method};
+use super::{
+    Callable, LocalBinding, TyChecker,
+    env::{TraitObligation, TraitObligationOrigin},
+};
 use crate::analysis::ty::{
     LayoutBundlePathStep,
-    canonical::Canonical,
+    canonical::Canonicalized,
     corelib::resolve_core_trait,
     diagnostics::BodyDiag,
     fold::{TyFoldable, TyFolder},
     shape::Shape,
-    trait_def::{TraitInstId, impls_for_ty},
+    trait_def::TraitInstId,
     trait_resolution::TraitSolveCx,
-    ty_def::{InvalidCause, TyId},
+    ty_def::{BorrowKind, InvalidCause, TyId},
     visitor::TyVisitable,
 };
 
-/// Resolved Seq trait methods for a for-loop.
-///
-/// This stores the pre-resolved `Callable` for `Seq::len` and `Seq::get`
-/// so that MIR lowering can emit direct method calls without re-resolving.
+/// A step of the collection protocol a `for` loop runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ForLoopStep {
+    /// `start(base)`: the first cursor.
+    Start,
+    /// `next(base, cursor)`: the cursor after.
+    Next,
+    /// `at(base, cursor)`: the element.
+    At,
+}
+
+impl ForLoopStep {
+    pub const ALL: [Self; 3] = [Self::Start, Self::Next, Self::At];
+}
+
+/// What a loop's body receives from each element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
+pub enum ForLoopItem {
+    /// A copy, taken before the body runs, so the element's session ends
+    /// first.
+    Copy,
+    /// The element's access, open while the body uses it.
+    Access(BorrowKind),
+}
+
+/// A call of the collection protocol, resolved.
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
-pub struct ForLoopSeq<'db> {
-    /// The type being iterated over
-    pub iterable_ty: TyId<'db>,
-    /// The element type (Seq::Item for the iterable)
-    pub elem_ty: TyId<'db>,
-    /// The trait instance (Seq for the iterable type)
-    pub trait_inst: TraitInstId<'db>,
-    /// Resolved callable for Seq::len(self) -> usize
-    pub len_callable: Callable<'db>,
-    /// Resolved callable for Seq::get(self, i: usize) -> T
-    pub get_callable: Callable<'db>,
-    /// Resolved effect arguments for Seq::len, in callee effect-param order.
-    pub len_effect_args: Vec<super::ResolvedEffectArg<'db>>,
-    /// Resolved effect arguments for Seq::get, in callee effect-param order.
-    pub get_effect_args: Vec<super::ResolvedEffectArg<'db>>,
-    /// The loop element is the indexed layout projection of the iterable.
-    /// Semantic lowering uses this explicit desugaring fact to retain the
-    /// dynamic array-index source on the synthesized `Seq::get` result.
+pub struct ForLoopCall<'db> {
+    pub callable: Callable<'db>,
+    pub effect_args: Vec<super::ResolvedEffectArg<'db>>,
+}
+
+/// How a `for` loop reaches its elements: the `Collection` protocol calls it
+/// selects, and what its body receives.
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+pub struct ForLoopPlan<'db> {
+    pub cursor_ty: TyId<'db>,
+    pub item_ty: TyId<'db>,
+    pub item: ForLoopItem,
+    /// The calls, in `ForLoopStep` order.
+    pub calls: [ForLoopCall<'db>; 3],
+    /// The element is the indexed layout projection of the base. Semantic
+    /// lowering uses this explicit desugaring fact to retain the dynamic
+    /// array-index source on the element.
     pub element_layout_backing_source: bool,
 }
 
-impl<'db> TyVisitable<'db> for ForLoopSeq<'db> {
+impl<'db> ForLoopPlan<'db> {
+    pub fn call(&self, step: ForLoopStep) -> &ForLoopCall<'db> {
+        &self.calls[step as usize]
+    }
+}
+
+impl<'db> TyVisitable<'db> for ForLoopPlan<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
-        self.iterable_ty.visit_with(visitor);
-        self.elem_ty.visit_with(visitor);
-        self.trait_inst.visit_with(visitor);
-        self.len_callable.visit_with(visitor);
-        self.get_callable.visit_with(visitor);
+        self.cursor_ty.visit_with(visitor);
+        self.item_ty.visit_with(visitor);
+        for call in &self.calls {
+            call.callable.visit_with(visitor);
+        }
     }
 }
 
-impl<'db> TyFoldable<'db> for ForLoopSeq<'db> {
+impl<'db> TyFoldable<'db> for ForLoopPlan<'db> {
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
     {
-        ForLoopSeq {
-            iterable_ty: self.iterable_ty.fold_with(db, folder),
-            elem_ty: self.elem_ty.fold_with(db, folder),
-            trait_inst: self.trait_inst.fold_with(db, folder),
-            len_callable: self.len_callable.fold_with(db, folder),
-            get_callable: self.get_callable.fold_with(db, folder),
-            len_effect_args: self.len_effect_args,
-            get_effect_args: self.get_effect_args,
-            element_layout_backing_source: self.element_layout_backing_source,
+        ForLoopPlan {
+            cursor_ty: self.cursor_ty.fold_with(db, folder),
+            item_ty: self.item_ty.fold_with(db, folder),
+            calls: self.calls.map(|call| ForLoopCall {
+                callable: call.callable.fold_with(db, folder),
+                effect_args: call.effect_args,
+            }),
+            ..self
         }
     }
 }
@@ -211,29 +244,37 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        let expr_ty = self.fresh_ty();
-        let typed_expr = self
-            .check_expr(*expr, expr_ty)
+        let expected = self.fresh_ty();
+        let prop = self
+            .check_expr(*expr, expected)
             .fold_with(self.db, &mut self.table);
-        let expr_ty = typed_expr.ty;
-
-        // Resolve Seq implementation and get element type
-        let (elem_ty, for_loop_seq) = self.resolve_seq_info(expr_ty, *expr, stmt);
-
-        let layout =
-            self.pattern_layout_context_for_projection(*expr, &[LayoutBundlePathStep::Index]);
-        let layout = layout.filter(|layout| {
-            self.projected_pattern_layout_ty(layout, &[])
-                .is_some_and(|projected| {
-                    crate::analysis::ty::layout_shape_key(self.db, projected)
-                        == crate::analysis::ty::layout_shape_key(self.db, elem_ty)
-                })
-        });
-        if let Some(mut seq_info) = for_loop_seq {
-            seq_info.element_layout_backing_source = layout.is_some();
-            self.env.register_for_loop_seq(stmt, seq_info);
+        // The loop holds its base; `for pat in mut e` mutates the elements.
+        if prop.shape.is_some() {
+            self.consume_access(*expr);
         }
-        self.check_pat_with_layout(*pat, elem_ty, layout.as_ref());
+        let mutates = matches!(prop.shape, Some(Shape::Access(BorrowKind::Mut, _)));
+        match self.plan_for_loop(*expr, prop.ty, mutates) {
+            Some(mut plan) => {
+                let layout = self
+                    .pattern_layout_context_for_projection(*expr, &[LayoutBundlePathStep::Index])
+                    .filter(|layout| {
+                        self.projected_pattern_layout_ty(layout, &[])
+                            .is_some_and(|projected| {
+                                crate::analysis::ty::layout_shape_key(self.db, projected)
+                                    == crate::analysis::ty::layout_shape_key(self.db, plan.item_ty)
+                            })
+                    });
+                plan.element_layout_backing_source = layout.is_some();
+                self.check_pat_with_layout(*pat, plan.item_ty, layout.as_ref());
+                if let ForLoopItem::Access(kind) = plan.item {
+                    self.bind_pattern_accesses(*pat, &Shape::Access(kind, plan.item_ty));
+                }
+                self.env.register_for_loop_plan(stmt, plan);
+            }
+            None => {
+                self.check_pat(*pat, TyId::invalid(self.db, InvalidCause::Other));
+            }
+        }
 
         self.env.enter_loop(stmt);
         self.env.enter_scope(*body);
@@ -248,166 +289,121 @@ impl<'db> TyChecker<'db> {
         TyId::unit(self.db)
     }
 
-    /// Resolve the Seq implementation for an iterable type.
-    ///
-    /// Returns the element type and optionally the resolved Seq methods.
-    /// The ForLoopSeq is None only when there's an error (type doesn't implement Seq).
-    fn resolve_seq_info(
+    /// The `Collection` protocol a loop over a base of type `base_ty` runs:
+    /// `CollectionMut::at` for a loop that mutates its elements, and otherwise
+    /// a copy of each `Copy` element or its `ref` access.
+    fn plan_for_loop(
         &mut self,
-        iterable_ty: TyId<'db>,
         expr: ExprId,
-        _stmt: StmtId,
-    ) -> (TyId<'db>, Option<ForLoopSeq<'db>>) {
-        let (base, _args) = iterable_ty.decompose_ty_app(self.db);
-
-        // Handle invalid and unknown types
-        if base.has_invalid(self.db) {
-            return (TyId::invalid(self.db, InvalidCause::Other), None);
+        base_ty: TyId<'db>,
+        mutates: bool,
+    ) -> Option<ForLoopPlan<'db>> {
+        if base_ty.has_invalid(self.db) {
+            return None;
         }
-        if base.is_never(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
-            self.push_diag(diag);
-            return (TyId::invalid(self.db, InvalidCause::Other), None);
+        if base_ty.is_never(self.db) || base_ty.base_ty(self.db).is_ty_var(self.db) {
+            self.push_diag(BodyDiag::TypeMustBeKnown(expr.span(self.body()).into()));
+            return None;
         }
-        if base.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(expr.span(self.body()).into());
-            self.push_diag(diag);
-            return (TyId::invalid(self.db, InvalidCause::Other), None);
-        }
-
-        // Look up Seq trait (if missing, treat as invalid).
-        let Some(seq_trait) = resolve_core_trait(self.db, self.env.scope(), &["seq", "Seq"]) else {
-            return (TyId::invalid(self.db, InvalidCause::Other), None);
+        let span: DynLazySpan<'db> = expr.span(self.body()).into();
+        let collection = resolve_core_trait(self.db, self.env.scope(), &["iter", "Collection"])?;
+        let collection_mut =
+            resolve_core_trait(self.db, self.env.scope(), &["iter", "CollectionMut"])?;
+        let (collection, collection_inst) = (
+            collection,
+            self.select_for_loop_trait(expr, base_ty, collection, "start")?,
+        );
+        let at_inst = if mutates {
+            self.select_for_loop_trait(expr, base_ty, collection_mut, "at")?
+        } else {
+            collection_inst
         };
+        let call = |this: &mut Self, trait_def: Trait<'db>, inst, name: &str, inputs| {
+            let method = *trait_def
+                .method_defs(this.db)
+                .get(&IdentId::new(this.db, name.to_string()))?;
+            let func_ty = this.instantiate_trait_method_to_term(method, base_ty, inst);
+            let mut callable = Callable::new(this.db, func_ty, span.clone(), Some(inst)).ok()?;
+            callable.set_checked_input_tys(inputs);
+            let effect_args = this.resolve_callable_effects(span.clone(), &mut callable);
+            Some(ForLoopCall {
+                callable,
+                effect_args,
+            })
+        };
+        let start = call(self, collection, collection_inst, "start", vec![base_ty])?;
+        let cursor_ty = *self
+            .normalize_ty(start.callable.ret_ty(self.db))
+            .generic_args(self.db)
+            .first()?;
+        let next = call(
+            self,
+            collection,
+            collection_inst,
+            "next",
+            vec![base_ty, cursor_ty],
+        )?;
+        let at_trait = if mutates { collection_mut } else { collection };
+        let at = call(self, at_trait, at_inst, "at", vec![base_ty, cursor_ty])?;
+        let Some(Shape::Access(_, item_ty)) = at.callable.ret_shape(self.db) else {
+            return None;
+        };
+        let item_ty = self.normalize_ty(item_ty);
+        let item = if mutates {
+            ForLoopItem::Access(BorrowKind::Mut)
+        } else if self.ty_is_copy(item_ty) {
+            ForLoopItem::Copy
+        } else {
+            ForLoopItem::Access(BorrowKind::Ref)
+        };
+        Some(ForLoopPlan {
+            cursor_ty,
+            item_ty,
+            item,
+            calls: [start, next, at],
+            element_layout_backing_source: false,
+        })
+    }
 
-        let iterable_candidates = self.receiver_candidates(iterable_ty);
-        let scope_ingot = self.env.scope().ingot(self.db);
-
-        for iterable_lookup_ty in iterable_candidates {
-            let canonical_ty = Canonical::new(self.db, iterable_lookup_ty);
-            let search_ingots = [
-                Some(scope_ingot),
-                iterable_lookup_ty
-                    .ingot(self.db)
-                    .filter(|&ingot| ingot != scope_ingot),
-            ];
-
-            for ingot in search_ingots.into_iter().flatten() {
-                for &impl_id in impls_for_ty(self.db, ingot, canonical_ty) {
-                    let snapshot = self.snapshot_state();
-                    if impl_id.trait_def(self.db) != seq_trait {
-                        self.commit_state(snapshot);
-                        continue;
-                    }
-
-                    // Instantiate the impl's trait instance (with associated type
-                    // bindings) using fresh type variables, then unify to get concrete types
-                    let raw_trait_inst = impl_id.trait_inst(self.db);
-                    let trait_inst = self.table.instantiate_with_fresh_vars(raw_trait_inst);
-
-                    // Unify the trait's Self type with the iterable type
-                    let self_ty = trait_inst.self_ty(self.db);
-                    if self.table.unify(self_ty, iterable_lookup_ty).is_err() {
-                        self.rollback_state(snapshot);
-                        continue;
-                    }
-
-                    // Fold to resolve type variables
-                    use crate::analysis::ty::fold::TyFoldable;
-                    let trait_inst = trait_inst.fold_with(self.db, &mut self.table);
-
-                    // Resolve the element type from Seq's associated type `Item`
-                    let item_ident = IdentId::new(self.db, "Item".to_string());
-                    let Some(&elem_ty) = trait_inst.assoc_type_bindings(self.db).get(&item_ident)
-                    else {
-                        self.rollback_state(snapshot);
-                        continue;
-                    };
-                    let elem_ty = elem_ty.fold_with(self.db, &mut self.table);
-
-                    // Resolve len and get methods from the trait
-                    let len_ident = IdentId::new(self.db, "len".to_string());
-                    let get_ident = IdentId::new(self.db, "get".to_string());
-
-                    let method_defs = seq_trait.method_defs(self.db);
-                    let Some(&len_method) = method_defs.get(&len_ident) else {
-                        self.rollback_state(snapshot);
-                        continue;
-                    };
-                    let Some(&get_method) = method_defs.get(&get_ident) else {
-                        self.rollback_state(snapshot);
-                        continue;
-                    };
-
-                    // Create Callable objects for the methods
-                    let span: crate::span::DynLazySpan<'db> = expr.span(self.body()).into();
-
-                    let len_func_ty = instantiate_trait_method(
-                        self.db,
-                        len_method,
-                        &mut self.table,
-                        iterable_lookup_ty,
-                        trait_inst,
-                    );
-                    let Ok(len_callable) =
-                        Callable::new(self.db, len_func_ty, span.clone(), Some(trait_inst))
-                    else {
-                        self.rollback_state(snapshot);
-                        continue;
-                    };
-
-                    let get_func_ty = instantiate_trait_method(
-                        self.db,
-                        get_method,
-                        &mut self.table,
-                        iterable_lookup_ty,
-                        trait_inst,
-                    );
-                    let Ok(mut get_callable) =
-                        Callable::new(self.db, get_func_ty, span, Some(trait_inst))
-                    else {
-                        self.rollback_state(snapshot);
-                        continue;
-                    };
-                    let mut len_callable = len_callable;
-
-                    len_callable.set_checked_input_tys(vec![iterable_ty]);
-                    let get_index_ty = get_callable
-                        .arg_ty(self.db, 1)
-                        .expect("Seq::get index type");
-                    get_callable.set_checked_input_tys(vec![iterable_ty, get_index_ty]);
-
-                    let call_span: crate::span::DynLazySpan<'db> = expr.span(self.body()).into();
-                    let len_effect_args =
-                        self.resolve_callable_effects(call_span.clone(), &mut len_callable);
-                    let get_effect_args =
-                        self.resolve_callable_effects(call_span, &mut get_callable);
-
-                    let for_loop_seq = ForLoopSeq {
-                        iterable_ty,
-                        elem_ty,
-                        trait_inst,
-                        len_callable,
-                        get_callable,
-                        len_effect_args,
-                        get_effect_args,
-                        element_layout_backing_source: false,
-                    };
-
-                    self.commit_state(snapshot);
-                    return (elem_ty, Some(for_loop_seq));
-                }
+    /// The instance of `trait_def`, selected through its method `method`, that
+    /// a loop base of type `base_ty` implements.
+    fn select_for_loop_trait(
+        &mut self,
+        expr: ExprId,
+        base_ty: TyId<'db>,
+        trait_def: Trait<'db>,
+        method: &str,
+    ) -> Option<TraitInstId<'db>> {
+        let canonical = Canonicalized::new(self.db, base_ty);
+        let candidate = select_method_candidate(
+            self.db,
+            &canonical,
+            IdentId::new(self.db, method.to_string()),
+            self.env.scope(),
+            self.env.assumptions(),
+            Some(trait_def),
+        );
+        let (cand, confirm) = match candidate {
+            Ok(MethodCandidate::TraitMethod(cand)) => (cand, false),
+            Ok(MethodCandidate::NeedsConfirmation(cand)) => (cand, true),
+            _ => {
+                self.push_diag(BodyDiag::TraitNotImplemented {
+                    primary: expr.span(self.body()).into(),
+                    ty: base_ty.pretty_print(self.db).to_string(),
+                    trait_name: trait_def.name(self.db).to_opt()?,
+                });
+                return None;
             }
-        }
-
-        // Type doesn't implement Seq
-        let diag = BodyDiag::TraitNotImplemented {
-            primary: expr.span(self.body()).into(),
-            ty: iterable_ty.pretty_print(self.db).to_string(),
-            trait_name: IdentId::new(self.db, "Seq".to_string()),
         };
-        self.push_diag(diag);
-        (TyId::invalid(self.db, InvalidCause::Other), None)
+        let inst = canonical.extract_solution(&mut self.table, cand.inst);
+        if confirm {
+            self.env.register_trait_obligation(TraitObligation {
+                goal: inst,
+                origin: TraitObligationOrigin::GenericConfirmation,
+                span: expr.span(self.body()).into(),
+            });
+        }
+        Some(inst)
     }
 
     fn check_while(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {

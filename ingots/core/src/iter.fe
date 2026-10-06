@@ -1,0 +1,193 @@
+use ingot::option::Option
+use ingot::marker::Copy
+use ingot::ops::{WrappingAdd, WrappingSub}
+use ingot::ptr::{MemArray, MemSlice}
+
+/// A collection a loop traverses by cursor, projecting each element in turn.
+///
+/// The loop holds the collection while it runs; the cursor is a plain value
+/// that names a position and holds no reference to the collection.
+pub trait Collection {
+    /// The effects of reaching an element, retained while an element is open.
+    uses E
+    /// The address space of the projected elements.
+    space S
+    type Cursor: Copy
+    type Item
+
+    /// The first position, if any.
+    fn start(self) -> Option<Self::Cursor> uses E
+
+    /// The position after `c`, if any.
+    fn next(self, _ c: Self::Cursor) -> Option<Self::Cursor> uses E
+
+    /// The element at `c`.
+    fn at(self, _ c: Self::Cursor) -> ref Self::Item @S uses E
+}
+
+/// A collection whose elements a loop can mutate in place.
+pub trait CollectionMut: Collection {
+    /// The authority to mutate an element. It may strengthen `E` without
+    /// widening what a read reaches.
+    uses EM
+
+    /// The element at `c`, to mutate.
+    fn at(mut self, _ c: Self::Cursor) -> mut Self::Item @S uses EM
+}
+
+/// A collection that can also be traversed from its end.
+pub trait Bidirectional: Collection {
+    /// The last position, if any.
+    fn last(self) -> Option<Self::Cursor> uses E
+
+    /// The position before `c`, if any.
+    fn prev(self, _ c: Self::Cursor) -> Option<Self::Cursor> uses E
+}
+
+// A valid cursor is below the collection's length, so stepping from it
+// cannot overflow.
+
+/// The first index of a collection of `len` elements.
+#[inline(always)]
+fn first_index(_ len: u256) -> Option<usize> {
+    if len == 0 { Option::None } else { Option::Some(0) }
+}
+
+/// The index after `i` in a collection of `len` elements.
+#[inline(always)]
+fn next_index(_ i: usize, _ len: u256) -> Option<usize> {
+    let next = i.wrapping_add(1)
+    if (next as u256) < len { Option::Some(next) } else { Option::None }
+}
+
+/// The last index of a collection of `len` elements.
+#[inline(always)]
+fn last_index(_ len: u256) -> Option<usize> {
+    if len == 0 { Option::None } else { Option::Some((len as usize).wrapping_sub(1)) }
+}
+
+/// The index before `i`.
+#[inline(always)]
+fn prev_index(_ i: usize) -> Option<usize> {
+    if i == 0 { Option::None } else { Option::Some(i.wrapping_sub(1)) }
+}
+
+impl<T, const N: usize> [T; N] {
+    pub fn len(self) -> usize {
+        N
+    }
+}
+
+// An array's elements are its own parts, wherever it lies.
+impl<T, const N: usize> Collection for [T; N] {
+    space S = self
+    type Cursor = usize
+    type Item = T
+
+    #[inline(always)]
+    fn start(self) -> Option<usize> {
+        first_index(N as u256)
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> Option<usize> {
+        next_index(c, N as u256)
+    }
+
+    #[inline(always)]
+    fn at(self, _ c: usize) -> ref T {
+        ref self[c]
+    }
+}
+
+impl<T, const N: usize> CollectionMut for [T; N] {
+    #[inline(always)]
+    fn at(mut self, _ c: usize) -> mut T {
+        mut self[c]
+    }
+}
+
+impl<T, const N: usize> Bidirectional for [T; N] {
+    #[inline(always)]
+    fn last(self) -> Option<usize> {
+        last_index(N as u256)
+    }
+
+    #[inline(always)]
+    fn prev(self, _ c: usize) -> Option<usize> {
+        prev_index(c)
+    }
+}
+
+impl<T> Collection for MemArray<T> {
+    space S = memory
+    type Cursor = usize
+    type Item = T
+
+    #[inline(always)]
+    fn start(self) -> Option<usize> {
+        first_index(self.len())
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> Option<usize> {
+        next_index(c, self.len())
+    }
+
+    #[inline(always)]
+    fn at(self, _ c: usize) -> ref T {
+        ref self[c]
+    }
+}
+
+impl<T> CollectionMut for MemArray<T> {
+    #[inline(always)]
+    fn at(mut self, _ c: usize) -> mut T {
+        mut self[c]
+    }
+}
+
+impl<T> Bidirectional for MemArray<T> {
+    #[inline(always)]
+    fn last(self) -> Option<usize> {
+        last_index(self.len())
+    }
+
+    #[inline(always)]
+    fn prev(self, _ c: usize) -> Option<usize> {
+        prev_index(c)
+    }
+}
+
+impl<T> Collection for MemSlice<T> {
+    space S = memory
+    type Cursor = usize
+    type Item = T
+
+    #[inline(always)]
+    fn start(self) -> Option<usize> {
+        first_index(self.len())
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> Option<usize> {
+        next_index(c, self.len())
+    }
+
+    #[inline(always)]
+    fn at(self, _ c: usize) -> ref T {
+        ref self[c]
+    }
+}
+
+impl<T> Bidirectional for MemSlice<T> {
+    #[inline(always)]
+    fn last(self) -> Option<usize> {
+        last_index(self.len())
+    }
+
+    #[inline(always)]
+    fn prev(self, _ c: usize) -> Option<usize> {
+        prev_index(c)
+    }
+}

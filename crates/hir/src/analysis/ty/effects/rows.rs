@@ -23,7 +23,7 @@ use crate::{
         },
     },
     core::semantic::{EffectRequirement, EffectRequirementKey, constraints_for},
-    hir_def::{IdentId, TypeId as HirTypeId, scope_graph::ScopeId},
+    hir_def::{IdentId, ImplTrait, TypeId as HirTypeId, scope_graph::ScopeId},
 };
 
 /// Row `row` of a trait instance.
@@ -202,6 +202,23 @@ pub fn expand_rows<'db>(
     out
 }
 
+/// Whether `key`'s row is known to have no effects.
+pub(crate) fn row_is_empty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: RowKey<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    direct_row_components(db, key, scope, assumptions).is_some_and(|components| {
+        components.iter().all(|component| {
+            component
+                .key
+                .key_row()
+                .is_some_and(|inner| row_is_empty(db, inner, scope, assumptions))
+        })
+    })
+}
+
 /// The components `key`'s implementation gives its row, if the scope
 /// selects the implementation.
 fn direct_row_components<'db>(
@@ -210,23 +227,34 @@ fn direct_row_components<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<Vec<RowComponent<'db>>> {
-    let Selection::Unique(resolved) = resolve_trait_impl_instance(
-        db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-        key.inst,
-    ) else {
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let name = key.name(db)?;
+    let row_effects = |impl_trait: ImplTrait<'db>| {
+        impl_trait
+            .rows(db)
+            .iter()
+            .find(|row| row.name.to_opt() == Some(name))
+            .and_then(|row| row.effects)
+            .filter(|effects| !effects.data(db).is_empty())
+    };
+    // An instance still being inferred selects its implementation, but only
+    // an empty row expands before its arguments are known.
+    if key.inst.args(db).iter().any(|ty| ty.has_var(db)) {
+        let Selection::Unique(implementor) = solve_cx.select_impl(db, key.inst) else {
+            return None;
+        };
+        let ImplementorOrigin::Hir(impl_trait) = implementor.origin(db) else {
+            return None;
+        };
+        return row_effects(impl_trait).is_none().then(Vec::new);
+    }
+    let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, key.inst) else {
         return None;
     };
     let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db) else {
         return None;
     };
-    let name = key.name(db)?;
-    let Some(effects) = impl_trait
-        .rows(db)
-        .iter()
-        .find(|row| row.name.to_opt() == Some(name))
-        .and_then(|row| row.effects)
-    else {
+    let Some(effects) = row_effects(impl_trait) else {
         return Some(Vec::new());
     };
     let impl_scope = impl_trait.scope();

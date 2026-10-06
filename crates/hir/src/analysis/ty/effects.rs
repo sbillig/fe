@@ -1,3 +1,5 @@
+use common::indexmap::IndexMap;
+
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{PathRes, resolve_path_with_minter};
 use crate::analysis::ty::const_ty::{
@@ -281,9 +283,11 @@ pub(crate) fn lower_effect_key_schema<'db>(
                 .iter()
                 .position(|row| row.name.to_opt() == Some(name))
         })
+        // A row is its trait instance's, whatever the bound says of the
+        // instance's associated types.
         .map_or(ResolvedEffectKey::Other, |(inst, row)| {
             ResolvedEffectKey::Row(rows::RowKey {
-                inst,
+                inst: TraitInstId::new(db, inst.def(db), inst.args(db).to_vec(), IndexMap::new()),
                 row: row as u16,
             })
         }),

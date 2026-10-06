@@ -160,10 +160,11 @@ impl<'db> ConstFnChecker<'db, '_> {
             Stmt::For(pat, iter, body, _) => {
                 self.check_let_pat(*pat);
                 self.check_expr(*iter);
-                if let Some(seq) = self.typed_body.for_loop_seq(stmt) {
+                if let Some(plan) = self.typed_body.for_loop_plan(stmt) {
                     let span: DynLazySpan<'db> = stmt.span(self.body).into();
-                    self.check_callable(span.clone(), &seq.len_callable);
-                    self.check_callable(span, &seq.get_callable);
+                    for call in &plan.calls {
+                        self.check_callable(span.clone(), &call.callable);
+                    }
                 }
                 self.check_expr(*body);
             }

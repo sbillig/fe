@@ -18,7 +18,7 @@ use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
 use super::{
     Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
-    TypedBodyTables, ValuePathRef, stmt::ForLoopSeq,
+    TypedBodyTables, ValuePathRef, stmt::ForLoopPlan,
 };
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
@@ -104,7 +104,7 @@ pub(crate) struct TyCheckEnv<'db> {
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
 
     /// Resolved Seq trait methods for for-loops, keyed by the for statement.
-    for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+    for_loop_plans: SecondaryMap<StmtId, Option<ForLoopPlan<'db>>>,
 
     /// The constrained type applications that resolving the body's paths
     /// passed through, each with the span of the expression or pattern whose
@@ -173,7 +173,7 @@ impl<'db> TyCheckEnv<'db> {
             consumed_accesses: FxHashSet::default(),
             matched_places: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
-            for_loop_seq: SecondaryMap::new(),
+            for_loop_plans: SecondaryMap::new(),
             path_applications: Vec::new(),
         };
 
@@ -498,8 +498,8 @@ impl<'db> TyCheckEnv<'db> {
         );
     }
 
-    pub(super) fn register_for_loop_seq(&mut self, stmt: StmtId, seq: ForLoopSeq<'db>) {
-        if self.for_loop_seq[stmt].replace(seq).is_some() {
+    pub(super) fn register_for_loop_plan(&mut self, stmt: StmtId, plan: ForLoopPlan<'db>) {
+        if self.for_loop_plans[stmt].replace(plan).is_some() {
             panic!("for loop seq is already registered for the given stmt")
         }
     }
@@ -976,10 +976,10 @@ impl<'db> TyCheckEnv<'db> {
             .flatten()
             .for_each(|lowering| *lowering = (*lowering).fold_with(self.db, &mut prober));
 
-        self.for_loop_seq
+        self.for_loop_plans
             .values_mut()
             .flatten()
-            .for_each(|seq| *seq = seq.clone().fold_with(self.db, &mut prober));
+            .for_each(|plan| *plan = plan.clone().fold_with(self.db, &mut prober));
         self.path_applications
             .iter_mut()
             .for_each(|(_, ty)| *ty = ty.fold_with(self.db, &mut prober));
@@ -1027,7 +1027,7 @@ impl<'db> TyCheckEnv<'db> {
             pat_binding_modes: self.pat_binding_modes,
             pattern_store,
             pattern_status: self.pattern_status,
-            for_loop_seq: self.for_loop_seq,
+            for_loop_plans: self.for_loop_plans,
             expr_place,
             expr_places,
             path_applications: self.path_applications,

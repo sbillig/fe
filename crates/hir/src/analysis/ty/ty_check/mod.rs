@@ -60,7 +60,7 @@ use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
 use std::sync::Arc;
-pub use stmt::ForLoopSeq;
+pub use stmt::{ForLoopCall, ForLoopItem, ForLoopPlan, ForLoopStep};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -1254,7 +1254,7 @@ fn typed_body_for_bodyless_func<'db>(
         pat_binding_modes: SecondaryMap::new(),
         pattern_store: PatternStore::default(),
         pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
-        for_loop_seq: SecondaryMap::new(),
+        for_loop_plans: SecondaryMap::new(),
         expr_place: SecondaryMap::new(),
         expr_places: PrimaryMap::new(),
         path_applications: Vec::new(),
@@ -3549,7 +3549,7 @@ mod typed_body_tables {
         pub(super) pattern_store: PatternStore<'db>,
         pub(super) pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
         /// Resolved Seq trait methods for for-loops
-        pub(super) for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+        pub(super) for_loop_plans: SecondaryMap<StmtId, Option<ForLoopPlan<'db>>>,
         pub(super) expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
         pub(super) expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
         /// The constrained type applications that resolving the body's paths
@@ -3884,8 +3884,8 @@ impl<'db> TypedBody<'db> {
             place.visit_with(visitor);
         }
         self.tables.pattern_store.visit_with(visitor);
-        for seq in self.tables.for_loop_seq.values().flatten() {
-            seq.visit_with(visitor);
+        for plan in self.tables.for_loop_plans.values().flatten() {
+            plan.visit_with(visitor);
         }
         for (_, ty) in &self.tables.path_applications {
             ty.visit_with(visitor);
@@ -3944,10 +3944,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .flatten()
             .for_each(|binding| *binding = binding.fold_with(db, folder));
         this.pattern_store = this.pattern_store.fold_with(db, folder);
-        this.for_loop_seq
+        this.for_loop_plans
             .values_mut()
             .flatten()
-            .for_each(|seq| *seq = seq.clone().fold_with(db, folder));
+            .for_each(|plan| *plan = plan.clone().fold_with(db, folder));
         this.expr_places
             .values_mut()
             .for_each(|place| *place = place.clone().fold_with(db, folder));
@@ -4138,7 +4138,7 @@ impl<'db> TypedBody<'db> {
         stmt_data: &Stmt<'db>,
     ) -> Option<SmirLoweringIssue> {
         match stmt_data {
-            Stmt::For(pat, expr, ..) if self.for_loop_seq(stmt).is_none() => {
+            Stmt::For(pat, expr, ..) if self.for_loop_plan(stmt).is_none() => {
                 let iterable_ty = self.expr_ty(db, *expr);
                 Some(
                     if iterable_ty.has_invalid(db)
@@ -4383,8 +4383,8 @@ impl<'db> TypedBody<'db> {
     }
 
     /// Get the resolved Seq methods for a for-loop statement.
-    pub fn for_loop_seq(&self, stmt: StmtId) -> Option<&ForLoopSeq<'db>> {
-        self.tables.for_loop_seq[stmt].as_ref()
+    pub fn for_loop_plan(&self, stmt: StmtId) -> Option<&ForLoopPlan<'db>> {
+        self.tables.for_loop_plans[stmt].as_ref()
     }
 
     pub fn binding_source(
@@ -5617,7 +5617,7 @@ impl<'db> TypedBody<'db> {
             pat_binding_modes: SecondaryMap::new(),
             pattern_store: PatternStore::default(),
             pattern_status: SecondaryMap::with_default(PatternAnalysisStatus::Invalid),
-            for_loop_seq: SecondaryMap::new(),
+            for_loop_plans: SecondaryMap::new(),
             expr_place: SecondaryMap::new(),
             expr_places: PrimaryMap::new(),
             path_applications: Vec::new(),
