@@ -1,7 +1,7 @@
 use salsa::Update;
 
 use crate::analysis::HirAnalysisDb;
-use crate::core::hir_def::{ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId};
+use crate::core::hir_def::{Expr, ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId, UnOp};
 
 use super::{Callable, LocalBinding, TyChecker, instantiate_trait_method};
 use crate::analysis::ty::{
@@ -10,6 +10,7 @@ use crate::analysis::ty::{
     corelib::resolve_core_trait,
     diagnostics::BodyDiag,
     fold::{TyFoldable, TyFolder},
+    shape::Shape,
     trait_def::{TraitInstId, impls_for_ty},
     trait_resolution::TraitSolveCx,
     ty_def::{InvalidCause, TyId},
@@ -113,7 +114,18 @@ impl<'db> TyChecker<'db> {
                     .set_local_borrow_provider(pat, prop.borrow_provider);
             }
 
-            if prop.shape.is_some() {
+            // `let mut x = p.get()` binds a mutable copy of a projection's
+            // `Copy` grant (an explicit `mut p` stays an access).
+            let copies_grant = matches!(
+                pat.data(self.db, self.body()),
+                Partial::Present(Pat::Path(_, true))
+            ) && !matches!(
+                self.env.expr_data(*expr),
+                Partial::Present(Expr::Un(_, UnOp::Ref | UnOp::Mut))
+            ) && matches!(prop.shape, Some(Shape::Access(_, ty)) if self.ty_is_copy(ty));
+            if copies_grant {
+                self.consume_access(*expr);
+            } else if prop.shape.is_some() {
                 self.bind_pattern_source(*pat, *expr, &prop);
             } else if self.pattern_binds_any(*pat) {
                 self.record_implicit_move_for_owned_expr(*expr, prop.ty);

@@ -475,14 +475,12 @@ fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
     offset(ptr, index as u256)
 }
 
-impl<T> Index<usize> for MemArray<T>
-    where T: Copy
-{
+impl<T> Index<usize> for MemArray<T> {
     type Output = T
 
     #[inline(always)]
-    fn index(self, _ index: usize) -> T {
-        unsafe { *mem_array_elem(self, index) }
+    fn index(self, _ index: usize) -> ref T {
+        unsafe { ref *mem_array_elem(self, index) }
     }
 }
 
@@ -495,14 +493,12 @@ impl<T> IndexMut<usize> for MemArray<T> {
     }
 }
 
-impl<T> Index<usize> for MemSlice<T>
-    where T: Copy
-{
+impl<T> Index<usize> for MemSlice<T> {
     type Output = T
 
     #[inline(always)]
-    fn index(self, _ index: usize) -> T {
-        unsafe { *self.ptr_at(index as u256) }
+    fn index(self, _ index: usize) -> ref T {
+        unsafe { ref *self.ptr_at(index as u256) }
     }
 }
 
