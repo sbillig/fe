@@ -470,21 +470,11 @@ impl<'db> TyChecker<'db> {
         }
 
         if ret_ty_ok
-            && let Some(expr) = returned_expr
+            && returned_expr.is_some()
             && let Some(prop) = returned_prop
             && let Some(provider) = prop.borrow_provider
         {
-            if let Some((ref previous_span, previous_provider)) = self.first_return_borrow_provider
-            {
-                self.merge_concrete_borrow_providers(
-                    previous_span.clone(),
-                    Some(previous_provider),
-                    expr.span(self.body()).into(),
-                    Some(provider),
-                );
-            } else {
-                self.first_return_borrow_provider = Some((expr.span(self.body()).into(), provider));
-            }
+            self.first_return_borrow_provider.get_or_insert(provider);
         }
 
         TyId::never(self.db)

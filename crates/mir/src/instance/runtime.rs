@@ -1,5 +1,5 @@
 use hir::analysis::{
-    semantic::{SemanticInstance, check_semantic_borrows},
+    semantic::{SemanticInstance, check_semantic_accesses},
     ty::ty_check::BodyOwner,
 };
 use salsa::Update;
@@ -135,7 +135,7 @@ fn lower_runtime_body<'db>(
 ) -> Result<LoweredRuntimeBody<'db>, LowerError> {
     let body = match instance.key(db).source(db) {
         RuntimeInstanceSource::Semantic(semantic) => {
-            if let Err(diag) = check_semantic_borrows(db, semantic) {
+            if let Err(diag) = check_semantic_accesses(db, semantic) {
                 return Err(LowerError::Unsupported(format!(
                     "semantic borrow checking failed for {:?}: {}",
                     semantic.key(db),

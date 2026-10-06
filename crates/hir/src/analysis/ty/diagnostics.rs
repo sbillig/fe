@@ -532,13 +532,6 @@ pub enum BodyDiag<'db> {
         func: Option<CallableDef<'db>>,
     },
 
-    IncompatibleBorrowProviders {
-        primary: DynLazySpan<'db>,
-        previous: DynLazySpan<'db>,
-        previous_provider: ProviderAddressSpace,
-        current_provider: ProviderAddressSpace,
-    },
-
     TypeMustBeKnown(DynLazySpan<'db>),
     TypeSizeOverflow {
         primary: DynLazySpan<'db>,
@@ -1001,7 +994,6 @@ impl<'db> BodyDiag<'db> {
             Self::WithEffectTypeUnsatisfied { .. } => 76,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
-            Self::IncompatibleBorrowProviders { .. } => 77,
             Self::TypeMustBeKnown(..) => 14,
             Self::TypeSizeOverflow { .. } => 88,
             Self::InvalidCast { .. } => 55,

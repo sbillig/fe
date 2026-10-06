@@ -18,10 +18,6 @@ struct Holder {
     tag: u256,
 }
 
-struct CellMover {
-    cell: mut Cell,
-}
-
 fn extract_ptr(holder: own Holder) -> StorPtr<Cell> {
     holder.ptr
 }
@@ -35,11 +31,9 @@ fn write_cell(value: u256) -> u256 uses (cell: mut Cell) {
     cell.value
 }
 
-impl CellMover {
-    fn bump(mut self, by: u256) -> u256 {
-        self.cell.value += by
-        self.cell.value
-    }
+fn bump(_ cell: mut Cell, by: u256) -> u256 {
+    cell.value += by
+    cell.value
 }
 
 pub contract EffectHandleFieldDeref {
@@ -66,9 +60,7 @@ pub contract EffectHandleFieldDeref {
         }
 
         BumpMover { by } -> u256 uses (mut live) {
-            let cell = mut live
-            let mut mover = CellMover { cell }
-            mover.bump(by)
+            bump(mut live, by)
         }
     }
 }

@@ -1790,7 +1790,9 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
                 expr: NExpr::Call { callee, .. },
                 ..
             } => Some(callee),
-            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
+            NStatementKind::Define { .. }
+            | NStatementKind::Store { .. }
+            | NStatementKind::End { .. } => None,
         })
         .expect("missing runtime evidence call");
     callee.key = alternate;
@@ -2408,7 +2410,9 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
                 expr: NExpr::Call { callee, .. },
                 ..
             } => Some(callee),
-            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
+            NStatementKind::Define { .. }
+            | NStatementKind::Store { .. }
+            | NStatementKind::End { .. } => None,
         })
         .expect("missing Handle::replace_raw call");
     let replace_raw = get_or_build_semantic_instance(&db, callee.key);

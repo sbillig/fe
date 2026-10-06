@@ -12,7 +12,6 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    semantic::BorrowActivation,
     ty::{
         corelib::MemoryAccessKind,
         ty_def::{BorrowKind, TyId},
@@ -33,9 +32,6 @@ pub enum AccessTarget<'a, 'db> {
 pub struct OperationAccess<'a, 'db> {
     pub target: AccessTarget<'a, 'db>,
     pub kind: MemoryAccessKind,
-    /// Receiver reservation has shared conflict semantics until its call.
-    /// It still requires an available source and never consumes ownership.
-    pub activation: BorrowActivation<'db>,
 }
 
 impl<'a, 'db> OperationAccess<'a, 'db> {
@@ -46,14 +42,6 @@ impl<'a, 'db> OperationAccess<'a, 'db> {
                 path: None,
             },
             kind: read_access(db, body.values[operand.value.index()].ty, operand.mode),
-            activation: BorrowActivation::Immediate,
-        }
-    }
-
-    pub fn conflict_kind(self) -> BorrowKind {
-        match self.activation {
-            BorrowActivation::AtCall { .. } => BorrowKind::Ref,
-            BorrowActivation::Immediate => self.kind.borrow_kind(),
         }
     }
 }
@@ -74,37 +62,29 @@ impl<'db> NStatementKind<'db> {
     ) -> Vec<OperationAccess<'a, 'db>> {
         let mut accesses = Vec::new();
         match self {
+            Self::End { .. } => {}
             Self::Store { destination, value } => {
                 accesses.push(OperationAccess::operand(db, body, *value));
                 accesses.push(OperationAccess {
                     target: AccessTarget::Place(destination),
                     kind: MemoryAccessKind::Write,
-                    activation: BorrowActivation::Immediate,
                 });
             }
             Self::Define { expr, .. } => match expr {
                 NExpr::Load { place, mode } => accesses.push(OperationAccess {
                     target: AccessTarget::Place(place),
                     kind: read_access(db, place.ty, *mode),
-                    activation: BorrowActivation::Immediate,
                 }),
                 NExpr::MakeView { place, .. } => accesses.push(OperationAccess {
                     target: AccessTarget::Place(place),
                     kind: MemoryAccessKind::Read,
-                    activation: BorrowActivation::Immediate,
                 }),
-                NExpr::Borrow {
-                    place,
-                    kind,
-                    activation,
-                    ..
-                } => accesses.push(OperationAccess {
+                NExpr::Borrow { place, kind, .. } => accesses.push(OperationAccess {
                     target: AccessTarget::Place(place),
                     kind: match kind {
                         BorrowKind::Ref => MemoryAccessKind::Read,
                         BorrowKind::Mut => MemoryAccessKind::MutAccess,
                     },
-                    activation: *activation,
                 }),
                 NExpr::ProjectValue { value, path } => {
                     let mut access = OperationAccess::operand(db, body, *value);
@@ -133,7 +113,6 @@ impl<'db> NStatementKind<'db> {
                                 } else {
                                     MemoryAccessKind::Read
                                 },
-                                activation: BorrowActivation::Immediate,
                             },
                         });
                     }
@@ -193,7 +172,6 @@ impl<'db> NStatementKind<'db> {
                 path: None,
             },
             kind: MemoryAccessKind::Read,
-            activation: BorrowActivation::Immediate,
         }));
         accesses
     }
@@ -218,7 +196,8 @@ impl<'db> NTerminatorKind<'db> {
         match self {
             Self::Branch { cond, .. }
             | Self::MatchEnum { value: cond, .. }
-            | Self::Return(Some(cond)) => Some(OperationAccess::operand(db, body, *cond)),
+            | Self::Return(Some(cond))
+            | Self::Yield { value: cond, .. } => Some(OperationAccess::operand(db, body, *cond)),
             Self::Goto(_) | Self::Assert { .. } | Self::Return(None) => None,
         }
     }

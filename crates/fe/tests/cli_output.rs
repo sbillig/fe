@@ -2856,8 +2856,8 @@ impl core::abi::Encode<std::abi::Sol> for Weird {
 
 impl core::abi::Decode<std::abi::Sol> for Weird {
     fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
-        let flag = bool::decode_payload(d)
-        let amount = u64::decode_payload(d)
+        let flag = bool::decode_payload(mut d)
+        let amount = u64::decode_payload(mut d)
         Self { amount, flag }
     }
 }

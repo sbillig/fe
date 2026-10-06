@@ -262,6 +262,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
                     .providers(db)
                     .clone()
                     .fold_with(db, folder),
+                self.effect_providers(db).param_spaces(db).clone(),
             ),
             ImplEnv::new(
                 db,

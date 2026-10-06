@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 431
 expression: output
 input_file: crates/codegen/tests/fixtures/pointer_first_class.fe
 ---
@@ -292,8 +293,8 @@ func private %offset(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        (v5.i256, v6.i1) = umulo v1 32.i256;
-        br v6 block2 block3;
+        (v4.i256, v5.i1) = umulo v1 32.i256;
+        br v5 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -301,8 +302,8 @@ func private %offset(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        v13.i256 = add v0 v5;
-        return v13;
+        v12.i256 = add v0 v4;
+        return v12;
 }
 
 func private %sum_first_class_pointers() -> i256 {

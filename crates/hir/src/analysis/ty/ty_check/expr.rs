@@ -21,6 +21,7 @@ use super::{
         BindingAccess, EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite,
         PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
     },
+    merged_borrow_provider,
     path::ResolvedPathInBody,
     ty_may_be_code_region_token,
 };
@@ -4639,12 +4640,8 @@ impl<'db> TyChecker<'db> {
             self.env.clear_pending_bindings();
             self.env.leave_scope();
             let else_prop = self.check_expr_in_new_scope(*else_, expected, result_discarded);
-            let borrow_provider = self.merge_concrete_borrow_providers(
-                then.span(self.body()).into(),
-                then_prop.borrow_provider,
-                else_.span(self.body()).into(),
-                else_prop.borrow_provider,
-            );
+            let borrow_provider =
+                merged_borrow_provider(then_prop.borrow_provider, else_prop.borrow_provider);
             ExprProp {
                 borrow_provider,
                 ..ExprProp::new(else_prop.ty, true)
@@ -4683,7 +4680,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let mut match_ty = expected;
-        let mut first_provider: Option<(DynLazySpan<'db>, super::ProviderAddressSpace)> = None;
+        let mut first_provider: Option<super::ProviderAddressSpace> = None;
         let mut provider_unknown = false;
         let mut provider_conflict = false;
         let mut arm_statuses = Vec::with_capacity(arms.len());
@@ -4706,17 +4703,11 @@ impl<'db> TyChecker<'db> {
 
             if arm_prop.shape.is_some() {
                 if let Some(provider) = arm_prop.borrow_provider {
-                    if let Some((ref span, previous)) = first_provider {
-                        provider_conflict |= self
-                            .merge_concrete_borrow_providers(
-                                span.clone(),
-                                Some(previous),
-                                arm.body.span(self.body()).into(),
-                                Some(provider),
-                            )
-                            .is_none();
+                    if let Some(previous) = first_provider {
+                        provider_conflict |=
+                            merged_borrow_provider(Some(previous), Some(provider)).is_none();
                     } else {
-                        first_provider = Some((arm.body.span(self.body()).into(), provider));
+                        first_provider = Some(provider);
                     }
                 } else {
                     provider_unknown = true;
@@ -4780,7 +4771,7 @@ impl<'db> TyChecker<'db> {
             borrow_provider: if provider_unknown || provider_conflict {
                 None
             } else {
-                first_provider.map(|(_, provider)| provider)
+                first_provider
             },
             ..ExprProp::new(match_ty, true)
         }

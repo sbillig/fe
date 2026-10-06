@@ -195,7 +195,7 @@ fn test_generic_recursion() {
     assert(generic_next(w) == 300)
 }
 
-fn relink(_ node: *ENode, _ next: Link) {
+fn relink(_ node: *ENode, _ next: own Link) {
     unsafe { node.next = next }
 }
 

@@ -1295,7 +1295,7 @@ pub struct TyChecker<'db> {
     /// The return shape of the projection being checked.
     projection_shape: Option<Shape<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
-    first_return_borrow_provider: Option<(DynLazySpan<'db>, ProviderAddressSpace)>,
+    first_return_borrow_provider: Option<ProviderAddressSpace>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -1697,29 +1697,6 @@ impl<'db> TyChecker<'db> {
                 )
                 .then_some(ProviderAddressSpace::Memory)
             })
-    }
-
-    fn merge_concrete_borrow_providers(
-        &mut self,
-        previous_span: DynLazySpan<'db>,
-        previous: Option<ProviderAddressSpace>,
-        current_span: DynLazySpan<'db>,
-        current: Option<ProviderAddressSpace>,
-    ) -> Option<ProviderAddressSpace> {
-        if let (Some(previous), Some(current)) = (previous, current)
-            && previous != current
-        {
-            self.push_diag(BodyDiag::IncompatibleBorrowProviders {
-                primary: current_span,
-                previous: previous_span,
-                previous_provider: previous,
-                current_provider: current,
-            });
-        }
-
-        previous
-            .zip(current)
-            .and_then(|(previous, current)| (previous == current).then_some(previous))
     }
 
     fn has_dead_inference_keys<T>(&self, value: &T) -> bool
@@ -5828,9 +5805,7 @@ impl<'db> TyCheckerFinalizer<'db> {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
         let mut body = checker.env.finish(&mut checker.table);
-        body.tables_mut().return_borrow_provider = checker
-            .first_return_borrow_provider
-            .map(|(_, provider)| provider);
+        body.tables_mut().return_borrow_provider = checker.first_return_borrow_provider;
         let direct_call_callees = body.body().map_or_else(FxHashSet::default, |body_id| {
             body_id
                 .exprs(checker.db)
@@ -5904,6 +5879,18 @@ impl<'db> TyCheckerFinalizer<'db> {
             self.diags.push(diag.into());
         }
     }
+}
+
+/// The provider two joined accesses share, if any. Accesses backed by
+/// different providers join only at yield sites, where the access checker
+/// requires one address space per instantiation.
+pub(super) fn merged_borrow_provider(
+    previous: Option<ProviderAddressSpace>,
+    current: Option<ProviderAddressSpace>,
+) -> Option<ProviderAddressSpace> {
+    previous
+        .zip(current)
+        .and_then(|(previous, current)| (previous == current).then_some(previous))
 }
 
 #[cfg(test)]

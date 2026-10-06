@@ -5,8 +5,10 @@ use crate::{
         HirAnalysisDb,
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
         ty::{
-            effects::{ResolvedEffectKey, resolve_effect_path},
-            trait_resolution::PredicateListId,
+            trait_def::TraitInstId,
+            trait_resolution::{
+                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+            },
             ty_def::{BorrowKind, TyBase, TyData, TyId},
         },
     },
@@ -14,6 +16,7 @@ use crate::{
         ArithBinOp, BinOp, CallableDef, CompBinOp, Func, IdentId, ItemKind, PathId, Trait, UnOp,
         scope_graph::ScopeId,
     },
+    semantic::EffectRequirementKey,
 };
 
 /// Resolve a trait in the core library by an explicit trait path, excluding the "core" root segment.
@@ -410,14 +413,15 @@ const REENTRANT_CAPABILITIES: [&str; 3] = [
     "std::evm::effects::Super",
 ];
 
-fn is_reentrant_capability<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    trait_: Trait<'db>,
-) -> bool {
-    REENTRANT_CAPABILITIES
-        .iter()
-        .any(|path| resolve_lib_trait_path(db, scope, path) == Some(trait_))
+/// The sealed std capability that addresses persistent slots directly.
+const RAW_STORAGE_CAPABILITY: &str = "std::evm::effects::RawStorage";
+
+/// Whether `trait_` is `target` or has it as a transitive super-trait.
+fn trait_reaches<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>, target: Trait<'db>) -> bool {
+    trait_ == target
+        || trait_
+            .super_trait_bounds(db)
+            .any(|bound| trait_reaches(db, bound.def(db), target))
 }
 
 /// The persistent and transient state an external execution started by `func`
@@ -441,7 +445,10 @@ pub fn external_call_state_access<'db>(
     }
     let func = func.trait_method_def(db).unwrap_or(func);
     let containing_trait = func.containing_trait(db)?;
-    if !is_reentrant_capability(db, func.scope(), containing_trait) {
+    if !REENTRANT_CAPABILITIES
+        .iter()
+        .any(|path| resolve_lib_trait_path(db, func.scope(), path) == Some(containing_trait))
+    {
         return None;
     }
     Some(
@@ -453,25 +460,43 @@ pub fn external_call_state_access<'db>(
     )
 }
 
-/// Whether effect parameter `idx` of `func` supplies a mutable reentrant std
-/// capability, so the callee may start external executions.
-pub fn effect_param_starts_external_calls<'db>(
+/// The persistent and transient state an effect keyed by `key` reaches in
+/// every slot: a reentrant capability can start external executions and a raw
+/// storage capability addresses slots directly. Immutable authority only
+/// reads.
+pub fn effect_key_state_access<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-    idx: usize,
-) -> bool {
-    let Some(param) = func.effect_params(db).nth(idx) else {
-        return false;
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    key: EffectRequirementKey<'db>,
+    is_mut: bool,
+) -> Option<MemoryAccessKind> {
+    let reaches = |path: &&str| {
+        let Some(target) = resolve_lib_trait_path(db, scope, path) else {
+            return false;
+        };
+        match key {
+            EffectRequirementKey::Trait(inst) => trait_reaches(db, inst.def(db), target),
+            EffectRequirementKey::Type(ty) => matches!(
+                is_goal_satisfiable(
+                    db,
+                    TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                    TraitInstId::new_simple(db, target, vec![ty]),
+                ),
+                GoalSatisfiability::Satisfied(_)
+            ),
+            EffectRequirementKey::Other => false,
+        }
     };
-    let Some(path) = param.key_path(db).filter(|_| param.is_mut(db)) else {
-        return false;
-    };
-    let ResolvedEffectKey::Trait(schema) =
-        resolve_effect_path(db, path, func.scope(), PredicateListId::empty_list(db))
-    else {
-        return false;
-    };
-    is_reentrant_capability(db, func.scope(), schema.into_trait_inst(db).def(db))
+    REENTRANT_CAPABILITIES
+        .iter()
+        .chain([&RAW_STORAGE_CAPABILITY])
+        .any(reaches)
+        .then_some(if is_mut {
+            MemoryAccessKind::Write
+        } else {
+            MemoryAccessKind::Read
+        })
 }
 
 fn runtime_builtin_func_path<'db>(

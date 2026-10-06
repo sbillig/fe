@@ -91,17 +91,22 @@ struct Data {
 }
 
 struct View {
-    d: ref Data,
+    d: Data,
+}
+
+impl View {
+    fn data(self) -> ref Data {
+        ref self.d
+    }
 }
 
 fn read_view(_ view: own View) -> u256 {
-    view.d.x
+    view.data().x
 }
 
 #[test]
-fn test_object_backed_nested_ref_fields_are_readable() {
-    let data = Data { x: 1 }
-    let view = View { d: ref data }
+fn test_object_backed_nested_ref_projections_are_readable() {
+    let view = View { d: Data { x: 1 } }
 
     assert!(read_view(view) == 1)
 }

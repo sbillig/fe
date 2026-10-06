@@ -1539,37 +1539,6 @@ impl<'db> LocalBinding<'db> {
             LocalBinding::EffectParam { site, idx, .. } => effect_param_span(*site, *idx),
         }
     }
-
-    pub(crate) fn pretty_name_in_body(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
-    ) -> String {
-        match self {
-            Self::Local { pat, .. } => {
-                let Partial::Present(Pat::Path(Partial::Present(path), ..)) = pat.data(db, body)
-                else {
-                    return "_".to_string();
-                };
-                path.ident(db)
-                    .to_opt()
-                    .map_or_else(|| "_".to_string(), |ident| ident.data(db).to_string())
-            }
-            Self::Param {
-                site: ParamSite::EffectField(effect_site),
-                idx,
-                ..
-            } => effect_param_name(db, *effect_site, *idx)
-                .or_else(|| param_name(db, ParamSite::EffectField(*effect_site), *idx))
-                .map_or_else(|| format!("%param{idx}"), |ident| ident.data(db).clone()),
-            Self::Param { site, idx, .. } => param_name(db, *site, *idx)
-                .map_or_else(|| format!("%param{idx}"), |ident| ident.data(db).clone()),
-            Self::EffectParam {
-                binding_name, idx, ..
-            } => Some(*binding_name)
-                .map_or_else(|| format!("%effect{idx}"), |ident| ident.data(db).clone()),
-        }
-    }
 }
 
 pub(super) struct Prober<'db, 'a> {

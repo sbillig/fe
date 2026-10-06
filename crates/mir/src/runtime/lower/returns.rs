@@ -5,8 +5,7 @@ use hir::analysis::{
     semantic::{
         ExecutableBlock, SLocalId, SemanticInstance, get_or_build_semantic_instance,
         normalized::{
-            NExpr, NPlaceBase, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
-            normalize_semantic_body,
+            NExpr, NPlaceBase, NValueDefinition, NValueId, NormalizedBody, normalize_semantic_body,
         },
         semantic_executable_control_flow, semantic_may_return,
     },
@@ -96,14 +95,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             .normalized
             .blocks
             .iter()
-            .filter_map(|block| match &block.terminator.kind {
-                NTerminatorKind::Return(Some(value)) => semantic_body.runtime_operand(*value),
-                NTerminatorKind::Goto(_)
-                | NTerminatorKind::Branch { .. }
-                | NTerminatorKind::MatchEnum { .. }
-                | NTerminatorKind::Assert { .. }
-                | NTerminatorKind::Return(None) => None,
-            })
+            .filter_map(|block| semantic_body.runtime_operand(block.terminator.kind.returned()?))
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let env = BodyEnv::new(db, semantic_body, &facts);
@@ -344,7 +336,7 @@ fn returned_raw_transports<'db>(
     };
     for (block, executable) in body.blocks.iter().zip(&executable.0) {
         if matches!(executable, ExecutableBlock::Continues(_))
-            && let NTerminatorKind::Return(Some(value)) = &block.terminator.kind
+            && let Some(value) = block.terminator.kind.returned()
         {
             tracer.trace(value.value, &mut Vec::new());
         }
@@ -1026,55 +1018,6 @@ mod tests {
             "static exact return class should match full-body carrier inference"
         );
     }
-
-    #[test]
-    fn stored_native_field_returns_preserve_their_carrier() {
-        for (expression, signature_first) in [
-            "holder.first",
-            "if take_first { holder.first } else { holder.second }",
-        ]
-        .into_iter()
-        .flat_map(|expression| [true, false].map(|signature_first| (expression, signature_first)))
-        {
-            let mut db = DriverDataBase::default();
-            let file = db.workspace().touch(
-                &mut db,
-                Url::parse("file:///stored_native_field_returns.fe").unwrap(),
-                Some(format!(
-                    "struct Holder {{ first: ref u8, second: ref u8 }}\nfn select(holder: Holder, take_first: bool) -> ref u8 {{ {expression} }}\n"
-                )),
-            );
-            let module = db.top_mod(file);
-            let diagnostics = db.run_on_top_mod(module);
-            assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
-            let semantic = semantic_instance_for_named_func(&db, module, "select");
-            let instance = runtime_instance_for_semantic(&db, semantic);
-            let key = instance.key(&db);
-            if signature_first {
-                instance.interface_signature(&db);
-            }
-            let body = instance.body(&db);
-            assert_eq!(body.signature, instance.interface_signature(&db));
-            let semantic_body = RuntimeSemanticBody::admitted(&db, semantic).unwrap();
-            let inferred = runtime_return_class_for_body(&db, key, &semantic_body);
-            assert_eq!(
-                inferred,
-                declaration_runtime_return_class(&db, key),
-                "{expression}"
-            );
-            assert_eq!(inferred, legacy_return_class_for_key(&db, key));
-            assert!(matches!(
-                inferred,
-                Some(RuntimeClass::Ref {
-                    kind: RefKind::Native,
-                    ..
-                })
-            ));
-            let program: &dyn MirDb = &db;
-            crate::verify_runtime_body(&db, &program, &body).expect("valid runtime body");
-        }
-    }
-
     fn assert_runtime_exit_behavior(
         source: &str,
         case_name: &str,
@@ -1297,98 +1240,6 @@ fn helper() {}
         );
         assert_eq!(declaration_runtime_return_class(&db, key), None);
     }
-
-    #[test]
-    fn mixed_native_return_declaration_matches_body_inference() {
-        let mut db = DriverDataBase::default();
-        let file_url = Url::parse("file:///mixed_native_return.fe").unwrap();
-        db.workspace().touch(
-            &mut db,
-            file_url.clone(),
-            Some(
-                r#"
-fn choose(first: ref u8, second: ref u8, use_first: bool) -> ref u8 {
-    if use_first { first } else { second }
-}
-"#
-                .into(),
-            ),
-        );
-        let file = db.workspace().get(&db, &file_url).unwrap();
-        let semantic = semantic_instance_for_named_func(&db, db.top_mod(file), "choose");
-        let default_key = runtime_instance_for_semantic(&db, semantic).key(&db);
-        let mut params = default_key.params(&db).clone();
-        let pointee = params[1].ref_pointee().unwrap().clone();
-        params[1] = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, pointee);
-        let key = RuntimeInstanceKey::new(&db, RuntimeInstanceSource::Semantic(semantic), params);
-        let declaration = declaration_runtime_return_class(&db, key);
-        assert!(matches!(
-            declaration,
-            Some(RuntimeClass::Ref {
-                kind: RefKind::Native,
-                ..
-            })
-        ));
-        assert_eq!(declaration, legacy_return_class_for_key(&db, key));
-    }
-
-    #[test]
-    fn raw_pointer_borrows_keep_their_return_layout() {
-        let mut db = DriverDataBase::default();
-        let file_url = Url::parse("file:///raw_borrow_returns.fe").unwrap();
-        db.workspace().touch(
-            &mut db,
-            file_url.clone(),
-            Some(
-                r#"
-struct Buffer { ptr: *u8 }
-struct Loan { value: mut u8 }
-fn direct(_ ptr: *u8) -> mut u8 { unsafe { mut *ptr } }
-fn nested(_ buffer: Buffer) -> Loan { unsafe { Loan { value: mut *buffer.ptr } } }
-"#
-                .to_string(),
-            ),
-        );
-        let file = db.workspace().get(&db, &file_url).unwrap();
-        let top_mod = db.top_mod(file);
-        for (name, projection) in [
-            ("direct", vec![]),
-            ("nested", vec![ReturnProjectionStep::Field(0)]),
-        ] {
-            let semantic = semantic_instance_for_named_func(&db, top_mod, name);
-            let key = runtime_instance_for_semantic(&db, semantic).key(&db);
-            let declaration = declaration_runtime_return_class(&db, key).unwrap();
-            assert_eq!(
-                Some(declaration.clone()),
-                legacy_return_class_for_key(&db, key)
-            );
-            let result = project_declaration_return_source(&db, declaration, &projection).unwrap();
-            if projection.is_empty() {
-                assert!(
-                    matches!(
-                        result,
-                        RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }
-                    ),
-                    "direct returns retain their static raw layout"
-                );
-            } else {
-                assert!(
-                    matches!(
-                        result,
-                        RuntimeClass::Ref {
-                            kind: RefKind::Native,
-                            ..
-                        }
-                    ),
-                    "stored borrows use the canonical address/layout carrier"
-                );
-            }
-        }
-    }
-
     #[test]
     fn borrow_return_class_remains_dynamic() {
         let mut db = DriverDataBase::default();

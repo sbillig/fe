@@ -323,6 +323,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             scope,
             self.assumptions,
         );
+        // A by-value binding of an access's part reads through its carrier.
+        let src_ty = match src_ty.as_capability(self.db) {
+            Some((_, target)) if dst_ty.as_capability(self.db).is_none() => target,
+            _ => src_ty,
+        };
         debug_assert_eq!(
             src_ty,
             dst_ty,
