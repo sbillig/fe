@@ -657,11 +657,7 @@ impl<'db> TyChecker<'db> {
     /// An enclosing body's effect binding used in a closure body: the
     /// closure's row's component with its key, which each call's caller
     /// provides.
-    fn capture_effect(
-        &mut self,
-        binding: LocalBinding<'db>,
-        span: DynLazySpan<'db>,
-    ) -> ExprProp<'db> {
+    fn capture_effect(&mut self, binding: LocalBinding<'db>) -> ExprProp<'db> {
         let LocalBinding::EffectParam {
             site,
             idx,
@@ -672,25 +668,19 @@ impl<'db> TyChecker<'db> {
         else {
             unreachable!("an effect binding is captured")
         };
-        let component = self
-            .env
-            .semantic_effect_requirement(site, idx)
-            .filter(|requirement| {
-                matches!(
-                    requirement.key,
-                    SemanticEffectRequirementKey::Type(_) | SemanticEffectRequirementKey::Trait(_)
-                )
-            })
-            .and_then(|requirement| {
-                self.env.closure_effect(
-                    requirement.key,
-                    binding_name,
-                    requirement.binding_ty,
-                    is_mut,
-                )
-            });
-        let Some((component, provided)) = component else {
-            self.push_diag(BodyDiag::UnsupportedClosureEffect { primary: span });
+        // A binding whose requirement does not resolve has its error already.
+        let Some((component, provided)) =
+            self.env
+                .semantic_effect_requirement(site, idx)
+                .and_then(|requirement| {
+                    self.env.closure_effect(
+                        requirement.key,
+                        binding_name,
+                        requirement.binding_ty,
+                        is_mut,
+                    )
+                })
+        else {
             return ExprProp::invalid(self.db);
         };
         if let Some(provided) = provided {
@@ -2091,11 +2081,6 @@ impl<'db> TyChecker<'db> {
                     });
                 }
                 EffectResolution::BlockedByBarrier => {}
-                EffectResolution::Missing if self.env.in_closure() => {
-                    self.push_diag(BodyDiag::UnsupportedClosureEffect {
-                        primary: call_span.clone(),
-                    });
-                }
                 EffectResolution::Missing => {
                     self.push_diag(BodyDiag::MissingEffect {
                         primary: call_span.clone(),
@@ -2123,7 +2108,7 @@ impl<'db> TyChecker<'db> {
                 Some((&component.requirement, component.path.clone(), row))
             }));
         for (requirement, path, row) in forwarded {
-            match self.own_row_binding(row) {
+            match self.own_row_binding(requirement, row) {
                 Some((binding, own)) => resolved_args.push(super::ResolvedEffectArg {
                     param_idx: resolved_args.len(),
                     binding_idx: requirement.binding_idx,
@@ -2150,11 +2135,6 @@ impl<'db> TyChecker<'db> {
                     ),
                     GoalSatisfiability::UnSat(_)
                 ) => {}
-                None if self.env.in_closure() => {
-                    self.push_diag(BodyDiag::UnsupportedClosureEffect {
-                        primary: call_span.clone(),
-                    })
-                }
                 None => self.push_diag(BodyDiag::MissingRow {
                     primary: call_span.clone(),
                     func,
@@ -2204,14 +2184,27 @@ impl<'db> TyChecker<'db> {
     /// The caller's own effect binding that forwards the abstract row `row`,
     /// with where `row` sits in it: an entry naming it, or an entry whose row
     /// expands to it here.
-    fn own_row_binding(&self, row: RowKey<'db>) -> Option<(LocalBinding<'db>, RowPath)> {
-        // A closure's body has no rows of its own to forward.
+    fn own_row_binding(
+        &mut self,
+        requirement: &EffectRequirement<'db>,
+        row: RowKey<'db>,
+    ) -> Option<(LocalBinding<'db>, RowPath)> {
+        // In a closure's body, a row is a component of the closure's row.
+        if self.env.in_closure() {
+            let (binding, _) = self.env.closure_effect(
+                SemanticEffectRequirementKey::Row(row),
+                requirement.binding_name,
+                requirement.binding_ty,
+                requirement.is_mut,
+            )?;
+            let LocalBinding::EffectParam { idx, .. } = binding else {
+                return None;
+            };
+            return Some((binding, RowPath::entry(idx as u32)));
+        }
         let super::BodyOwner::Func(caller) = self.env.owner() else {
             return None;
         };
-        if self.env.in_closure() {
-            return None;
-        }
         let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
         let names_row = |requirement: &EffectRequirement<'db>| {
             requirement.key.key_row().is_some_and(|own| {
@@ -4129,7 +4122,7 @@ impl<'db> TyChecker<'db> {
                 let captured = self.env.binding_is_capture(binding);
                 if captured {
                     if matches!(binding, LocalBinding::EffectParam { .. }) {
-                        return self.capture_effect(binding, path_expr_span.into());
+                        return self.capture_effect(binding);
                     }
                     if access.is_some() && !ty.has_var(self.db) && !self.ty_is_copy(ty) {
                         self.push_diag(BodyDiag::AccessCapture {

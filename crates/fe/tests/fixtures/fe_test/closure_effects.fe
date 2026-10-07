@@ -3,6 +3,7 @@
 // and the provider in scope where that function is called is the one the
 // body uses.
 use core::iter::Collection
+use std::evm::{Evm, RawStorage, SolArray}
 
 struct Store { n: u256 }
 
@@ -120,6 +121,28 @@ fn trait_keyed_effects() {
     with (Scale = ten) {
         assert!(xs.fold(0, |acc, x| acc + scaled(x)) == 60)
     }
+}
+
+fn has_start<C: Collection>(_ c: C) -> bool uses C::E {
+    c.start().is_some()
+}
+
+// An enclosing row the body needs is a component of the closure's row, which
+// the caller forwards.
+fn any_nonempty<C: Collection + Copy>(_ xs: [u256; 2], _ c: C) -> bool uses C::E {
+    xs.any(|x| has_start(c))
+}
+
+#[test]
+fn enclosing_rows() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let a = unsafe { SolArray<u256>::at(0) }
+        assert!(!any_nonempty([1, 2], a))
+        a.push(1)
+        assert!(any_nonempty([1, 2], a))
+    }
+    let arr: [u256; 2] = [3, 4]
+    assert!(any_nonempty([1, 2], arr))
 }
 
 msg TallyMsg {

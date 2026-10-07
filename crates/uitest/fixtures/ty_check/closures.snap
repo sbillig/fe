@@ -71,11 +71,3 @@ error[8-0112]: cannot move `a` out of a closure's captures
    │                 ^ moved here
    │
    = each call of a closure only views its captures
-
-error[8-0113]: a closure cannot use a row of effects
-   ┌─ closures.fe:79:16
-   │
-79 │     xs.any(|x| has_start(c))
-   │                ^^^^^^^^^^^^ this needs an enclosing row
-   │
-   = use it outside the closure and pass the closure what it computes

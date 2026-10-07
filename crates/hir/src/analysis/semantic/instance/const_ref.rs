@@ -2,6 +2,7 @@ use super::{
     EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
     resolved_effect_binding_ty_for_instance_effect, resolved_provider_binding_for_instance_effect,
+    row_expansion_for_key,
 };
 use crate::{
     analysis::{
@@ -519,8 +520,11 @@ fn semantic_callee_key_with_assumptions<'db>(
         )
     {
         let owner = BodyOwner::closure(db, closure_template_ty(db, closure), receiver);
+        let subst = GenericSubst::for_body_owner(db, owner, closure.parent_args(db).clone());
         // Its effects are its row's components: those of `call`'s row, in
-        // order, with the providers the call binds them to.
+        // order, with the providers the call binds them to. A component of
+        // one of the closure's own rows is the body's expansion of that row's
+        // component at the same place.
         let (_, rows) = instantiated_effects(
             db,
             nominal_func,
@@ -528,12 +532,33 @@ fn semantic_callee_key_with_assumptions<'db>(
             impl_env.normalization_scope(db),
             assumptions,
         );
+        let body_rows = row_expansion_for_key(
+            db,
+            SemanticInstanceKey::new(
+                db,
+                owner,
+                subst,
+                EffectProviderSubst::empty(db),
+                ImplEnv::empty(db, owner.scope()),
+            ),
+        );
         let effect_pairs: Vec<_> = rows
             .components
             .iter()
-            .filter_map(|component| match component.path.steps.as_slice() {
-                &[idx] => Some((component.requirement.binding_idx as usize, idx as usize)),
-                _ => None,
+            .filter_map(|component| {
+                let (&entry, steps) = component.path.steps.split_first()?;
+                let body = if steps.is_empty() {
+                    entry
+                } else {
+                    body_rows
+                        .component(&RowPath {
+                            entry,
+                            steps: steps.to_vec(),
+                        })?
+                        .requirement
+                        .binding_idx
+                };
+                Some((component.requirement.binding_idx as usize, body as usize))
             })
             .collect();
         let provider_pairs: Vec<_> = effect_pairs
@@ -561,7 +586,7 @@ fn semantic_callee_key_with_assumptions<'db>(
             key: SemanticInstanceKey::new(
                 db,
                 owner,
-                GenericSubst::for_body_owner(db, owner, closure.parent_args(db).clone()),
+                subst,
                 EffectProviderSubst::new(db, providers, Vec::new()),
                 ImplEnv::empty(db, owner.scope()),
             ),

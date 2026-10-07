@@ -4980,20 +4980,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
-            BodyDiag::UnsupportedClosureEffect { primary } => CompleteDiagnostic {
-                severity,
-                message: "a closure cannot use a row of effects".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "this needs an enclosing row".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![
-                    "use it outside the closure and pass the closure what it computes".to_string(),
-                ],
-                error_code,
-            },
-
             BodyDiag::UnsafeProviderRequiresUnsafe { primary } => primary_diag(
                 severity,
                 "binding a raw-pointer effect provider requires an `unsafe` block or function",

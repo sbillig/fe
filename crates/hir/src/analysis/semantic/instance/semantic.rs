@@ -1266,7 +1266,7 @@ impl<'db> SemanticInstance<'db> {
     }
 
     /// The effect requirements a call to the instance supplies: its declared
-    /// ones other than rows, then the components of the rows it expands.
+    /// ones other than rows, then the effects its rows expand to.
     pub fn call_effect_requirements(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1281,6 +1281,7 @@ impl<'db> SemanticInstance<'db> {
                 row_expansion_for_key(db, key)
                     .components
                     .iter()
+                    .filter(|component| component.requirement.key.key_row().is_none())
                     .map(|component| component.requirement.clone()),
             )
             .collect()

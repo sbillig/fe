@@ -1032,7 +1032,7 @@ impl<'db> TyCheckEnv<'db> {
     /// as `name` if the row has none, with its provider if it is new. A
     /// component required `mut` anywhere is `mut`. A new trait-keyed
     /// component's provider is assumed to implement the trait for the rest
-    /// of the body.
+    /// of the body; a row component has no provider.
     pub(super) fn closure_effect(
         &mut self,
         key: EffectRequirementKey<'db>,
@@ -1084,19 +1084,21 @@ impl<'db> TyCheckEnv<'db> {
             );
         }
         let binding = LocalBinding::effect_param(&info);
-        let provided = ProvidedEffect {
+        // A row is forwarded whole, never provided.
+        let provided = match info.requirement.key {
+            EffectRequirementKey::Trait(_) => Some(provider_ty),
+            ref key => key.binding_ty(db),
+        }
+        .map(|ty| ProvidedEffect {
             origin: EffectOrigin::Param {
                 site: info.requirement.binding_site,
                 index: info.requirement.binding_idx as usize,
                 name: Some(name),
             },
-            ty: match info.requirement.key {
-                EffectRequirementKey::Trait(_) => provider_ty,
-                _ => info.requirement.key.binding_ty(db)?,
-            },
+            ty,
             is_mut: true,
             binding: Some(binding),
-        };
+        });
         let bound = info.requirement.key.key_trait();
         active.effects.push(info);
         if let Some(bound) = bound {
@@ -1104,7 +1106,7 @@ impl<'db> TyCheckEnv<'db> {
             preds.push(bound);
             self.assumptions = PredicateListId::new(db, preds).extend_all_bounds(db);
         }
-        Some((binding, Some(provided)))
+        Some((binding, provided))
     }
 
     /// Marks the closure effect `binding` as used `mut`.

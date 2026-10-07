@@ -989,12 +989,6 @@ pub enum BodyDiag<'db> {
     MixedLoopBases {
         primary: DynLazySpan<'db>,
     },
-
-    /// An effect a closure body uses that its row cannot carry: an enclosing
-    /// row.
-    UnsupportedClosureEffect {
-        primary: DynLazySpan<'db>,
-    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1138,7 +1132,6 @@ impl<'db> BodyDiag<'db> {
             Self::WriteToCapture { .. } => 110,
             Self::AccessCapture { .. } => 111,
             Self::MoveOutOfCapture { .. } => 112,
-            Self::UnsupportedClosureEffect { .. } => 113,
             Self::MixedLoopBases { .. } => 114,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,

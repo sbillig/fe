@@ -69,12 +69,3 @@ const C: u256 = {
 fn missing_at_call(_ xs: [u256; 2]) -> bool {
     xs.any(|x| x == read())
 }
-
-fn has_start<C: Collection>(_ c: C) -> bool uses C::E {
-    c.start().is_some()
-}
-
-// A closure's row cannot hold an enclosing row.
-fn row_effect<C: Collection + Copy>(_ xs: [u256; 2], _ c: C) -> bool uses C::E {
-    xs.any(|x| has_start(c))
-}
