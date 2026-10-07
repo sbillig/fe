@@ -60,8 +60,17 @@ place is resolved first (a temporary is hoisted into a local), the arguments
 are evaluated, the receiver chain's projection sessions open innermost first,
 and the receiver's access opens last. A `mut` receiver's place is guarded by a
 `ref` access while the arguments run, so they may read the receiver but
-neither write nor move it. A `Copy` view argument is passed by copy and opens
-no access.
+neither write nor move it.
+
+A view argument's transport follows its type (`ty_is_snapshot`): a snapshot,
+meaning a scalar or handle (a primitive, a raw pointer, an effect handle, a
+static slot or a `core::marker::Snapshot` type such as `Address`), is passed
+by copy and opens no access, and a projection's snapshot parameter is a copy
+its session owns. Every other aggregate, `Copy` or not, is viewed in place:
+the call reads its place for the call's duration, a projection's session
+reserves it, and a yield from it is the caller's place. Lowering may still
+pass a `Copy` aggregate to an ordinary function by value; the checker traces
+the value back to its place.
 
 ## Tokens and places
 

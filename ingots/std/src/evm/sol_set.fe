@@ -28,6 +28,7 @@ use super::sol_slot::{SolPacked, data_slot, field_mask}
 pub struct SolEnumerableSet<T> { slot: u256 }
 
 impl<T> Copy for SolEnumerableSet<T> {}
+impl<T> Snapshot for SolEnumerableSet<T> {}
 
 // A loop visits the elements in the set's internal order, like `get`.
 impl<T: SolPacked> Collection for SolEnumerableSet<T> {

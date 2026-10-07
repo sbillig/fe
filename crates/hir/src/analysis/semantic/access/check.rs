@@ -44,7 +44,7 @@ use crate::{
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyId},
-            ty_is_copy,
+            ty_is_snapshot,
         },
     },
     hir_def::{CallableDef, FuncParamMode, scope_graph::ScopeId},
@@ -390,11 +390,12 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     /// The accesses a carrier argument for a parameter of `mode` passes. A
-    /// handle opens none, and a `Copy` view argument is passed by copy.
+    /// handle opens none, and a snapshot view argument is passed by copy.
     fn passed_to(&self, value: NValueId, mode: FuncParamMode) -> TokenSet {
         let ty = self.body.values[value.index()].ty;
         let ty = ty.as_capability(self.db).map_or(ty, |(_, target)| target);
-        if mode == FuncParamMode::View && ty_is_copy(self.db, self.scope, ty, self.assumptions) {
+        if mode == FuncParamMode::View && ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
+        {
             return TokenSet::new();
         }
         self.passed(value)
@@ -661,8 +662,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
             // A borrow no `end` closes is not an access of its own: through
             // a carrier it names part of the carrier's access, and otherwise
             // it is normalization's view of a call argument, open for that
-            // call. A `Copy` argument is passed by copy: its read is the whole
-            // access.
+            // call. A snapshot argument is passed by copy: its read is the
+            // whole access.
             NExpr::Borrow { place, .. } | NExpr::MakeView { place, .. }
                 if !self.ended.contains(&result) =>
             {
@@ -673,7 +674,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         .map(|token| (token, Path::new()))
                         .collect(),
                     NPlaceBase::Root(_)
-                        if ty_is_copy(self.db, self.scope, place.ty, self.assumptions) =>
+                        if ty_is_snapshot(self.db, self.scope, place.ty, self.assumptions) =>
                     {
                         Held::new()
                     }
@@ -976,11 +977,26 @@ impl<'a, 'db> Analysis<'a, 'db> {
         if field_handle_spaces(self.db, self.scope, self.assumptions, ty).is_empty() {
             return None;
         }
-        // The place the handles lie in: the place a value was read from or
-        // borrowed, or the places its own carriers name.
+        let (regions, mut parents) = self.source_place(value);
+        // The argument's own access is this operation's.
+        parents.extend(self.direct(value));
+        Some(Footprint {
+            regions: self.named_regions(regions, ty),
+            mode: match mode {
+                FuncParamMode::View => BorrowKind::Ref,
+                FuncParamMode::Mut | FuncParamMode::Own => BorrowKind::Mut,
+            },
+            parents,
+        })
+    }
+
+    /// The regions of the place a value was read from or borrowed, through
+    /// forwards and temporaries, or else the places its own carriers name,
+    /// with the tokens that authorize it.
+    fn source_place(&mut self, value: NValueId) -> (Vec<AbsPlace>, TokenSet) {
         let body = self.body;
         let mut source = value;
-        let (regions, mut parents) = loop {
+        let (regions, parents) = loop {
             match body.defining_expr(source) {
                 Some((_, NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. })) => {
                     source = src.value
@@ -1011,21 +1027,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 }
             }
         };
-        let regions = if regions.is_empty() {
-            vec![AbsPlace::new(Base::Raw)]
+        if regions.is_empty() {
+            (vec![AbsPlace::new(Base::Raw)], parents)
         } else {
-            regions
-        };
-        // The argument's own access is this operation's.
-        parents.extend(self.direct(value));
-        Some(Footprint {
-            regions: self.named_regions(regions, ty),
-            mode: match mode {
-                FuncParamMode::View => BorrowKind::Ref,
-                FuncParamMode::Mut | FuncParamMode::Own => BorrowKind::Mut,
-            },
-            parents,
-        })
+            (regions, parents)
+        }
     }
 
     // --- control flow -----------------------------------------------------
@@ -1793,6 +1799,24 @@ impl<'a, 'db> Analysis<'a, 'db> {
             }
             let direct = self.passed_to(arg.value, param_mode);
             if direct.is_empty() {
+                // An aggregate passed by value is still viewed in place: the
+                // call reads the place it came from.
+                let ty = self.body.values[arg.value.index()].ty;
+                if param_mode == FuncParamMode::View
+                    && !ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
+                {
+                    let (regions, parents) = self.source_place(arg.value);
+                    let authority = self.ancestors(&parents);
+                    self.check_conflicts(
+                        state,
+                        &regions,
+                        BorrowKind::Ref,
+                        &authority,
+                        &[],
+                        MemoryAccessKind::Read,
+                        arg_origin,
+                    )?;
+                }
                 continue;
             }
             let (mode, kind) = match param_mode {

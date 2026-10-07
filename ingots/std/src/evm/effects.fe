@@ -60,6 +60,7 @@ impl core::ops::Eq for Address {
 }
 
 impl Copy for Address {}
+impl Snapshot for Address {}
 
 impl Default for Address {
     fn default() -> Self {

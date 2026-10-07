@@ -29,6 +29,7 @@ const MAX_LEN: u256 = 0xffffffffffffffff
 pub struct SolArray<T> { slot: u256 }
 
 impl<T> Copy for SolArray<T> {}
+impl<T> Snapshot for SolArray<T> {}
 
 impl<T: SolPacked> SolArray<T> {
     /// The array whose length is stored at `slot`.

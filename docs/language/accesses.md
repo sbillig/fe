@@ -16,6 +16,20 @@ fn consume(_ item: own Item) { .. }         // own: the callee takes the value
 A view or `mut` argument is a place of the caller's (`bump(mut counter)`);
 an owned argument is moved, or copied if its type is `Copy`.
 
+A view argument that is a scalar or a handle (an integer, `bool`,
+`Address`, a storage map, or any `core::marker::Snapshot` type) is a
+*snapshot*: the callee gets a copy, and the caller may change the original
+during the call. Every other value, including `Copy` arrays and structs, is
+viewed in place: the caller cannot write it while the call, or a projection's
+result over it, is in use.
+
+```fe
+fn first(_ xs: [u256; 4]) -> ref u256 { ref xs[0] }
+
+let x = first(xs)
+xs[1] = 5        // rejected: `x` views `xs` in place
+```
+
 ## Access bindings
 
 `let h = mut p.x` and `let r = ref p.x` bind an access to a place. It is

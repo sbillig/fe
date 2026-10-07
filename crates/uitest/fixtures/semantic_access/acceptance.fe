@@ -1,4 +1,4 @@
-// The draft-6 acceptance list ("Acceptance tests"), numbered as the spec
+// The draft-8 acceptance list ("Acceptance tests"), numbered as the spec
 // lists it, for the cases the access/session checker decides. Type-level
 // cases are in `ty_check/acceptance.fe` and run-time results in
 // `fe_test/acceptance.fe`.
@@ -420,4 +420,41 @@ fn case27_view_closed() -> u256 {
         update_state()
     }
     before + p.n
+}
+
+// 33. Rejected: a read projection of a storage-rooted `Copy` array yields its
+// storage place, like the mutable one, so an external call conflicts with it.
+pub contract Case33CopyArraySpace {
+    mut cells: [u256; 4],
+    init() uses (cells, call: mut Call) {
+        let x = cells.at(0)
+        ping()
+        assert(x == 0)
+    }
+}
+
+fn first(_ xs: [u256; 4]) -> ref u256 {
+    ref xs[0]
+}
+
+// 36. Rejected: a projection over a `Copy` array views it in place, so its
+// session reserves the array until the result's last use.
+fn case36_copy_array_view() -> u256 {
+    let mut xs: [u256; 4] = [1, 2, 3, 4]
+    let x = first(xs)
+    xs[1] = 5
+    x
+}
+
+fn echo(_ n: u256) -> ref u256 {
+    ref n
+}
+
+// 37. Accepted: a scalar is a snapshot, so the result is the session's own
+// copy and the caller may change the original.
+fn case37_scalar_snapshot() -> u256 {
+    let mut n: u256 = 1
+    let x = echo(n)
+    n = 2
+    x + n
 }

@@ -49,7 +49,7 @@ use crate::{
                 ResolvedEffectArg, RowArg, SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
             ty_def::{InvalidCause, TyData, TyId},
-            ty_is_copy,
+            ty_is_snapshot,
             ty_lower::{
                 ParamSchemaId, SubstError, callable_layout_bundle_input_interface,
                 specialized_callable_layout_bundle_signature_with_normalizer,
@@ -1435,9 +1435,9 @@ impl<'db> SemanticInstance<'db> {
         }
     }
 
-    /// Whether `binding` is a projection's `Copy` view parameter: a copy the
-    /// session owns, never the caller's place. A copy of code or calldata,
-    /// which nothing writes, is the place itself.
+    /// Whether `binding` is a projection's snapshot view parameter (a scalar
+    /// or handle): a copy the session owns, never the caller's place. A copy
+    /// of code or calldata, which nothing writes, is the place itself.
     pub fn binding_is_session_copy(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1451,7 +1451,7 @@ impl<'db> SemanticInstance<'db> {
                 idx,
                 ..
             } if self.is_projection(db)
-                && ty_is_copy(db, self.normalization_scope(db), ty, self.assumptions(db))
+                && ty_is_snapshot(db, self.normalization_scope(db), ty, self.assumptions(db))
                 && !matches!(
                     self.param_space(db, idx as u32),
                     ProviderAddressSpace::Code | ProviderAddressSpace::Calldata

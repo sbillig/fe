@@ -38,128 +38,49 @@ func inline(always) private %first_index(v0.i256) -> @layout_0 {
 
 func private %for_array_sum() -> i64 {
     block0:
-        v0.objref<[i64; 25]> = obj.alloc [i64; 25];
         jump block1;
 
     block1:
+        v25.constref<[i64; 25]> = const.ref $const_region_0;
         v26.constref<[i64; 25]> = const.ref $const_region_0;
-        v27.constref<[i64; 25]> = const.ref $const_region_0;
-        v29.@layout_0 = call %start v27;
-        v30.i1 = enum.is_variant v29 #variant_0;
-        br v30 block5 block4;
+        v28.@layout_0 = call %start v26;
+        v29.i1 = enum.is_variant v28 #variant_0;
+        br v29 block5 block4;
 
     block2:
-        v138.i64 = phi (0.i64 block5) (v127 block6);
-        v32.i256 = phi (v115 block5) (v117 block6);
-        v33.@layout_0 = call %next v27 v32;
-        v34.objref<[i64; 25]> = obj.alloc [i64; 25];
-        obj.init.const v34 v27;
-        v35.[i64; 25] = obj.load v34;
-        v37.objref<i64> = obj.index v0 0.i256;
-        v38.i64 = extract_value v35 0.i256;
-        obj.store v37 v38;
-        v40.objref<i64> = obj.index v0 1.i256;
-        v41.i64 = extract_value v35 1.i256;
-        obj.store v40 v41;
-        v43.objref<i64> = obj.index v0 2.i256;
-        v44.i64 = extract_value v35 2.i256;
-        obj.store v43 v44;
-        v46.objref<i64> = obj.index v0 3.i256;
-        v47.i64 = extract_value v35 3.i256;
-        obj.store v46 v47;
-        v49.objref<i64> = obj.index v0 4.i256;
-        v50.i64 = extract_value v35 4.i256;
-        obj.store v49 v50;
-        v52.objref<i64> = obj.index v0 5.i256;
-        v53.i64 = extract_value v35 5.i256;
-        obj.store v52 v53;
-        v55.objref<i64> = obj.index v0 6.i256;
-        v56.i64 = extract_value v35 6.i256;
-        obj.store v55 v56;
-        v58.objref<i64> = obj.index v0 7.i256;
-        v59.i64 = extract_value v35 7.i256;
-        obj.store v58 v59;
-        v61.objref<i64> = obj.index v0 8.i256;
-        v62.i64 = extract_value v35 8.i256;
-        obj.store v61 v62;
-        v64.objref<i64> = obj.index v0 9.i256;
-        v65.i64 = extract_value v35 9.i256;
-        obj.store v64 v65;
-        v67.objref<i64> = obj.index v0 10.i256;
-        v68.i64 = extract_value v35 10.i256;
-        obj.store v67 v68;
-        v70.objref<i64> = obj.index v0 11.i256;
-        v71.i64 = extract_value v35 11.i256;
-        obj.store v70 v71;
-        v73.objref<i64> = obj.index v0 12.i256;
-        v74.i64 = extract_value v35 12.i256;
-        obj.store v73 v74;
-        v76.objref<i64> = obj.index v0 13.i256;
-        v77.i64 = extract_value v35 13.i256;
-        obj.store v76 v77;
-        v79.objref<i64> = obj.index v0 14.i256;
-        v80.i64 = extract_value v35 14.i256;
-        obj.store v79 v80;
-        v82.objref<i64> = obj.index v0 15.i256;
-        v83.i64 = extract_value v35 15.i256;
-        obj.store v82 v83;
-        v85.objref<i64> = obj.index v0 16.i256;
-        v86.i64 = extract_value v35 16.i256;
-        obj.store v85 v86;
-        v88.objref<i64> = obj.index v0 17.i256;
-        v89.i64 = extract_value v35 17.i256;
-        obj.store v88 v89;
-        v91.objref<i64> = obj.index v0 18.i256;
-        v92.i64 = extract_value v35 18.i256;
-        obj.store v91 v92;
-        v94.objref<i64> = obj.index v0 19.i256;
-        v95.i64 = extract_value v35 19.i256;
-        obj.store v94 v95;
-        v97.objref<i64> = obj.index v0 20.i256;
-        v98.i64 = extract_value v35 20.i256;
-        obj.store v97 v98;
-        v100.objref<i64> = obj.index v0 21.i256;
-        v101.i64 = extract_value v35 21.i256;
-        obj.store v100 v101;
-        v103.objref<i64> = obj.index v0 22.i256;
-        v104.i64 = extract_value v35 22.i256;
-        obj.store v103 v104;
-        v106.objref<i64> = obj.index v0 23.i256;
-        v107.i64 = extract_value v35 23.i256;
-        obj.store v106 v107;
-        v109.objref<i64> = obj.index v0 24.i256;
-        v110.i64 = extract_value v35 24.i256;
-        obj.store v109 v110;
+        v64.i64 = phi (0.i64 block5) (v51 block6);
+        v31.i256 = phi (v38 block5) (v40 block6);
+        v32.@layout_0 = call %next v26 v31;
         jump block8;
 
     block3:
-        v112.i1 = enum.is_variant v33 #variant_0;
-        br v112 block6 block4;
+        v34.i1 = enum.is_variant v32 #variant_0;
+        br v34 block6 block4;
 
     block4:
-        v113.i64 = phi (0.i64 block1) (v127 block3);
-        return v113;
+        v35.i64 = phi (0.i64 block1) (v51 block3);
+        return v35;
 
     block5:
-        v115.i256 = enum.extract v29 #variant_0 0.i256;
+        v38.i256 = enum.extract v28 #variant_0 0.i256;
         jump block2;
 
     block6:
-        v117.i256 = enum.extract v33 #variant_0 0.i256;
+        v40.i256 = enum.extract v32 #variant_0 0.i256;
         jump block2;
 
     block7:
-        v119.i64 = obj.load v124;
+        v42.i64 = const.load v48;
         jump block10;
 
     block8:
-        v122.i1 = lt v32 25.i256;
-        v123.i1 = is_zero v122;
-        br v123 block11 block12;
+        v45.i1 = lt v31 25.i256;
+        v46.i1 = is_zero v45;
+        br v46 block11 block12;
 
     block9:
-        (v127.i64, v128.i1) = uaddo v138 v119;
-        br v128 block13 block14;
+        (v51.i64, v52.i1) = uaddo v64 v42;
+        br v52 block13 block14;
 
     block10:
         jump block9;
@@ -168,7 +89,7 @@ func private %for_array_sum() -> i64 {
         evm_revert 0.i256 0.i256;
 
     block12:
-        v124.objref<i64> = obj.index v0 v32;
+        v48.constref<i64> = const.index v26 v31;
         jump block7;
 
     block13:

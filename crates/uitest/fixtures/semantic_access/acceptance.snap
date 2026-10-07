@@ -93,6 +93,22 @@ error[16-0001]: access conflict in `fn case27_provider_aliases_view`
 409 │         update_state()
     │         ^^^^^^^^^^^^^^ cannot mutably access this place while a `ref` access of it is open
 
+error[16-0001]: access conflict in `fn Case33CopyArraySpace::__init__`
+    ┌─ acceptance.fe:431:9
+    │
+430 │         let x = cells.at(0)
+    │                 ----- access opened here
+431 │         ping()
+    │         ^^^^^^ this call may write storage while a `ref` access of it is open
+
+error[16-0001]: access conflict in `fn case36_copy_array_view`
+    ┌─ acceptance.fe:445:5
+    │
+444 │     let x = first(xs)
+    │             --------- projection opened here
+445 │     xs[1] = 5
+    │     ^^^^^^^^^ cannot write to this place while a `ref` projection of it is open
+
 error[16-0002]: move conflict in `fn case13_uninitialized`
     ┌─ acceptance.fe:222:11
     │

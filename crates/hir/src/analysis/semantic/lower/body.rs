@@ -29,10 +29,10 @@ use crate::{
             ty_check::{
                 BodyOwner, Callable, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef,
                 ForLoopItem, ForLoopStep, LocalBinding, PathReadSemantics, RecordInitLowering,
-                RecordLike, SemanticExprLowering, TypedBody, ValuePathRef,
+                RecordLike, SemanticExprLowering, TypedBody, ValuePathRef, infer_body,
             },
             ty_def::{BorrowKind, TyData, TyId},
-            ty_is_copy,
+            ty_is_copy, ty_is_snapshot,
         },
     },
     hir_def::{
@@ -751,7 +751,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         };
         let origin = SemOrigin::Expr(expr);
         // An access binding is re-yielded through its carrier. (A projection's
-        // `Copy` view parameter is a session-owned copy, viewed below.)
+        // snapshot view parameter is a session-owned copy, viewed below.)
         if let Some(binding) = self.typed_body.expr_binding(expr)
             && !self.capture_places.contains_key(&binding)
             && let Some(&local) = self.binding_locals.get(&binding)
@@ -1485,10 +1485,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    /// Lowers the call input for parameter `param`. A non-Copy projection
-    /// passed to a view parameter is viewed in place: loading it first would
-    /// move the field, and the call's view coercion cannot undo that move.
-    /// Call normalization views root values directly.
+    /// Lowers the call input for parameter `param`. A place passed to a view
+    /// parameter is viewed in place unless it is a snapshot (a scalar or
+    /// handle) or a `Copy` value an ordinary function may take by value:
+    /// loading a non-`Copy` place would move it, and a projection's result
+    /// over a `Copy` aggregate is the caller's place. (Either way the call
+    /// reads the place for its duration.) Call normalization views local
+    /// roots directly; an effect binding is viewed here when its template
+    /// type is not a parameter, so every instance lowers it alike.
     fn lower_callable_argument(
         &mut self,
         expr: ExprId,
@@ -1521,11 +1525,27 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         {
             return self.binding_locals[&binding];
         }
+        let scope = self.body.scope();
         if mode == FuncParamMode::View
-            && !ty_is_copy(self.db, self.body.scope(), ty, self.assumptions)
             && self.typed_body.expr_prop(self.db, expr).shape.is_none()
+            && !ty_is_snapshot(self.db, scope, ty, self.assumptions)
+            && (!ty_is_copy(self.db, scope, ty, self.assumptions)
+                || matches!(
+                    callable.callable_def(),
+                    CallableDef::Func(func) if func.is_projection(self.db)
+                ))
             && let Some(place) = self.try_lower_place(expr)
-            && !place.path.is_empty()
+            && (!place.path.is_empty()
+                || !ty.is_zero_sized(self.db)
+                    && infer_body(self.db, self.template_owner)
+                        .1
+                        .expr_ty(self.db, expr)
+                        .as_generic_param(self.db)
+                        .is_none()
+                    && matches!(
+                        self.locals[place.local.index()].source,
+                        Some(LocalBinding::EffectParam { .. })
+                    ))
         {
             return self.emit_borrow(expr, place, BorrowKind::Ref, ty);
         }
