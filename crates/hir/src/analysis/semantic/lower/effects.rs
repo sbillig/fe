@@ -246,13 +246,7 @@ pub(super) fn provisional_owner_effect_bindings<'db>(
                         site,
                         requirement.binding_idx,
                     )?;
-                    Some(LocalBinding::EffectParam {
-                        site: requirement.binding_site,
-                        idx: requirement.binding_idx as usize,
-                        binding_name: requirement.binding_name,
-                        provider_idx,
-                        is_mut: requirement.is_mut,
-                    })
+                    Some(LocalBinding::effect(&requirement, provider_idx))
                 })
                 .collect::<Vec<_>>()
         })
@@ -262,7 +256,8 @@ pub(super) fn provisional_owner_effect_bindings<'db>(
 pub fn effect_param_site<'db>(owner: BodyOwner<'db>) -> Option<EffectParamSite<'db>> {
     match owner {
         BodyOwner::Func(func) => Some(EffectParamSite::Func(func)),
-        BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => None,
+        BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => None,
+        BodyOwner::Closure { def, .. } => Some(EffectParamSite::Closure(def)),
         BodyOwner::ContractInit { contract } => Some(EffectParamSite::ContractInit { contract }),
         BodyOwner::ContractRecvArm {
             contract,

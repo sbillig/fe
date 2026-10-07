@@ -985,8 +985,9 @@ pub enum BodyDiag<'db> {
         name: IdentId<'db>,
     },
 
-    /// An effect used in a closure body.
-    EffectInClosure {
+    /// An effect a closure body uses that its row cannot carry: one keyed
+    /// by a trait, or an enclosing row.
+    UnsupportedClosureEffect {
         primary: DynLazySpan<'db>,
     },
 }
@@ -1132,7 +1133,7 @@ impl<'db> BodyDiag<'db> {
             Self::WriteToCapture { .. } => 110,
             Self::AccessCapture { .. } => 111,
             Self::MoveOutOfCapture { .. } => 112,
-            Self::EffectInClosure { .. } => 113,
+            Self::UnsupportedClosureEffect { .. } => 113,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

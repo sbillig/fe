@@ -153,7 +153,7 @@ where
                         .parent_args(db)
                         .iter()
                         .chain(closure.captures(db))
-                        .chain(closure.params(db))
+                        .chain(&closure.param_tys(db))
                         .chain([closure.ret_ty(db)].iter())
                         .copied()
                         .collect::<Vec<_>>()

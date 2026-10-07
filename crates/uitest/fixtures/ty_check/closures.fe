@@ -4,6 +4,20 @@ use core::iter::Collection
 
 struct Account { balance: u256 }
 
+struct Store { n: u256 }
+
+trait Ctx {
+    fn get(self) -> u256
+}
+
+fn read() -> u256 uses (store: Store) {
+    store.n
+}
+
+fn needs_ctx() -> u256 uses (ctx: Ctx) {
+    ctx.get()
+}
+
 fn consume(_ a: own Account) {}
 
 fn write_capture(_ xs: [u256; 2]) -> u256 {
@@ -57,4 +71,17 @@ fn break_in_closure(_ xs: [u256; 2]) {
 const C: u256 = {
     let f = |x: u256| x
     1
+}
+
+// The row of a closure using `Store` needs a provider where `any` is called.
+fn missing_at_call(_ xs: [u256; 2]) -> bool {
+    xs.any(|x| x == read())
+}
+
+fn trait_effect(_ xs: [u256; 2]) -> bool uses (ctx: Ctx) {
+    xs.any(|x| x == needs_ctx())
+}
+
+fn trait_capture(_ xs: [u256; 2]) -> bool uses (ctx: Ctx) {
+    xs.any(|x| x == ctx.get())
 }

@@ -69,6 +69,27 @@ pub struct RowComponent<'db> {
     pub key_syntax: HirTypeId<'db>,
 }
 
+impl<'db> TyVisitable<'db> for RowComponent<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.key.visit_with(visitor)
+    }
+}
+
+impl<'db> TyFoldable<'db> for RowComponent<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        RowComponent {
+            key: self.key.fold_with(db, folder),
+            ..self
+        }
+    }
+}
+
 /// Where a row component sits: the requirement entry whose row it descends
 /// from, and its index in each row on the way down. A path names the same
 /// component in every view of a requirement, however far each view expands
@@ -227,9 +248,9 @@ fn direct_row_components<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<Vec<RowComponent<'db>>> {
-    // A closure's row is the effects its body uses; none yet.
-    if key.inst.self_ty(db).as_closure(db).is_some() {
-        return Some(Vec::new());
+    // A closure's row is the effects its body uses.
+    if let Some(closure) = key.inst.self_ty(db).as_closure(db) {
+        return Some(closure.effects(db).clone());
     }
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     let name = key.name(db)?;

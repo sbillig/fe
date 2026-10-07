@@ -519,17 +519,55 @@ fn semantic_callee_key_with_assumptions<'db>(
         )
     {
         let owner = BodyOwner::closure(db, closure_template_ty(db, closure), receiver);
+        // Its effects are its row's components: those of `call`'s row, in
+        // order, with the providers the call binds them to.
+        let (_, rows) = instantiated_effects(
+            db,
+            nominal_func,
+            callable.generic_args(),
+            impl_env.normalization_scope(db),
+            assumptions,
+        );
+        let effect_pairs: Vec<_> = rows
+            .components
+            .iter()
+            .filter_map(|component| match component.path.steps.as_slice() {
+                &[idx] => Some((component.requirement.binding_idx as usize, idx as usize)),
+                _ => None,
+            })
+            .collect();
+        let provider_pairs: Vec<_> = effect_pairs
+            .iter()
+            .map(|&(nominal, body)| (nominal as u32, body as u32))
+            .collect();
+        let providers = resolve_provider_specializations(
+            db,
+            caller,
+            effect_providers,
+            provider_resolution_mode,
+        )
+        .into_iter()
+        .filter_map(|specialization| {
+            let &(_, body) = provider_pairs
+                .iter()
+                .find(|(nominal, _)| *nominal == specialization.provider.provider_idx)?;
+            Some(ProviderBinding {
+                provider_idx: body,
+                ..specialization.provider
+            })
+        })
+        .collect::<Vec<_>>();
         return Ok(Some(SemanticCallCallee {
             key: SemanticInstanceKey::new(
                 db,
                 owner,
                 GenericSubst::for_body_owner(db, owner, closure.parent_args(db).clone()),
-                EffectProviderSubst::empty(db),
+                EffectProviderSubst::new(db, providers, Vec::new()),
                 ImplEnv::empty(db, owner.scope()),
             ),
             concrete_dispatch: true,
-            effect_pairs: Vec::new(),
-            provider_pairs: Vec::new(),
+            effect_pairs,
+            provider_pairs,
         }));
     }
     let mut selected_trait_method: Option<(ResolvedImplInstance<'db>, TraitInstId<'db>)> = None;
@@ -976,37 +1014,9 @@ fn resolve_callable_effect_providers<'db>(
     effect_providers: &[EffectProviderSpecialization<'db>],
     provider_resolution_mode: ProviderResolutionMode,
 ) -> Vec<EffectProviderSpecialization<'db>> {
+    let providers =
+        resolve_provider_specializations(db, caller, effect_providers, provider_resolution_mode);
     let caller = || caller.expect("effect providers require a caller instance");
-    let mut providers = effect_providers
-        .iter()
-        .map(|specialization| {
-            let provider_idx = specialization.provider.provider_idx;
-            let provider = match specialization.provenance {
-                crate::analysis::ty::ty_check::EffectProviderProvenance::Binding {
-                    binding,
-                    ..
-                } => provider_resolution_mode
-                    .resolve_binding(db, caller(), binding)
-                    .filter(|provider| {
-                        provider.effective_target_ty()
-                            == specialization.provider.effective_target_ty()
-                    })
-                    .map(|provider| crate::semantic::ProviderBinding {
-                        provider_idx,
-                        ..provider
-                    })
-                    .unwrap_or(specialization.provider.clone()),
-                crate::analysis::ty::ty_check::EffectProviderProvenance::Expr { .. } => {
-                    specialization.provider.clone()
-                }
-            };
-            EffectProviderSpecialization {
-                provider,
-                provenance: specialization.provenance,
-            }
-        })
-        .collect::<Vec<_>>();
-    providers.sort_by_key(|provider| provider.provider.provider_idx);
     let effect_env = EffectEnvView::new(EffectParamSite::Func(func));
     let resolution_by_req = match provider_resolution_mode {
         ProviderResolutionMode::Final => effect_env
@@ -1048,6 +1058,48 @@ fn resolve_callable_effect_providers<'db>(
         let actual_key_ty = effect_provider_target_ty(db, caller(), provider);
         instantiate_callable_effect_layout_args(db, func, effect_idx, actual_key_ty, subst_args);
     }
+    providers
+}
+
+/// A call's provider specializations, each a caller binding's provider
+/// resolved in the caller.
+fn resolve_provider_specializations<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: Option<SemanticInstance<'db>>,
+    effect_providers: &[EffectProviderSpecialization<'db>],
+    provider_resolution_mode: ProviderResolutionMode,
+) -> Vec<EffectProviderSpecialization<'db>> {
+    let caller = || caller.expect("effect providers require a caller instance");
+    let mut providers = effect_providers
+        .iter()
+        .map(|specialization| {
+            let provider_idx = specialization.provider.provider_idx;
+            let provider = match specialization.provenance {
+                crate::analysis::ty::ty_check::EffectProviderProvenance::Binding {
+                    binding,
+                    ..
+                } => provider_resolution_mode
+                    .resolve_binding(db, caller(), binding)
+                    .filter(|provider| {
+                        provider.effective_target_ty()
+                            == specialization.provider.effective_target_ty()
+                    })
+                    .map(|provider| crate::semantic::ProviderBinding {
+                        provider_idx,
+                        ..provider
+                    })
+                    .unwrap_or(specialization.provider.clone()),
+                crate::analysis::ty::ty_check::EffectProviderProvenance::Expr { .. } => {
+                    specialization.provider.clone()
+                }
+            };
+            EffectProviderSpecialization {
+                provider,
+                provenance: specialization.provenance,
+            }
+        })
+        .collect::<Vec<_>>();
+    providers.sort_by_key(|provider| provider.provider.provider_idx);
     providers
 }
 

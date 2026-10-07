@@ -26,7 +26,7 @@ use crate::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
             },
-            fold::TyFoldable,
+            fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
             normalize::normalize_ty,
             provider::{
@@ -48,7 +48,7 @@ use crate::{
                 EffectProviderSpecialization, ForLoopStep, LocalBinding, ParamSite,
                 ResolvedEffectArg, RowArg, SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
-            ty_def::{InvalidCause, TyId},
+            ty_def::{InvalidCause, TyData, TyId},
             ty_is_copy,
             ty_lower::{
                 ParamSchemaId, SubstError, callable_layout_bundle_input_interface,
@@ -56,7 +56,7 @@ use crate::{
             },
         },
     },
-    hir_def::{CallableDef, FuncParamMode, scope_graph::ScopeId},
+    hir_def::{CallableDef, ExprId, FuncParamMode, scope_graph::ScopeId},
     semantic::{
         AssignedLayoutBindingEnv, EffectEnvView, EffectRequirement, EffectRequirementKey,
         LayoutViewKind, ProviderBinding, ProviderSource, ResolvedEffectBinding,
@@ -317,7 +317,38 @@ pub fn instantiated_typed_body<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
 ) -> TypedBody<'db> {
-    instantiate_typed_body(db, typed_body_template(db, key.owner(db)), key.subst(db))
+    let body = instantiate_typed_body(db, typed_body_template(db, key.owner(db)), key.subst(db));
+    // A closure body's provider parameters are the providers its call binds.
+    match key.owner(db) {
+        BodyOwner::Closure { def, .. } => body.fold_with(
+            db,
+            &mut ClosureProviderSubst {
+                closure: def.expr,
+                providers: key.effect_providers(db).providers(db),
+            },
+        ),
+        _ => body,
+    }
+}
+
+struct ClosureProviderSubst<'a, 'db> {
+    closure: ExprId,
+    providers: &'a [ProviderBinding<'db>],
+}
+
+impl<'db> TyFolder<'db> for ClosureProviderSubst<'_, 'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        if let TyData::TyParam(param) = ty.data(db)
+            && param.closure_effect_provider_of() == Some(self.closure)
+            && let Some(provider) = self
+                .providers
+                .iter()
+                .find(|provider| provider.provider_idx as usize == param.idx)
+        {
+            return provider.provider_ty;
+        }
+        ty.super_fold_with(db, self)
+    }
 }
 
 #[salsa::tracked(return_ref)]
@@ -1775,6 +1806,7 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
             }
             Some(field_provider_idx.len() as u32)
         }
+        EffectParamSite::Closure(_) => Some(requirement_idx),
     }
 }
 
@@ -1850,6 +1882,11 @@ fn provisional_provider_binding_for_effect<'db>(
             }
             provisional_root_provider_binding(db, key, site, provider_idx)
         }
+        EffectParamSite::Closure(_) => EffectEnvView::new(site)
+            .providers(db)
+            .into_iter()
+            .find(|provider| provider.provider_idx == provider_idx)
+            .and_then(|provider| instantiate_provider_binding(db, key, provider).ok()),
     }
 }
 

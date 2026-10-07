@@ -400,6 +400,7 @@ impl<'db> RootProviderScope<'db> {
             EffectParamSite::Contract(contract)
             | EffectParamSite::ContractInit { contract }
             | EffectParamSite::ContractRecvArm { contract, .. } => Self::Contract(contract),
+            EffectParamSite::Closure(_) => unreachable!("a closure has no root providers"),
         }
     }
 }
@@ -425,6 +426,7 @@ pub fn registered_root_providers<'db>(
 ) -> &'db [RootProviderRegistration<'db>] {
     match site {
         EffectParamSite::Func(func) => registered_root_providers_for_func(db, func).as_slice(),
+        EffectParamSite::Closure(_) => &[],
         EffectParamSite::Contract(contract) => {
             registered_root_providers_for_contract(db, contract, RootProviderSiteKind::Contract)
                 .as_slice()

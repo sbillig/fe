@@ -25,6 +25,7 @@ pub mod reference;
 mod storage_layout;
 pub mod symbol;
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::closure::closure_effect_requirements;
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::effects::rows::RowKey;
@@ -291,7 +292,7 @@ fn contract_effect_hidden_param_scope<'db>(
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => contract.scope(),
-        EffectParamSite::Func(_) => {
+        EffectParamSite::Func(_) | EffectParamSite::Closure(_) => {
             unreachable!("contract effect hidden params must use a contract-scoped site")
         }
     }
@@ -329,7 +330,7 @@ fn contract_effect_layout_param_name<'db>(
             recv_idx,
             arm_idx
         ),
-        EffectParamSite::Func(_) => {
+        EffectParamSite::Func(_) | EffectParamSite::Closure(_) => {
             unreachable!("contract effect hidden params must use a contract-scoped site")
         }
     };
@@ -2178,6 +2179,38 @@ pub fn effect_requirements_for_site<'db>(
             let arm = RecvArmView::new(db, recv, arm_idx);
             arm.effective_effect_requirements(db).clone()
         }
+        EffectParamSite::Closure(def) => closure_effect_requirements(db, def),
+    }
+}
+
+/// The canonical provider of `requirement`, a component of the row of the
+/// closure at `def`: the provider parameter its body is generic over.
+pub(crate) fn closure_effect_provider<'db>(
+    db: &'db dyn HirAnalysisDb,
+    def: ClosureDef<'db>,
+    requirement: &EffectRequirement<'db>,
+) -> ProviderBinding<'db> {
+    let provider_ty = TyParam::closure_effect_provider(
+        requirement.binding_name,
+        requirement.binding_idx as usize,
+        def,
+    )
+    .ty(db);
+    ProviderBinding {
+        provider_idx: requirement.binding_idx,
+        provider_ty,
+        is_mut: requirement.is_mut,
+        source: ProviderSource::UsesParam {
+            site: EffectParamSite::Closure(def),
+            requirement_idx: requirement.binding_idx,
+        },
+        semantics: provider_semantics(
+            db,
+            def.body.scope(),
+            PredicateListId::empty_list(db),
+            provider_ty,
+        ),
+        layout_env: None,
     }
 }
 
@@ -2201,6 +2234,10 @@ fn provider_bindings_for_site_query<'db>(
         | EffectParamSite::ContractRecvArm { contract, .. } => {
             contract_provider_bindings_canonical(db, contract, site)
         }
+        EffectParamSite::Closure(def) => closure_effect_requirements(db, def)
+            .iter()
+            .map(|requirement| closure_effect_provider(db, def, requirement))
+            .collect(),
     }
 }
 
@@ -2238,6 +2275,13 @@ fn effect_resolutions_for_site_query<'db>(
             };
             contract_effect_resolutions_canonical(db, contract, site, arm.effects)
         }
+        EffectParamSite::Closure(def) => closure_effect_requirements(db, def)
+            .iter()
+            .map(|requirement| ResolvedEffectBinding {
+                requirement_idx: requirement.binding_idx,
+                provider_idx: requirement.binding_idx,
+            })
+            .collect(),
     }
 }
 

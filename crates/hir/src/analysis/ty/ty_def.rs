@@ -29,7 +29,7 @@ use super::{
         ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy, const_ty_from_sem_const,
     },
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
-    effects::place_effect_provider_param_index_map,
+    effects::{place_effect_provider_param_index_map, rows::RowComponent},
     trait_def::{TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
@@ -1151,18 +1151,27 @@ pub struct ClosureTy<'db> {
     pub captures: Vec<TyId<'db>>,
     /// The parameters' modes and types.
     #[return_ref]
-    pub modes: Vec<FuncParamMode>,
-    #[return_ref]
-    pub params: Vec<TyId<'db>>,
+    pub params: Vec<(FuncParamMode, TyId<'db>)>,
     pub ret_ty: TyId<'db>,
+    /// The effects the body uses that its own `with` blocks do not provide:
+    /// its row `E`, which the caller of each call provides.
+    #[return_ref]
+    pub effects: Vec<RowComponent<'db>>,
 }
 
 impl<'db> ClosureTy<'db> {
+    pub fn modes(self, db: &'db dyn HirAnalysisDb) -> Vec<FuncParamMode> {
+        self.params(db).iter().map(|&(mode, _)| mode).collect()
+    }
+
+    pub fn param_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<TyId<'db>> {
+        self.params(db).iter().map(|&(_, ty)| ty).collect()
+    }
+
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         let params = self
-            .modes(db)
+            .params(db)
             .iter()
-            .zip(self.params(db))
             .map(|(mode, ty)| {
                 let mode = match mode {
                     FuncParamMode::View => "",
@@ -1661,7 +1670,10 @@ impl<'db> TyParam<'db> {
     }
 
     pub fn is_effect_provider(&self) -> bool {
-        matches!(self.variant, Variant::EffectProvider)
+        matches!(
+            self.variant,
+            Variant::EffectProvider | Variant::ClosureEffectProvider(_)
+        )
     }
 
     pub fn is_implicit(&self) -> bool {
@@ -1720,6 +1732,28 @@ impl<'db> TyParam<'db> {
         }
     }
 
+    /// The provider type of component `idx` of the row of the closure at
+    /// `def`: its body is generic over it, and each instance of the body
+    /// takes it from the provider its caller binds.
+    pub fn closure_effect_provider(name: IdentId<'db>, idx: usize, def: ClosureDef<'db>) -> Self {
+        Self {
+            name,
+            idx,
+            declared_index: None,
+            kind: Kind::Star,
+            variant: Variant::ClosureEffectProvider(def.expr),
+            owner: def.body.scope(),
+        }
+    }
+
+    /// The closure whose provider this is, if it is a closure's.
+    pub fn closure_effect_provider_of(&self) -> Option<ExprId> {
+        match self.variant {
+            Variant::ClosureEffectProvider(expr) => Some(expr),
+            _ => None,
+        }
+    }
+
     pub fn implicit_param(name: IdentId<'db>, idx: usize, kind: Kind, scope: ScopeId<'db>) -> Self {
         Self {
             name,
@@ -1744,9 +1778,10 @@ impl<'db> TyParam<'db> {
                 // TyParam.idx includes implicit params, subtract offset to get original idx
                 self.idx - offset
             }
-            Variant::Effect => self.idx,
-            Variant::EffectProvider => self.idx,
-            Variant::Implicit => self.idx,
+            Variant::Effect
+            | Variant::EffectProvider
+            | Variant::ClosureEffectProvider(_)
+            | Variant::Implicit => self.idx,
         }
     }
 
@@ -1757,8 +1792,9 @@ impl<'db> TyParam<'db> {
                 ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
             }
             Variant::Effect => ScopeId::FuncParam(self.owner.item(), self.idx as u16),
-            Variant::EffectProvider => self.owner,
-            Variant::Implicit => self.owner,
+            Variant::EffectProvider | Variant::ClosureEffectProvider(_) | Variant::Implicit => {
+                self.owner
+            }
         }
     }
 }
@@ -1774,6 +1810,9 @@ enum Variant {
     /// These are inserted by type lowering for functions that have type effects so that
     /// monomorphization can treat effect domains as ordinary generic arguments.
     EffectProvider,
+    /// The provider type of a component of the row of the closure at the
+    /// expression (`TyParam::closure_effect_provider`).
+    ClosureEffectProvider(ExprId),
     /// Synthetic generic parameter that does not map to a source-level generic parameter.
     Implicit,
 }

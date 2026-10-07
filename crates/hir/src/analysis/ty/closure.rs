@@ -15,13 +15,14 @@ use salsa::Update;
 use super::{
     corelib::resolve_core_trait,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
-    ty_check::{BodyOwner, infer_body},
+    ty_check::{BodyOwner, EffectParamSite, infer_body},
     ty_def::{ClosureTy, TyId},
 };
 use crate::{
     analysis::HirAnalysisDb,
+    core::semantic::EffectRequirement,
     hir_def::{
-        Body, Cond, CondId, Expr, ExprId, Func, IdentId, Partial, Stmt, StmtId, Trait,
+        Body, ClosureDef, Cond, CondId, Expr, ExprId, Func, IdentId, Partial, Stmt, StmtId, Trait,
         params::{FuncParamMode, callable_shape_name},
         scope_graph::ScopeId,
     },
@@ -84,11 +85,11 @@ pub(crate) fn closure_shape_inst<'db>(
     trait_: Trait<'db>,
 ) -> Option<TraitInstId<'db>> {
     let shape = CallableShape::of(db, trait_)?;
-    if shape.modes != *closure.modes(db) {
+    if shape.modes != closure.modes(db) {
         return None;
     }
     let mut args = vec![TyId::closure(db, closure)];
-    args.extend(closure.params(db));
+    args.extend(closure.param_tys(db));
     let mut bindings = IndexMap::new();
     if shape.result_is_arg() {
         args.push(closure.ret_ty(db));
@@ -106,7 +107,7 @@ pub(crate) fn closure_shape_insts<'db>(
     [false, true].into_iter().filter_map(move |mut_receiver| {
         let shape = CallableShape {
             mut_receiver,
-            modes: closure.modes(db).clone(),
+            modes: closure.modes(db),
         };
         let trait_ = shape.trait_(db, closure.def(db).body.scope())?;
         closure_shape_inst(db, closure, trait_)
@@ -144,7 +145,7 @@ pub(crate) fn closure_out_ty<'db>(
 ) -> Option<TyId<'db>> {
     let closure = self_ty.as_closure(db)?;
     let shape = CallableShape::of(db, trait_)?;
-    (name == out_ident(db) && !shape.result_is_arg() && shape.modes == *closure.modes(db))
+    (name == out_ident(db) && !shape.result_is_arg() && shape.modes == closure.modes(db))
         .then(|| closure.ret_ty(db))
 }
 
@@ -322,13 +323,40 @@ pub(crate) fn closure_template_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     closure: ClosureTy<'db>,
 ) -> ClosureTy<'db> {
-    let def = closure.def(db);
-    BodyOwner::from_body(db, def.body)
-        .and_then(|parent| {
-            infer_body(db, parent)
-                .1
-                .expr_ty(db, def.expr)
-                .as_closure(db)
+    parent_closure_ty(db, closure.def(db)).unwrap_or(closure)
+}
+
+fn parent_closure_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    def: ClosureDef<'db>,
+) -> Option<ClosureTy<'db>> {
+    let parent = BodyOwner::from_body(db, def.body)?;
+    infer_body(db, parent)
+        .1
+        .expr_ty(db, def.expr)
+        .as_closure(db)
+}
+
+/// The effect requirements of the body of the closure at `def`: its row,
+/// numbered in order.
+pub(crate) fn closure_effect_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    def: ClosureDef<'db>,
+) -> Vec<EffectRequirement<'db>> {
+    let Some(closure) = parent_closure_ty(db, def) else {
+        return Vec::new();
+    };
+    closure
+        .effects(db)
+        .iter()
+        .enumerate()
+        .map(|(idx, component)| EffectRequirement {
+            binding_name: component.name,
+            key: component.key.clone(),
+            is_mut: component.is_mut,
+            binding_site: EffectParamSite::Closure(def),
+            binding_idx: idx as u32,
+            binding_ty: component.key_syntax,
         })
-        .unwrap_or(closure)
+        .collect()
 }

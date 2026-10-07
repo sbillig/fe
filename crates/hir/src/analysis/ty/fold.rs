@@ -161,7 +161,13 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                 };
                 let parent_args = fold_tys(closure.parent_args(db));
                 let captures = fold_tys(closure.captures(db));
-                let params = fold_tys(closure.params(db));
+                let params = closure
+                    .params(db)
+                    .iter()
+                    .map(|&(mode, ty)| (mode, folder.fold_ty(db, ty)))
+                    .collect::<Vec<_>>();
+                let ret_ty = folder.fold_ty(db, closure.ret_ty(db));
+                let effects = closure.effects(db).clone().fold_with(db, folder);
                 TyId::closure(
                     db,
                     ClosureTy::new(
@@ -169,9 +175,9 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         closure.def(db),
                         parent_args,
                         captures,
-                        closure.modes(db).clone(),
                         params,
-                        folder.fold_ty(db, closure.ret_ty(db)),
+                        ret_ty,
+                        effects,
                     ),
                 )
             }

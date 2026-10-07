@@ -10,7 +10,9 @@ use hir::{
             ty_def::{ClosureTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{CallableDef, ItemKind, TopLevelMod, params::FuncParamMode, scope_graph::ScopeId},
+    hir_def::{
+        Body, CallableDef, ItemKind, TopLevelMod, params::FuncParamMode, scope_graph::ScopeId,
+    },
     semantic::{ProviderBinding, ProviderSource},
 };
 
@@ -402,7 +404,20 @@ fn effect_param_site_identity<'db>(
             "contract_recv${}${recv_idx}${arm_idx}",
             item_identity(db, contract.into())
         ),
+        EffectParamSite::Closure(def) => format!(
+            "closure${}${}",
+            closure_owner_identity(db, def.body),
+            def.expr.as_u32()
+        ),
     }
+}
+
+/// The owner of the body a closure is in: closures are nameless.
+fn closure_owner_identity<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> String {
+    BodyOwner::from_body(db, body).map_or_else(
+        || module_path_components_for_scope(db, body.scope()).join("$"),
+        |owner| body_owner_identity(db, owner),
+    )
 }
 
 pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
@@ -436,15 +451,12 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                 // Closures are nameless: the owner of the body defining one
                 // and its position there identify it.
                 let def = closure.def(db);
-                let owner = BodyOwner::from_body(db, def.body).map_or_else(
-                    || module_path_components_for_scope(db, def.body.scope()).join("$"),
-                    |owner| body_owner_identity(db, owner),
-                );
+                let owner = closure_owner_identity(db, def.body);
                 let tys = closure
                     .parent_args(db)
                     .iter()
                     .chain(closure.captures(db))
-                    .chain(closure.params(db))
+                    .chain(&closure.param_tys(db))
                     .chain([closure.ret_ty(db)].iter())
                     .map(|ty| type_identity(db, *ty))
                     .collect::<Vec<_>>()

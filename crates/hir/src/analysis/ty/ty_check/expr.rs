@@ -53,6 +53,7 @@ use crate::analysis::ty::{
             build_conservative_same_family_barrier_pattern_in_scope, build_effect_query_for_call,
             contains_projection_or_invalid_query_state, effect_requirement_decls_for_callable,
             finalize_stored_effect_key, query_contains_unresolved_inference,
+            seed_forwarder_from_requirement,
         },
         instantiate_trait_effect_key,
         match_::{
@@ -593,8 +594,8 @@ impl<'db> TyChecker<'db> {
             }
         });
 
-        self.env.enter_closure();
-        let (mut modes, mut param_tys) = (Vec::new(), Vec::new());
+        self.env.enter_closure(def);
+        let mut param_tys = Vec::new();
         for (idx, param) in params.iter().enumerate() {
             let expected = expectation
                 .as_ref()
@@ -608,8 +609,7 @@ impl<'db> TyChecker<'db> {
                 is_mut: param.is_mut,
             };
             self.env.register_closure_param(param.name(), binding);
-            modes.push(mode);
-            param_tys.push(ty);
+            param_tys.push((mode, ty));
         }
         let ret = match ret_ty {
             Some(ret_ty) => self.lower_closure_ty(ret_ty),
@@ -632,7 +632,7 @@ impl<'db> TyChecker<'db> {
         self.explicit_yields = explicit_yields;
         self.projection_shape = projection_shape;
         self.expected = expected;
-        let info = self.env.leave_closure(expr);
+        let (info, effects) = self.env.leave_closure(expr);
 
         let parent_args = match self.env.owner() {
             BodyOwner::Func(func) => CallableDef::Func(func).params(self.db).to_vec(),
@@ -646,12 +646,109 @@ impl<'db> TyChecker<'db> {
                 .iter()
                 .map(|capture| capture.ty)
                 .collect::<Vec<_>>(),
-            modes,
             param_tys,
             ret,
+            effects,
         );
         self.env.register_closure_info(expr, info);
         ExprProp::new(TyId::closure(self.db, closure), true)
+    }
+
+    /// An enclosing body's effect binding used in a closure body: the
+    /// closure's row's component with its key, which each call's caller
+    /// provides.
+    fn capture_effect(
+        &mut self,
+        binding: LocalBinding<'db>,
+        span: DynLazySpan<'db>,
+    ) -> ExprProp<'db> {
+        let LocalBinding::EffectParam {
+            site,
+            idx,
+            binding_name,
+            is_mut,
+            ..
+        } = binding
+        else {
+            unreachable!("an effect binding is captured")
+        };
+        let component = self
+            .env
+            .semantic_effect_requirement(site, idx)
+            .filter(|requirement| matches!(requirement.key, SemanticEffectRequirementKey::Type(_)))
+            .and_then(|requirement| {
+                self.env.closure_effect(
+                    requirement.key,
+                    binding_name,
+                    requirement.binding_ty,
+                    is_mut,
+                )
+            });
+        let Some((component, provided)) = component else {
+            self.push_diag(BodyDiag::UnsupportedClosureEffect { primary: span });
+            return ExprProp::invalid(self.db);
+        };
+        if let Some(provided) = provided {
+            self.seed_closure_effect(provided);
+        }
+        let ty = self.env.lookup_binding_ty(&component);
+        ExprProp {
+            binding: Some(component),
+            borrow_provider: self.concrete_borrow_provider_for_binding(component),
+            ..ExprProp::new(ty, is_mut)
+        }
+    }
+
+    /// Makes `req`, which no provider in a closure body meets, a component
+    /// of the closure's row, returning whether it did. Only effects keyed by
+    /// type can be.
+    fn provide_closure_effect(
+        &mut self,
+        req: &EffectRequirementDecl<'db>,
+        query: &EffectQuery<'db>,
+    ) -> bool {
+        if !self.env.in_closure() {
+            return false;
+        }
+        let Some(key_ty) = self
+            .query_type_key(&query.key)
+            .map(|ty| self.table.fold_ty(self.db, ty))
+            .filter(|ty| !ty.has_var(self.db))
+        else {
+            return false;
+        };
+        let name = req
+            .name
+            .or_else(|| req.key_ty.as_path(self.db)?.ident(self.db).to_opt())
+            .unwrap_or_else(|| IdentId::new(self.db, "effect".to_string()));
+        let Some((_, provided)) = self.env.closure_effect(
+            SemanticEffectRequirementKey::Type(key_ty),
+            name,
+            req.key_ty,
+            req.required_mut,
+        ) else {
+            return false;
+        };
+        if let Some(provided) = provided {
+            self.seed_closure_effect(provided);
+        }
+        true
+    }
+
+    /// Provides a new component of a closure's row in its body, below any
+    /// `with` the body opens.
+    fn seed_closure_effect(&mut self, provided: ProvidedEffect<'db>) {
+        let Some(LocalBinding::EffectParam { site, idx, .. }) = provided.binding else {
+            return;
+        };
+        let (scope, assumptions) = (self.env.owner().scope(), self.env.assumptions());
+        if let Some(requirement) = self.env.semantic_effect_requirement(site, idx)
+            && let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, &requirement)
+            && let Some(forwarder) =
+                seed_forwarder_from_requirement(self, &req, provided, scope, assumptions)
+        {
+            self.env.effect_env_mut().insert_base_forwarder(forwarder);
+        }
     }
 
     /// A closure parameter's mode and type: as annotated, else as the
@@ -1733,7 +1830,13 @@ impl<'db> TyChecker<'db> {
                 .copied()
                 .flatten();
 
-            match self.resolve_effect_query(req.clone(), query.clone(), call_args) {
+            let mut resolution = self.resolve_effect_query(req.clone(), query.clone(), call_args);
+            if matches!(resolution, EffectResolution::Missing)
+                && self.provide_closure_effect(req, &query)
+            {
+                resolution = self.resolve_effect_query(req.clone(), query.clone(), call_args);
+            }
+            match resolution {
                 EffectResolution::Chosen(evidence) => {
                     let (provider, arg_style, layout_view, key_kind, instantiated_key_ty) =
                         match *evidence {
@@ -1824,6 +1927,11 @@ impl<'db> TyChecker<'db> {
                             }
                         };
 
+                    if req.required_mut
+                        && let Some(binding) = provider.binding
+                    {
+                        self.env.require_mut_closure_effect(binding);
+                    }
                     let (arg, pass_mode) =
                         self.effect_arg_for_provider(provider, arg_style, req.required_mut);
                     let provider_target_ty = self.provider_target_ty_for_effect_arg(
@@ -1961,6 +2069,11 @@ impl<'db> TyChecker<'db> {
                     });
                 }
                 EffectResolution::BlockedByBarrier => {}
+                EffectResolution::Missing if self.env.in_closure() => {
+                    self.push_diag(BodyDiag::UnsupportedClosureEffect {
+                        primary: call_span.clone(),
+                    });
+                }
                 EffectResolution::Missing => {
                     self.push_diag(BodyDiag::MissingEffect {
                         primary: call_span.clone(),
@@ -2015,6 +2128,11 @@ impl<'db> TyChecker<'db> {
                     ),
                     GoalSatisfiability::UnSat(_)
                 ) => {}
+                None if self.env.in_closure() => {
+                    self.push_diag(BodyDiag::UnsupportedClosureEffect {
+                        primary: call_span.clone(),
+                    })
+                }
                 None => self.push_diag(BodyDiag::MissingRow {
                     primary: call_span.clone(),
                     func,
@@ -2065,9 +2183,13 @@ impl<'db> TyChecker<'db> {
     /// with where `row` sits in it: an entry naming it, or an entry whose row
     /// expands to it here.
     fn own_row_binding(&self, row: RowKey<'db>) -> Option<(LocalBinding<'db>, RowPath)> {
+        // A closure's body has no rows of its own to forward.
         let super::BodyOwner::Func(caller) = self.env.owner() else {
             return None;
         };
+        if self.env.in_closure() {
+            return None;
+        }
         let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
         let names_row = |requirement: &EffectRequirement<'db>| {
             requirement.key.key_row().is_some_and(|own| {
@@ -2595,7 +2717,7 @@ impl<'db> TyChecker<'db> {
                             EffectParamSite::Contract(contract)
                             | EffectParamSite::ContractInit { contract }
                             | EffectParamSite::ContractRecvArm { contract, .. } => contract,
-                            EffectParamSite::Func(_) => {
+                            EffectParamSite::Func(_) | EffectParamSite::Closure(_) => {
                                 unreachable!(
                                     "effect field bindings cannot originate from function sites"
                                 )
@@ -3985,10 +4107,7 @@ impl<'db> TyChecker<'db> {
                 let captured = self.env.binding_is_capture(binding);
                 if captured {
                     if matches!(binding, LocalBinding::EffectParam { .. }) {
-                        self.push_diag(BodyDiag::EffectInClosure {
-                            primary: path_expr_span.into(),
-                        });
-                        return ExprProp::invalid(self.db);
+                        return self.capture_effect(binding, path_expr_span.into());
                     }
                     if access.is_some() && !ty.has_var(self.db) && !self.ty_is_copy(ty) {
                         self.push_diag(BodyDiag::AccessCapture {

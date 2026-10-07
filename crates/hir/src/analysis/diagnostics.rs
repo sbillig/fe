@@ -4972,13 +4972,19 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            BodyDiag::EffectInClosure { primary } => primary_diag(
+            BodyDiag::UnsupportedClosureEffect { primary } => CompleteDiagnostic {
                 severity,
-                "effects cannot be used inside a closure",
-                "this needs an effect of the enclosing function",
-                primary.resolve(db),
+                message: "a closure can only use effects keyed by a type".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this needs an effect keyed by a trait, or a row".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "use it outside the closure and pass the closure what it computes".to_string(),
+                ],
                 error_code,
-            ),
+            },
 
             BodyDiag::UnsafeProviderRequiresUnsafe { primary } => primary_diag(
                 severity,
