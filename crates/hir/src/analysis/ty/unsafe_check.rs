@@ -1,5 +1,5 @@
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::place::{PlaceBase, resolve_place_field};
+use crate::analysis::place::resolve_place_field;
 use crate::analysis::semantic::capability::semantics::field_handle_spaces;
 use crate::analysis::semantic::effect_param_site;
 use crate::analysis::ty::corelib::{effect_key_state_access, resolve_core_trait};
@@ -122,9 +122,11 @@ impl<'db> UnsafeChecker<'db, '_> {
 
     /// Reports a `with` binding whose provider names existing storage or
     /// transient state that the function's own effects do not cover, so that
-    /// nonlocal interference never disappears from its contract. A place with
-    /// effect authority carries it (`binding_has_authority`); a copied handle
-    /// needs an effect of its type (`Field(T)`) or raw state authority.
+    /// nonlocal interference never disappears from its contract. The type
+    /// checker records the providers the function's own providers cover
+    /// (`provider_covered`): a place in an effect, or static slot handles a
+    /// provider holds. Otherwise an effect of its type (`Field(T)`) or raw
+    /// state authority covers it.
     fn check_provider_coverage(&mut self, value: ExprId) {
         let scope = self.body.scope();
         let assumptions = self.typed_body.assumptions();
@@ -138,11 +140,7 @@ impl<'db> UnsafeChecker<'db, '_> {
             provider_semantics(self.db, scope, assumptions, ty).address_space,
             Some(ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)
         ) || !field_handle_spaces(self.db, scope, assumptions, ty).is_empty();
-        let authority = self.typed_body.expr_place(value).is_some_and(|place| {
-            let PlaceBase::Binding(binding) = place.base;
-            self.typed_body.binding_has_authority(binding)
-        });
-        if authority || !names_resource {
+        if self.typed_body.provider_covered(value) || !names_resource {
             return;
         }
         let is_mut = self.typed_body.expr_prop(self.db, value).is_mut;

@@ -1251,6 +1251,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_ty: SecondaryMap::new(),
         yield_shapes: SecondaryMap::new(),
         implicit_moves: FxHashSet::default(),
+        covered_providers: FxHashSet::default(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
@@ -3594,6 +3595,8 @@ mod typed_body_tables {
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
         pub(super) yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
         pub(super) implicit_moves: FxHashSet<ExprId>,
+        /// `with` values whose resources the function's own authority covers.
+        pub(super) covered_providers: FxHashSet<ExprId>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
         pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
         pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
@@ -4301,6 +4304,13 @@ impl<'db> TypedBody<'db> {
 
     pub fn is_implicit_move(&self, expr: ExprId) -> bool {
         self.tables.implicit_moves.contains(&expr)
+    }
+
+    /// Whether the function's own authority covers the resources the `with`
+    /// value `expr` names: its place lies in an effect provider, or a
+    /// provider in scope holds each static slot handle it holds.
+    pub fn provider_covered(&self, expr: ExprId) -> bool {
+        self.tables.covered_providers.contains(&expr)
     }
 
     /// All const references registered in this body, in arbitrary order.
@@ -5719,6 +5729,7 @@ impl<'db> TypedBody<'db> {
             expr_ty: SecondaryMap::new(),
             yield_shapes: SecondaryMap::new(),
             implicit_moves: FxHashSet::default(),
+            covered_providers: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),

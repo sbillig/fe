@@ -1574,6 +1574,9 @@ impl<'db> TyChecker<'db> {
             // opens no access.
             self.consume_access(binding.value);
             let is_mut = value_prop.is_mut;
+            if self.provider_covered(binding.value, &value_prop) {
+                self.env.cover_provider(binding.value);
+            }
 
             let provided = ProvidedEffect {
                 origin: EffectOrigin::With {
@@ -2520,6 +2523,38 @@ impl<'db> TyChecker<'db> {
             resolve_static_slot_layout(self.db, self.env.scope(), self.env.assumptions(), ty),
             StaticSlotLayoutResolution::Resolved(_) | StaticSlotLayoutResolution::UnresolvedSpace
         )
+    }
+
+    /// Whether the function's own authority covers the resources the `with`
+    /// value `value` names: its place lies in an effect provider, or a
+    /// provider in scope holds each static slot handle it holds, writable if
+    /// the value is.
+    fn provider_covered(&mut self, value: ExprId, prop: &ExprProp<'db>) -> bool {
+        let place = self.env.expr_place(value);
+        if let Some(place) = &place {
+            let PlaceBase::Binding(binding) = place.base;
+            if self.env.binding_has_authority(&binding) {
+                return true;
+            }
+        }
+        let handles: Vec<_> = self
+            .handle_places(place, prop.ty)
+            .into_iter()
+            .map(|(_, ty)| ty)
+            .filter(|ty| self.is_static_slot(*ty))
+            .collect();
+        let providers: Vec<_> = self.env.effect_env().providers().collect();
+        !handles.is_empty()
+            && handles.into_iter().all(|ty| {
+                providers.iter().any(|provider| {
+                    (provider.is_mut || !prop.is_mut)
+                        && self.provider_place(*provider).is_some_and(|place| {
+                            self.handle_places(Some(place), provider.ty)
+                                .into_iter()
+                                .any(|(_, part)| part == ty)
+                        })
+                })
+            })
     }
 
     /// The type of the value at `place`.

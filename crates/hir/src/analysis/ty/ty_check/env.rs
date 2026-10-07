@@ -119,6 +119,7 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Places matched through the `mut` access their `mut` pattern bindings
     /// open.
     matched_places: FxHashSet<ExprId>,
+    covered_providers: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
 
@@ -237,6 +238,7 @@ impl<'db> TyCheckEnv<'db> {
             call_effect_args: SecondaryMap::new(),
             consumed_accesses: FxHashSet::default(),
             matched_places: FxHashSet::default(),
+            covered_providers: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
             path_applications: Vec::new(),
@@ -848,6 +850,12 @@ impl<'db> TyCheckEnv<'db> {
         self.matched_places.contains(&expr)
     }
 
+    /// Records that the function's own authority covers the resources the
+    /// `with` value `expr` names.
+    pub(super) fn cover_provider(&mut self, expr: ExprId) {
+        self.covered_providers.insert(expr);
+    }
+
     pub(super) fn record_yield_shape(&mut self, expr: ExprId, shape: Shape<'db>) {
         self.yield_shapes[expr] = Some(shape);
     }
@@ -1413,6 +1421,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: self.expr_ty,
             yield_shapes: self.yield_shapes,
             implicit_moves,
+            covered_providers: self.covered_providers,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
