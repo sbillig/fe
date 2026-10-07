@@ -14,7 +14,7 @@
 //! let first = owners.get(0)
 //! ```
 use core::abi::{AbiSize, DynArray, Encode, store_word}
-use core::iter::{Collection, CollectionMut}
+use core::iter::{Bidirectional, Collection, CollectionMut}
 use core::ops::WrappingAdd
 use core::option::Option
 use core::ptr
@@ -160,6 +160,16 @@ impl<T: SolPacked> CollectionMut for SolArray<T> {
     }
 }
 
+impl<T: SolPacked> Bidirectional for SolArray<T> {
+    fn last(self) -> Option<u256> uses E {
+        last_index(self.len())
+    }
+
+    fn prev(self, _ c: u256) -> Option<u256> uses E {
+        prev_index(c)
+    }
+}
+
 /// The first index of a collection of `len` elements.
 pub(ingot) fn first_index(_ len: u256) -> Option<u256> {
     if len == 0 { Option::None } else { Option::Some(0) }
@@ -168,6 +178,16 @@ pub(ingot) fn first_index(_ len: u256) -> Option<u256> {
 /// The index after `i` in a collection of `len` elements.
 pub(ingot) fn next_index(_ i: u256, _ len: u256) -> Option<u256> {
     if i + 1 < len { Option::Some(i + 1) } else { Option::None }
+}
+
+/// The last index of a collection of `len` elements.
+pub(ingot) fn last_index(_ len: u256) -> Option<u256> {
+    if len == 0 { Option::None } else { Option::Some(len - 1) }
+}
+
+/// The index before `i`.
+pub(ingot) fn prev_index(_ i: u256) -> Option<u256> {
+    if i == 0 { Option::None } else { Option::Some(i - 1) }
 }
 
 /// Reads `len` elements laid out from `first_slot` on with `per_slot` of them

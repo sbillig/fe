@@ -1,7 +1,7 @@
-// Storage collections are `Collection`s: a loop reads each element into
-// the session, and a `mut` loop writes it back. A `Copy` element is copied
-// before the body runs, so its session, which reserves storage, is finished
-// and the body may write storage.
+// Storage collections are `Collection`s and `Bidirectional`: a loop reads
+// each element into the session, and a `mut` loop writes it back. A `Copy`
+// element is copied before the body runs, so its session, which reserves
+// storage, is finished and the body may write storage.
 use std::evm::{Evm, RawStorage, SolArray, SolEnumerableSet}
 
 #[test]
@@ -35,6 +35,12 @@ fn sol_array_loops() uses (evm: mut Evm) {
         }
         assert(tail == 50)
 
+        let mut digits = 0
+        for x in a.reversed() {
+            digits = digits * 100 + x
+        }
+        assert(digits == 302010)
+
         let empty = unsafe { SolArray<u256>::at(2) }
         for _ in empty {
             assert(false)
@@ -55,5 +61,11 @@ fn sol_set_loops() uses (evm: mut Evm) {
             sum += v
         }
         assert(sum == 16)
+
+        let mut order = 0
+        for v in s.reversed() {
+            order = order * 10 + v
+        }
+        assert(order == 79)
     }
 }

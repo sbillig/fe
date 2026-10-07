@@ -2183,17 +2183,20 @@ pub fn effect_requirements_for_site<'db>(
     }
 }
 
-/// The canonical provider of `requirement`, a component of the row of the
-/// closure at `def`: the provider parameter its body is generic over.
-pub(crate) fn closure_effect_provider<'db>(
+/// The canonical provider of `requirement`, a component of a row the body at
+/// `owner` is generic over (the closure's at `closure`, if any): the provider
+/// parameter its instances substitute.
+pub(crate) fn row_effect_provider<'db>(
     db: &'db dyn HirAnalysisDb,
-    def: ClosureDef<'db>,
+    owner: ScopeId<'db>,
+    closure: Option<ExprId>,
     requirement: &EffectRequirement<'db>,
 ) -> ProviderBinding<'db> {
-    let provider_ty = TyParam::closure_effect_provider(
+    let provider_ty = TyParam::row_effect_provider(
         requirement.binding_name,
         requirement.binding_idx as usize,
-        def,
+        owner,
+        closure,
     )
     .ty(db);
     ProviderBinding {
@@ -2201,15 +2204,10 @@ pub(crate) fn closure_effect_provider<'db>(
         provider_ty,
         is_mut: requirement.is_mut,
         source: ProviderSource::UsesParam {
-            site: EffectParamSite::Closure(def),
+            site: requirement.binding_site,
             requirement_idx: requirement.binding_idx,
         },
-        semantics: provider_semantics(
-            db,
-            def.body.scope(),
-            PredicateListId::empty_list(db),
-            provider_ty,
-        ),
+        semantics: provider_semantics(db, owner, PredicateListId::empty_list(db), provider_ty),
         layout_env: None,
     }
 }
@@ -2236,7 +2234,9 @@ fn provider_bindings_for_site_query<'db>(
         }
         EffectParamSite::Closure(def) => closure_effect_requirements(db, def)
             .iter()
-            .map(|requirement| closure_effect_provider(db, def, requirement))
+            .map(|requirement| {
+                row_effect_provider(db, def.body.scope(), Some(def.expr), requirement)
+            })
             .collect(),
     }
 }

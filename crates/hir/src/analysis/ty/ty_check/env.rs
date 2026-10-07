@@ -34,7 +34,7 @@ use crate::analysis::{
             EffectKeyKind,
             elaborate::{build_pattern_from_requirement_decl, seed_forwarder_from_requirement},
             model::EffectRequirementDecl,
-            rows::RowComponent,
+            rows::{RowComponent, expand_rows},
         },
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
@@ -51,7 +51,7 @@ use crate::analysis::{
 };
 use crate::core::semantic::{
     EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding,
-    ResolvedEffectBindingInfo, closure_effect_provider,
+    ResolvedEffectBindingInfo, row_effect_provider,
 };
 
 pub(crate) struct TyCheckEnv<'db> {
@@ -91,6 +91,9 @@ pub(crate) struct TyCheckEnv<'db> {
     capture_moves: Vec<(ExprId, LocalBinding<'db>, TyId<'db>)>,
     /// The rows of the closures checked so far.
     closure_effects: FxHashMap<ExprId, Vec<ResolvedEffectBindingInfo<'db>>>,
+    /// The components of the rows a function's effects name, when its view
+    /// expands every row: the body uses them as its own effects.
+    row_components: Vec<ResolvedEffectBindingInfo<'db>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
     expr_stack: Vec<ExprId>,
@@ -224,6 +227,7 @@ impl<'db> TyCheckEnv<'db> {
             closure_expectations: FxHashMap::default(),
             capture_moves: Vec::new(),
             closure_effects: FxHashMap::default(),
+            row_components: Vec::new(),
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
             expr_stack: Vec::new(),
@@ -357,6 +361,55 @@ impl<'db> TyCheckEnv<'db> {
                 LocalBinding::effect_param(&resolved_binding),
             );
         }
+        // A row that stays abstract may expand in an instance and renumber
+        // the components after it, so components are only seeded when every
+        // row expands.
+        let rows = expand_rows(
+            self.db,
+            func.effect_requirements(self.db),
+            func.scope(),
+            self.base_assumptions,
+        );
+        if !rows.abstract_rows.is_empty()
+            || rows
+                .components
+                .iter()
+                .any(|component| component.requirement.key.key_row().is_some())
+        {
+            return;
+        }
+        for component in rows.components {
+            let requirement = component.requirement;
+            let provider = row_effect_provider(self.db, self.body.scope(), None, &requirement);
+            if let Some(trait_inst) = requirement.key.key_trait() {
+                self.effect_bounds
+                    .push(super::super::instantiate_trait_self(
+                        self.db,
+                        trait_inst,
+                        provider.provider_ty,
+                    ));
+            }
+            self.row_components.push(ResolvedEffectBindingInfo {
+                requirement,
+                provider,
+            });
+        }
+    }
+
+    /// The row component of the function body at `site` numbered `idx`.
+    fn row_component(
+        &self,
+        site: EffectParamSite<'db>,
+        idx: usize,
+    ) -> Option<&ResolvedEffectBindingInfo<'db>> {
+        self.row_components.iter().find(|component| {
+            component.requirement.binding_site == site
+                && component.requirement.binding_idx as usize == idx
+        })
+    }
+
+    pub(super) fn row_components(&self) -> &[ResolvedEffectBindingInfo<'db>] {
+        &self.row_components
     }
 
     fn contract_effect_site(&self) -> Option<(Contract<'db>, EffectParamSite<'db>)> {
@@ -414,6 +467,9 @@ impl<'db> TyCheckEnv<'db> {
                 .get(idx)
                 .cloned();
         }
+        if let Some(component) = self.row_component(site, idx) {
+            return Some(component.clone());
+        }
         EffectEnvView::new(site).resolved_binding(self.db, idx)
     }
 
@@ -458,6 +514,12 @@ impl<'db> TyCheckEnv<'db> {
                 .requirement
                 .key
                 .binding_ty(self.db);
+        }
+        if let Some(component) = self.row_component(site, idx) {
+            return match component.requirement.key {
+                EffectRequirementKey::Trait(_) => Some(component.provider.provider_ty),
+                _ => component.requirement.key.binding_ty(self.db),
+            };
         }
         EffectEnvView::new(site).visible_effect_binding_ty(self.db, idx)
     }
@@ -996,7 +1058,12 @@ impl<'db> TyCheckEnv<'db> {
             binding_ty: key_syntax,
         };
         let info = ResolvedEffectBindingInfo {
-            provider: closure_effect_provider(db, active.def, &requirement),
+            provider: row_effect_provider(
+                db,
+                active.def.body.scope(),
+                Some(active.def.expr),
+                &requirement,
+            ),
             requirement,
         };
         let binding = LocalBinding::effect_param(&info);
@@ -1422,6 +1489,29 @@ impl<'db> TyChecker<'db> {
             };
 
             if let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, binding)
+                && let Some(forwarder) =
+                    seed_forwarder_from_requirement(self, &req, provided, func.scope(), assumptions)
+            {
+                self.env
+                    .effect_env_mut()
+                    .insert_forwarder(self.db, forwarder);
+            }
+        }
+
+        for component in self.env.row_components().to_vec() {
+            let requirement = &component.requirement;
+            let local_binding = LocalBinding::effect_param(&component);
+            let provided = ProvidedEffect {
+                origin: EffectOrigin::Param {
+                    site: EffectParamSite::Func(func),
+                    index: requirement.binding_idx as usize,
+                    name: Some(requirement.binding_name),
+                },
+                ty: self.env.lookup_binding_ty(&local_binding),
+                is_mut: local_binding.is_mut(),
+                binding: Some(local_binding),
+            };
+            if let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, requirement)
                 && let Some(forwarder) =
                     seed_forwarder_from_requirement(self, &req, provided, func.scope(), assumptions)
             {

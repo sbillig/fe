@@ -1672,7 +1672,7 @@ impl<'db> TyParam<'db> {
     pub fn is_effect_provider(&self) -> bool {
         matches!(
             self.variant,
-            Variant::EffectProvider | Variant::ClosureEffectProvider(_)
+            Variant::EffectProvider | Variant::RowEffectProvider(_)
         )
     }
 
@@ -1732,24 +1732,31 @@ impl<'db> TyParam<'db> {
         }
     }
 
-    /// The provider type of component `idx` of the row of the closure at
-    /// `def`: its body is generic over it, and each instance of the body
-    /// takes it from the provider its caller binds.
-    pub fn closure_effect_provider(name: IdentId<'db>, idx: usize, def: ClosureDef<'db>) -> Self {
+    /// The provider type of component `idx` of a row the body whose scope is
+    /// `owner` is generic over: the row of the closure at `closure`, or with
+    /// `None` a row the body's function's effects name. Each instance of the body takes it
+    /// from the provider its caller binds.
+    pub fn row_effect_provider(
+        name: IdentId<'db>,
+        idx: usize,
+        owner: ScopeId<'db>,
+        closure: Option<ExprId>,
+    ) -> Self {
         Self {
             name,
             idx,
             declared_index: None,
             kind: Kind::Star,
-            variant: Variant::ClosureEffectProvider(def.expr),
-            owner: def.body.scope(),
+            variant: Variant::RowEffectProvider(closure),
+            owner,
         }
     }
 
-    /// The closure whose provider this is, if it is a closure's.
-    pub fn closure_effect_provider_of(&self) -> Option<ExprId> {
+    /// The body whose row provider this is: its scope, and its closure if it
+    /// is a closure's.
+    pub fn row_effect_provider_of(&self) -> Option<(ScopeId<'db>, Option<ExprId>)> {
         match self.variant {
-            Variant::ClosureEffectProvider(expr) => Some(expr),
+            Variant::RowEffectProvider(closure) => Some((self.owner, closure)),
             _ => None,
         }
     }
@@ -1780,7 +1787,7 @@ impl<'db> TyParam<'db> {
             }
             Variant::Effect
             | Variant::EffectProvider
-            | Variant::ClosureEffectProvider(_)
+            | Variant::RowEffectProvider(_)
             | Variant::Implicit => self.idx,
         }
     }
@@ -1792,7 +1799,7 @@ impl<'db> TyParam<'db> {
                 ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
             }
             Variant::Effect => ScopeId::FuncParam(self.owner.item(), self.idx as u16),
-            Variant::EffectProvider | Variant::ClosureEffectProvider(_) | Variant::Implicit => {
+            Variant::EffectProvider | Variant::RowEffectProvider(_) | Variant::Implicit => {
                 self.owner
             }
         }
@@ -1810,9 +1817,9 @@ enum Variant {
     /// These are inserted by type lowering for functions that have type effects so that
     /// monomorphization can treat effect domains as ordinary generic arguments.
     EffectProvider,
-    /// The provider type of a component of the row of the closure at the
-    /// expression (`TyParam::closure_effect_provider`).
-    ClosureEffectProvider(ExprId),
+    /// The provider type of a row component a body is generic over, of a
+    /// closure's row if it names the closure (`TyParam::row_effect_provider`).
+    RowEffectProvider(Option<ExprId>),
     /// Synthetic generic parameter that does not map to a source-level generic parameter.
     Implicit,
 }

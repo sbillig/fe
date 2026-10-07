@@ -318,28 +318,38 @@ pub fn instantiated_typed_body<'db>(
     key: SemanticInstanceKey<'db>,
 ) -> TypedBody<'db> {
     let body = instantiate_typed_body(db, typed_body_template(db, key.owner(db)), key.subst(db));
-    // A closure body's provider parameters are the providers its call binds.
-    match key.owner(db) {
-        BodyOwner::Closure { def, .. } => body.fold_with(
-            db,
-            &mut ClosureProviderSubst {
-                closure: def.expr,
-                providers: key.effect_providers(db).providers(db),
-            },
-        ),
-        _ => body,
-    }
+    // A body's row provider parameters are the providers its call binds.
+    let owner = match key.owner(db) {
+        BodyOwner::Closure { def, .. } => (def.body.scope(), Some(def.expr)),
+        BodyOwner::Func(func)
+            if let Some(func_body) = func.body(db)
+                && func
+                    .effect_requirements(db)
+                    .iter()
+                    .any(|requirement| requirement.key.key_row().is_some()) =>
+        {
+            (func_body.scope(), None)
+        }
+        _ => return body,
+    };
+    body.fold_with(
+        db,
+        &mut RowProviderSubst {
+            owner,
+            providers: key.effect_providers(db).providers(db),
+        },
+    )
 }
 
-struct ClosureProviderSubst<'a, 'db> {
-    closure: ExprId,
+struct RowProviderSubst<'a, 'db> {
+    owner: (ScopeId<'db>, Option<ExprId>),
     providers: &'a [ProviderBinding<'db>],
 }
 
-impl<'db> TyFolder<'db> for ClosureProviderSubst<'_, 'db> {
+impl<'db> TyFolder<'db> for RowProviderSubst<'_, 'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if let TyData::TyParam(param) = ty.data(db)
-            && param.closure_effect_provider_of() == Some(self.closure)
+            && param.row_effect_provider_of() == Some(self.owner)
             && let Some(provider) = self
                 .providers
                 .iter()

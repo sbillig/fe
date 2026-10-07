@@ -34,7 +34,9 @@ parent's effect environment is swapped out for the body: an effect the body
 needs and its `with` blocks do not provide becomes a component of the row,
 seeded as the body's own effect on first use, and the body is generic over
 the component's provider through a closure-owned provider parameter
-(`TyParam::closure_effect_provider`).
+(`TyParam::row_effect_provider`). A function body names its rows' components
+the same way where its view expands every row, so a `Bidirectional` method can
+use the components of `Collection`'s row `E`.
 
 An argument's closure expectation comes from the callee's shape bound on the
 parameter (`Callable::closure_arg_expectation`).
@@ -53,4 +55,4 @@ A shape trait's `call` on a closure resolves to the closure body's instance
 (`semantic_callee_key_with_assumptions`): its generic substitution is the
 parent's arguments the closure type carries, and its effects are the
 components of `call`'s row in order, with the providers the call binds;
-`ClosureProviderSubst` replaces the body's provider parameters with them.
+`RowProviderSubst` replaces the body's provider parameters with them.
