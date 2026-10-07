@@ -202,6 +202,12 @@ pub struct StorageMap<K, V, const SALT: u256 = _> {
 
 impl<K, V, const SALT: u256> Copy for StorageMap<K, V, SALT> {}
 
+// A map's entries are persistent wherever the handle lies, so its salt is
+// drawn from the storage slots even inside transient state.
+impl<K, V, const SALT: u256> core::effect_ref::StaticSlot for StorageMap<K, V, SALT> {
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
+}
+
 #[inline(always)]
 fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
     where K: StorageKey
