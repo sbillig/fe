@@ -85,6 +85,18 @@ impl<'db> NormalizedBody<'db> {
         }
     }
 
+    /// The type of `place` after the first `len` steps of its path.
+    pub fn place_prefix_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        place: &NPlace<'db>,
+        len: usize,
+    ) -> Option<TyId<'db>> {
+        let base_ty = self.place_base_ty(db, place.base)?;
+        let prefix = NDataPath::new(place.path.iter().take(len).copied().collect::<Vec<_>>());
+        super::verify::project_path_ty(db, self.owner, &self.values, base_ty, &prefix).ok()
+    }
+
     /// Values required to access a place, including the value that initializes
     /// temporary storage or supplies a handle's representation root.
     pub fn place_values<'a>(
@@ -103,7 +115,9 @@ impl<'db> NormalizedBody<'db> {
         };
         base.into_iter()
             .chain(place.path.iter().filter_map(|projection| match projection {
-                NDataProjection::Index(NIndex::Value(value)) => Some(*value),
+                NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value) => {
+                    Some(*value)
+                }
                 NDataProjection::Field(_)
                 | NDataProjection::VariantField { .. }
                 | NDataProjection::Index(NIndex::Const(_)) => None,
@@ -134,7 +148,7 @@ impl<'db> NormalizedBody<'db> {
                         let mut used = expression_uses_value(expr);
                         if let NExpr::ProjectValue { path, .. } = expr {
                             used |= path.0.iter().any(|projection| {
-                                matches!(projection, NDataProjection::Index(NIndex::Value(value)) if *value == target)
+                                matches!(projection, NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value) if *value == target)
                             });
                         }
                         expr.for_each_place_operand(|place| used |= place_uses_target(place));
@@ -251,6 +265,10 @@ impl NDataPath {
         self.0.iter()
     }
 
+    pub fn as_slice(&self) -> &[NDataProjection] {
+        &self.0
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -288,6 +306,9 @@ pub enum NDataProjection {
         field: FieldIndex,
     },
     Index(NIndex),
+    /// The element at key `value` of a collection whose elements are places
+    /// (`core::ops::PlaceIndex`), at a slot the collection computes.
+    Entry(NValueId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

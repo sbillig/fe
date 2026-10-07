@@ -1479,6 +1479,22 @@ impl<'db> SemanticInstance<'db> {
         normalize_ty(db, ty, self.normalization_scope(db), self.assumptions(db))
     }
 
+    /// The key and element types of `ty` when its elements are places
+    /// (`core::ops::PlaceIndex`), in this instance.
+    #[salsa::tracked]
+    pub fn place_index_tys(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+    ) -> Option<(TyId<'db>, TyId<'db>)> {
+        crate::analysis::ty::place_index_tys(
+            db,
+            self.normalization_scope(db),
+            ty,
+            self.assumptions(db),
+        )
+    }
+
     #[salsa::tracked(return_ref)]
     pub fn normalized_field_types(
         self,

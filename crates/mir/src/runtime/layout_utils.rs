@@ -324,6 +324,22 @@ pub fn storage_scalar_bytes(scalar: &ScalarClass<'_>) -> u32 {
     }
 }
 
+/// The storage width of an element of class `class`, as
+/// `core::ops::PlaceIndex::locate` takes it: the bytes of a scalar packed with
+/// others when below 32, else 32 bytes per slot the element spans.
+pub fn storage_element_width<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> u64 {
+    match class {
+        RuntimeClass::Scalar(scalar) if storage_scalar_bytes(scalar) < 32 => {
+            u64::from(storage_scalar_bytes(scalar))
+        }
+        _ => {
+            32 * RuntimeMemoryLayout::for_space(db, AddressSpaceKind::Storage)
+                .class_size(class)
+                .expect("a storage element has a size")
+        }
+    }
+}
+
 pub fn scalar_raw_memory_size_bytes(scalar: &ScalarClass<'_>) -> u64 {
     match scalar.repr {
         ScalarRepr::Bool => 1,

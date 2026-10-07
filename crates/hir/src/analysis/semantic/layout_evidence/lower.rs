@@ -766,7 +766,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         .push(LayoutEvidencePathStep::Variant(variant.0));
                     projection.path.push(LayoutEvidencePathStep::Field(field.0));
                 }
-                NDataProjection::Index(_) => {
+                // An entry, like an array element, has no layout of its own
+                // within the base.
+                NDataProjection::Index(_) | NDataProjection::Entry(_) => {
                     projection.array_element = true;
                     break;
                 }
@@ -1815,7 +1817,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         ty.generic_args(self.db),
                     );
                 }
-                NDataProjection::Index(_) => {
+                // An entry, like an array element, has no layout of its own
+                // within the base.
+                NDataProjection::Index(_) | NDataProjection::Entry(_) => {
                     projection.array_element = true;
                     break;
                 }

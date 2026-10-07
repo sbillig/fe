@@ -64,7 +64,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             {
                 let mut place = self.try_lower_place_expr(*base, capture)?;
                 let index = self.lower_place_operand(*index, capture);
-                place.push_dynamic_index(index);
+                if self.typed_body.is_place_entry(expr) {
+                    place.push_entry(index);
+                } else {
+                    place.push_dynamic_index(index);
+                }
                 Some(place)
             }
             // A projection's result is a place in the grant its carrier names.
@@ -104,6 +108,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 PlaceProjection::Index { index_expr, .. } => {
                     let index = self.lower_place_operand(index_expr, capture);
                     place.push_dynamic_index(index);
+                }
+                PlaceProjection::Entry { key_expr, .. } => {
+                    let key = self.lower_place_operand(key_expr, capture);
+                    place.push_entry(key);
                 }
                 PlaceProjection::VariantField {
                     variant,

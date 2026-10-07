@@ -1274,6 +1274,21 @@ impl<'db> TyChecker<'db> {
             }
             return ExprProp::new(elem_ty, lhs.is_mut);
         }
+        if matches!(op, BinOp::Index) {
+            let base_ty = self.normalize_ty(lhs_place_ty);
+            if let Some((key_ty, output_ty)) = crate::analysis::ty::place_index_tys(
+                self.db,
+                self.env.scope(),
+                base_ty,
+                self.env.assumptions(),
+            ) {
+                // An entry of a collection whose elements are places is a
+                // place, mutable through a mutable base, like an array element.
+                self.check_expr(rhs_expr, key_ty);
+                self.env.record_place_entry(expr);
+                return ExprProp::new(output_ty, lhs.is_mut);
+            }
+        }
 
         if lhs.ty.is_integral_var(self.db) {
             // Avoid 'type must be known' diagnostics when lhs is an unknown integer ty.
@@ -5093,11 +5108,15 @@ impl<'db> TyChecker<'db> {
             .storage_layout(self.db)
             .values()
             .find(|field| field.field == layout_env.field)?;
+        // An entry lies at a slot computed at runtime, outside the field.
+        if place.has_entry() {
+            return None;
+        }
         let projections = place
             .projections
             .iter()
             .filter_map(|projection| match projection {
-                PlaceProjection::Deref { .. } => None,
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
                 PlaceProjection::Field { index, .. } => Some(LayoutProjection::Field(*index)),
                 PlaceProjection::Index { .. } => Some(LayoutProjection::Index),
                 PlaceProjection::VariantField { variant, field, .. } => {
@@ -5342,11 +5361,14 @@ impl<'db> TyChecker<'db> {
                 | LocalBinding::EffectParam { .. },
             ) => return None,
         };
+        if place.has_entry() {
+            return None;
+        }
         let mut base_path = place
             .projections
             .iter()
             .flat_map(|projection| match *projection {
-                PlaceProjection::Deref { .. } => vec![],
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => vec![],
                 PlaceProjection::Field { index, .. } => vec![LayoutBundlePathStep::Field(index)],
                 PlaceProjection::Index { .. } => vec![LayoutBundlePathStep::Index],
                 PlaceProjection::VariantField { variant, field, .. } => vec![
@@ -5430,11 +5452,14 @@ impl<'db> TyChecker<'db> {
             ),
             PlaceBase::Binding(_) => return None,
         };
+        if place.has_entry() {
+            return None;
+        }
         let mut path = place
             .projections
             .iter()
             .flat_map(|projection| match *projection {
-                PlaceProjection::Deref { .. } => vec![],
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => vec![],
                 PlaceProjection::Field { index, .. } => vec![LayoutBundlePathStep::Field(index)],
                 PlaceProjection::Index { .. } => vec![LayoutBundlePathStep::Index],
                 PlaceProjection::VariantField { variant, field, .. } => vec![

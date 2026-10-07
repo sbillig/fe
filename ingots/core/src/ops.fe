@@ -196,6 +196,22 @@ pub trait Ord<T = Self> {
     fn ge(self, _ other: T) -> bool
 }
 
+/// A collection whose elements are places, as an array's are: `c[k]` names
+/// the element at `k` with no call, a path that the access checker sees as
+/// `c` indexed by a dynamic key, and `c[k].f = v` writes one field. A
+/// collection implements it by saying where an element lives; the compiler
+/// calls `locate` when it addresses the element.
+pub trait PlaceIndex {
+    type Key: Copy
+    type Output
+
+    /// The slot holding the element at `key` of the collection whose place
+    /// starts at slot `base`, and the element's byte offset within that slot.
+    /// `width` is the element's size in storage: the bytes of a scalar packed
+    /// with others when below 32, else 32 bytes per slot it spans.
+    fn locate(_ base: u256, _ key: Self::Key, _ width: u256) -> (u256, u256)
+}
+
 /// `t[i]` where the context reads the element.
 pub trait Index<I> {
     /// The effects of reaching an element.

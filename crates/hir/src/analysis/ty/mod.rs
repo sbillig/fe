@@ -167,6 +167,37 @@ pub fn ty_is_snapshot<'db>(
     })
 }
 
+/// The key and element types of a collection whose elements are places
+/// (`core::ops::PlaceIndex`): for such a `ty`, `c[k]` is a path step, an
+/// entry, rather than a call.
+pub fn place_index_tys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<(TyId<'db>, TyId<'db>)> {
+    let ty = normalize::normalize_ty(db, ty, scope, assumptions);
+    let place_index = corelib::resolve_core_trait(db, scope, &["ops", "PlaceIndex"])?;
+    let inst = trait_def::TraitInstId::new_simple(db, place_index, vec![ty]);
+    if !matches!(
+        is_goal_satisfiable(
+            db,
+            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+            inst,
+        ),
+        GoalSatisfiability::Satisfied(_)
+    ) {
+        return None;
+    }
+    let assoc = |name: &str| {
+        let projected = inst
+            .trait_ref(db)
+            .project_assoc_ty(db, IdentId::new(db, name.to_string()))?;
+        Some(normalize::normalize_ty(db, projected, scope, assumptions))
+    };
+    Some((assoc("Key")?, assoc("Output")?))
+}
+
 #[salsa::tracked]
 fn ty_is_copy_query<'db>(
     db: &'db dyn HirAnalysisDb,

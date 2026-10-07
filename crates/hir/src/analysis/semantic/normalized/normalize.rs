@@ -1565,6 +1565,16 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     self.projection_values[local.index()] = Some(index.value);
                     NDataProjection::Index(NIndex::Value(index.value))
                 }
+                Projection::Entry(local) => {
+                    let key = self.read_scalar_operand(
+                        block,
+                        origin,
+                        SOperand::inherited(*local),
+                        Some(ReadMode::Copy),
+                    )?;
+                    self.projection_values[local.index()] = Some(key.value);
+                    NDataProjection::Entry(key.value)
+                }
                 Projection::Index(IndexSource::Any)
                 | Projection::Deref
                 | Projection::Discriminant => {
@@ -1994,22 +2004,30 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 None => Vec::new(),
             },
         };
-        let target: Vec<_> = path
+        // An entry lies at a slot computed at runtime, outside its base's
+        // layout, so no backing reaches through it.
+        let Some(target) = path
             .iter()
             .map(|projection| match projection {
-                NDataProjection::Field(field) => LayoutBackingProjection::Field(*field),
+                NDataProjection::Field(field) => Some(LayoutBackingProjection::Field(*field)),
                 NDataProjection::VariantField { variant, field } => {
-                    LayoutBackingProjection::VariantField {
+                    Some(LayoutBackingProjection::VariantField {
                         variant: *variant,
                         field: *field,
-                    }
+                    })
                 }
-                NDataProjection::Index(index) => LayoutBackingProjection::Index(match index {
-                    NIndex::Const(index) => Some(*index),
-                    NIndex::Value(_) => None,
-                }),
+                NDataProjection::Index(index) => {
+                    Some(LayoutBackingProjection::Index(match index {
+                        NIndex::Const(index) => Some(*index),
+                        NIndex::Value(_) => None,
+                    }))
+                }
+                NDataProjection::Entry(_) => None,
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(());
+        };
         for mut backing in backings {
             if layout_backing_source_path_is_prefix(&backing.target, &target) {
                 let suffix = NDataPath::new(
@@ -2102,7 +2120,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     };
                     NDataProjection::Index(NIndex::Value(value))
                 }
+                // A layout source never reaches through an entry, which lies at
+                // a slot computed at runtime.
                 Projection::Index(IndexSource::Any)
+                | Projection::Entry(_)
                 | Projection::Deref
                 | Projection::Discriminant => {
                     return Err(NormalizeError::UnsupportedPlaceProjection);
@@ -3153,6 +3174,7 @@ fn read_twice(mut _ index: own usize, values: [u256; 2]) -> u256 {
                     NDataProjection::Index(NIndex::Value(value)) => Some(*value),
                     NDataProjection::Field(_)
                     | NDataProjection::VariantField { .. }
+                    | NDataProjection::Entry(_)
                     | NDataProjection::Index(NIndex::Const(_)) => None,
                 }),
                 NStatementKind::Define {
@@ -3162,6 +3184,7 @@ fn read_twice(mut _ index: own usize, values: [u256; 2]) -> u256 {
                     NDataProjection::Index(NIndex::Value(value)) => Some(*value),
                     NDataProjection::Field(_)
                     | NDataProjection::VariantField { .. }
+                    | NDataProjection::Entry(_)
                     | NDataProjection::Index(NIndex::Const(_)) => None,
                 }),
                 NStatementKind::Define { .. }

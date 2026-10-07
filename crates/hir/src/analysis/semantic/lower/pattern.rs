@@ -726,7 +726,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Projection::Deref => {
                 panic!("decision-tree lowering does not support deref projections yet")
             }
-            Projection::Index(_) => {
+            Projection::Index(_) | Projection::Entry(_) => {
                 panic!("decision-tree lowering does not support index projections yet")
             }
         }

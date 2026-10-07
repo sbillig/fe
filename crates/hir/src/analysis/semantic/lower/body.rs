@@ -908,6 +908,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*base), &[*index]);
                 }
+                // An entry lives at its collection's place: a storage
+                // collection is never a temporary.
+                if self.typed_body.is_place_entry(expr) {
+                    let place = self.lower_place(expr);
+                    return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
+                }
                 if let Some(place) = self.try_lower_place(expr) {
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }

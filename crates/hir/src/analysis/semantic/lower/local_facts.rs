@@ -428,6 +428,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         &self,
         place: &SPlace<'db>,
     ) -> Vec<LayoutBackingSource<'db>> {
+        // An entry lies at a slot computed at runtime, so nothing of its
+        // collection's layout backs it.
+        if place
+            .path
+            .iter()
+            .any(|projection| matches!(projection, Projection::Entry(_)))
+        {
+            return Vec::new();
+        }
         let base_sources = self.local_layout_backing_sources(place.local);
         let projected = layout_backing_query(&place.path)
             .map_or_else(Vec::new, |(target, path)| {

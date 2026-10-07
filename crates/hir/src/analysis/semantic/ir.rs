@@ -152,7 +152,8 @@ pub(crate) fn layout_backing_query<'db>(
                 LayoutBackingProjection::Index(None)
             }
             Projection::Deref => continue,
-            Projection::Discriminant => return None,
+            // An entry lies at a slot computed at runtime.
+            Projection::Discriminant | Projection::Entry(_) => return None,
         };
         target.push(step);
         structural_path.push(projection.clone());
@@ -396,6 +397,10 @@ impl<'db> SPlace<'db> {
             .push(Projection::Index(IndexSource::Dynamic(index)));
     }
 
+    pub fn push_entry(&mut self, key: SValueId) {
+        self.path.push(Projection::Entry(key));
+    }
+
     pub fn push_deref(&mut self) {
         self.path.push(Projection::Deref);
     }
@@ -406,7 +411,9 @@ impl SPlace<'_> {
     pub fn used_locals(&self) -> Vec<SLocalId> {
         std::iter::once(self.local)
             .chain(self.path.iter().filter_map(|projection| match projection {
-                Projection::Index(IndexSource::Dynamic(index)) => Some(*index),
+                Projection::Index(IndexSource::Dynamic(index)) | Projection::Entry(index) => {
+                    Some(*index)
+                }
                 Projection::Field(_)
                 | Projection::VariantField { .. }
                 | Projection::Discriminant

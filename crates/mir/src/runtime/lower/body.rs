@@ -54,7 +54,9 @@ use crate::{
         RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
         ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
+        layout_utils::storage_element_width,
         package::{LowerError, generated_call_error, runtime_instance_for_semantic},
+        synthetic::uint_scalar,
     },
 };
 
@@ -2803,6 +2805,9 @@ impl<'db> RmirEmitter<'db> {
                         )));
                         current = project_index_class(self.db, current);
                     }
+                    NDataProjection::Entry(_) => {
+                        unreachable!("an entry is a place step, never a value projection")
+                    }
                 }
             }
             place.path = projected.into_boxed_slice();
@@ -2856,6 +2861,9 @@ impl<'db> RmirEmitter<'db> {
                     }
                 }
                 NDataProjection::Index(NIndex::Value(_)) => return false,
+                NDataProjection::Entry(_) => {
+                    unreachable!("an entry is a place step, never a value projection")
+                }
             };
             let extracted_class = match &step {
                 ValueExtractStep::Aggregate { class, .. }
@@ -3584,7 +3592,7 @@ impl<'db> RmirEmitter<'db> {
         if self.terminated_blocks[bb.index()] {
             return;
         }
-        for (index, len) in data_path_index_bounds(self.db, ty, path) {
+        for (index, len) in data_path_index_bounds(self.db, self.semantic_body.owner(), ty, path) {
             let index = match index {
                 NIndex::Const(index) => IndexSource::Constant(index),
                 NIndex::Value(index) => IndexSource::Dynamic(self.read_normalized_value(bb, index)),
@@ -5580,6 +5588,15 @@ impl<'db> RmirEmitter<'db> {
                     projected.push(PlaceElem::Index(IndexSource::Constant(*index)));
                     current = project_index_class(self.db, current);
                 }
+                NDataProjection::Entry(key) => {
+                    runtime_place.path = std::mem::take(&mut projected).into_boxed_slice();
+                    let normalized = &self.semantic_body.normalized;
+                    let collection_ty = normalized.place_prefix_ty(self.db, place, idx)?;
+                    let element_ty = normalized.place_prefix_ty(self.db, place, idx + 1)?;
+                    runtime_place =
+                        self.lower_entry(bb, runtime_place, collection_ty, element_ty, *key);
+                    current = self.project_place_class(&runtime_place);
+                }
             }
             if idx + 1 < place.path.len()
                 && let Some(target) = current.deref_target(self.db)
@@ -5590,6 +5607,122 @@ impl<'db> RmirEmitter<'db> {
         }
         runtime_place.path = projected.into_boxed_slice();
         Some(runtime_place)
+    }
+
+    /// The place of the element at `key` of the collection at `collection`,
+    /// of type `collection_ty`: a reference at the slot the collection's
+    /// `PlaceIndex::locate` computes from the collection's own slot.
+    fn lower_entry(
+        &mut self,
+        bb: RBlockId,
+        collection: RuntimePlace<'db>,
+        collection_ty: TyId<'db>,
+        element_ty: TyId<'db>,
+        key: NValueId,
+    ) -> RuntimePlace<'db> {
+        let space = self
+            .place_addr_class(&collection)
+            .address_space()
+            .expect("a collection whose elements are places has an address");
+        let word_ty = TyId::u256(self.db);
+        let word = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 256,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let base = self.lower_place_addr_of_for_class(word_ty, bb, collection, word.clone());
+        let key = self.read_normalized_value(bb, key);
+        let element_class =
+            provider_class_for_target_in_env(self.db, self.env, Some(element_ty), space);
+        let width = self.alloc_runtime_temp(word_ty, RuntimeCarrier::Value(word.clone()));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: width,
+                expr: RExpr::ConstScalar(uint_scalar(
+                    256,
+                    storage_element_width(
+                        self.db,
+                        &stored_class_for_ty_in_env(self.db, self.env, element_ty),
+                    ),
+                )),
+            },
+        );
+        let semantic = self.resolve_place_index_locate(collection_ty);
+        let key_class = self
+            .value_class(key)
+            .cloned()
+            .expect("an entry key has a runtime class");
+        let callee_key = RuntimeInstanceKey::new(
+            self.db,
+            crate::instance::RuntimeInstanceSource::Semantic(semantic),
+            vec![word.clone(), key_class, word.clone()],
+        );
+        let callee = get_or_build_runtime_instance(self.db, callee_key);
+        let abi = runtime_declaration_abi_plan(self.db, callee_key);
+        let location_class = abi
+            .returns
+            .class
+            .clone()
+            .expect("PlaceIndex::locate returns a slot and an offset");
+        let location = self.alloc_runtime_temp(
+            semantic_return_ty(self.db, semantic),
+            RuntimeCarrier::Value(location_class),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: location,
+                expr: RExpr::Call {
+                    callee,
+                    args: Box::new([base, key, width]),
+                },
+            },
+        );
+        let slot = self.alloc_runtime_temp(word_ty, RuntimeCarrier::Value(word));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: slot,
+                expr: RExpr::AggregateExtract {
+                    value: location,
+                    index: 0,
+                },
+            },
+        );
+        let element = self.coerce_value(bb, slot, &element_class);
+        RuntimePlace {
+            root: PlaceRoot::Ref(element),
+            path: Box::default(),
+        }
+    }
+
+    fn resolve_place_index_locate(&self, collection_ty: TyId<'db>) -> SemanticInstance<'db> {
+        let scope = self
+            .env
+            .scope
+            .or_else(|| collection_ty.as_scope(self.db))
+            .expect("PlaceIndex resolution requires a scope");
+        let place_index = resolve_core_trait(self.db, scope, &["ops", "PlaceIndex"])
+            .expect("core declares PlaceIndex");
+        let trait_inst = TraitInstId::new_simple(self.db, place_index, vec![collection_ty]);
+        let func = place_index
+            .method_defs(self.db)
+            .get(&IdentId::new(self.db, "locate".to_string()))
+            .copied()
+            .expect("PlaceIndex declares locate");
+        let key = generated_callee_key(
+            self.db,
+            scope,
+            self.env.assumptions,
+            func,
+            Some(trait_inst),
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
+        get_or_build_semantic_instance(self.db, key)
     }
 
     fn read_semantic_value(&mut self, bb: RBlockId, local: SLocalId) -> RLocalId {

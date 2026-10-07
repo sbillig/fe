@@ -1251,6 +1251,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_ty: SecondaryMap::new(),
         yield_shapes: SecondaryMap::new(),
         implicit_moves: FxHashSet::default(),
+        place_entries: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
@@ -3595,6 +3596,9 @@ mod typed_body_tables {
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
         pub(super) yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
         pub(super) implicit_moves: FxHashSet<ExprId>,
+        /// Index expressions naming an entry of a collection whose elements
+        /// are places.
+        pub(super) place_entries: FxHashSet<ExprId>,
         /// `with` values whose resources the function's own authority covers.
         pub(super) covered_providers: FxHashSet<ExprId>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
@@ -4304,6 +4308,12 @@ impl<'db> TypedBody<'db> {
 
     pub fn is_implicit_move(&self, expr: ExprId) -> bool {
         self.tables.implicit_moves.contains(&expr)
+    }
+
+    /// Whether the index expression `expr` names an entry of a collection
+    /// whose elements are places (`core::ops::PlaceIndex`), a path step.
+    pub fn is_place_entry(&self, expr: ExprId) -> bool {
+        self.tables.place_entries.contains(&expr)
     }
 
     /// Whether the function's own authority covers the resources the `with`
@@ -5035,11 +5045,14 @@ impl<'db> TypedBody<'db> {
                 ..
             } => return None,
         };
+        if place.has_entry() {
+            return None;
+        }
         let projection = place
             .projections
             .iter()
             .filter_map(|projection| match projection {
-                PlaceProjection::Deref { .. } => None,
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
                 PlaceProjection::Field { index, .. } => {
                     Some(Some(ReturnProjectionStep::Field(*index)))
                 }
@@ -5729,6 +5742,7 @@ impl<'db> TypedBody<'db> {
             expr_ty: SecondaryMap::new(),
             yield_shapes: SecondaryMap::new(),
             implicit_moves: FxHashSet::default(),
+            place_entries: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),

@@ -77,7 +77,11 @@ pub(super) fn path_of(path: &NDataPath, constant: impl Fn(NValueId) -> Option<us
                 field: field.0,
             },
             NDataProjection::Index(NIndex::Const(index)) => Step::Index(Some(index)),
-            NDataProjection::Index(NIndex::Value(value)) => Step::Index(constant(value)),
+            // An entry is an element at a key, `[*]` unless the key is a
+            // literal.
+            NDataProjection::Index(NIndex::Value(value)) | NDataProjection::Entry(value) => {
+                Step::Index(constant(value))
+            }
         })
         .collect()
 }

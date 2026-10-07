@@ -119,6 +119,9 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Places matched through the `mut` access their `mut` pattern bindings
     /// open.
     matched_places: FxHashSet<ExprId>,
+    /// Index expressions naming an entry of a collection whose elements are
+    /// places (`core::ops::PlaceIndex`).
+    place_entries: FxHashSet<ExprId>,
     covered_providers: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
@@ -238,6 +241,7 @@ impl<'db> TyCheckEnv<'db> {
             call_effect_args: SecondaryMap::new(),
             consumed_accesses: FxHashSet::default(),
             matched_places: FxHashSet::default(),
+            place_entries: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
@@ -578,6 +582,7 @@ impl<'db> TyCheckEnv<'db> {
             expr,
             |expr| self.typed_expr(expr).and_then(|p| p.binding),
             |expr| self.typed_expr_ty(expr),
+            |expr| self.place_entries.contains(&expr),
         )
     }
 
@@ -848,6 +853,10 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn is_matched_place(&self, expr: ExprId) -> bool {
         self.matched_places.contains(&expr)
+    }
+
+    pub(super) fn record_place_entry(&mut self, expr: ExprId) {
+        self.place_entries.insert(expr);
     }
 
     /// Records that the function's own authority covers the resources the
@@ -1403,6 +1412,7 @@ impl<'db> TyCheckEnv<'db> {
                         |prop| prop.ty,
                     )
                 },
+                |expr| self.place_entries.contains(&expr),
             ) {
                 let place_id = expr_places.push(place);
                 expr_place[expr] = place_id.into();
@@ -1421,6 +1431,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: self.expr_ty,
             yield_shapes: self.yield_shapes,
             implicit_moves,
+            place_entries: self.place_entries,
             covered_providers: self.covered_providers,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
