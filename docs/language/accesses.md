@@ -81,14 +81,18 @@ buffer reserved until its last use.
 A storage handle, such as a `StorageMap`, is a snapshot naming the field
 whose entries it reaches. An operation through it declares that field's
 authority, `uses (storage: Field(Self))` (`mut` to write), and accesses the
-field for its duration. A static slot handle's type names its field, since
-distinct fields' handles never share a type, so the authority comes from an
-effect provider holding a value of that type: `uses (balances)` covers
-`balances.get(k)`, a copy of `balances`, the map a projection over
-`balances` yields and one in an enum payload of a provider alike. A handle
-whose slot is a runtime value, such as a `StorPtr`, carries its authority
-only in place, as an argument lying in an effect provider. A data parameter
-carries none: a function operating on handles it is given declares
+field's entries for its duration. The entries lie apart from the place
+holding the handle, so a `mut` access of a struct holding a map does not
+overlap the map's entries.
+
+A static slot handle's type names its field, since distinct fields'
+handles never share a type, so the authority comes from an effect provider
+holding a value of that type: `uses (balances)` covers `balances.get(k)`, a
+copy of `balances`, the map a projection over `balances` yields and one in
+an enum payload of a provider alike. A handle whose slot is a runtime value,
+such as a `StorPtr`, has the authority of a provider of its type, or of its
+place when that lies in an effect provider. A data parameter carries none: a
+function operating on handles it is given declares
 `uses (storage: Field(StorageMap<K, V>))`, and its caller grants it.
 
 ```fe
@@ -100,11 +104,11 @@ x -= amount
 ```
 
 A `Field(T)` that leaves `T`'s salt open (`Field(StorageMap<K, V>)`) is
-authority over any map of that shape, so a call holding it accesses every
-such field. A callee may exercise a `Field(T)` authority over any handle of
-`T`'s shape its arguments hold, so each of those must be covered. A `with`
-block may install a handle copy as a provider only under the function's own
-authority over its field, or raw storage authority.
+authority over any map of that shape. A callee reaches maps only through its
+arguments and effects, so a call lending such an authority, or `Field(Self)`,
+must cover every map of that shape its arguments hold, and accesses their
+fields. A `with` block may install a handle copy as a provider only under
+the function's own authority over its field, or raw storage authority.
 
 ## External calls
 
