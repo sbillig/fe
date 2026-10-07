@@ -85,7 +85,11 @@ The analysis resolves carriers to *tokens*:
 | Handle | provider handles | Names a domain; confers no exclusivity. |
 
 An abstract place is a base and a path (fields, variant fields, constant or
-dynamic indices):
+dynamic indices). A path may end in `KeySpace`: the entries of the static
+slot handles the place holds (a map's keyed slots), which lie apart from the
+place itself. Key-space regions overlap each other by their paths and raw
+state, never a data access, so a `mut` access of a struct holding a map does
+not conflict with an operation on the map's entries.
 
 - `Root`: storage the body owns: locals, owned parameters, temporaries.
 - `Param(i)`: the place data parameter `i` names. Its address space is part of
