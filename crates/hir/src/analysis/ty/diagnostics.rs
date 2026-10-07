@@ -214,16 +214,6 @@ pub enum TyLowerDiag<'db> {
         name: IdentId<'db>,
     },
 
-    /// A contract field's layout hole (`_`) instantiates the slot parameter of a
-    /// `core::effect_ref::StaticSlot` type whose `const SPACE` does not evaluate
-    /// to a concrete `AddressSpace`, so the slot cannot be assigned from a known
-    /// address-space counter (a silent fallback would risk a cross-space slot
-    /// collision).
-    StaticSlotSpaceUnresolved {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
     /// A contract field carries an unresolved const hole (`_`) whose type is not
     /// a storage-slot index (e.g. a defaulted `const SP: AddressSpace = _`).
     /// Contract layout only assigns slots to slot-index const holes; any other
@@ -357,7 +347,6 @@ impl TyLowerDiag<'_> {
             Self::DuplicateGenericParamName(..) => 19,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
-            Self::StaticSlotSpaceUnresolved { .. } => 39,
             Self::ContractFieldNonSlotConstHole { .. } => 40,
             Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
             Self::ContractFieldExplicitConstHole { .. } => 42,
@@ -510,23 +499,6 @@ pub enum BodyDiag<'db> {
         func: Func<'db>,
         key: HirTypeId<'db>,
         provided_span: Option<DynLazySpan<'db>>,
-    },
-
-    /// A `Field` effect binding named as a value: it is authority only.
-    FieldEffectAsValue {
-        primary: DynLazySpan<'db>,
-        name: IdentId<'db>,
-    },
-
-    /// A call lends a `Field` authority its callee may exercise over the
-    /// handles another effect it is given holds, which the caller does not
-    /// cover with that authority's mode.
-    LentFieldAuthority {
-        primary: DynLazySpan<'db>,
-        func: Func<'db>,
-        key: HirTypeId<'db>,
-        effect: Option<IdentId<'db>>,
-        is_mut: bool,
     },
 
     EffectTypeMismatch {
@@ -1114,8 +1086,6 @@ impl<'db> BodyDiag<'db> {
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
-            Self::LentFieldAuthority { .. } => 115,
-            Self::FieldEffectAsValue { .. } => 116,
             Self::EffectTypeMismatch { .. } => 38,
             Self::EffectProviderMismatch { .. } => 52,
             Self::EffectTraitUnsatisfied { .. } => 39,

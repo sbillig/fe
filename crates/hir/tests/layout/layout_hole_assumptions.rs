@@ -3344,7 +3344,7 @@ contract C {
 /// `TStorPtr` provider fields, so lock bits can never collide with other
 /// transient state — and the mutex consumes no persistent slot for the lock.
 #[test]
-fn contract_field_mutex_lock_slots_share_transient_counter() {
+fn contract_field_mutex_lock_slots_share_the_field_counter() {
     parse_ok!(
         db,
         top_mod,
@@ -3369,28 +3369,18 @@ contract C {
             .get(&IdentId::new(&db, name.to_string()))
             .expect("missing field")
     };
-    let lock_slot = |name: &str| {
-        field(name)
-            .cells
-            .iter()
-            .find(|cell| cell.space == fe_hir::analysis::ty::ProviderAddressSpace::Transient)
-            .and_then(|cell| cell.allocation)
-            .map(|allocation| allocation.slot)
-            .expect("missing transient lock allocation")
-    };
-
-    // Transient provider fields take 0 and 1; the two lock bits continue the
-    // same counter; the next transient field lands after them.
-    assert_eq!(field("t0").slot_offset, 0);
-    assert_eq!(field("t1").slot_offset, 1);
-    assert_eq!(lock_slot("m"), 2);
-    assert_eq!(lock_slot("m2"), 3);
-    assert_eq!(field("after").slot_offset, 4);
-
-    // The lock consumes no persistent storage: one slot per mutex (the value).
-    assert_eq!(field("m").slot_count, 1);
-    assert_eq!(field("m").slot_offset, 0);
-    assert_eq!(field("m2").slot_offset, 1);
+    // Storage and transient fields share one counter. A mutex's value takes
+    // a storage slot and its lock, a transient cell, the next number.
+    for (name, offset, count) in [
+        ("t0", 0, 1),
+        ("t1", 1, 1),
+        ("m", 2, 2),
+        ("m2", 4, 2),
+        ("after", 6, 1),
+    ] {
+        assert_eq!(field(name).slot_offset, offset, "{name}");
+        assert_eq!(field(name).slot_count, count, "{name}");
+    }
 
     assert!(
         contract
@@ -3406,43 +3396,6 @@ contract C {
     );
 }
 
-#[test]
-fn contract_field_param_dependent_static_slot_space_uses_concrete_owner() {
-    parse_module!(
-        db,
-        top_mod,
-        r#"
-use core::effect_ref::{AddressSpace, StaticSlot}
-
-struct ParamSlot<const SP: AddressSpace, const SLOT: u256 = _> {}
-
-impl<const SP: AddressSpace, const SLOT: u256> StaticSlot for ParamSlot<SP, SLOT> {
-    const SPACE: AddressSpace = SP
-}
-
-contract C {
-    lock: ParamSlot<AddressSpace::TransientStorage>,
-}
-"#,
-    );
-
-    let contract = find_contract(&db, top_mod, "C");
-    let field = allocated_fields(&db, contract)
-        .get(&IdentId::new(&db, "lock".to_string()))
-        .cloned()
-        .expect("missing `lock` field");
-    assert_eq!(field.cells.len(), 1);
-    assert_eq!(
-        field.cells[0].space,
-        fe_hir::analysis::ty::ProviderAddressSpace::Transient
-    );
-    assert_eq!(field.cells[0].allocation.unwrap().slot, 0);
-    assert_eq!(field.slot_count, 0);
-}
-
-/// A storage-slot (`u256`) const hole is a legitimate contract-field layout
-/// hole: it is numbered as a slot and the field is accepted. Guards the
-/// non-slot rejection below from over-rejecting real slots.
 #[test]
 fn contract_field_u256_slot_hole_is_not_rejected() {
     parse_ok!(

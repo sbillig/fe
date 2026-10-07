@@ -34,8 +34,7 @@ use crate::{
             },
             normalize::{normalize_layout_root_uses, normalize_ty},
             provider::{
-                ProviderLayoutFailure, ProviderLayoutResolution, StaticSlotLayoutResolution,
-                resolve_effect_handle_layout, resolve_static_slot_layout,
+                ProviderLayoutFailure, ProviderLayoutResolution, resolve_effect_handle_layout,
             },
             trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance},
             trait_resolution::PredicateListId,
@@ -525,8 +524,6 @@ pub enum ContractLayoutError<'db> {
     UnresolvedProviderSpace,
     InvalidProviderRaw { failure: ProviderLayoutFailure },
     NonRegularProviderCycle,
-    UnresolvedStaticSlotSpace { owner: TyId<'db> },
-    AmbiguousStaticSlot { owner: TyId<'db> },
     ConflictingLayoutRootSpaces { root: LayoutRootId<'db> },
     LayoutRootArray { array: TyId<'db> },
     LayoutExtentOverflow,
@@ -561,8 +558,6 @@ impl ContractLayoutError<'_> {
             Self::NonRegularProviderCycle => {
                 "provider target recursion changes its layout arguments"
             }
-            Self::UnresolvedStaticSlotSpace { .. } => "static-slot address space is unresolved",
-            Self::AmbiguousStaticSlot { .. } => "static-slot implementation is ambiguous",
             Self::ConflictingLayoutRootSpaces { .. } => {
                 "one layout root has conflicting address spaces"
             }
@@ -1247,12 +1242,6 @@ struct InlineLayoutLeaf<'db> {
 }
 
 #[derive(Clone, Debug)]
-struct ConcreteApplication<'db> {
-    ty: TyId<'db>,
-    direct_roots: FxHashSet<LayoutRootId<'db>>,
-}
-
-#[derive(Clone, Debug)]
 struct ConcreteRootSite<'db> {
     owner: TyId<'db>,
     place: StoragePlace<'db>,
@@ -1384,7 +1373,6 @@ struct FieldCollector<'db> {
     occurrences: Vec<RootOccurrence<'db>>,
     concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
     errors: Vec<ContractLayoutError<'db>>,
-    applications: Vec<ConcreteApplication<'db>>,
     reached_concrete_sites: Vec<ConcreteRootSite<'db>>,
     visiting: FxHashSet<(TyId<'db>, StoragePlace<'db>)>,
     expanding_providers: Vec<ExpandingProvider<'db>>,
@@ -1408,7 +1396,6 @@ impl<'db> FieldCollector<'db> {
             occurrences: Vec::new(),
             concrete_occurrences: Vec::new(),
             errors: Vec::new(),
-            applications: Vec::new(),
             reached_concrete_sites: Vec::new(),
             visiting: FxHashSet::default(),
             expanding_providers: Vec::new(),
@@ -1439,42 +1426,6 @@ impl<'db> FieldCollector<'db> {
         self.errors.insert(position, error);
     }
 
-    fn concrete_owner(&self, root: LayoutRootId<'db>) -> Option<TyId<'db>> {
-        self.applications.iter().rev().find_map(|application| {
-            application
-                .direct_roots
-                .iter()
-                .any(|candidate| layout_root_descends_from(self.db, root, *candidate))
-                .then_some(application.ty)
-        })
-    }
-
-    fn root_space(&mut self, root: LayoutRootId<'db>) -> Option<ProviderAddressSpace> {
-        let Some(owner) = self.concrete_owner(root) else {
-            return Some(self.active_space);
-        };
-        self.root_space_for_owner(owner, self.active_space)
-    }
-
-    fn root_space_for_owner(
-        &mut self,
-        owner: TyId<'db>,
-        default_space: ProviderAddressSpace,
-    ) -> Option<ProviderAddressSpace> {
-        match resolve_static_slot_layout(self.db, self.scope, self.assumptions, owner) {
-            StaticSlotLayoutResolution::NotStaticSlot => Some(default_space),
-            StaticSlotLayoutResolution::Resolved(space) => Some(space),
-            StaticSlotLayoutResolution::Ambiguous => {
-                self.push_error(ContractLayoutError::AmbiguousStaticSlot { owner });
-                None
-            }
-            StaticSlotLayoutResolution::UnresolvedSpace => {
-                self.push_error(ContractLayoutError::UnresolvedStaticSlotSpace { owner });
-                None
-            }
-        }
-    }
-
     fn emit_root(
         &mut self,
         placeholder: TyId<'db>,
@@ -1499,7 +1450,7 @@ impl<'db> FieldCollector<'db> {
             return None;
         }
         let root = hole.root(self.db);
-        let space = self.root_space(root)?;
+        let space = self.active_space;
         let id = RootOccurrenceId(self.occurrences.len() as u32);
         self.occurrences.push(RootOccurrence {
             id,
@@ -1569,9 +1520,7 @@ impl<'db> FieldCollector<'db> {
             return;
         }
         let value = IntegerId::new(self.db, value);
-        let Some(space) = self.root_space_for_owner(owner, default_space) else {
-            return;
-        };
+        let space = default_space;
         if self.concrete_occurrences.iter().any(|occurrence| {
             occurrence.value == value
                 && occurrence.ty == ty
@@ -2223,9 +2172,6 @@ impl<'db> FieldCollector<'db> {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             return WalkOutput::empty();
         }
-        let direct_roots = self.direct_root_args(adt, args);
-        self.applications
-            .push(ConcreteApplication { ty, direct_roots });
         let mut direct_events = Vec::new();
         for (idx, param) in adt.params(self.db).iter().enumerate() {
             if !matches!(param.data(self.db), TyData::ConstTy(_)) {
@@ -2373,7 +2319,6 @@ impl<'db> FieldCollector<'db> {
                 self.nonterminal_occurrences.insert(direct_id);
             }
         }
-        self.applications.pop();
         output
     }
 }
@@ -3112,6 +3057,18 @@ fn allocate_lanes<'db>(
     Ok(())
 }
 
+/// The counter a space's slots are numbered by. Storage and transient slots
+/// share one, so no transient slot number is also a storage one: a storage
+/// collection keeps its contents at its own slot number in its contents'
+/// space (a `TSlot`'s value in transient storage, a map's entries in
+/// storage) wherever the collection itself lies.
+fn slot_counter(space: ProviderAddressSpace) -> ProviderAddressSpace {
+    match space {
+        ProviderAddressSpace::Transient => ProviderAddressSpace::Storage,
+        space => space,
+    }
+}
+
 fn allocate_contract<'db>(
     db: &'db dyn HirAnalysisDb,
     field_results: &[ContractFieldLayoutResult<'db>],
@@ -3121,7 +3078,7 @@ fn allocate_contract<'db>(
     for reservation in &explicit_reservations {
         if let Some(slot) = reservation.value.data(db).to_usize() {
             reserved_slots
-                .entry(reservation.space)
+                .entry(slot_counter(reservation.space))
                 .or_default()
                 .push(slot);
         }
@@ -3131,6 +3088,7 @@ fn allocate_contract<'db>(
         slots.dedup();
     }
     let mut counters: FxHashMap<ProviderAddressSpace, usize> = FxHashMap::default();
+    let mut high_water: FxHashMap<ProviderAddressSpace, usize> = FxHashMap::default();
     let mut fields = IndexMap::new();
     for field in field_results {
         let mut plan = field
@@ -3141,28 +3099,29 @@ fn allocate_contract<'db>(
         let extents = field_block_extents(&plan).map_err(|error| (field.field, error))?;
         let mut bases = FxHashMap::default();
         let mut cursors = FxHashMap::default();
+        let mut field_ends = FxHashMap::default();
         for (space, extent) in extents {
-            let cursor = *counters.entry(space).or_insert(0);
+            let counter = slot_counter(space);
+            let cursor = *counters.entry(counter).or_insert(0);
             let (base, end) = find_unreserved_block(
                 cursor,
                 extent,
-                reserved_slots.get(&space).map_or(&[], Vec::as_slice),
+                reserved_slots.get(&counter).map_or(&[], Vec::as_slice),
             )
             .ok_or((field.field, ContractLayoutError::LayoutExtentOverflow))?;
             bases.insert(space, base);
             cursors.insert(space, base);
+            field_ends.insert(space, end);
             if extent != 0 {
                 if space == ProviderAddressSpace::Code && end.checked_mul(32).is_none() {
                     return Err((field.field, ContractLayoutError::LayoutExtentOverflow));
                 }
-                counters.insert(space, end);
+                counters.insert(counter, end);
+                high_water.insert(space, end);
             }
         }
         let slot_offset = bases[&plan.address_space];
-        let slot_count = counters
-            .get(&plan.address_space)
-            .copied()
-            .unwrap_or(slot_offset)
+        let slot_count = field_ends[&plan.address_space]
             .checked_sub(slot_offset)
             .ok_or((field.field, ContractLayoutError::LayoutExtentOverflow))?;
         let field_cursor = cursors
@@ -3178,9 +3137,9 @@ fn allocate_contract<'db>(
         allocate_lanes(&mut plan, &materialize_only_lanes, &mut cursors)
             .map_err(|error| (field.field, error))?;
         debug_assert!(
-            cursors.iter().all(|(space, cursor)| {
-                counters.get(space).copied().unwrap_or(*cursor) == *cursor
-            })
+            cursors
+                .iter()
+                .all(|(space, cursor)| field_ends.get(space).is_none_or(|end| end == cursor))
         );
         let declared = assigned_view(db, plan.declared_template, &plan.bindings);
         let target = assigned_view(db, plan.target_template, &plan.bindings);
@@ -3215,7 +3174,7 @@ fn allocate_contract<'db>(
     Ok(AllocatedContractStorageLayout {
         fields,
         explicit_reservations,
-        high_water_by_address_space: counters,
+        high_water_by_address_space: high_water,
     })
 }
 
@@ -3618,41 +3577,12 @@ pub(crate) fn build_contract_layout_report<'db>(
     Some(allocated_contract_layout_report(db, fields))
 }
 
-fn storage_owner_space<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    place: &StoragePlace<'db>,
-    owner: TyId<'db>,
-) -> Option<ProviderAddressSpace> {
-    let (_, default_space) = storage_place_ty_and_space(db, field, place)?;
-    owner_space_in_field(db, field, owner, default_space)
-}
-
-fn storage_place_root_space<'db>(
+fn storage_place_space<'db>(
     db: &'db dyn HirAnalysisDb,
     field: &FieldStorageLayout<'db>,
     place: &StoragePlace<'db>,
 ) -> Option<ProviderAddressSpace> {
-    let (owner, default_space) = storage_place_ty_and_space(db, field, place)?;
-    owner_space_in_field(db, field, owner, default_space)
-}
-
-fn owner_space_in_field<'db>(
-    db: &'db dyn HirAnalysisDb,
-    field: &FieldStorageLayout<'db>,
-    owner: TyId<'db>,
-    default_space: ProviderAddressSpace,
-) -> Option<ProviderAddressSpace> {
-    match resolve_static_slot_layout(
-        db,
-        field.field.contract.scope(),
-        PredicateListId::empty_list(db),
-        owner,
-    ) {
-        StaticSlotLayoutResolution::NotStaticSlot => Some(default_space),
-        StaticSlotLayoutResolution::Resolved(space) => Some(space),
-        StaticSlotLayoutResolution::Ambiguous | StaticSlotLayoutResolution::UnresolvedSpace => None,
-    }
+    storage_place_ty_and_space(db, field, place).map(|(_, space)| space)
 }
 
 /// Validates the completed graph independently of allocation construction.
@@ -3717,7 +3647,7 @@ pub fn validate_allocated_contract_layout<'db>(
                 occurrence.ty.data(db),
                 TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
             );
-            let owner_space = storage_owner_space(db, field, &occurrence.place, occurrence.owner);
+            let owner_space = storage_place_space(db, field, &occurrence.place);
             let selector = StoragePlace {
                 field: occurrence.place.field,
                 steps: occurrence.selector.clone(),
@@ -3788,7 +3718,7 @@ pub fn validate_allocated_contract_layout<'db>(
                 if data.id != *occurrence
                     || data.root != cell.root
                     || data.space != cell.space
-                    || storage_place_root_space(db, field, &data.place) != Some(data.space)
+                    || storage_place_space(db, field, &data.place) != Some(data.space)
                     || data.place.field != field.field
                     || !data.selector.starts_with(&data.place.steps)
                     || resolved_layout_parameter_ty(db, field, &selector) != Some(expected)

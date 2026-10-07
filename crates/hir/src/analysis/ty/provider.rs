@@ -122,14 +122,6 @@ pub enum ProviderLayoutResolution<'db> {
     Invalid(ProviderLayoutFailure),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum StaticSlotLayoutResolution {
-    NotStaticSlot,
-    Resolved(ProviderAddressSpace),
-    Ambiguous,
-    UnresolvedSpace,
-}
-
 fn can_select_effect_handle_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     ty.as_ptr(db).is_some()
         || matches!(
@@ -339,45 +331,6 @@ pub fn resolve_effect_handle_layout<'db>(
         target_template,
         space,
     }
-}
-
-#[salsa::tracked]
-pub fn resolve_static_slot_layout<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    owner_ty: TyId<'db>,
-) -> StaticSlotLayoutResolution {
-    let Some(static_slot) = super::corelib::resolve_core_trait(db, scope, &["StaticSlot"]) else {
-        return StaticSlotLayoutResolution::NotStaticSlot;
-    };
-    let inst = TraitInstId::new(db, static_slot, vec![owner_ty], IndexMap::new());
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-    // An unresolved argument cannot instantiate an impl, only select one.
-    if owner_ty.has_var(db) {
-        return match solve_cx.select_impl(db, inst) {
-            Selection::NotFound => StaticSlotLayoutResolution::NotStaticSlot,
-            Selection::Unique(_) | Selection::Ambiguous(_) => StaticSlotLayoutResolution::Ambiguous,
-        };
-    }
-    let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
-        Selection::Unique(resolved)
-            if !matches!(
-                resolved.selected().origin(db),
-                ImplementorOrigin::Assumption
-            ) =>
-        {
-            resolved
-        }
-        Selection::Unique(_) | Selection::Ambiguous(_) => {
-            return StaticSlotLayoutResolution::Ambiguous;
-        }
-        Selection::NotFound => return StaticSlotLayoutResolution::NotStaticSlot,
-    };
-    effect_space_from_resolved_trait_const(db, scope, resolved).map_or(
-        StaticSlotLayoutResolution::UnresolvedSpace,
-        StaticSlotLayoutResolution::Resolved,
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -669,6 +622,24 @@ pub fn provider_semantics_for_specialized_call<'db>(
     }
     semantics.transport = transport;
     semantics
+}
+
+/// The address space the elements of a collection whose elements are places
+/// (`core::ops::PlaceIndex`) live in: its implementation's `SPACE`.
+#[salsa::tracked]
+pub fn place_index_space<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    collection_ty: TyId<'db>,
+) -> Option<ProviderAddressSpace> {
+    let place_index = super::corelib::resolve_core_trait(db, scope, &["ops", "PlaceIndex"])?;
+    let inst = TraitInstId::new(db, place_index, vec![collection_ty], IndexMap::new());
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, inst) else {
+        return None;
+    };
+    effect_space_from_resolved_trait_const(db, scope, resolved)
 }
 
 fn effect_space_from_resolved_trait_const<'db>(

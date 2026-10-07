@@ -9,7 +9,7 @@ use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId, GenericArg,
         GenericArgListId, GenericParamListId, IdentId, Partial, PathId, TraitRefId, TupleTypeId,
-        TypeBound, TypeGenericArg, TypeId, TypeKind, WhereClauseId, item::*,
+        TypeBound, TypeId, WhereClauseId, item::*,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -614,29 +614,10 @@ fn lower_uses_params<'db>(
         .into_iter()
         .flatten()
         .chain(param)
-        .map(|p| {
-            let key_ty = TypeId::lower_ast_partial(ctxt, p.ty());
-            // `Field(T)` is the core marker `Field<T>`.
-            let key_ty = match (p.field_key(), key_ty) {
-                (Some(_), Partial::Present(handle)) => {
-                    let db = ctxt.db();
-                    let args = GenericArgListId::new(
-                        db,
-                        vec![GenericArg::Type(TypeGenericArg {
-                            ty: Partial::Present(handle),
-                        })],
-                        true,
-                    );
-                    let path = ctxt.core_path().push_str_args(db, "Field", args);
-                    Partial::Present(TypeId::new(db, TypeKind::Path(Partial::Present(path))))
-                }
-                (_, key_ty) => key_ty,
-            };
-            EffectParam {
-                name: p.name().map(|n| IdentId::lower_token(ctxt, n.syntax())),
-                key_ty,
-                is_mut: p.mut_token().is_some(),
-            }
+        .map(|p| EffectParam {
+            name: p.name().map(|n| IdentId::lower_token(ctxt, n.syntax())),
+            key_ty: TypeId::lower_ast_partial(ctxt, p.ty()),
+            is_mut: p.mut_token().is_some(),
         })
         .collect();
     EffectParamListId::new(ctxt.db(), data)

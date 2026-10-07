@@ -1085,7 +1085,7 @@ pub contract Spaces {
         "#### Storage",
         "- `0`: `stored` (inline field, `u256`)",
         "#### Transient Storage",
-        "- `0`: `temporary` (inline field, `u256`)",
+        "- `1`: `temporary` (inline field, `u256`)",
         "#### Immutable (Code)",
         "- `0`: `immutable` (inline field, `u256`)",
     ] {

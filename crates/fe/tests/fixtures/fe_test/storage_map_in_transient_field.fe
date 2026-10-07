@@ -1,15 +1,15 @@
 use std::evm::{Evm, StorageMap, TStorPtr}
 
-// A map's entries are persistent wherever its handle lies, so a map inside
-// transient state draws its salt from the storage slots and never shares one
-// with a persistent map.
+// A map's entries are persistent wherever the map lies. Storage and
+// transient fields share one slot numbering, so a map inside transient state
+// derives its entries from a slot no persistent field takes.
 
 struct Ledger {
     balances: StorageMap<u256, u256>,
 }
 
 impl Ledger {
-    fn get(mut self, _ key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
+    fn get(self, _ key: u256) -> u256 {
         self.balances.get(key)
     }
 }
@@ -32,7 +32,7 @@ pub contract C {
 }
 
 #[test]
-fn maps_under_transient_fields_take_storage_salts() uses (evm: mut Evm) {
+fn maps_in_transient_fields_have_their_own_entries() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 1)
     let v: u256 = evm.call(addr: c, gas: 200000, value: 0, message: Msg::Run {})
     assert!(v == 0)

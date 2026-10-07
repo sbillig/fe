@@ -30,7 +30,7 @@ use hir::analysis::{
         trait_resolution::{
             GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
         },
-        ty_check::BodyOwner,
+        ty_check::{BodyOwner, LocalBinding},
         ty_def::{TyData, TyId},
     },
 };
@@ -101,8 +101,8 @@ use super::{
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
-        provider_class_for_target_in_env, runtime_array_len, runtime_effect_handle_info,
-        stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
+        provider_address_space_to_runtime, provider_class_for_target_in_env, runtime_array_len,
+        runtime_effect_handle_info, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
     },
 };
@@ -5611,7 +5611,8 @@ impl<'db> RmirEmitter<'db> {
 
     /// The place of the element at `key` of the collection at `collection`,
     /// of type `collection_ty`: a reference at the slot the collection's
-    /// `PlaceIndex::locate` computes from the collection's own slot.
+    /// `PlaceIndex::locate` computes from the collection's own slot, in the
+    /// space the collection keeps its elements in.
     fn lower_entry(
         &mut self,
         bb: RBlockId,
@@ -5620,10 +5621,12 @@ impl<'db> RmirEmitter<'db> {
         element_ty: TyId<'db>,
         key: NValueId,
     ) -> RuntimePlace<'db> {
-        let space = self
-            .place_addr_class(&collection)
-            .address_space()
-            .expect("a collection whose elements are places has an address");
+        let space = provider_address_space_to_runtime(
+            self.semantic_body
+                .owner()
+                .place_index_space(self.db, collection_ty)
+                .expect("a collection whose elements are places declares their space"),
+        );
         let word_ty = TyId::u256(self.db);
         let word = RuntimeClass::Scalar(ScalarClass {
             repr: ScalarRepr::Int {
@@ -5651,14 +5654,26 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         let semantic = self.resolve_place_index_locate(collection_ty);
-        let key_class = self
-            .value_class(key)
-            .cloned()
-            .expect("an entry key has a runtime class");
+        // A zero-sized key, such as a `TSlot`'s `()`, has no runtime value.
+        let inputs = [base, key, width];
+        let (args, params): (Vec<_>, Vec<_>) = runtime_visible_binding_plans(self.db, semantic)
+            .iter()
+            .map(|plan| {
+                let LocalBinding::Param { idx, .. } = plan.binding else {
+                    panic!("PlaceIndex::locate takes no effects")
+                };
+                let arg = inputs[idx];
+                let class = self
+                    .value_class(arg)
+                    .cloned()
+                    .expect("a visible locate argument has a runtime class");
+                (arg, class)
+            })
+            .unzip();
         let callee_key = RuntimeInstanceKey::new(
             self.db,
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
-            vec![word.clone(), key_class, word.clone()],
+            params,
         );
         let callee = get_or_build_runtime_instance(self.db, callee_key);
         let abi = runtime_declaration_abi_plan(self.db, callee_key);
@@ -5677,7 +5692,7 @@ impl<'db> RmirEmitter<'db> {
                 dst: location,
                 expr: RExpr::Call {
                     callee,
-                    args: Box::new([base, key, width]),
+                    args: args.into_boxed_slice(),
                 },
             },
         );

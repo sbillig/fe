@@ -378,7 +378,7 @@ module.exports = grammar({
         optional(choice('mut', 'ref', 'own')),
         field('name', choice($.identifier, '_')),
         ':',
-        choice(field('type', $._type), seq(optional('mut'), $.uses_field_key)),
+        field('type', $._type),
       ),
       // unlabeled: `Type` or `mut Type` or `Storage<T>`
       seq(
@@ -386,11 +386,7 @@ module.exports = grammar({
         field('type', $.path),
         optional($.generic_arg_list),
       ),
-      seq(optional('mut'), $.uses_field_key),
     )),
-
-    // `Field(T)`: the storage field a handle of type `T` names
-    uses_field_key: $ => seq('Field', '(', field('type', $._type), ')'),
 
     // Trait definition
     trait_definition: $ => seq(

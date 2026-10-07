@@ -128,8 +128,8 @@ pub fn ty_is_copy<'db>(
 }
 
 /// Whether a view parameter takes a value of `ty` by copy, a *snapshot*: a
-/// primitive scalar, a raw pointer, a handle (an effect handle or a static
-/// slot such as a storage map), or a `core::marker::Snapshot` type such as
+/// primitive scalar, a raw pointer, an effect handle, or a
+/// `core::marker::Snapshot` type such as
 /// `Address`. Every other value, `Copy` or not, is viewed in place
 /// (`ViewTransport`).
 pub fn ty_is_snapshot<'db>(
@@ -147,10 +147,6 @@ pub fn ty_is_snapshot<'db>(
         || !matches!(
             provider::resolve_effect_handle(db, scope, assumptions, ty),
             provider::EffectHandleResolution::NotHandle
-        )
-        || !matches!(
-            provider::resolve_static_slot_layout(db, scope, assumptions, ty),
-            provider::StaticSlotLayoutResolution::NotStaticSlot
         )
     {
         return true;

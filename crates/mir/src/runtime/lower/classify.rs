@@ -806,7 +806,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         carriers: &[RuntimeCarrier<'db>],
         place: &NPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        if let Some(entry) = self.place_entry_root(carriers, place) {
+        if let Some(entry) = self.place_entry_root(place) {
             let EntryRoot {
                 element_ty, path, ..
             } = entry?;
@@ -819,25 +819,23 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
 
     /// For a place that reaches an entry of a collection whose elements are
     /// places, its last entry: the element at the slot the collection
-    /// computes, in its collection's space, and the path after it. `None`
-    /// for a place without entries.
-    fn place_entry_root(
-        self,
-        carriers: &[RuntimeCarrier<'db>],
-        place: &NPlace<'db>,
-    ) -> Option<Option<EntryRoot<'db>>> {
+    /// computes, in the space the collection keeps its elements in, and the
+    /// path after it. `None` for a place without entries.
+    fn place_entry_root(self, place: &NPlace<'db>) -> Option<Option<EntryRoot<'db>>> {
         let path = place.path.as_slice();
         let index = path
             .iter()
             .rposition(|projection| matches!(projection, NDataProjection::Entry(_)))?;
         Some((|| {
-            let collection = NPlace {
-                path: NDataPath::new(&path[..index]),
-                ..place.clone()
-            };
-            let space = self
-                .normalized_place_address_class(carriers, &collection)?
-                .address_space()?;
+            let collection_ty = self
+                .body
+                .normalized
+                .place_prefix_ty(self.db, place, index)?;
+            let space = provider_address_space_to_runtime(
+                self.body
+                    .owner()
+                    .place_index_space(self.db, collection_ty)?,
+            );
             Some(EntryRoot {
                 element_ty: self
                     .body
@@ -922,7 +920,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         place: &NPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let value_class = self.normalized_place_class(carriers, place)?;
-        if let Some(entry) = self.place_entry_root(carriers, place) {
+        if let Some(entry) = self.place_entry_root(place) {
             let EntryRoot {
                 element_ty,
                 space,
@@ -1533,7 +1531,6 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                                 ..
                             }) if provider_erases_runtime_root(
                                 db,
-                                body.owner(),
                                 binding,
                                 type_env.scope,
                                 type_env.assumptions,
@@ -1822,41 +1819,13 @@ pub(crate) fn provider_source_erases_zero_sized_effect_value<'db>(
     }
 }
 
-/// Whether effect `idx` of `site` is a `Field(T)` effect: authority only,
-/// which no code reads, so it has no runtime value.
-fn is_field_effect<'db>(db: &'db dyn MirDb, site: EffectParamSite<'db>, idx: u32) -> bool {
-    let EffectParamSite::Func(func) = site else {
-        return false;
-    };
-    func.effect_requirements(db).iter().any(|requirement| {
-        requirement.binding_idx == idx && requirement.binding_ty.field_key_handle(db).is_some()
-    })
-}
-
-/// Whether `provider` supplies one of `semantic`'s `Field(T)` effects.
-fn provider_is_field_effect<'db>(
-    db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
-    provider: &ProviderBinding<'db>,
-) -> bool {
-    semantic.effect_bindings(db).into_iter().any(|binding| {
-        matches!(binding, LocalBinding::EffectParam { site, idx, provider_idx, .. }
-            if provider_idx == provider.provider_idx && is_field_effect(db, site, idx as u32))
-    })
-}
-
-/// Whether `provider`, supplying an effect of `semantic`, has no runtime
-/// root: a `Field` authority, or a value that needs no storage.
+/// Whether `provider` has no runtime root: a value that needs no storage.
 pub(crate) fn provider_erases_runtime_root<'db>(
     db: &'db dyn MirDb,
-    semantic: SemanticInstance<'db>,
     provider: &ProviderBinding<'db>,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    if provider_is_field_effect(db, semantic, provider) {
-        return true;
-    }
     if let ProviderSource::ContractField { field: field_id } = provider.source {
         return field_id
             .contract
@@ -1884,12 +1853,9 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
 ) -> Option<RuntimeEffectBindingPlan<'db>> {
-    let LocalBinding::EffectParam { site, idx, .. } = binding else {
+    let LocalBinding::EffectParam { .. } = binding else {
         return None;
     };
-    if is_field_effect(db, site, idx as u32) {
-        return None;
-    }
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let binding_ty = semantic.binding_ty(db, binding);
     if effect_handle_transport_class_for_ty_in_env(db, env, binding_ty).is_some()
@@ -1903,7 +1869,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             provenance: ValueProvenance::RootProvider(provider),
         } => {
             let value_ty = provider.semantics.target_ty.unwrap_or(binding_ty);
-            if provider_erases_runtime_root(db, semantic, &provider, env.scope, env.assumptions) {
+            if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
             let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
@@ -1979,7 +1945,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             provider: Some(provider),
             value_ty,
         } => {
-            if provider_erases_runtime_root(db, semantic, &provider, env.scope, env.assumptions) {
+            if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
             let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
@@ -2009,7 +1975,7 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             value_ty,
         } => {
-            if provider_erases_runtime_root(db, semantic, &provider, env.scope, env.assumptions) {
+            if provider_erases_runtime_root(db, &provider, env.scope, env.assumptions) {
                 return None;
             }
             let class = runtime_class_for_provider_value_ty_in_env(db, env, &provider, value_ty)?;
@@ -2646,13 +2612,7 @@ fn normalized_place_root_transport_class_in_context<'db>(
             NRootKind::Provider { binding } => {
                 let actual = env.actual_runtime_visible_root_provider_class(carriers, binding);
                 if actual.is_none()
-                    && provider_erases_runtime_root(
-                        env.db,
-                        env.body.owner(),
-                        binding,
-                        env.scope(),
-                        env.assumptions(),
-                    )
+                    && provider_erases_runtime_root(env.db, binding, env.scope(), env.assumptions())
                 {
                     return None;
                 }
@@ -2704,13 +2664,7 @@ fn normalized_place_root_class_in_context<'db>(
                 let value_ty = env.body.normalized.root(root)?.ty;
                 let actual = env.actual_runtime_visible_root_provider_class(carriers, binding);
                 if actual.is_none()
-                    && provider_erases_runtime_root(
-                        env.db,
-                        env.body.owner(),
-                        binding,
-                        env.scope(),
-                        env.assumptions(),
-                    )
+                    && provider_erases_runtime_root(env.db, binding, env.scope(), env.assumptions())
                 {
                     return None;
                 }
@@ -3155,8 +3109,8 @@ mod tests {
     use driver::DriverDataBase;
     use hir::{
         analysis::semantic::{
-            EffectProviderSubst, GenericSubst, ImplEnv, NEffectArg, NPlace, NPlaceBase, NRootKind,
-            NStatementKind, SemanticCalleeRef, SemanticInstance, SemanticInstanceKey,
+            EffectProviderSubst, GenericSubst, ImplEnv, NEffectArg, NStatementKind,
+            SemanticCalleeRef, SemanticInstance, SemanticInstanceKey,
             get_or_build_semantic_instance, owner_effect_bindings,
             resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
         },
@@ -3173,10 +3127,7 @@ mod tests {
         arg_selector::RuntimeArgSelector,
         body::check_runtime_body_supported,
         boundary::BoundarySiteAllocator,
-        call_input::{
-            CompiledCallInputPlan, CompiledEffectArgPlan, compile_call_input_plan_for_semantic,
-        },
-        realize::{RuntimeArgSource, SelectedRuntimeArg},
+        call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
     };
     use super::*;
     use crate::runtime::lower::boundary::BoundaryMatcher;
@@ -3882,7 +3833,7 @@ uses (slot: Slot<u256>)
             "generic zero-sized uses providers should have no runtime payload"
         );
         assert!(
-            provider_erases_runtime_root(&db, semantic, &provider, env.scope, env.assumptions),
+            provider_erases_runtime_root(&db, &provider, env.scope, env.assumptions),
             "root effect planning must erase the same generic zero-sized provider"
         );
     }
@@ -4118,176 +4069,6 @@ uses (slot: Slot<u256>)
         let _ = instance.body(&db);
     }
 
-    #[test]
-    fn concrete_zero_width_storage_packed_array_effect_args_erase_from_runtime_calls() {
-        let mut db = DriverDataBase::default();
-        let file_url = Url::parse(
-            "file:///concrete_zero_width_storage_packed_array_effect_args_erase_from_runtime_calls.fe",
-        )
-        .unwrap();
-        db.workspace().touch(
-            &mut db,
-            file_url.clone(),
-            Some(
-                include_str!("../../../../codegen/tests/fixtures/storage_packed_array.fe")
-                    .to_string(),
-            ),
-        );
-        let file = db
-            .workspace()
-            .get(&db, &file_url)
-            .expect("file should be loaded");
-        let top_mod = db.top_mod(file);
-        let owners = [
-            ("get_status", 1usize),
-            ("set_status", 2usize),
-            ("search_status", 3usize),
-        ];
-        let mut checked_calls = 0;
-
-        for (owner_name, expected_params) in owners {
-            let semantic = semantic_instance_for_named_func(&db, top_mod, owner_name);
-            let instance = runtime_instance_for_semantic(&db, semantic);
-            let signature = instance.interface_signature(&db);
-            assert_eq!(
-                signature.params.len(),
-                expected_params,
-                "`{owner_name}` should not expose its StoragePackedArray effect as a runtime param:\n{signature:#?}",
-            );
-            assert!(
-                runtime_visible_binding_plans(&db, semantic)
-                    .iter()
-                    .all(|entry| !matches!(entry.binding, LocalBinding::EffectParam { .. })),
-                "`{owner_name}` should not keep zero-width StoragePackedArray effects runtime-visible",
-            );
-
-            let normalized = normalize_semantic_body(&db, semantic)
-                .unwrap_or_else(|err| panic!("failed to normalize {owner_name}: {err:?}"));
-            let facts = BodyStaticFacts::new(&db, &normalized);
-            let env = BodyEnv::new(&db, &normalized, &facts);
-            let params = instance.key(&db).params(&db);
-            let inferred = LocalStateInferer::new(
-                env,
-                params,
-                &runtime_param_locals(&db, semantic, &normalized.source, params),
-            )
-            .run();
-
-            for (block_idx, block) in normalized.normalized.blocks.iter().enumerate() {
-                for (stmt_idx, stmt) in block.statements.iter().enumerate() {
-                    let NStatementKind::Define { expr, .. } = &stmt.kind else {
-                        continue;
-                    };
-                    let NExpr::Call {
-                        callee,
-                        args,
-                        effect_args,
-                        ..
-                    } = expr
-                    else {
-                        continue;
-                    };
-                    let BodyOwner::Func(func) = callee.key.owner(&db) else {
-                        continue;
-                    };
-                    let Some(name) = func.name(&db).to_opt().map(|name| name.data(&db)) else {
-                        continue;
-                    };
-                    if !matches!(name.as_str(), "get" | "set" | "search") {
-                        continue;
-                    }
-                    let ExprStaticFacts::Call(call_facts) =
-                        facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
-                            panic!("missing staged call facts for {block_idx}:{stmt_idx}")
-                        })
-                    else {
-                        panic!("{name} expression should keep staged call facts");
-                    };
-                    let input_plan =
-                        call_input_plan_for_test(&db, &normalized, call_facts, effect_args);
-                    assert!(
-                        input_plan
-                            .effect_plans
-                            .iter()
-                            .all(|plan| matches!(plan, CompiledEffectArgPlan::Erased)),
-                        "StoragePackedArray effect arg should erase for `{owner_name}` -> `{name}`:\nargs={args:#?}\neffect_args={effect_args:#?}\ninput_plan={input_plan:#?}",
-                    );
-
-                    let mut class_cache = InferClassCache::new(normalized.locals.len());
-                    let selected =
-                        RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
-                            .with_concrete_roots(&inferred.roots)
-                            .selected_call_inputs(args, effect_args, &input_plan);
-                    for selected_arg in &selected {
-                        let erased_place = selected_erased_place_root(
-                            &normalized,
-                            &inferred.carriers,
-                            &inferred.roots,
-                            selected_arg,
-                        );
-                        assert!(
-                            erased_place.is_none(),
-                            "selected runtime input for `{owner_name}` -> `{name}` would lower an erased place root:\nerased_place={erased_place:#?}\nselected={selected:#?}",
-                        );
-                    }
-                    checked_calls += 1;
-                }
-            }
-
-            let _ = instance.body(&db);
-        }
-
-        assert_eq!(
-            checked_calls, 3,
-            "StoragePackedArray helpers should contain get/set/search calls; checked {checked_calls}",
-        );
-    }
-
-    fn selected_erased_place_root<'db>(
-        body: &RuntimeSemanticBody<'db>,
-        carriers: &[RuntimeCarrier<'db>],
-        roots: &[RuntimeLocalRoot<'db>],
-        selected: &SelectedRuntimeArg<'db>,
-    ) -> Option<SLocalId> {
-        let local = match &selected.source {
-            RuntimeArgSource::PlaceAddress(place, _)
-            | RuntimeArgSource::PlaceValue(place, _)
-            | RuntimeArgSource::ValueExtract { place, .. } => place_root_local(body, place)?,
-            RuntimeArgSource::SemanticPlaceAddress(local, _) => *local,
-            RuntimeArgSource::SemanticOperand(_)
-            | RuntimeArgSource::DirectValueMaterialization { .. }
-            | RuntimeArgSource::RuntimeValue(_)
-            | RuntimeArgSource::HandleLikeValue(_)
-            | RuntimeArgSource::AggregateFromRuntimeSource(_)
-            | RuntimeArgSource::Placeholder(_) => return None,
-        };
-        matches!(carriers.get(local.index()), Some(RuntimeCarrier::Erased))
-            .then_some(local)
-            .filter(|local| {
-                matches!(
-                    roots.get(local.index()),
-                    Some(RuntimeLocalRoot::None) | None
-                )
-            })
-    }
-
-    fn place_root_local<'db>(
-        body: &RuntimeSemanticBody<'db>,
-        place: &NPlace<'db>,
-    ) -> Option<SLocalId> {
-        match place.base {
-            NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier),
-            NPlaceBase::Root(root) => match body.normalized.root(root).map(|root| &root.kind) {
-                Some(
-                    NRootKind::ParamPlace { .. }
-                    | NRootKind::LocalSlot { .. }
-                    | NRootKind::Temporary { .. },
-                ) => body.root_local(root),
-                Some(NRootKind::Provider { .. } | NRootKind::CapabilityRepresentation { .. })
-                | None => None,
-            },
-        }
-    }
     #[test]
     fn own_scalar_call_inputs_materialize_provider_backed_direct_values() {
         let mut db = DriverDataBase::default();

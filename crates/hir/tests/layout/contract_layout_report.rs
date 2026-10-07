@@ -132,31 +132,17 @@ contract C {
 }
 
 #[test]
-fn report_keeps_address_spaces_independent() {
+fn report_numbers_storage_and_transient_fields_together() {
     parse_ok!(
         db,
         top_mod,
         r#"
 use std::evm::TStorPtr
-use core::effect_ref::{AddressSpace, StaticSlot}
-
-struct Slot<const ROOT: u256 = _> {}
-struct Holder { ptr: TStorPtr<Slot> }
-struct Plain<const ROOT: u256> {}
-struct Routed<const SPACE: AddressSpace, const ROOT: u256> {}
-impl<const SPACE: AddressSpace, const ROOT: u256> StaticSlot for Routed<SPACE, ROOT> {
-    const SPACE: AddressSpace = SPACE
-}
-type Both<const ROOT: u256 = _> = (
-    Plain<ROOT>,
-    Routed<AddressSpace::TransientStorage, ROOT>,
-)
 
 contract C {
     mut stored: u256,
     mut temporary: TStorPtr<u256>,
-    mut holder: Holder,
-    mut explicit: Both<7>,
+    mut later: u256,
     immutable: u256,
 }
 "#,
@@ -165,11 +151,8 @@ contract C {
     let report = contract.layout_report(&db).unwrap();
     for (path, space, value) in [
         ("stored", ProviderAddressSpace::Storage, "0"),
-        ("temporary", ProviderAddressSpace::Transient, "0"),
-        ("holder.ptr.slot", ProviderAddressSpace::Storage, "1"),
-        ("holder.ptr.ROOT", ProviderAddressSpace::Transient, "1"),
-        ("explicit.0.ROOT", ProviderAddressSpace::Storage, "7"),
-        ("explicit.1.ROOT", ProviderAddressSpace::Transient, "7"),
+        ("temporary", ProviderAddressSpace::Transient, "1"),
+        ("later", ProviderAddressSpace::Storage, "2"),
         ("immutable", ProviderAddressSpace::Code, "0"),
     ] {
         let entry = entry(&db, &report.entries, path);

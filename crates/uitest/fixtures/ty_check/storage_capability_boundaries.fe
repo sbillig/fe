@@ -1,4 +1,5 @@
-use std::evm::{StorageMap, StoragePackedArray, TSlot}
+use std::evm::{StorageMap, TSlot}
+use std::evm::effects::RawStorage
 
 struct Store {
     balances: StorageMap<u256, u256>,
@@ -8,15 +9,20 @@ pub fn map_literal(_ store: mut Store) {
     store.balances = StorageMap { seed: 0 }
 }
 
-pub fn array_new_without_effect() -> StoragePackedArray<8, 0> {
-    StoragePackedArray::new()
+// A raw-slot constructor is `unsafe` and needs raw storage authority.
+pub fn raw_map_without_unsafe() -> u256 uses (storage: mut RawStorage) {
+    StorageMap<u256, u256>::at(0).get(1)
 }
 
-pub fn tslot_literal() -> TSlot<u256, 0> {
-    TSlot {}
+pub fn raw_map_without_effect() -> u256 {
+    unsafe { StorageMap<u256, u256>::at(0).get(1) }
 }
 
-pub fn tslot_write_without_effect(slot: TSlot<u256, 0>) {
+pub fn tslot_literal(_ slot: mut TSlot<u256>) {
+    slot = TSlot { seed: 0 }
+}
+
+pub fn tslot_write_through_view(slot: TSlot<u256>) {
     slot.write(1)
 }
 

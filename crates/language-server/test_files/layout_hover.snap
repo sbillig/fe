@@ -52,7 +52,7 @@ range: 13:13..13:19
 
 #### Transient Storage
 
-- `0`: `temporary` (inline field, `u256`)
+- `1`: `temporary` (inline field, `u256`)
 
 #### Immutable (Code)
 

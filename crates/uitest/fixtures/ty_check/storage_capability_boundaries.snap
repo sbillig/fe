@@ -5,62 +5,75 @@ expression: diags
 input_file: fixtures/ty_check/storage_capability_boundaries.fe
 ---
 error[2-0003]: `seed` is not visible
-    ┌─ storage_capability_boundaries.fe:8:35
+    ┌─ storage_capability_boundaries.fe:9:35
     │
-  8 │     store.balances = StorageMap { seed: 0 }
+  9 │     store.balances = StorageMap { seed: 0 }
     │                                   ^^^^^^^ `seed` is not visible
     │
-    ┌─ src/evm/storage_map.fe:207:5
+    ┌─ src/evm/storage_map.fe:209:5
     │
-207 │     seed: u256,
+209 │     seed: u256,
+    │     ---- `seed` is defined here
+
+error[2-0003]: `seed` is not visible
+    ┌─ storage_capability_boundaries.fe:22:20
+    │
+ 22 │     slot = TSlot { seed: 0 }
+    │                    ^^^^^^^ `seed` is not visible
+    │
+    ┌─ src/evm/effects.fe:241:5
+    │
+241 │     seed: u256,
     │     ---- `seed` is defined here
 
 error[3-0061]: `StorageMap<u256, u256>` lives only in storage
-  ┌─ storage_capability_boundaries.fe:8:22
+  ┌─ storage_capability_boundaries.fe:9:22
   │
-8 │     store.balances = StorageMap { seed: 0 }
+9 │     store.balances = StorageMap { seed: 0 }
   │                      ^^^^^^^^^^^^^^^^^^^^^^ a storage-only type cannot be constructed as a value
   │
   = a storage collection lives at its storage place; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
-error[8-0011]: missing fields in record pattern
-   ┌─ storage_capability_boundaries.fe:16:11
+error[3-0061]: `TSlot<u256>` lives only in storage
+   ┌─ storage_capability_boundaries.fe:22:12
    │
-16 │     TSlot {}
-   │           ^^
-   │           │
-   │           missing `seal`
-   │           Consider using `TSlot { seal }` instead
+22 │     slot = TSlot { seed: 0 }
+   │            ^^^^^^^^^^^^^^^^^ a storage-only type cannot be constructed as a value
+   │
+   = a storage collection lives at its storage place; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
-error[8-0036]: missing effect `RawStorage` required by `new`
-   ┌─ storage_capability_boundaries.fe:12:5
+error[8-0036]: missing effect `RawStorage` required by `at`
+   ┌─ storage_capability_boundaries.fe:18:14
    │
-12 │     StoragePackedArray::new()
-   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ `new` requires effect `RawStorage` to be in scope
+18 │     unsafe { StorageMap<u256, u256>::at(0).get(1) }
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `at` requires effect `RawStorage` to be in scope
    │
    = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`
-
-error[8-0036]: missing effect `Field(Self)` required by `write`
-   ┌─ storage_capability_boundaries.fe:20:5
-   │
-20 │     slot.write(1)
-   │     ^^^^^^^^^^^^^ `write` requires effect `Field(Self)` to be in scope
-   │
-   = the authority over the field a handle names comes from an effect provider holding it, such as a contract field under `uses (mut store)`, or from a `uses (storage: Field(T))` effect
-
-error[8-0066]: mutable borrow requires a mutable place
-   ┌─ storage_capability_boundaries.fe:20:5
-   │
-19 │ pub fn tslot_write_without_effect(slot: TSlot<u256, 0>) {
-   │                                   ---- `slot` does not provide mutable access
-20 │     slot.write(1)
-   │     ^^^^ cannot borrow as `mut`
 
 error[8-0066]: mutable borrow requires a mutable place
    ┌─ storage_capability_boundaries.fe:26:5
    │
-24 │ uses (store: Store)
+25 │ pub fn tslot_write_through_view(slot: TSlot<u256>) {
+   │                                 ---- `slot` does not provide mutable access
+26 │     slot.write(1)
+   │     ^^^^ cannot borrow as `mut`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ storage_capability_boundaries.fe:32:5
+   │
+30 │ uses (store: Store)
    │       ----- `store` does not provide mutable access
-25 │ {
-26 │     store.balances.set(key: 1, value: 2)
+31 │ {
+32 │     store.balances.set(key: 1, value: 2)
    │     ^^^^^^^^^^^^^^ cannot borrow as `mut`
+
+error[8-0097]: call to unsafe function `at` requires an `unsafe` block or function
+    ┌─ storage_capability_boundaries.fe:14:5
+    │
+ 14 │     StorageMap<u256, u256>::at(0).get(1)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+    │
+    ┌─ src/evm/storage_map.fe:238:19
+    │
+238 │     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    │                   -- callee defined here

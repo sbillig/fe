@@ -1479,6 +1479,22 @@ impl<'db> SemanticInstance<'db> {
         normalize_ty(db, ty, self.normalization_scope(db), self.assumptions(db))
     }
 
+    /// The address space the elements of `ty` live in when its elements are
+    /// places (`core::ops::PlaceIndex`), in this instance.
+    #[salsa::tracked]
+    pub fn place_index_space(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+    ) -> Option<ProviderAddressSpace> {
+        crate::analysis::ty::provider::place_index_space(
+            db,
+            self.normalization_scope(db),
+            self.assumptions(db),
+            self.normalized_ty(db, ty),
+        )
+    }
+
     /// The key and element types of `ty` when its elements are places
     /// (`core::ops::PlaceIndex`), in this instance.
     #[salsa::tracked]

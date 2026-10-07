@@ -2064,34 +2064,6 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
-            Self::StaticSlotSpaceUnresolved { span, ty } => {
-                let mut sub_diagnostics = vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message:
-                        "this field embeds a `StaticSlot` type whose `SPACE` does not evaluate to a concrete address space"
-                            .to_string(),
-                    span: span.resolve(db),
-                }];
-                if let Some(name_span) = ty.name_span(db) {
-                    let type_name = ty.base_ty(db).pretty_print(db);
-                    sub_diagnostics.push(SubDiagnostic {
-                        style: LabelStyle::Secondary,
-                        message: format!("`{type_name}` is defined here"),
-                        span: name_span.resolve(db),
-                    });
-                }
-
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "cannot determine the address space of a static-slot field".to_string(),
-                    sub_diagnostics,
-                    notes: vec![
-                        "`StaticSlot::SPACE` must evaluate to a concrete `core::effect_ref::AddressSpace` variant; it cannot depend on an unresolved generic parameter".to_string(),
-                    ],
-                    error_code,
-                }
-            }
-
             Self::ContractFieldNonSlotConstHole { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -3143,15 +3115,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         ),
                         span: primary.resolve(db),
                     }],
-                    notes: vec![match key.field_key_handle(db) {
-                        Some(_) => "the authority over the field a handle names comes from \
-                            an effect provider holding it, such as a contract field under \
-                            `uses (mut store)`, or from a `uses (storage: Field(T))` effect"
-                            .to_string(),
-                        None => format!(
-                            "provide it with `with ({key_str} = value)` or require it via `uses {key_str}`"
-                        ),
-                    }],
+                    notes: vec![format!(
+                        "provide it with `with ({key_str} = value)` or require it via `uses {key_str}`"
+                    )],
                     error_code,
                 }
             }
@@ -3225,54 +3191,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     sub_diagnostics,
                     notes: vec![
                         "use a mutable binding or pass a mutable reference in the `with` block"
-                            .to_string(),
-                    ],
-                    error_code,
-                }
-            }
-
-            Self::FieldEffectAsValue { primary, name } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: format!("`{}` is a `Field` effect, not a value", name.data(db)),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "a `Field` effect is authority over a field".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec!["operate on the handle that names the field".to_string()],
-                error_code,
-            },
-
-            Self::LentFieldAuthority {
-                primary,
-                func,
-                key,
-                effect,
-                is_mut,
-            } => {
-                let func_name = func
-                    .name(db)
-                    .to_opt()
-                    .map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
-                let key_str = key.pretty_print(db);
-                let effect = effect.map_or_else(|| "an effect".to_string(), |name| {
-                    format!("its effect `{}`", name.data(db))
-                });
-                let (mode, verb) = if *is_mut { ("mut ", "write") } else { ("", "read") };
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: format!(
-                        "`{func_name}` may use `{mode}{key_str}` on the handles {effect} holds"
-                    ),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!(
-                            "this function's authority does not {verb} the fields those handles name"
-                        ),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![
-                        "a call lending a `Field` authority must hold it over every handle of its shape the callee is given"
                             .to_string(),
                     ],
                     error_code,

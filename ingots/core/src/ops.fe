@@ -202,6 +202,8 @@ pub trait Ord<T = Self> {
 /// collection implements it by saying where an element lives; the compiler
 /// calls `locate` when it addresses the element.
 pub trait PlaceIndex {
+    /// The address space the elements live in, wherever the collection is.
+    const SPACE: ingot::effect_ref::AddressSpace
     type Key: Copy
     type Output
 

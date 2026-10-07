@@ -3,6 +3,7 @@ use super::crypto::keccak256
 use ingot::evm::ops::mstore
 use core::num::IntWord
 use core::ptr
+use core::effect_ref::AddressSpace
 use core::ops::PlaceIndex
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
@@ -196,7 +197,8 @@ impl StorageKey for bool {
 /// takes one slot of its container, and it is never copied or moved. The
 /// value at `key` occupies the slots from `keccak256(key ++ slot)` onwards,
 /// laid out like any value of type `V` in storage, including packed struct
-/// fields, so a map in a map's value derives its slot from its entry's.
+/// fields, so a map in a map's value derives its slot from its entry's. The
+/// entries are persistent wherever the map lives, even in transient state.
 /// `map[key]` names that entry's place: `map[key].f += 1` reads and writes
 /// one field, and `let e = mut map[key]` binds the entry. Keys use the stable
 /// encoding `StorageKey` defines.
@@ -208,6 +210,7 @@ pub struct StorageMap<K, V> {
 }
 
 impl<K: StorageKey + Copy, V> PlaceIndex for StorageMap<K, V> {
+    const SPACE: AddressSpace = AddressSpace::Storage
     type Key = K
     type Output = V
 

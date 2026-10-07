@@ -5059,12 +5059,6 @@ impl<'db> TypedBody<'db> {
                 PlaceProjection::Index { index_expr, .. } => {
                     Some(self.return_index_projection(db, body, *index_expr))
                 }
-                PlaceProjection::VariantField { variant, field, .. } => {
-                    Some(Some(ReturnProjectionStep::VariantField {
-                        variant: *variant,
-                        field: *field,
-                    }))
-                }
             })
             .collect::<Option<Vec<_>>>()?;
         project_return_sources(sources, &projection)

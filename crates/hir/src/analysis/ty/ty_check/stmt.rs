@@ -507,12 +507,7 @@ impl<'db> TyChecker<'db> {
             let func_ty = this.instantiate_trait_method_to_term(method, receiver_ty, inst);
             let mut callable = Callable::new(this.db, func_ty, span.clone(), Some(inst)).ok()?;
             callable.set_checked_input_tys(inputs);
-            let args: Vec<_> = driver
-                .map(|(driver, _)| driver)
-                .into_iter()
-                .chain(bases.iter().map(|&(base, _)| base))
-                .collect();
-            let effect_args = this.resolve_callable_effects(span.clone(), &mut callable, &args);
+            let effect_args = this.resolve_callable_effects(span.clone(), &mut callable);
             Some(ForLoopCall {
                 callable,
                 effect_args,

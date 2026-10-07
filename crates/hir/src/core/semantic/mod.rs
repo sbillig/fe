@@ -5830,10 +5830,6 @@ impl<'db> FieldView<'db> {
                 ContractLayoutError::UnresolvedConcreteLayoutRoot { .. } => {
                     TyLowerDiag::ContractFieldConcreteLayoutRootUnresolved { span, ty }
                 }
-                ContractLayoutError::UnresolvedStaticSlotSpace { .. }
-                | ContractLayoutError::AmbiguousStaticSlot { .. } => {
-                    TyLowerDiag::StaticSlotSpaceUnresolved { span, ty }
-                }
                 ContractLayoutError::LayoutRootArray { array } => {
                     TyLowerDiag::ContractFieldLayoutRootArray {
                         span,
@@ -5903,8 +5899,6 @@ impl<'db> FieldView<'db> {
                         | ContractLayoutError::UnresolvedProviderSpace
                         | ContractLayoutError::InvalidProviderRaw { .. }
                         | ContractLayoutError::NonRegularProviderCycle
-                        | ContractLayoutError::UnresolvedStaticSlotSpace { .. }
-                        | ContractLayoutError::AmbiguousStaticSlot { .. }
                         | ContractLayoutError::LayoutRootArray { .. } => {
                             unreachable!()
                         }

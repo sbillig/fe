@@ -32,14 +32,6 @@ fn raw_read_only(_ p: StorPtr<u256>) -> u256 uses (storage: RawStorage) {
     }
 }
 
-// Accepted: the authority over the slot a handle of this type names.
-fn field(_ p: StorPtr<u256>) -> u256 uses (storage: Field(StorPtr<u256>)) {
-    let ptr = p
-    with (ptr) {
-        read(ptr)
-    }
-}
-
 // Accepted: an `unsafe` block vouches for the provider.
 fn vouched(_ p: StorPtr<u256>) -> u256 {
     let ptr = p
