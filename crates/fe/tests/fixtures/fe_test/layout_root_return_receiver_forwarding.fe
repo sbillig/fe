@@ -40,9 +40,9 @@ pub contract C {
         Get { lane, key } -> u256 uses (first, second) {
             // The wrapped map is a place in the field this arm reads.
             if lane == 0 {
-                with (first.map) { read_wrapped(wrapped: first, key: key) }
+                read_wrapped(wrapped: first, key: key)
             } else {
-                with (second.map) { read_wrapped(wrapped: second, key: key) }
+                read_wrapped(wrapped: second, key: key)
             }
         }
     }

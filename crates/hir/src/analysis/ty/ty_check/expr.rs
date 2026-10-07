@@ -2256,16 +2256,46 @@ impl<'db> TyChecker<'db> {
         );
     }
 
+    /// The places of the argument `arg` a `Field(T)` handle may be taken
+    /// from, with their types: its own, then the fields of its structs and
+    /// tuples, breadth first.
+    fn handle_places(&mut self, arg: ExprId) -> Vec<(Place<'db>, TyId<'db>)> {
+        let (Some(place), Some(prop)) = (self.env.expr_place(arg), self.env.typed_expr(arg)) else {
+            return Vec::new();
+        };
+        let mut places = vec![(place, prop.ty.fold_with(self.db, &mut self.table))];
+        let mut next = 0;
+        while let Some((place, ty)) = places.get(next).cloned() {
+            next += 1;
+            if ty.is_tuple(self.db)
+                || ty
+                    .adt_def(self.db)
+                    .is_some_and(|adt| matches!(adt.adt_ref(self.db), AdtRef::Struct(_)))
+            {
+                for (index, field_ty) in ty.field_types(self.db).into_iter().enumerate() {
+                    let mut field = place.clone();
+                    field.push_projection(PlaceProjection::Field {
+                        index: index as u16,
+                        result_ty: field_ty,
+                    });
+                    places.push((field, field_ty));
+                }
+            }
+        }
+        places
+    }
+
     fn resolve_effect_query(
         &mut self,
         req: EffectRequirementDecl<'db>,
         query: EffectQuery<'db>,
         call_args: &[ExprId],
     ) -> EffectResolution<'db> {
-        // `Field(T)` takes the authority of the first argument of type `T`
-        // whose place carries effect authority (`binding_has_authority`),
-        // since that handle names the field; a copy of a handle carries
-        // none. Otherwise a provider of type `T` gives it.
+        // `Field(T)` takes the authority of the first argument place of type
+        // `T`, or field of an argument place holding one, that carries effect
+        // authority (`binding_has_authority`), since that handle names the
+        // field; a copy of a handle carries none. Otherwise a provider of
+        // type `T` gives it.
         if req.key_ty.field_key_handle(self.db).is_some()
             && let EffectPatternKey::Type(type_query) = &query.key
         {
@@ -2280,18 +2310,37 @@ impl<'db> TyChecker<'db> {
                 if !authority {
                     continue;
                 }
-                let provider = ProvidedEffect {
-                    origin: EffectOrigin::Arg { expr: arg },
-                    ty: prop.ty.fold_with(self.db, &mut self.table),
-                    is_mut: prop.is_mut,
-                    binding: None,
-                };
-                if let Some(evidence) = self.evaluate_unkeyed_type_provider(
-                    type_query.clone(),
-                    provider,
-                    query.required_mut,
-                ) {
-                    return EffectResolution::Chosen(Box::new(evidence));
+                // A field passes its handle by place; an effect handle, which
+                // passes by value, is taken only as a whole argument.
+                for (index, (_, ty)) in self.handle_places(arg).into_iter().enumerate() {
+                    if index > 0
+                        && matches!(
+                            provider_semantics(
+                                self.db,
+                                self.env.scope(),
+                                self.env.assumptions(),
+                                ty
+                            )
+                            .evidence,
+                            ProviderLayoutEvidence::ResolvedHandle(_)
+                                | ProviderLayoutEvidence::TraitBoundHandle(_)
+                        )
+                    {
+                        continue;
+                    }
+                    let provider = ProvidedEffect {
+                        origin: EffectOrigin::Arg { expr: arg },
+                        ty,
+                        is_mut: prop.is_mut,
+                        binding: None,
+                    };
+                    if let Some(evidence) = self.evaluate_unkeyed_type_provider(
+                        type_query.clone(),
+                        provider,
+                        query.required_mut,
+                    ) {
+                        return EffectResolution::Chosen(Box::new(evidence));
+                    }
                 }
             }
         }
@@ -2648,9 +2697,13 @@ impl<'db> TyChecker<'db> {
         match arg_style {
             EffectArgStyle::Place => {
                 let place = match provider.origin {
-                    EffectOrigin::With { value_expr } | EffectOrigin::Arg { expr: value_expr } => {
-                        self.env.expr_place(value_expr)
-                    }
+                    EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
+                    // The argument's place, or its field holding the handle.
+                    EffectOrigin::Arg { expr } => self
+                        .handle_places(expr)
+                        .into_iter()
+                        .find(|(_, ty)| *ty == provider.ty)
+                        .map(|(place, _)| place),
                     EffectOrigin::Param { .. } => provider
                         .binding
                         .map(|binding| Place::new(PlaceBase::Binding(binding))),

@@ -97,3 +97,34 @@ pub contract Distinct {
         x += v
     }
 }
+
+struct Pair {
+    left: StorageMap<u256, u256>,
+    right: StorageMap<u256, u256>,
+}
+
+// `left` is a copy, so the caller grants the authority over its field, which
+// leaves the map's salt open: any map of that shape.
+fn read_left(_ pair: Pair, _ key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
+    let left = pair.left
+    left.get(key)
+}
+
+// Accepted: a field of an argument in an effect gives the authority.
+pub contract Nested {
+    mut pair: Pair,
+    init() uses (mut pair) {
+        pair.left.set(key: 1, value: read_left(pair, 1) + 1)
+    }
+}
+
+// Rejected: the authority `read_left` holds reaches any map of its shape,
+// including the one a session holds.
+pub contract NestedSession {
+    mut pair: Pair,
+    init() uses (mut pair) {
+        let x = mut pair.right[1]
+        let v = read_left(pair, 1)
+        x += v
+    }
+}

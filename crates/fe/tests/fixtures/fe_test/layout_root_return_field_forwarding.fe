@@ -46,11 +46,11 @@ pub contract C {
         }
 
         Get { lane, key } -> u256 uses (first, second) {
-            // The pair's map is a place in the field this arm reads.
+            // The pair's maps are places in the fields this arm reads.
             if lane == 0 {
-                with (first.left) { read_pair_left(pair: first, key: key) }
+                read_pair_left(pair: first, key: key)
             } else {
-                with (second.left) { read_pair_left(pair: second, key: key) }
+                read_pair_left(pair: second, key: key)
             }
         }
     }

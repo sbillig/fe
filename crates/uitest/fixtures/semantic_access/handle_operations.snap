@@ -43,3 +43,11 @@ error[16-0001]: access conflict in `fn Provided::__init__`
 72 │         with (h) {
 73 │             h.set(key: 2, value: 5)
    │             ^^^^^^^^^^^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn NestedSession::__init__`
+    ┌─ handle_operations.fe:127:17
+    │
+126 │         let x = mut pair.right[1]
+    │                     ------------- projection opened here
+127 │         let v = read_left(pair, 1)
+    │                 ^^^^^^^^^^^^^^^^^^ cannot read this place while a `mut` projection of it is open

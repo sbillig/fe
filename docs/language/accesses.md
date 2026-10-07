@@ -82,8 +82,9 @@ A storage handle, such as a `StorageMap`, is a snapshot naming the field
 whose entries it reaches. An operation through it declares that field's
 authority, `uses (storage: Field(Self))` (`mut` to write), and accesses the
 field for its duration. The authority comes with a handle argument whose
-place carries it: a place in an effect, or in a data parameter or access
-naming the caller's place. A copy (a local, an owned value, a call's
+place carries it, or with a struct or tuple argument holding the handle in
+a field: a place in an effect, or in a data parameter or access naming the
+caller's place. A copy (a local, an owned value, a call's
 result) carries none, so a function operating on one declares
 `uses (storage: Field(StorageMap<K, V>))` and its caller grants it.
 
