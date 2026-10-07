@@ -64,3 +64,11 @@ error[8-0115]: `write_held` may use `mut Field(StorageMap<u256, u256>)` on the h
    │         ^^^^^^^^^^^^ this function's authority does not write the fields those handles name
    │
    = a call lending a `Field` authority must hold it over every handle of its shape the callee is given
+
+error[8-0116]: `storage` is a `Field` effect, not a value
+   ┌─ field_authority_sources.fe:78:5
+   │
+78 │     storage.get(key)
+   │     ^^^^^^^ a `Field` effect is authority over a field
+   │
+   = operate on the handle that names the field

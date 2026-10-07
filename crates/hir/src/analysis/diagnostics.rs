@@ -3206,6 +3206,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::FieldEffectAsValue { primary, name } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!("`{}` is a `Field` effect, not a value", name.data(db)),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "a `Field` effect is authority over a field".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec!["operate on the handle that names the field".to_string()],
+                error_code,
+            },
+
             Self::LentFieldAuthority {
                 primary,
                 func,

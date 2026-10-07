@@ -107,7 +107,8 @@ A `Field(T)` that leaves `T`'s salt open (`Field(StorageMap<K, V>)`) is
 authority over any map of that shape. A callee reaches maps only through its
 arguments and effects, so a call lending such an authority, or `Field(Self)`,
 must cover every map of that shape its arguments hold, and accesses their
-fields. A `with` block may install a handle copy as a provider only under
+fields. A `Field` effect is authority only: it is not a value the body can
+name, and it costs nothing at runtime. A `with` block may install a handle copy as a provider only under
 the function's own authority over its field, or raw storage authority.
 
 ## External calls

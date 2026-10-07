@@ -4370,6 +4370,24 @@ impl<'db> TyChecker<'db> {
         };
         match res {
             ResolvedPathInBody::Binding(binding) => {
+                if let LocalBinding::EffectParam { site, idx, .. } = binding
+                    && self
+                        .env
+                        .resolved_effect_binding(site, idx)
+                        .is_some_and(|resolved| {
+                            resolved
+                                .requirement
+                                .binding_ty
+                                .field_key_handle(self.db)
+                                .is_some()
+                        })
+                {
+                    self.push_diag(BodyDiag::FieldEffectAsValue {
+                        primary: path_expr_span.into(),
+                        name: binding.binding_name(&self.env),
+                    });
+                    return ExprProp::invalid(self.db);
+                }
                 let ty = self
                     .env
                     .lookup_binding_ty(&binding)

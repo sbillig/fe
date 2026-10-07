@@ -503,6 +503,12 @@ pub enum BodyDiag<'db> {
         provided_span: Option<DynLazySpan<'db>>,
     },
 
+    /// A `Field` effect binding named as a value: it is authority only.
+    FieldEffectAsValue {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+
     /// A call lends a `Field` authority its callee may exercise over the
     /// handles another effect it is given holds, which the caller does not
     /// cover with that authority's mode.
@@ -1100,6 +1106,7 @@ impl<'db> BodyDiag<'db> {
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::LentFieldAuthority { .. } => 115,
+            Self::FieldEffectAsValue { .. } => 116,
             Self::EffectTypeMismatch { .. } => 38,
             Self::EffectProviderMismatch { .. } => 52,
             Self::EffectTraitUnsatisfied { .. } => 39,

@@ -72,3 +72,8 @@ fn lend_over_read_only_effect() uses (first: mut Holder, second: Holder) {
         write_held()
     }
 }
+
+// Rejected: a `Field` effect is authority, not a value.
+fn named(_ key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
+    storage.get(key)
+}
