@@ -227,6 +227,10 @@ fn direct_row_components<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<Vec<RowComponent<'db>>> {
+    // A closure's row is the effects its body uses; none yet.
+    if key.inst.self_ty(db).as_closure(db).is_some() {
+        return Some(Vec::new());
+    }
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     let name = key.name(db)?;
     let row_effects = |impl_trait: ImplTrait<'db>| {

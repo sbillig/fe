@@ -32,7 +32,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
-use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
+use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait, params::FuncParamMode};
 use crate::{
     hir_def::{
         BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
@@ -52,14 +52,14 @@ use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::Pac
 use ena::unify::InPlace;
 use env::TyCheckEnv;
 pub use env::{
-    BindingAccess, EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode,
-    PathReadSemantics,
+    BindingAccess, ClosureCapture, ClosureInfo, EffectParamSite, ExprProp, LocalBinding, ParamSite,
+    PatBindingMode, PathReadSemantics,
 };
 pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
-use std::sync::Arc;
+use std::{iter, sync::Arc};
 pub use stmt::{ForLoopCall, ForLoopItem, ForLoopPlan, ForLoopStep};
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -107,7 +107,7 @@ use crate::analysis::semantic::{
     eval_body_owner_const, get_or_build_semantic_instance, reify_runtime_const_for_ty,
     runtime_size_bytes_with_source,
 };
-use crate::analysis::ty::ty_def::{TyBase, TyData};
+use crate::analysis::ty::ty_def::{ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{
         BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor,
@@ -831,6 +831,14 @@ fn infer_body_query<'db>(
     key: BodyInferenceKey<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let owner = key.owner(db);
+    // A closure's body is checked inline in its parent's.
+    if let BodyOwner::Closure { ty, def, receiver } = owner {
+        let body = BodyOwner::from_body(db, def.body).map_or_else(
+            || TypedBody::empty(db),
+            |parent| infer_body(db, parent).1.for_closure(db, ty, receiver),
+        );
+        return (Vec::new(), body);
+    }
     let Ok(mut checker) = TyChecker::new(db, owner) else {
         return (
             Vec::new(),
@@ -839,7 +847,8 @@ fn infer_body_query<'db>(
                 BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
                 | BodyOwner::ContractInit { .. }
-                | BodyOwner::ContractRecvArm { .. } => TypedBody::empty(db),
+                | BodyOwner::ContractRecvArm { .. }
+                | BodyOwner::Closure { .. } => TypedBody::empty(db),
             },
         );
     };
@@ -1246,6 +1255,7 @@ fn typed_body_for_bodyless_func<'db>(
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
         record_init_lowering: SecondaryMap::new(),
+        closure_infos: SecondaryMap::new(),
         resolved_field_index: SecondaryMap::new(),
         call_effect_args: SecondaryMap::new(),
         return_borrow_provider: None,
@@ -1371,6 +1381,20 @@ impl<'db> TyChecker<'db> {
         self.check_access_uses();
     }
 
+    /// Reports the non-`Copy` values moved out of closures' captures.
+    fn check_capture_moves(&mut self) {
+        for (expr, binding, ty) in self.env.take_capture_moves() {
+            let ty = ty.fold_with(self.db, &mut self.table);
+            let ty = self.normalize_ty(ty);
+            if !ty.has_var(self.db) && !ty.has_invalid(self.db) && !self.ty_is_copy(ty) {
+                self.push_diag(BodyDiag::MoveOutOfCapture {
+                    primary: expr.span(self.body()).into(),
+                    name: binding.binding_name(&self.env),
+                });
+            }
+        }
+    }
+
     fn check_own_param_types(&mut self) {
         match self.env.owner() {
             BodyOwner::Func(_) => {}
@@ -1419,14 +1443,15 @@ impl<'db> TyChecker<'db> {
             }
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
-            | BodyOwner::ContractRecvArm { .. } => {}
+            | BodyOwner::ContractRecvArm { .. }
+            | BodyOwner::Closure { .. } => {}
         }
     }
 
     fn check_effect_param_keys_resolve(&mut self) {
         match self.env.owner() {
             BodyOwner::Func(func) => self.check_free_func_effect_list(func, func.effects(self.db)),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -1475,7 +1500,9 @@ impl<'db> TyChecker<'db> {
     ) {
         let (owner, site) = match owner {
             BodyOwner::Func(func) => (EffectParamOwner::Func(func), EffectParamSite::Func(func)),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => unreachable!(),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
+                unreachable!()
+            }
             BodyOwner::ContractInit { contract } => (
                 EffectParamOwner::ContractInit { contract },
                 EffectParamSite::ContractInit { contract },
@@ -3547,6 +3574,7 @@ mod typed_body_tables {
         pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
         pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
         pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
+        pub(super) closure_infos: SecondaryMap<ExprId, Option<ClosureInfo<'db>>>,
         pub(super) resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
         pub(super) call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
         pub(super) return_borrow_provider: Option<ProviderAddressSpace>,
@@ -3883,6 +3911,9 @@ impl<'db> TypedBody<'db> {
         for lowering in self.tables.record_init_lowering.values().flatten() {
             lowering.visit_with(visitor);
         }
+        for info in self.tables.closure_infos.values().flatten() {
+            info.visit_with(visitor);
+        }
         for args in self.tables.call_effect_args.values().flatten() {
             args.visit_with(visitor);
         }
@@ -3941,6 +3972,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|lowering| *lowering = (*lowering).fold_with(db, folder));
+        this.closure_infos
+            .values_mut()
+            .flatten()
+            .for_each(|info| *info = info.clone().fold_with(db, folder));
         for args in this.call_effect_args.values_mut().flatten() {
             for arg in args {
                 *arg = arg.clone().fold_with(db, folder);
@@ -4273,6 +4308,35 @@ impl<'db> TypedBody<'db> {
 
     pub fn record_init_lowering(&self, expr: ExprId) -> Option<RecordInitLowering<'db>> {
         self.tables.record_init_lowering[expr]
+    }
+
+    pub fn closure_info(&self, expr: ExprId) -> Option<&ClosureInfo<'db>> {
+        self.tables.closure_infos[expr].as_ref()
+    }
+
+    /// This (parent) typed body viewed as the body of `closure` called with
+    /// a `receiver` environment: its parameters are the environment and the
+    /// closure's parameters, and its result is the closure's. A closure's
+    /// body is checked inline in its parent's, so every other table is
+    /// shared.
+    pub(crate) fn for_closure(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        closure: ClosureTy<'db>,
+        receiver: FuncParamMode,
+    ) -> Self {
+        let params = self
+            .closure_info(closure.def(db).expr)
+            .map(|info| info.params.clone())
+            .unwrap_or_default();
+        let mut body = self.clone();
+        let tables = body.tables_mut();
+        tables.result_ty = closure.ret_ty(db);
+        tables.return_borrow_provider = None;
+        tables.param_bindings = iter::once(LocalBinding::closure_env(db, closure, receiver))
+            .chain(params)
+            .collect();
+        body
     }
 
     pub fn resolved_field_index(&self, expr: ExprId) -> Option<u16> {
@@ -4928,7 +4992,7 @@ impl<'db> TypedBody<'db> {
                 sources?
             }
             LocalBinding::Param {
-                site: ParamSite::ContractInit(_),
+                site: ParamSite::ContractInit(_) | ParamSite::Closure(_) | ParamSite::ClosureEnv(_),
                 ..
             } => return None,
         };
@@ -5371,6 +5435,9 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
+            Expr::Closure { .. } => {
+                *saw_non_param = true;
+            }
             Expr::Lit(_) | Expr::Path(_) | Expr::UnsupportedMacroCall => {}
         }
     }
@@ -5621,6 +5688,7 @@ impl<'db> TypedBody<'db> {
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
             record_init_lowering: SecondaryMap::new(),
+            closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             call_effect_args: SecondaryMap::new(),
             return_borrow_provider: None,
@@ -5984,6 +6052,7 @@ impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
+        checker.check_capture_moves();
         let mut body = checker.env.finish(&mut checker.table);
         body.tables_mut().return_borrow_provider = checker.first_return_borrow_provider;
         let direct_call_callees = body.body().map_or_else(FxHashSet::default, |body_id| {

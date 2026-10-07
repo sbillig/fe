@@ -89,7 +89,7 @@ pub fn contains_capability<'db>(
     if ty.is_array(db) {
         ArrayLength::from_ty(db, ty.generic_args(db)[1]) != Some(ArrayLength::Known(0))
             && contains_capability(db, scope, assumptions, ty.generic_args(db)[0])
-    } else if ty.is_tuple(db) || ty.is_struct(db) {
+    } else if ty.is_product(db) {
         ty.field_types(db)
             .into_iter()
             .any(|field| contains_capability(db, scope, assumptions, field))

@@ -719,6 +719,7 @@ module.exports = grammar({
       $.match_expression,
       $.with_expression,
       $.unsafe_expression,
+      $.closure_expression,
       $.block,
       $.assignment_expression,
       $.augmented_assignment_expression,
@@ -1184,6 +1185,24 @@ module.exports = grammar({
       'unsafe',
       field('body', $.block),
     ),
+
+    // Closure: |x| x + 1, |acc: own, x: u256| -> u256 { acc + x }, || true
+    // The body extends as far as possible.
+    closure_expression: $ => prec.right(seq(
+      choice('||', seq('|', sepTrailing($.closure_parameter, ','), '|')),
+      optional(seq('->', field('return_type', $._type))),
+      field('body', $._expression),
+    )),
+
+    // A closure parameter's type, or the type after its mode, may be omitted:
+    // `x`, `x: own`, `x: own u256`, `x: u256`.
+    closure_parameter: $ => seq(
+      optional('mut'),
+      field('name', choice($.identifier, '_')),
+      optional(seq(':', field('type', choice($._type, $.closure_mode)))),
+    ),
+
+    closure_mode: $ => choice('own', 'mut', 'ref'),
 
     with_param_list: $ => seq(
       '(',

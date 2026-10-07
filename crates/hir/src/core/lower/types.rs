@@ -4,6 +4,7 @@ use super::FileLowerCtxt;
 use crate::core::hir_def::{
     AssocTypeGenericArg, Body, GenericArg, GenericArgListId, IdentId, Partial, PathId, TraitRefId,
     TupleTypeId, TypeGenericArg, TypeId, TypeKind, TypeMode,
+    params::{FuncParamMode, callable_shape_name},
 };
 
 impl<'db> TypeId<'db> {
@@ -77,15 +78,15 @@ impl<'db> TraitRefId<'db> {
             // `Fn_ov<A, B, Out = R>`; `Fn(own T) -> U` is `Fn<T, U>`.
             Some(shape) => shape.name().zip(shape.params()).map(|(name, params)| {
                 let db = ctxt.db();
-                let mut modes = String::new();
+                let mut modes = Vec::new();
                 let mut args = Vec::new();
                 for param in params {
                     let ty = TypeId::lower_ast(ctxt, param);
                     let (mode, ty) = match ty.data(db) {
-                        TypeKind::Mode(TypeMode::Own, inner) => ('o', *inner),
-                        TypeKind::Mode(TypeMode::Mut, inner) => ('m', *inner),
-                        TypeKind::Mode(TypeMode::Ref, inner) => ('v', *inner),
-                        _ => ('v', Partial::Present(ty)),
+                        TypeKind::Mode(TypeMode::Own, inner) => (FuncParamMode::Own, *inner),
+                        TypeKind::Mode(TypeMode::Mut, inner) => (FuncParamMode::Mut, *inner),
+                        TypeKind::Mode(TypeMode::Ref, inner) => (FuncParamMode::View, *inner),
+                        _ => (FuncParamMode::View, Partial::Present(ty)),
                     };
                     modes.push(mode);
                     args.push(GenericArg::Type(TypeGenericArg { ty }));
@@ -94,12 +95,7 @@ impl<'db> TraitRefId<'db> {
                     || TupleTypeId::new(db, Vec::new()).to_ty(db),
                     |ty| TypeId::lower_ast(ctxt, ty),
                 ));
-                let receiver = name.text();
-                let trait_name = match modes.as_str() {
-                    "" => format!("{receiver}0"),
-                    "o" if receiver == "Fn" => receiver.to_string(),
-                    modes => format!("{receiver}_{modes}"),
-                };
+                let trait_name = callable_shape_name(name.text() == "FnMut", &modes);
                 args.push(if trait_name == "Fn" {
                     GenericArg::Type(TypeGenericArg { ty: ret })
                 } else {

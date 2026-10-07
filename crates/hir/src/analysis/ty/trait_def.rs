@@ -249,6 +249,9 @@ pub enum ImplementorOrigin<'db> {
     Hir(ImplTrait<'db>),
     VirtualContract(Contract<'db>),
     Assumption,
+    /// A closure's implementation of its callable shape traits
+    /// (`ty::closure`).
+    Closure,
 }
 
 fn ingot_trait_env_cycle_initial<'db>(
@@ -364,7 +367,9 @@ impl<'db> ResolvedImplInstance<'db> {
                         })
                 }
             }
-            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => Vec::new(),
+            ImplementorOrigin::VirtualContract(_)
+            | ImplementorOrigin::Assumption
+            | ImplementorOrigin::Closure => Vec::new(),
         };
         let Some(template) = self.assoc_ty_template(db, name) else {
             return uses;
@@ -1010,7 +1015,7 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
                     .ok()?,
                 ))
             }),
-        ImplementorOrigin::VirtualContract(_) => None,
+        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Closure => None,
         ImplementorOrigin::Assumption => return None,
     };
     explicit.or_else(|| {
@@ -1177,6 +1182,9 @@ impl<'db> ImplementorId<'db> {
             ImplementorOrigin::Assumption => {
                 panic!("requested HIR impl-trait for assumption-based implementor")
             }
+            ImplementorOrigin::Closure => {
+                panic!("requested HIR impl-trait for a closure's builtin implementor")
+            }
         }
     }
 
@@ -1227,9 +1235,9 @@ impl<'db> ImplementorId<'db> {
                 collect_candidate_constraints(db, impl_trait.into())
                     .instantiate(db, self.params(db))
             }
-            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
-                PredicateListId::empty_list(db)
-            }
+            ImplementorOrigin::VirtualContract(_)
+            | ImplementorOrigin::Assumption
+            | ImplementorOrigin::Closure => PredicateListId::empty_list(db),
         }
     }
 

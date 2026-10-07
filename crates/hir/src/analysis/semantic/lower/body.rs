@@ -157,10 +157,12 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
             binding_role_mode,
         },
     );
-    let result = cx.lower_expr(body.expr(db));
+    let root = template_owner
+        .root_expr(db)
+        .unwrap_or_else(|| body.expr(db));
+    let result = cx.lower_expr(root);
     if !cx.is_terminated(cx.current) {
-        let result = (cx.expr_ty(body.expr(db)) != TyId::unit(db))
-            .then(|| SOperand::expr(result, body.expr(db)));
+        let result = (cx.expr_ty(root) != TyId::unit(db)).then(|| SOperand::expr(result, root));
         cx.exit(SemOrigin::Body(template_owner), result);
     }
     let mut body = cx.finish();
@@ -202,6 +204,9 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) assigned_layout_backing_sources: Vec<bool>,
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
+    /// In a closure body, the field of its environment each captured
+    /// binding is read from.
+    pub(super) capture_places: FxHashMap<LocalBinding<'db>, (SPlace<'db>, TyId<'db>)>,
     pub(super) with_binding_sources: FxHashMap<ExprId, WithBindingSource<'db>>,
     pub(super) current: SBlockId,
     pub(super) next_stmt_id: u32,
@@ -293,6 +298,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             assigned_layout_backing_sources: Vec::new(),
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
+            capture_places: FxHashMap::default(),
             with_binding_sources: FxHashMap::default(),
             current: SBlockId::from_u32(0),
             next_stmt_id: 0,
@@ -350,6 +356,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
         for binding in self.owner_effect_bindings() {
             self.alloc_entry_binding_local(binding);
+        }
+        if let BodyOwner::Closure { def, .. } = self.template_owner
+            && let Some(env) = self.typed_body.param_binding(0)
+            && let Some(info) = self.typed_body.closure_info(def.expr)
+        {
+            let env = self.binding_locals[&env];
+            for (idx, capture) in info.captures.iter().enumerate() {
+                let mut place = SPlace::new(env);
+                place.push_field(FieldIndex(idx as u16));
+                self.capture_places
+                    .insert(capture.binding, (place, capture.ty));
+            }
         }
 
         for (pat, _) in self.body.pats(self.db).iter() {
@@ -562,6 +580,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             expr.data(self.db, self.body),
             Partial::Present(Expr::Path(_))
         ) && let Some(binding) = self.typed_body.expr_binding(expr)
+            && !self.capture_places.contains_key(&binding)
             && let Some(&local) = self.binding_locals.get(&binding)
             && self.locals[local.index()]
                 .ty
@@ -734,6 +753,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // An access binding is re-yielded through its carrier. (A projection's
         // `Copy` view parameter is a session-owned copy, viewed below.)
         if let Some(binding) = self.typed_body.expr_binding(expr)
+            && !self.capture_places.contains_key(&binding)
             && let Some(&local) = self.binding_locals.get(&binding)
             && self.locals[local.index()]
                 .ty
@@ -829,6 +849,26 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let fields = elems
                     .iter()
                     .map(|expr| self.lower_expr_operand(*expr))
+                    .collect();
+                self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
+            }
+            // A closure is the aggregate of its captures, each copied or
+            // moved in.
+            Expr::Closure { .. } => {
+                let captures = self
+                    .typed_body
+                    .closure_info(expr)
+                    .expect("a typed closure has its captures")
+                    .captures
+                    .clone();
+                let fields = captures
+                    .into_iter()
+                    .map(|capture| {
+                        SOperand::expr(
+                            self.lower_binding_read(expr, capture.binding, capture.ty, None),
+                            expr,
+                        )
+                    })
                     .collect();
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
@@ -1093,29 +1133,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_path_expr(&mut self, expr: ExprId) -> SValueId {
         if let Some(binding) = self.typed_body.expr_binding(expr) {
-            let local = *self
-                .binding_locals
-                .get(&binding)
-                .expect("binding local should be allocated");
-            return match self.binding_path_read_semantics(
-                binding,
-                self.typed_body
-                    .path_expr_read_semantics(expr)
-                    .expect("binding path should have typed read semantics"),
-                self.expr_ty(expr),
-            ) {
-                PathReadSemantics::ReuseLocal => local,
-                PathReadSemantics::ForwardInterface => self.emit_expr_with_origin(
-                    SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
-                    SExpr::Forward(SOperand::inherited(local)),
-                ),
-                PathReadSemantics::MaterializeValue => self.emit_expr_with_origin(
-                    SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
-                    SExpr::UseValue(SOperand::inherited(local)),
-                ),
-            };
+            let semantics = self
+                .typed_body
+                .path_expr_read_semantics(expr)
+                .expect("binding path should have typed read semantics");
+            return self.lower_binding_read(expr, binding, self.expr_ty(expr), Some(semantics));
         }
         if let Some(const_ref) = self.typed_body.expr_const_ref(expr) {
             return self.lower_const_ref(expr, const_ref);
@@ -1206,6 +1228,39 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.typed_body.expr_const_ref(expr),
                 self.typed_body.expr_code_region_ref(self.db, expr),
             ),
+        }
+    }
+
+    /// Reads `binding` as a `ty` value for `expr`: a path to it, or a
+    /// closure capturing it. A closure body reads its captures from its
+    /// environment.
+    fn lower_binding_read(
+        &mut self,
+        expr: ExprId,
+        binding: LocalBinding<'db>,
+        ty: TyId<'db>,
+        semantics: Option<PathReadSemantics>,
+    ) -> SValueId {
+        let origin = SemOrigin::Expr(expr);
+        if let Some((place, _)) = self.capture_places.get(&binding).cloned() {
+            return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
+        }
+        let local = *self
+            .binding_locals
+            .get(&binding)
+            .expect("binding local should be allocated");
+        match self.binding_path_read_semantics(
+            binding,
+            semantics.unwrap_or(PathReadSemantics::ReuseLocal),
+            ty,
+        ) {
+            PathReadSemantics::ReuseLocal => local,
+            PathReadSemantics::ForwardInterface => {
+                self.emit_expr_with_origin(origin, ty, SExpr::Forward(SOperand::inherited(local)))
+            }
+            PathReadSemantics::MaterializeValue => {
+                self.emit_expr_with_origin(origin, ty, SExpr::UseValue(SOperand::inherited(local)))
+            }
         }
     }
 
@@ -1445,12 +1500,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if mode == FuncParamMode::Own {
             return self.lower_expr(expr);
         }
+        // A closure literal passed to a `mut` parameter is a temporary.
+        if mode == FuncParamMode::Mut
+            && matches!(
+                expr.data(self.db, self.body),
+                Partial::Present(Expr::Closure { .. })
+            )
+        {
+            let local = self.hoist_temporary(expr, ty);
+            return self.emit_borrow(expr, SPlace::new(local), BorrowKind::Mut, ty);
+        }
         // An access binding passed to a view parameter is viewed through its
         // carrier.
         if matches!(
             expr.data(self.db, self.body),
             Partial::Present(Expr::Path(_))
         ) && let Some(binding) = self.typed_body.expr_binding(expr)
+            && !self.capture_places.contains_key(&binding)
             && self.typed_body.binding_access(binding).is_some()
         {
             return self.binding_locals[&binding];
@@ -1505,6 +1571,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             receiver.data(self.db, self.body),
             Partial::Present(Expr::Path(_))
         ) && let Some(binding) = self.typed_body.expr_binding(receiver)
+            && !self.capture_places.contains_key(&binding)
             && self.typed_body.binding_access(binding).is_some()
         {
             return Receiver::Value(self.binding_locals[&binding]);
@@ -1514,19 +1581,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             let guard = self.last_stmt_id(guard);
             return Receiver::Place { place, guard };
         }
-        let value = self.lower_expr(receiver);
-        let local = self.alloc_local(ty, Mutability::Mutable, None);
-        self.push_stmt(
-            SemOrigin::Expr(receiver),
-            SStmtKind::Assign {
-                dst: local,
-                expr: SExpr::UseValue(SOperand::expr(value, receiver)),
-            },
-        );
         Receiver::Place {
-            place: SPlace::new(local),
+            place: SPlace::new(self.hoist_temporary(receiver, ty)),
             guard: None,
         }
+    }
+
+    /// Evaluates `expr` into a fresh mutable local.
+    fn hoist_temporary(&mut self, expr: ExprId, ty: TyId<'db>) -> SLocalId {
+        let value = self.lower_expr(expr);
+        let local = self.alloc_local(ty, Mutability::Mutable, None);
+        self.push_stmt(
+            SemOrigin::Expr(expr),
+            SStmtKind::Assign {
+                dst: local,
+                expr: SExpr::UseValue(SOperand::expr(value, expr)),
+            },
+        );
+        local
     }
 
     /// Opens a prepared receiver's accesses: its chain's projection sessions

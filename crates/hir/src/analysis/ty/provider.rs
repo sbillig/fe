@@ -564,12 +564,16 @@ fn validate_effect_handle_raw<'db>(
     match resolved.selected().origin(db) {
         ImplementorOrigin::Assumption => Ok(()),
         ImplementorOrigin::Hir(impl_trait) if trusted_effect_handle_impl(db, impl_trait) => Ok(()),
-        ImplementorOrigin::Hir(_) | ImplementorOrigin::VirtualContract(_)
+        ImplementorOrigin::Hir(_)
+        | ImplementorOrigin::VirtualContract(_)
+        | ImplementorOrigin::Closure
             if space != ProviderAddressSpace::Memory || raw_pointee != Some(target_ty) =>
         {
             Err(ProviderLayoutFailure::UntrustedRaw)
         }
-        ImplementorOrigin::Hir(_) | ImplementorOrigin::VirtualContract(_) => Ok(()),
+        ImplementorOrigin::Hir(_)
+        | ImplementorOrigin::VirtualContract(_)
+        | ImplementorOrigin::Closure => Ok(()),
     }
 }
 

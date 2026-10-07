@@ -1203,6 +1203,34 @@ pub fn walk_expr<'db, V>(
             }
         }
 
+        Expr::Closure {
+            params,
+            ret_ty,
+            body,
+        } => {
+            // Closure parameters have no `ScopeId::FuncParam` in the scope graph,
+            // so they are visited in the enclosing scope (like `let` type
+            // annotations) instead of through `visit_func_param_list`.
+            ctxt.with_new_ctxt(
+                |span| span.into_closure_expr().params(),
+                |ctxt| {
+                    for (idx, param) in params.data(ctxt.db).iter().enumerate() {
+                        ctxt.with_new_ctxt(
+                            |span| span.param(idx),
+                            |ctxt| visitor.visit_func_param(ctxt, param),
+                        );
+                    }
+                },
+            );
+            if let Some(ret_ty) = ret_ty {
+                ctxt.with_new_ctxt(
+                    |span| span.into_closure_expr().ret_ty(),
+                    |ctxt| visitor.visit_ty(ctxt, *ret_ty),
+                );
+            }
+            visit_node_in_body!(visitor, ctxt, body, expr);
+        }
+
         Expr::Bin(lhs_id, rhs_id, _) => {
             visit_node_in_body!(visitor, ctxt, lhs_id, expr);
             visit_node_in_body!(visitor, ctxt, rhs_id, expr);

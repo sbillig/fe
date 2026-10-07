@@ -333,6 +333,7 @@ pub(crate) fn checker_name<'db>(
             Partial::Absent => "<const>".to_string(),
         },
         BodyOwner::AnonConstBody { .. } => "<anon const>".to_string(),
+        BodyOwner::Closure { .. } => "<closure>".to_string(),
         BodyOwner::ContractInit { contract } => format!(
             "{}::__init__",
             match contract.name(db) {

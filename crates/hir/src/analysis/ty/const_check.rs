@@ -221,6 +221,10 @@ impl<'db> ConstFnChecker<'db, '_> {
 
             Expr::Block(stmts, _) => stmts.iter().for_each(|stmt| self.check_stmt(*stmt)),
 
+            Expr::Closure { .. } => self.push(BodyDiag::ClosureInConstContext {
+                primary: expr.span(self.body).into(),
+            }),
+
             Expr::Bin(lhs, rhs, _) => {
                 self.check_expr(*lhs);
                 self.check_expr(*rhs);

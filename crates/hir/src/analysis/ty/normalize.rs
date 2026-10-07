@@ -14,6 +14,7 @@ use super::{
     binder::Binder,
     canonical::Canonical,
     canonical::Canonicalized,
+    closure::closure_out_ty,
     fold::{TyFoldable, TyFolder},
     layout_holes::LayoutRootUse,
     trait_def::{
@@ -250,6 +251,15 @@ impl<'db> TypeNormalizer<'db> {
 
         if !self.resolve_impls {
             return None;
+        }
+
+        if let Some(out) = closure_out_ty(
+            self.db,
+            self.fold_ty(self.db, assoc.trait_.self_ty(self.db)),
+            assoc.trait_.def(self.db),
+            assoc.name,
+        ) {
+            return Some(out);
         }
 
         // 3) Fall back to the general associated type search used by path resolution,

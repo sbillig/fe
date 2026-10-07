@@ -20,6 +20,7 @@ use crate::{
         ty::{
             CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutOwner,
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
+            closure::closure_regions,
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             effects::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
@@ -145,7 +146,9 @@ pub fn semantic_layout_bundle_signature<'db>(
                     recv_idx,
                     arm_idx,
                 },
-                BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {
+                BodyOwner::Const(_)
+                | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::Closure { .. } => {
                     return CallableLayoutBundleSignature::default();
                 }
                 BodyOwner::Func(_) => unreachable!(),
@@ -332,12 +335,19 @@ fn provisional_call_sites<'db>(
     let assumptions = semantic_instance_base_assumptions_for_key(db, instance.key(db));
     let mut sites = vec![None; body.exprs(db).len()];
     let mut diagnostic = None;
+    let (regions, region) = (
+        closure_regions(db, body),
+        instance.key(db).owner(db).closure_region(),
+    );
 
     for (expr, _) in body.exprs(db).iter() {
         let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
         else {
             continue;
         };
+        if regions.expr(expr) != region {
+            continue;
+        }
         let site = provisional_call_site(
             db,
             instance,
@@ -368,10 +378,17 @@ fn provisional_for_loop_call_sites<'db>(
     let assumptions = semantic_instance_base_assumptions_for_key(db, instance.key(db));
     let mut sites = vec![None; body.stmts(db).len()];
     let mut diagnostic = None;
+    let (regions, region) = (
+        closure_regions(db, body),
+        instance.key(db).owner(db).closure_region(),
+    );
     for (stmt, _) in body.stmts(db).iter() {
         let Some(plan) = typed_body.for_loop_plan(stmt) else {
             continue;
         };
+        if regions.stmt(stmt) != region {
+            continue;
+        }
         sites[stmt.index()] = Some(ForLoopCallSites {
             sites: plan.calls.each_ref().map(|call| {
                 provisional_call_site(
@@ -1427,11 +1444,11 @@ impl<'db> SemanticInstance<'db> {
         ty: TyId<'db>,
     ) -> ThinVec<TyId<'db>> {
         let ty = self.normalized_ty(db, ty);
-        if ty.is_tuple(db) {
-            let (_, elems) = ty.decompose_ty_app(db);
-            return elems
-                .iter()
-                .map(|elem| self.normalized_ty(db, *elem))
+        if ty.is_tuple(db) || ty.as_closure(db).is_some() {
+            return ty
+                .field_types(db)
+                .into_iter()
+                .map(|field| self.normalized_ty(db, field))
                 .collect();
         }
 
@@ -1964,7 +1981,8 @@ pub fn root_semantic_instance_key<'db>(
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
-        | BodyOwner::ContractRecvArm { .. } => GenericSubst::none(db),
+        | BodyOwner::ContractRecvArm { .. }
+        | BodyOwner::Closure { .. } => GenericSubst::none(db),
     };
     let key = SemanticInstanceKey::new(
         db,
@@ -2266,7 +2284,8 @@ fn root_owner_generic_args<'db>(
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
-        | BodyOwner::ContractRecvArm { .. } => Ok(Vec::new()),
+        | BodyOwner::ContractRecvArm { .. }
+        | BodyOwner::Closure { .. } => Ok(Vec::new()),
     }
 }
 

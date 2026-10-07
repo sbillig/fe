@@ -8,6 +8,7 @@ use crate::analysis::{
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
     ty::{
         canonical::{Canonical, Canonicalized, Solution},
+        closure::closure_shape_insts,
         fold::TyFoldable as _,
         method_table::{MethodProbe, ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
@@ -230,6 +231,12 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn assemble_trait_method_candidates(&mut self) {
         let scope_ingot = self.scope.ingot(self.db);
+        // Closures implement their callable shapes without HIR impls.
+        if let Some(closure) = self.receiver.original().as_closure(self.db) {
+            for inst in closure_shape_insts(self.db, closure) {
+                self.insert_assumption_trait_method_cand(inst);
+            }
+        }
 
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
@@ -873,6 +880,10 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         for pred in self.assumptions.list(self.db) {
             let trait_def = pred.def(self.db);
             insert_trait(trait_def)
+        }
+        // A closure's callable shapes are intrinsic to its type.
+        if let Some(closure) = self.receiver.original().as_closure(self.db) {
+            closure_shape_insts(self.db, closure).for_each(|inst| insert_trait(inst.def(self.db)));
         }
 
         traits

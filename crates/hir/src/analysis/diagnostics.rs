@@ -66,7 +66,9 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                     .scope()
                     .pretty_path(db)
                     .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Prim(_) | TyBase::Func(_) => ty.pretty_print(db).to_string(),
+                TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) => {
+                    ty.pretty_print(db).to_string()
+                }
             }
         }
         TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
@@ -4906,6 +4908,77 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 )],
                 error_code,
             },
+
+            BodyDiag::ClosureInConstContext { primary } => primary_diag(
+                severity,
+                "closures cannot be used in constant contexts",
+                "constant evaluation cannot evaluate a closure",
+                primary.resolve(db),
+                error_code,
+            ),
+
+            BodyDiag::ClosureArityMismatch {
+                primary,
+                expected,
+                given,
+            } => primary_diag(
+                severity,
+                "closure has the wrong number of parameters",
+                format!(
+                    "expected a closure taking {expected} parameter{}, found {given}",
+                    if *expected == 1 { "" } else { "s" }
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            BodyDiag::WriteToCapture { primary, name } => CompleteDiagnostic {
+                severity,
+                message: format!("cannot write to `{}`, which a closure captures", name.data(db)),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "the closure only reads its copy".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "closures capture by copy or move; thread state through parameters and results instead"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            BodyDiag::AccessCapture { primary, name } => CompleteDiagnostic {
+                severity,
+                message: format!("a closure cannot capture the access `{}`", name.data(db)),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "an access of a non-`Copy` value is neither copied nor moved"
+                        .to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec!["pass the value to the closure as a parameter instead".to_string()],
+                error_code,
+            },
+
+            BodyDiag::MoveOutOfCapture { primary, name } => CompleteDiagnostic {
+                severity,
+                message: format!("cannot move `{}` out of a closure's captures", name.data(db)),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "moved here".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec!["each call of a closure only views its captures".to_string()],
+                error_code,
+            },
+
+            BodyDiag::EffectInClosure { primary } => primary_diag(
+                severity,
+                "effects cannot be used inside a closure",
+                "this needs an effect of the enclosing function",
+                primary.resolve(db),
+                error_code,
+            ),
 
             BodyDiag::UnsafeProviderRequiresUnsafe { primary } => primary_diag(
                 severity,

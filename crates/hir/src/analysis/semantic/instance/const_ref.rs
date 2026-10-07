@@ -10,6 +10,7 @@ use crate::{
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
             binder::Binder,
+            closure::{callee_closure, closure_template_ty},
             const_ty::{
                 ConstCanonEnv, ConstCanonMode, canonicalize_ty_for_mode,
                 inherent_const_body_and_impl_args, inherent_const_decl_ty,
@@ -509,6 +510,28 @@ fn semantic_callee_key_with_assumptions<'db>(
     let CallableDef::Func(nominal_func) = callable.callable_def() else {
         return Ok(None);
     };
+    // A callable shape's method called on a closure runs the closure's body.
+    if let Some(inst) = callable.trait_inst()
+        && let Some((closure, receiver)) = callee_closure(
+            db,
+            nominal_func,
+            normalize_ty(db, inst, impl_env.normalization_scope(db), assumptions),
+        )
+    {
+        let owner = BodyOwner::closure(db, closure_template_ty(db, closure), receiver);
+        return Ok(Some(SemanticCallCallee {
+            key: SemanticInstanceKey::new(
+                db,
+                owner,
+                GenericSubst::for_body_owner(db, owner, closure.parent_args(db).clone()),
+                EffectProviderSubst::empty(db),
+                ImplEnv::empty(db, owner.scope()),
+            ),
+            concrete_dispatch: true,
+            effect_pairs: Vec::new(),
+            provider_pairs: Vec::new(),
+        }));
+    }
     let mut selected_trait_method: Option<(ResolvedImplInstance<'db>, TraitInstId<'db>)> = None;
     let mut effect_pairs = Vec::new();
     let mut provider_pairs = Vec::new();

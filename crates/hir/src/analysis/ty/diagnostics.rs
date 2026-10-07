@@ -950,6 +950,45 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         is_mut: bool,
     },
+
+    /// A closure in a constant context, which cannot evaluate it.
+    ClosureInConstContext {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A closure whose parameter count differs from the callable shape it
+    /// is passed as.
+    ClosureArityMismatch {
+        primary: DynLazySpan<'db>,
+        expected: usize,
+        given: usize,
+    },
+
+    /// A write to, or a `mut` access of, a binding a closure captures: the
+    /// closure has its own copy, read-only.
+    WriteToCapture {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+
+    /// A closure capturing an access (a view, `ref` or `mut` binding or
+    /// parameter) of a non-`Copy` value, which it can neither copy nor move.
+    AccessCapture {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+
+    /// A non-`Copy` capture moved out of the closure's environment, which
+    /// each call only views.
+    MoveOutOfCapture {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+
+    /// An effect used in a closure body.
+    EffectInClosure {
+        primary: DynLazySpan<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1088,6 +1127,12 @@ impl<'db> BodyDiag<'db> {
             Self::ViewInstantiation { .. } => 105,
             Self::MissingRow { .. } => 106,
             Self::UncoveredProvider { .. } => 107,
+            Self::ClosureInConstContext { .. } => 108,
+            Self::ClosureArityMismatch { .. } => 109,
+            Self::WriteToCapture { .. } => 110,
+            Self::AccessCapture { .. } => 111,
+            Self::MoveOutOfCapture { .. } => 112,
+            Self::EffectInClosure { .. } => 113,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

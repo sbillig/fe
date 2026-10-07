@@ -42,7 +42,7 @@ use crate::{
         EntryEffectContext, entry_semantic_args_plan, target_root_provider_materialization,
     },
     runtime::stable_key::{
-        IdentityMode, item_identity, semantic_instance_identity_in_mode,
+        IdentityMode, closure_symbol_component, item_identity, semantic_instance_identity_in_mode,
         stable_identity_fingerprint, type_identity,
     },
     runtime::{
@@ -2429,6 +2429,7 @@ fn symbol_base_for_semantic_instance<'db>(
             recv_idx,
             arm_idx
         ),
+        BodyOwner::Closure { ty, receiver, .. } => closure_symbol_component(db, ty, receiver),
         BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => "__const".to_string(),
     }
 }
@@ -2495,7 +2496,8 @@ fn inline_hint_for_semantic<'db>(
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
-        | BodyOwner::ContractRecvArm { .. } => RuntimeInlineHint::Auto,
+        | BodyOwner::ContractRecvArm { .. }
+        | BodyOwner::Closure { .. } => RuntimeInlineHint::Auto,
     }
 }
 

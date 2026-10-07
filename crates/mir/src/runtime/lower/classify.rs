@@ -1686,7 +1686,7 @@ pub(crate) fn runtime_zero_sized_effect_value_is_inert<'db>(
     if !runtime_zero_sized_ty(db, ty, scope, assumptions) {
         return false;
     }
-    if ty.is_tuple(db) || ty.is_struct(db) {
+    if ty.is_product(db) {
         return ty
             .field_types(db)
             .into_iter()

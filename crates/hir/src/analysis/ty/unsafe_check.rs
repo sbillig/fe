@@ -234,6 +234,7 @@ impl<'db> UnsafeChecker<'db, '_> {
             Expr::Block(stmts, BlockKind::Normal) => {
                 stmts.iter().for_each(|stmt| self.check_stmt(*stmt));
             }
+            Expr::Closure { body, .. } => self.check_expr(*body),
 
             Expr::Un(inner, op) => {
                 self.check_expr(*inner);

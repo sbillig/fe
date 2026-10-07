@@ -1,14 +1,15 @@
 use crate::{
-    analysis::place::{Place, is_grant_place_expr, is_pointer_place_expr},
+    analysis::place::{Place, PlaceBase, is_grant_place_expr, is_pointer_place_expr},
     hir_def::{
-        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, Partial, Pat, PatId, Stmt, StmtId,
-        UnOp, scope_graph::ScopeId,
+        BinOp, Body, ClosureDef, Contract, Expr, ExprId, Func, IdentId, Partial, Pat, PatId, Stmt,
+        StmtId, UnOp, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
 
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
+use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -40,7 +41,7 @@ use crate::analysis::{
         trait_def::TraitInstId,
         trait_resolution::{PredicateListId, constraint::collect_func_effect_provider_constraints},
         ty_contains_const_hole,
-        ty_def::{BorrowKind, InvalidCause, StringFallback, TyData, TyId, TyVarSort},
+        ty_def::{BorrowKind, ClosureTy, InvalidCause, StringFallback, TyData, TyId, TyVarSort},
         ty_is_copy,
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
@@ -66,6 +67,7 @@ pub(crate) struct TyCheckEnv<'db> {
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
     record_init_lowering: SecondaryMap<ExprId, Option<super::RecordInitLowering<'db>>>,
+    closure_infos: SecondaryMap<ExprId, Option<ClosureInfo<'db>>>,
     resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
 
     deferred: Vec<DeferredTask<'db>>,
@@ -75,6 +77,15 @@ pub(crate) struct TyCheckEnv<'db> {
     base_assumptions: PredicateListId<'db>,
     assumptions: PredicateListId<'db>,
     var_env: Vec<BlockEnv<'db>>,
+    /// The index of the block each binding is registered in, which tells
+    /// whether a closure body's use of it is a capture.
+    binding_block_idx: FxHashMap<LocalBinding<'db>, usize>,
+    /// The closures whose bodies are being checked, innermost last.
+    closure_stack: Vec<ActiveClosure<'db>>,
+    closure_expectations: FxHashMap<ExprId, ClosureExpectation<'db>>,
+    /// Values moved out of closures' captures, with the expression that
+    /// moves each and its type, to report once types are known.
+    capture_moves: Vec<(ExprId, LocalBinding<'db>, TyId<'db>)>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
     expr_stack: Vec<ExprId>,
@@ -113,6 +124,40 @@ pub(crate) struct TyCheckEnv<'db> {
     /// passed through, each with the span of the expression or pattern whose
     /// path it is.
     path_applications: Vec<(DynLazySpan<'db>, TyId<'db>)>,
+}
+
+/// A closure expression's parameters and captured bindings, in the order of
+/// its type's environment fields.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub struct ClosureInfo<'db> {
+    pub params: Vec<LocalBinding<'db>>,
+    pub captures: Vec<ClosureCapture<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ClosureCapture<'db> {
+    pub binding: LocalBinding<'db>,
+    pub ty: TyId<'db>,
+}
+
+struct ActiveClosure<'db> {
+    /// The block that contains the closure expression: bindings registered
+    /// in it or an outer block are captures.
+    boundary_block_idx: usize,
+    params: Vec<LocalBinding<'db>>,
+    captures: IndexMap<LocalBinding<'db>, TyId<'db>>,
+    /// The body's implicit moves, with the type each moves.
+    moves: Vec<(ExprId, TyId<'db>)>,
+}
+
+/// The callable shape a closure literal is expected to implement, from the
+/// bound on the parameter it is passed to, deduced before its body is
+/// checked.
+#[derive(Debug, Clone)]
+pub(super) struct ClosureExpectation<'db> {
+    pub(super) modes: Vec<FuncParamMode>,
+    pub(super) params: Vec<TyId<'db>>,
+    pub(super) ret: Option<TyId<'db>>,
 }
 
 impl<'db> TyCheckEnv<'db> {
@@ -156,6 +201,7 @@ impl<'db> TyCheckEnv<'db> {
             callables: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
             record_init_lowering: SecondaryMap::new(),
+            closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
@@ -163,6 +209,10 @@ impl<'db> TyCheckEnv<'db> {
             base_assumptions,
             assumptions: base_assumptions,
             var_env: vec![BlockEnv::new(owner_scope, 0)],
+            binding_block_idx: FxHashMap::default(),
+            closure_stack: Vec::new(),
+            closure_expectations: FxHashMap::default(),
+            capture_moves: Vec::new(),
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
             expr_stack: Vec::new(),
@@ -209,7 +259,7 @@ impl<'db> TyCheckEnv<'db> {
 
                     env.param_bindings.push(var);
                     if let Some(name) = view.name(db) {
-                        env.var_env.last_mut().unwrap().register_var(name, var);
+                        env.register_var_in_current_scope(name, var);
                     };
                 }
             }
@@ -245,11 +295,11 @@ impl<'db> TyCheckEnv<'db> {
                     };
                     env.param_bindings.push(var);
                     if let Some(name) = param.name() {
-                        env.var_env.last_mut().unwrap().register_var(name, var);
+                        env.register_var_in_current_scope(name, var);
                     }
                 }
             }
-            BodyOwner::ContractRecvArm { .. } => {}
+            BodyOwner::ContractRecvArm { .. } | BodyOwner::Closure { .. } => {}
         }
 
         env.register_effect_bindings(base_assumptions);
@@ -265,7 +315,7 @@ impl<'db> TyCheckEnv<'db> {
     fn register_effect_bindings(&mut self, base_assumptions: PredicateListId<'db>) {
         match self.owner {
             BodyOwner::Func(func) => self.register_func_effect_bindings(func),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
             BodyOwner::ContractInit { .. } => {
                 self.register_contract_effect_bindings(base_assumptions)
             }
@@ -291,13 +341,10 @@ impl<'db> TyCheckEnv<'db> {
             else {
                 continue;
             };
-            self.var_env
-                .last_mut()
-                .expect("function scope exists")
-                .register_var(
-                    resolved_binding.requirement.binding_name,
-                    LocalBinding::effect_param(&resolved_binding),
-                );
+            self.register_var_in_current_scope(
+                resolved_binding.requirement.binding_name,
+                LocalBinding::effect_param(&resolved_binding),
+            );
         }
     }
 
@@ -319,7 +366,10 @@ impl<'db> TyCheckEnv<'db> {
                     arm_idx,
                 },
             )),
-            BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => None,
+            BodyOwner::Func(_)
+            | BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::Closure { .. } => None,
         }
     }
 
@@ -411,11 +461,20 @@ impl<'db> TyCheckEnv<'db> {
             else {
                 continue;
             };
-            self.var_env.last_mut().expect("scope exists").register_var(
+            self.register_var_in_current_scope(
                 resolved_binding.requirement.binding_name,
                 LocalBinding::effect_param(&resolved_binding),
             );
         }
+    }
+
+    fn register_var_in_current_scope(&mut self, name: IdentId<'db>, binding: LocalBinding<'db>) {
+        let block_idx = self.current_block_idx();
+        self.var_env
+            .last_mut()
+            .expect("scope exists")
+            .register_var(name, binding);
+        self.binding_block_idx.insert(binding, block_idx);
     }
 
     pub(super) fn typed_expr(&self, expr: ExprId) -> Option<ExprProp<'db>> {
@@ -659,6 +718,7 @@ impl<'db> TyCheckEnv<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
             }
+            BodyOwner::Closure { ty, .. } => ty.ret_ty(self.db),
         }
     }
 
@@ -792,6 +852,114 @@ impl<'db> TyCheckEnv<'db> {
         self.var_env.pop().unwrap();
     }
 
+    /// Starts checking the body of a closure whose expression is in the
+    /// current block. Its parameters are registered in a new scope.
+    pub(super) fn enter_closure(&mut self) {
+        self.closure_stack.push(ActiveClosure {
+            boundary_block_idx: self.current_block_idx(),
+            params: Vec::new(),
+            captures: IndexMap::new(),
+            moves: Vec::new(),
+        });
+        self.enter_lexical_scope();
+    }
+
+    pub(super) fn register_closure_param(
+        &mut self,
+        name: Option<IdentId<'db>>,
+        binding: LocalBinding<'db>,
+    ) {
+        if let Some(active) = self.closure_stack.last_mut() {
+            active.params.push(binding);
+        }
+        match name {
+            Some(name) => self.register_var_in_current_scope(name, binding),
+            None => {
+                self.binding_block_idx
+                    .insert(binding, self.current_block_idx());
+            }
+        }
+    }
+
+    /// Ends checking the innermost closure's body, with its parameters and
+    /// captures. Moving a capture out of the closure's environment, in its
+    /// body or into a closure nested in it, is recorded to be reported if
+    /// the value is not `Copy`.
+    pub(super) fn leave_closure(&mut self, expr: ExprId) -> ClosureInfo<'db> {
+        self.leave_scope();
+        let active = self
+            .closure_stack
+            .pop()
+            .expect("closure stack is non-empty");
+        for (moved, ty) in active.moves {
+            if let Some(place) = self.expr_place(moved) {
+                let PlaceBase::Binding(binding) = place.base;
+                if active.captures.contains_key(&binding) {
+                    self.capture_moves.push((moved, binding, ty));
+                }
+            }
+        }
+        for (&binding, &ty) in &active.captures {
+            if self.binding_is_capture(binding) {
+                self.capture_moves.push((expr, binding, ty));
+            }
+        }
+        ClosureInfo {
+            params: active.params,
+            captures: active
+                .captures
+                .into_iter()
+                .map(|(binding, ty)| ClosureCapture { binding, ty })
+                .collect(),
+        }
+    }
+
+    pub(super) fn take_capture_moves(&mut self) -> Vec<(ExprId, LocalBinding<'db>, TyId<'db>)> {
+        std::mem::take(&mut self.capture_moves)
+    }
+
+    /// Whether `binding`, used in the innermost closure being checked, is
+    /// one of its captures.
+    pub(super) fn binding_is_capture(&self, binding: LocalBinding<'db>) -> bool {
+        self.closure_stack.last().is_some_and(|active| {
+            self.binding_block_idx
+                .get(&binding)
+                .is_some_and(|&idx| idx <= active.boundary_block_idx)
+        })
+    }
+
+    /// Records `binding`, of type `ty`, as a capture of every closure being
+    /// checked that it is outside of.
+    pub(super) fn record_capture(&mut self, binding: LocalBinding<'db>, ty: TyId<'db>) {
+        let Some(&binding_block_idx) = self.binding_block_idx.get(&binding) else {
+            return;
+        };
+        for active in &mut self.closure_stack {
+            if binding_block_idx <= active.boundary_block_idx {
+                active.captures.entry(binding).or_insert(ty);
+            }
+        }
+    }
+
+    pub(super) fn swap_loop_stack(&mut self, loop_stack: Vec<StmtId>) -> Vec<StmtId> {
+        std::mem::replace(&mut self.loop_stack, loop_stack)
+    }
+
+    pub(super) fn expect_closure(&mut self, expr: ExprId, expectation: ClosureExpectation<'db>) {
+        self.closure_expectations.insert(expr, expectation);
+    }
+
+    pub(super) fn take_closure_expectation(
+        &mut self,
+        expr: ExprId,
+    ) -> Option<ClosureExpectation<'db>> {
+        self.closure_expectations.remove(&expr)
+    }
+
+    pub(super) fn register_closure_info(&mut self, expr: ExprId, info: ClosureInfo<'db>) {
+        self.closure_infos[expr] = Some(info);
+    }
+
     pub(super) fn enter_loop(&mut self, stmt: StmtId) {
         self.loop_stack.push(stmt);
     }
@@ -882,9 +1050,11 @@ impl<'db> TyCheckEnv<'db> {
     /// into the latest `BlockEnv` in `var_env`. After this operation, the
     /// `pending_vars` map will be empty.
     pub(super) fn flush_pending_bindings(&mut self) {
+        let block_idx = self.current_block_idx();
         let var_env = self.var_env.last_mut().unwrap();
         for (name, binding) in self.pending_vars.drain() {
             var_env.register_var(name, binding);
+            self.binding_block_idx.insert(binding, block_idx);
         }
     }
 
@@ -914,6 +1084,9 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn record_implicit_move(&mut self, expr: ExprId, ty: TyId<'db>) {
         self.implicit_moves.insert(expr, ty);
+        for active in &mut self.closure_stack {
+            active.moves.push((expr, ty));
+        }
     }
 
     /// Completes the type checking environment by finalizing pending trait
@@ -1000,6 +1173,10 @@ impl<'db> TyCheckEnv<'db> {
             .values_mut()
             .flatten()
             .for_each(|plan| *plan = plan.clone().fold_with(self.db, &mut prober));
+        self.closure_infos
+            .values_mut()
+            .flatten()
+            .for_each(|info| *info = info.clone().fold_with(self.db, &mut prober));
         self.path_applications
             .iter_mut()
             .for_each(|(_, ty)| *ty = ty.fold_with(self.db, &mut prober));
@@ -1039,6 +1216,7 @@ impl<'db> TyCheckEnv<'db> {
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
             record_init_lowering: self.record_init_lowering,
+            closure_infos: self.closure_infos,
             resolved_field_index: self.resolved_field_index,
             call_effect_args: self.call_effect_args,
             return_borrow_provider: None,
@@ -1084,7 +1262,7 @@ impl<'db> TyChecker<'db> {
     pub(super) fn seed_effect_witnesses(&mut self) {
         match self.env.owner {
             BodyOwner::Func(func) => self.seed_func_effect_witnesses(func),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 self.seed_contract_effect_witnesses();
             }
@@ -1268,6 +1446,10 @@ pub enum EffectParamSite<'db> {
 pub enum ParamSite<'db> {
     Func(Func<'db>),
     ContractInit(Contract<'db>),
+    /// A closure's parameter.
+    Closure(ClosureDef<'db>),
+    /// A closure body's environment: the closure value, its `self`.
+    ClosureEnv(ClosureDef<'db>),
     /// Effect param that resolves to a contract field.
     EffectField(EffectParamSite<'db>),
 }
@@ -1286,6 +1468,15 @@ fn param_span<'db>(
             .param(idx)
             .name()
             .into(),
+        ParamSite::Closure(def) => def
+            .expr
+            .span(def.body)
+            .into_closure_expr()
+            .params()
+            .param(idx)
+            .name()
+            .into(),
+        ParamSite::ClosureEnv(def) => def.expr.span(def.body).into(),
         ParamSite::EffectField(effect_site) => effect_param_span(db, effect_site, idx),
     }
 }
@@ -1303,6 +1494,13 @@ fn param_name<'db>(
             .data(db)
             .get(idx)
             .and_then(|p| p.name()),
+        ParamSite::Closure(def) => {
+            let Partial::Present(Expr::Closure { params, .. }) = def.expr.data(db, def.body) else {
+                return None;
+            };
+            params.data(db).get(idx).and_then(|param| param.name())
+        }
+        ParamSite::ClosureEnv(_) => Some(IdentId::make_self(db)),
         ParamSite::EffectField(effect_site) => effect_param_name(db, effect_site, idx),
     }
 }
@@ -1546,9 +1744,27 @@ impl<'db> LocalBinding<'db> {
             | Self::EffectParam { idx, .. } => Some(CallableInputLayoutHoleOrigin::Effect(idx)),
             Self::Local { .. }
             | Self::Param {
-                site: ParamSite::ContractInit(_),
+                site: ParamSite::ContractInit(_) | ParamSite::Closure(_) | ParamSite::ClosureEnv(_),
                 ..
             } => None,
+        }
+    }
+
+    /// The first parameter of a closure body: the closure value itself, its
+    /// environment of captures, viewed or `mut` as the callable shape trait's
+    /// receiver is. The body's lowering and its callers must agree on it, so
+    /// it is constructed only here.
+    pub fn closure_env(
+        db: &'db dyn HirAnalysisDb,
+        closure: ClosureTy<'db>,
+        receiver: FuncParamMode,
+    ) -> Self {
+        Self::Param {
+            site: ParamSite::ClosureEnv(closure.def(db)),
+            idx: 0,
+            mode: receiver,
+            ty: TyId::closure(db, closure),
+            is_mut: false,
         }
     }
 

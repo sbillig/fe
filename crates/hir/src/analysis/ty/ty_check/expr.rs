@@ -8,23 +8,25 @@ use smallvec1::SmallVec;
 
 use crate::core::{
     hir_def::{
-        ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId,
-        FieldIndex, Func, FuncParamMode, IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId,
-        PathId, Stmt, StmtId, UnOp, VariantKind, WithBinding,
+        ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, ClosureDef, Cond, CondId, Expr,
+        ExprId, FieldIndex, Func, FuncParam, FuncParamListId, FuncParamMode, IdentId, IntegerId,
+        LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt, StmtId, TypeId as HirTyId, TypeKind,
+        TypeMode, UnOp, VariantKind, WithBinding,
     },
     semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
 };
 use crate::span::DynLazySpan;
 
 use super::{
-    CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArgLayoutView,
+    BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArgLayoutView,
     PatternLayoutContext, RecordLike, RowArg, Typeable, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
     env::{
-        BindingAccess, EffectOrigin, EffectParamSite, ExprProp, LocalBinding, ParamSite,
-        PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv,
+        BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
+        ParamSite, PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin,
+        TyCheckEnv,
     },
     merged_borrow_provider,
     path::ResolvedPathInBody,
@@ -74,7 +76,7 @@ use crate::analysis::ty::{
         GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
-    ty_def::{BorrowKind, PrimTy, TyBase, TyData, prim_int_bits},
+    ty_def::{BorrowKind, ClosureTy, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -101,11 +103,13 @@ use crate::analysis::{
         const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
+        ty_contains_const_hole,
         ty_def::{InvalidCause, TyId},
         ty_lower::{
             callable_input_carrier_projected_layout_ty, callable_input_layout_origin_ty,
             callable_input_layout_projection_paths, callable_input_projected_layout_ty,
             instantiate_callable_effect_layout_args, instantiate_callable_projection_layout_args,
+            lower_hir_ty,
         },
     },
 };
@@ -382,6 +386,11 @@ impl<'db> TyChecker<'db> {
             }
             Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected, result_discarded),
+            Expr::Closure {
+                params,
+                ret_ty,
+                body,
+            } => self.check_closure(expr, *params, *ret_ty, *body),
             Expr::Un(..) => self.check_unary(expr, expr_data),
             Expr::Cast(inner, ty) => self.check_cast(expr, *inner, *ty),
             Expr::Try(inner) => self.check_try(expr, *inner),
@@ -537,6 +546,148 @@ impl<'db> TyChecker<'db> {
                 primary: expr.span(self.body()).into(),
                 subject: MustUseSubject::Function(callable.callable_def()),
             });
+        }
+    }
+
+    /// Checks a closure expression and its body, inline: the body sees the
+    /// enclosing bindings, and each one it uses is a capture, copied or
+    /// moved into the closure's environment.
+    fn check_closure(
+        &mut self,
+        expr: ExprId,
+        params: FuncParamListId<'db>,
+        ret_ty: Option<HirTyId<'db>>,
+        body: ExprId,
+    ) -> ExprProp<'db> {
+        let def = ClosureDef {
+            body: self.body(),
+            expr,
+        };
+        let params = params.data(self.db);
+        let span: DynLazySpan<'db> = expr.span(self.body()).into();
+        if matches!(
+            self.env.owner(),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }
+        ) {
+            self.push_diag(BodyDiag::ClosureInConstContext {
+                primary: span.clone(),
+            });
+        }
+
+        // The shape the callee the closure is passed to expects types its
+        // unannotated parameters and its result in context. Against a shape
+        // of another arity they are invalid, so the body does not cascade.
+        let expectation = self.env.take_closure_expectation(expr).map(|expectation| {
+            if expectation.params.len() == params.len() {
+                return expectation;
+            }
+            self.push_diag(BodyDiag::ClosureArityMismatch {
+                primary: span.clone(),
+                expected: expectation.params.len(),
+                given: params.len(),
+            });
+            ClosureExpectation {
+                modes: vec![FuncParamMode::View; params.len()],
+                params: vec![TyId::invalid(self.db, InvalidCause::Other); params.len()],
+                ret: expectation.ret,
+            }
+        });
+
+        self.env.enter_closure();
+        let (mut modes, mut param_tys) = (Vec::new(), Vec::new());
+        for (idx, param) in params.iter().enumerate() {
+            let expected = expectation
+                .as_ref()
+                .map(|expectation| (expectation.modes[idx], expectation.params[idx]));
+            let (mode, ty) = self.closure_param(param, expected);
+            let binding = LocalBinding::Param {
+                site: ParamSite::Closure(def),
+                idx,
+                mode,
+                ty,
+                is_mut: param.is_mut,
+            };
+            self.env.register_closure_param(param.name(), binding);
+            modes.push(mode);
+            param_tys.push(ty);
+        }
+        let ret = match ret_ty {
+            Some(ret_ty) => self.lower_closure_ty(ret_ty),
+            None => expectation
+                .and_then(|expectation| expectation.ret)
+                .unwrap_or_else(|| self.fresh_ty()),
+        };
+
+        // The body is its own for control flow: `return` leaves the closure,
+        // which is no projection, and the enclosing body's loops are not its.
+        let expected = std::mem::replace(&mut self.expected, ret);
+        let projection_shape = self.projection_shape.take();
+        let explicit_yields = std::mem::replace(&mut self.explicit_yields, false);
+        let return_borrow_provider = self.first_return_borrow_provider.take();
+        let loops = self.env.swap_loop_stack(Vec::new());
+        self.check_expr(body, ret);
+        self.record_implicit_move_for_owned_expr(body, ret);
+        self.env.swap_loop_stack(loops);
+        self.first_return_borrow_provider = return_borrow_provider;
+        self.explicit_yields = explicit_yields;
+        self.projection_shape = projection_shape;
+        self.expected = expected;
+        let info = self.env.leave_closure(expr);
+
+        let parent_args = match self.env.owner() {
+            BodyOwner::Func(func) => CallableDef::Func(func).params(self.db).to_vec(),
+            _ => Vec::new(),
+        };
+        let closure = ClosureTy::new(
+            self.db,
+            def,
+            parent_args,
+            info.captures
+                .iter()
+                .map(|capture| capture.ty)
+                .collect::<Vec<_>>(),
+            modes,
+            param_tys,
+            ret,
+        );
+        self.env.register_closure_info(expr, info);
+        ExprProp::new(TyId::closure(self.db, closure), true)
+    }
+
+    /// A closure parameter's mode and type: as annotated, else as the
+    /// expected shape has them, else a view of an inferred type. A mode
+    /// written without a type (`x: own`) keeps the mode and infers the type.
+    fn closure_param(
+        &mut self,
+        param: &FuncParam<'db>,
+        expected: Option<(FuncParamMode, TyId<'db>)>,
+    ) -> (FuncParamMode, TyId<'db>) {
+        let annotation = param.ty.to_opt();
+        let (mode, payload) = match annotation.map(|ty| ty.data(self.db)) {
+            Some(TypeKind::Mode(mode, payload)) => (
+                Some(match mode {
+                    TypeMode::Own => FuncParamMode::Own,
+                    TypeMode::Mut => FuncParamMode::Mut,
+                    TypeMode::Ref => FuncParamMode::View,
+                }),
+                payload.to_opt(),
+            ),
+            _ => (None, annotation),
+        };
+        let mode = mode.or(expected.map(|(mode, _)| mode));
+        let ty = match payload {
+            Some(ty) => self.lower_closure_ty(ty),
+            None => expected.map_or_else(|| self.fresh_ty(), |(_, ty)| ty),
+        };
+        (mode.unwrap_or(FuncParamMode::View), ty)
+    }
+
+    fn lower_closure_ty(&mut self, ty: HirTyId<'db>) -> TyId<'db> {
+        let ty = lower_hir_ty(self.db, ty, self.env.scope(), self.env.assumptions());
+        if ty.is_star_kind(self.db) && !ty_contains_const_hole(self.db, ty) {
+            ty
+        } else {
+            TyId::invalid(self.db, InvalidCause::Other)
         }
     }
 
@@ -3828,10 +3979,26 @@ impl<'db> TyChecker<'db> {
                     .lookup_binding_ty(&binding)
                     .fold_with(self.db, &mut self.table);
                 let ty = self.normalize_ty(ty);
-                let is_mut = self
-                    .env
-                    .binding_access(&binding)
-                    .map_or(binding.is_mut(), BindingAccess::is_mut);
+                let access = self.env.binding_access(&binding);
+                // A closure has its own read-only copy of each binding it
+                // captures.
+                let captured = self.env.binding_is_capture(binding);
+                if captured {
+                    if matches!(binding, LocalBinding::EffectParam { .. }) {
+                        self.push_diag(BodyDiag::EffectInClosure {
+                            primary: path_expr_span.into(),
+                        });
+                        return ExprProp::invalid(self.db);
+                    }
+                    if access.is_some() && !ty.has_var(self.db) && !self.ty_is_copy(ty) {
+                        self.push_diag(BodyDiag::AccessCapture {
+                            primary: path_expr_span.into(),
+                            name: binding.binding_name(&self.env),
+                        });
+                    }
+                    self.env.record_capture(binding, ty);
+                }
+                let is_mut = !captured && access.map_or(binding.is_mut(), BindingAccess::is_mut);
                 ExprProp {
                     binding: Some(binding),
                     borrow_provider: self.concrete_borrow_provider_for_binding(binding),
@@ -5515,6 +5682,9 @@ impl<'db> TyChecker<'db> {
 
         if !typed_lhs.is_mut {
             let binding = self.find_base_binding(lhs);
+            if self.report_write_to_capture(binding, lhs.span(self.body()).into()) {
+                return AssignLhsStatus::Immutable;
+            }
             let diag = match binding {
                 Some(binding) => {
                     let (ident, def_span) =
@@ -5557,10 +5727,30 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn report_cannot_borrow_mut(&mut self, expr: ExprId, primary: DynLazySpan<'db>) {
-        let binding = self
-            .find_base_binding(expr)
-            .map(|binding| (binding.binding_name(&self.env), binding.def_span(&self.env)));
+        let binding = self.find_base_binding(expr);
+        if self.report_write_to_capture(binding, primary.clone()) {
+            return;
+        }
+        let binding =
+            binding.map(|binding| (binding.binding_name(&self.env), binding.def_span(&self.env)));
         self.push_diag(BodyDiag::CannotBorrowMut { primary, binding });
+    }
+
+    /// Reports a write through `binding` if it is a capture of the closure
+    /// being checked, returning whether it is.
+    fn report_write_to_capture(
+        &mut self,
+        binding: Option<LocalBinding<'db>>,
+        primary: DynLazySpan<'db>,
+    ) -> bool {
+        let Some(binding) = binding.filter(|&binding| self.env.binding_is_capture(binding)) else {
+            return false;
+        };
+        self.push_diag(BodyDiag::WriteToCapture {
+            primary,
+            name: binding.binding_name(&self.env),
+        });
+        true
     }
 
     /// Returns the base binding for a given expression if it exists.

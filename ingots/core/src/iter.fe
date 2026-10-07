@@ -47,12 +47,12 @@ pub trait Collection {
     }
 
     /// The elements `p` holds for.
-    fn filter<P>(self, _ p: own P) -> Filter<Identity, P> {
+    fn filter<P: Fn(Self::Item) -> bool>(self, _ p: own P) -> Filter<Identity, P> {
         filter(p)
     }
 
     /// The values `f` makes of the elements, owned.
-    fn map<F>(self, _ f: own F) -> Map<Identity, F> {
+    fn map<F: FnMut_v<Self::Item>>(self, _ f: own F) -> Map<Identity, F> {
         map(f)
     }
 

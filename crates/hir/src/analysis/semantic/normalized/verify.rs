@@ -561,11 +561,7 @@ fn verify_expr<'db>(
                     && element.is_some_and(|element| {
                         field_tys.iter().all(|field_ty| *field_ty == element)
                     })
-            } else if ty.is_tuple(db)
-                || ty
-                    .adt_def(db)
-                    .is_some_and(|adt| matches!(adt.adt_ref(db), AdtRef::Struct(_)))
-            {
+            } else if ty.is_product(db) {
                 body.owner.normalized_field_types(db, *ty).as_slice() == field_tys
             } else {
                 false
@@ -907,7 +903,7 @@ fn verify_scalar_result<'db>(
 
 fn ty_has_scalar_repr<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> bool {
     let mut visiting = FxHashSet::default();
-    while ty.is_tuple(db) || ty.is_struct(db) {
+    while ty.is_product(db) {
         if !visiting.insert(ty) {
             return false;
         }
