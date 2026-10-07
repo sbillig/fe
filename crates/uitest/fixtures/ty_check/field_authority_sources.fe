@@ -17,6 +17,10 @@ fn peek(pair: Pair) -> u256 {
     pair.left.get(key: 1)
 }
 
+fn poke_map(map: mut StorageMap<u256, u256>) {
+    map.set(key: 1, value: 2)
+}
+
 // Rejected: a copy of a read-only provider's map is read-only, whichever
 // other provider is `mut`.
 fn escalate() uses (first: mut Pair, second: Pair) {
