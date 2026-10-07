@@ -10,8 +10,8 @@ impl<const ROOT: u256> Wrapped<ROOT> {
     }
 }
 
-// The map `into_map` returns is a copy, so the caller grants the authority
-// over its field.
+// A data parameter carries no authority, so the caller grants the authority
+// over the maps it passes.
 fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
     wrapped.into_map().get(key: key)
 }

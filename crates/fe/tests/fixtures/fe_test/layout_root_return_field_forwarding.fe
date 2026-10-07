@@ -11,8 +11,8 @@ fn left_map<const LEFT: u256, const RIGHT: u256>(
     pair.left
 }
 
-// The map `left_map` returns is a copy, so the caller grants the authority
-// over its field.
+// A data parameter carries no authority, so the caller grants the authority
+// over the maps it passes.
 fn read_left<const LEFT: u256, const RIGHT: u256>(
     pair: Pair<LEFT, RIGHT>,
     key: u256,
