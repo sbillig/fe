@@ -2,8 +2,8 @@ use parser::ast::{self};
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{
-    Body, GenericArg, GenericArgListId, Partial, PathId, TraitRefId, TupleTypeId, TypeGenericArg,
-    TypeId, TypeKind, TypeMode,
+    AssocTypeGenericArg, Body, GenericArg, GenericArgListId, IdentId, Partial, PathId, TraitRefId,
+    TupleTypeId, TypeGenericArg, TypeId, TypeKind, TypeMode,
 };
 
 impl<'db> TypeId<'db> {
@@ -74,7 +74,7 @@ impl<'db> TraitRefId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitRef) -> Self {
         let path = match ast.fn_shape() {
             // `Fn(own A, B) -> R` names the core trait of its shape,
-            // `Fn_ov<A, B, R>`; `Fn(own T) -> U` is `Fn<T, U>`.
+            // `Fn_ov<A, B, Out = R>`; `Fn(own T) -> U` is `Fn<T, U>`.
             Some(shape) => shape.name().zip(shape.params()).map(|(name, params)| {
                 let db = ctxt.db();
                 let mut modes = String::new();
@@ -90,19 +90,24 @@ impl<'db> TraitRefId<'db> {
                     modes.push(mode);
                     args.push(GenericArg::Type(TypeGenericArg { ty }));
                 }
-                let ret = shape.ret_ty().map_or_else(
+                let ret = Partial::Present(shape.ret_ty().map_or_else(
                     || TupleTypeId::new(db, Vec::new()).to_ty(db),
                     |ty| TypeId::lower_ast(ctxt, ty),
-                );
-                args.push(GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(ret),
-                }));
+                ));
                 let receiver = name.text();
                 let trait_name = match modes.as_str() {
                     "" => format!("{receiver}0"),
                     "o" if receiver == "Fn" => receiver.to_string(),
                     modes => format!("{receiver}_{modes}"),
                 };
+                args.push(if trait_name == "Fn" {
+                    GenericArg::Type(TypeGenericArg { ty: ret })
+                } else {
+                    GenericArg::AssocType(AssocTypeGenericArg {
+                        name: Partial::Present(IdentId::new(db, "Out".to_string())),
+                        ty: ret,
+                    })
+                });
                 ctxt.core_path().push_str(db, "functional").push_str_args(
                     db,
                     &trait_name,

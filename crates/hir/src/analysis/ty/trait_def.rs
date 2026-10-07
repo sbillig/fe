@@ -822,36 +822,39 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<ImplementorId<'db>> {
-    impls_for_ty_with_constraint_mode(db, ingot, None, ty, assumptions, false)
+    let mut table = UnificationTable::new(db);
+    let ty = ty.extract_identity(&mut table);
+    impls_with_constraint_mode(db, ingot, &mut table, ty, None, assumptions, false)
 }
 
-/// Returns implementors of `trait_def` whose self type can apply to `ty` and
-/// whose constraints are not known to be unsatisfied.
-pub(crate) fn impls_for_trait_and_ty_with_possible_constraints<'db>(
+/// Returns implementors of `inst`'s trait that can apply to `inst` and whose
+/// constraints, under `inst`'s arguments, are not known to be unsatisfied.
+pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-    trait_def: Trait<'db>,
-    ty: Canonical<TyId<'db>>,
+    inst: Canonical<TraitInstId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<ImplementorId<'db>> {
-    impls_for_ty_with_constraint_mode(db, ingot, Some(trait_def), ty, assumptions, true)
+    let mut table = UnificationTable::new(db);
+    let inst = inst.extract_identity(&mut table);
+    let ty = inst.self_ty(db);
+    impls_with_constraint_mode(db, ingot, &mut table, ty, Some(inst), assumptions, true)
 }
 
-fn impls_for_ty_with_constraint_mode<'db>(
+fn impls_with_constraint_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-    trait_def: Option<Trait<'db>>,
-    ty: Canonical<TyId<'db>>,
+    table: &mut UnificationTable<'db>,
+    ty: TyId<'db>,
+    trait_inst: Option<TraitInstId<'db>>,
     assumptions: PredicateListId<'db>,
     allow_needs_confirmation: bool,
 ) -> Vec<ImplementorId<'db>> {
-    let mut table = UnificationTable::new(db);
-    let ty = ty.extract_identity(&mut table);
-
     let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
+    let trait_def = trait_inst.map(|inst| inst.def(db));
     let env = ingot_trait_env(db, ingot);
     let mut raw_impls = match trait_def {
         Some(trait_def) => env.impls_for_trait(db, trait_def),
@@ -875,7 +878,18 @@ fn impls_for_ty_with_constraint_mode<'db>(
             let inst = table.instantiate_with_fresh_vars(*impl_);
             let impl_ty = table.instantiate_to_term(inst.self_ty(db));
             let ty_term = table.instantiate_to_term(ty);
-            let unifies = table.unify(impl_ty, ty_term).is_ok();
+            // The constraints are checked under the target's arguments too:
+            // `impl<B, D: Driver<B>> Driver<B> for Filter<D>` needs its `B`.
+            let unifies =
+                table.unify(impl_ty, ty_term).is_ok()
+                    && trait_inst.is_none_or(|target| {
+                        inst.trait_(db).args(db).iter().zip(target.args(db)).all(
+                            |(&impl_arg, &arg)| {
+                                let arg = table.instantiate_to_term(arg);
+                                table.unify(impl_arg, arg).is_ok()
+                            },
+                        )
+                    });
 
             if unifies {
                 let impl_constraints = inst.constraints(db);
@@ -885,7 +899,7 @@ fn impls_for_ty_with_constraint_mode<'db>(
                 }
 
                 for &constraint in impl_constraints.list(db) {
-                    let constraint = constraint.fold_with(db, &mut table);
+                    let constraint = constraint.fold_with(db, table);
                     let satisfiability = is_goal_satisfiable(db, solve_cx, constraint);
                     let constraint_holds =
                         matches!(satisfiability, GoalSatisfiability::Satisfied(_))

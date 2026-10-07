@@ -922,9 +922,42 @@ impl<'db> ImplTrait<'db> {
         // Lower generic params first so they are in scope for trait-ref/type and where-clause lowering.
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
-        let trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
+        let mut trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
+
+        // The `-> R` of a callable shape, `impl FnMut(u256) -> u256 for F`,
+        // is the implementation's `type Out = R`, not a binding of the trait.
+        let mut shape_types = vec![];
+        if ast
+            .trait_ref()
+            .is_some_and(|trait_ref| trait_ref.fn_shape().is_some())
+            && let Partial::Present(lowered) = trait_ref
+            && let Partial::Present(path) = lowered.path(ctxt.db())
+            && let Partial::Present(ident) = path.ident(ctxt.db())
+        {
+            let db = ctxt.db();
+            let (outs, args): (Vec<_>, Vec<_>) = path
+                .generic_args(db)
+                .data(db)
+                .iter()
+                .cloned()
+                .partition(|arg| matches!(arg, GenericArg::AssocType(_)));
+            shape_types.extend(outs.into_iter().filter_map(|out| match out {
+                GenericArg::AssocType(binding) => Some(AssocTyDef {
+                    attributes: AttrListId::new(db, Vec::new()),
+                    name: binding.name,
+                    type_ref: binding.ty,
+                }),
+                _ => None,
+            }));
+            let args = GenericArgListId::new(db, args, true);
+            let path = match path.parent(db) {
+                Some(parent) => parent.push_ident_args(db, ident, args),
+                None => PathId::from_ident(db, ident),
+            };
+            trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(path)));
+        }
 
         let mut types = vec![];
         let mut consts = vec![];
@@ -969,6 +1002,10 @@ impl<'db> ImplTrait<'db> {
             }
         }
 
+        shape_types.retain(|shape_type: &AssocTyDef| {
+            !types.iter().any(|defined| defined.name == shape_type.name)
+        });
+        types.extend(shape_types);
         let impl_trait = Self::new(
             ctxt.db(),
             id,
