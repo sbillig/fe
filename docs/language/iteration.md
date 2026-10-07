@@ -30,6 +30,10 @@ Drivers combine as methods, `xs.reversed().enumerate().take(3)`, and a
 method chain on a collection is sugar for `by`:
 `for x in xs.filter(|x| x > 1)` is `for x in xs by filter(..)`.
 
+A two-base driver traverses two bases in step: `for (x, y) in (a, b) by zip()`
+views both until either ends, and `for (x, y) in (mut a, mut b) by zip()`
+mutates both, which needs `a` and `b` disjoint.
+
 ## Higher-order operations
 
 Collections provide `fold`, `any`, `count` and `find`. `fold` owns its

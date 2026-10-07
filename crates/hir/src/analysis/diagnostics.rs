@@ -4972,6 +4972,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            BodyDiag::MixedLoopBases { primary } => primary_diag(
+                severity,
+                "a two-base loop's bases are both viewed or both `mut`",
+                "one base is `mut` and the other is not",
+                primary.resolve(db),
+                error_code,
+            ),
+
             BodyDiag::UnsupportedClosureEffect { primary } => CompleteDiagnostic {
                 severity,
                 message: "a closure can only use effects keyed by a type".to_string(),

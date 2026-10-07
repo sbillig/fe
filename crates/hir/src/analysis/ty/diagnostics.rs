@@ -985,6 +985,11 @@ pub enum BodyDiag<'db> {
         name: IdentId<'db>,
     },
 
+    /// A two-base loop over one viewed and one `mut` base.
+    MixedLoopBases {
+        primary: DynLazySpan<'db>,
+    },
+
     /// An effect a closure body uses that its row cannot carry: one keyed
     /// by a trait, or an enclosing row.
     UnsupportedClosureEffect {
@@ -1134,6 +1139,7 @@ impl<'db> BodyDiag<'db> {
             Self::AccessCapture { .. } => 111,
             Self::MoveOutOfCapture { .. } => 112,
             Self::UnsupportedClosureEffect { .. } => 113,
+            Self::MixedLoopBases { .. } => 114,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,
