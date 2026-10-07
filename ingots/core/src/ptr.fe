@@ -155,6 +155,31 @@ impl<T> MemArray<T> {
         unsafe { (mut *mem_array_elem(self, i), mut *mem_array_elem(self, j)) }
     }
 
+    /// Moves `value` into element `index` and returns the element it
+    /// replaces: the owner-side move out of a dynamically indexed element.
+    pub fn replace(mut self, _ index: usize, _ value: own T) -> T {
+        let slot = mut self[index]
+        let old = slot
+        slot = value
+        old
+    }
+
+    /// Moves `value` into element `index`.
+    pub fn set(mut self, _ index: usize, _ value: own T) {
+        self[index] = value
+    }
+
+    /// Exchanges elements `i` and `j`.
+    pub fn swap(mut self, _ i: usize, _ j: usize) {
+        if i == j {
+            return
+        }
+        let (a, b) = self.pair_mut(i, j)
+        let tmp = a
+        a = b
+        b = tmp
+    }
+
     pub fn zero(mut self) {
         unsafe { zero_bytes(cast<T, u8>(self.ptr), self.byte_len()) }
     }
