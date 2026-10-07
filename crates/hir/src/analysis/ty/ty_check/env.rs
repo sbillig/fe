@@ -119,9 +119,6 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Places matched through the `mut` access their `mut` pattern bindings
     /// open.
     matched_places: FxHashSet<ExprId>,
-    /// The `mut self` variant of a method call that selected the view one,
-    /// with its receiver type.
-    mut_variants: FxHashMap<ExprId, (TyId<'db>, PendingMethodCandidate<'db>)>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
 
@@ -240,7 +237,6 @@ impl<'db> TyCheckEnv<'db> {
             call_effect_args: SecondaryMap::new(),
             consumed_accesses: FxHashSet::default(),
             matched_places: FxHashSet::default(),
-            mut_variants: FxHashMap::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
             path_applications: Vec::new(),
@@ -846,22 +842,6 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn open_matched_place(&mut self, expr: ExprId, prop: ExprProp<'db>) {
         self.matched_places.insert(expr);
         self.type_expr(expr, prop);
-    }
-
-    pub(super) fn register_mut_variant(
-        &mut self,
-        expr: ExprId,
-        recv_ty: TyId<'db>,
-        variant: PendingMethodCandidate<'db>,
-    ) {
-        self.mut_variants.insert(expr, (recv_ty, variant));
-    }
-
-    pub(super) fn take_mut_variant(
-        &mut self,
-        expr: ExprId,
-    ) -> Option<(TyId<'db>, PendingMethodCandidate<'db>)> {
-        self.mut_variants.remove(&expr)
     }
 
     pub(super) fn is_matched_place(&self, expr: ExprId) -> bool {

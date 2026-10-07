@@ -467,8 +467,8 @@ impl<'db> TyChecker<'db> {
                 let inst = select(self, driver_trait, "start")?;
                 if mutates {
                     let driver_mut = core_trait(self, "DriverMut2")?;
-                    let at_inst = select(self, driver_mut, "at")?;
-                    (driver_trait, inst, driver_mut, at_inst, "at")
+                    let at_inst = select(self, driver_mut, "at_mut")?;
+                    (driver_trait, inst, driver_mut, at_inst, "at_mut")
                 } else {
                     (driver_trait, inst, driver_trait, inst, "at")
                 }
@@ -478,8 +478,8 @@ impl<'db> TyChecker<'db> {
                 let inst = select(self, collection, "start")?;
                 if mutates {
                     let collection_mut = core_trait(self, "CollectionMut")?;
-                    let at_inst = select(self, collection_mut, "at")?;
-                    (collection, inst, collection_mut, at_inst, "at")
+                    let at_inst = select(self, collection_mut, "at_mut")?;
+                    (collection, inst, collection_mut, at_inst, "at_mut")
                 } else {
                     (collection, inst, collection, inst, "at")
                 }
@@ -489,9 +489,9 @@ impl<'db> TyChecker<'db> {
                 let producer = core_trait(self, "Producer")?;
                 if mutates {
                     let driver_mut = core_trait(self, "DriverMut")?;
-                    let at_inst = select(self, driver_mut, "at")?;
+                    let at_inst = select(self, driver_mut, "at_mut")?;
                     let inst = select(self, driver_trait, "start")?;
-                    (driver_trait, inst, driver_mut, at_inst, "at")
+                    (driver_trait, inst, driver_mut, at_inst, "at_mut")
                 } else if let Some(inst) = select(self, producer, "produce") {
                     (producer, inst, producer, inst, "produce")
                 } else {
