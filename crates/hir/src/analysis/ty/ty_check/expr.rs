@@ -2263,9 +2263,9 @@ impl<'db> TyChecker<'db> {
         call_args: &[ExprId],
     ) -> EffectResolution<'db> {
         // `Field(T)` takes the authority of the first argument of type `T`
-        // whose place lies in an effect provider or an access, since that
-        // handle names the field; a copy of a handle carries none. Otherwise
-        // a provider of type `T` gives it.
+        // whose place carries effect authority (`binding_has_authority`),
+        // since that handle names the field; a copy of a handle carries
+        // none. Otherwise a provider of type `T` gives it.
         if req.key_ty.field_key_handle(self.db).is_some()
             && let EffectPatternKey::Type(type_query) = &query.key
         {
@@ -2275,13 +2275,7 @@ impl<'db> TyChecker<'db> {
                 };
                 let authority = self.env.expr_place(arg).is_some_and(|place| {
                     let PlaceBase::Binding(binding) = place.base;
-                    match (binding, self.env.binding_access(&binding)) {
-                        (LocalBinding::EffectParam { .. }, _) => true,
-                        (_, Some(BindingAccess::View)) => {
-                            !self.ty_is_copy(self.env.lookup_binding_ty(&binding))
-                        }
-                        (_, access) => access.is_some(),
-                    }
+                    self.env.binding_has_authority(&binding)
                 });
                 if !authority {
                     continue;

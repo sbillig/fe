@@ -39,6 +39,7 @@ use crate::{
         },
         ty::{
             corelib::{MemoryAccessKind, effect_key_state_access, external_call_state_access},
+            layout_holes::ty_contains_const_hole,
             provider::{ProviderAddressSpace, provider_semantics},
             shape::Shape,
             trait_resolution::PredicateListId,
@@ -917,6 +918,28 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NEffectArgValue::Place(place) if place.ty.is_zero_sized(self.db) && !names_field => {
                 return None;
             }
+            // A `Field(T)` key that leaves `T`'s layout arguments open is
+            // authority over any field of that shape, whichever argument
+            // supplied it.
+            NEffectArgValue::Place(_)
+                if requirement.is_some_and(|requirement| {
+                    requirement.binding_ty.field_key_handle(self.db).is_some()
+                        && requirement
+                            .key
+                            .key_ty()
+                            .is_some_and(|key| ty_contains_const_hole(self.db, key))
+                }) =>
+            {
+                let spaces = field_handle_spaces(self.db, self.scope, self.assumptions, arg_ty);
+                let space = match spaces.as_slice() {
+                    [space] => Some(*space),
+                    _ => None,
+                };
+                (
+                    vec![AbsPlace::new(Base::Domain(self.domains.dynamic(space)))],
+                    TokenSet::new(),
+                )
+            }
             NEffectArgValue::Place(place) => {
                 let resolved = self.resolve(place);
                 (
@@ -968,13 +991,17 @@ impl<'a, 'db> Analysis<'a, 'db> {
         regions
     }
 
-    /// The footprint of the field handles a call argument holds: an
-    /// operation through a handle accesses the field it names for the call's
-    /// duration, reading it through a view and writing it otherwise.
+    /// The footprint of the field handles an aggregate call argument holds:
+    /// the callee may operate through them with the argument's authority,
+    /// so the call accesses the fields they name for its duration, reading
+    /// them through a view and writing them otherwise. A handle passed
+    /// itself is a snapshot, operated on only under declared authority.
     fn handle_footprint(&mut self, value: NValueId, mode: FuncParamMode) -> Option<Footprint> {
         let ty = self.body.values[value.index()].ty;
         let ty = ty.as_capability(self.db).map_or(ty, |(_, target)| target);
-        if field_handle_spaces(self.db, self.scope, self.assumptions, ty).is_empty() {
+        if ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
+            || field_handle_spaces(self.db, self.scope, self.assumptions, ty).is_empty()
+        {
             return None;
         }
         let (regions, mut parents) = self.source_place(value);

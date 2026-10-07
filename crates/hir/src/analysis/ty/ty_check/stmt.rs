@@ -336,7 +336,8 @@ impl<'db> TyChecker<'db> {
                 plan.element_layout_backing_source = layout.is_some();
                 self.check_pat_with_layout(*pat, pattern_shape.erased_ty(self.db), layout.as_ref());
                 if let ForLoopItem::Access(_) = plan.item {
-                    self.bind_pattern_accesses(*pat, &pattern_shape);
+                    let authority = bases.iter().all(|base| self.expr_has_authority(*base));
+                    self.bind_pattern_accesses(*pat, &pattern_shape, authority);
                 }
                 self.env.register_for_loop_plan(stmt, plan);
             }

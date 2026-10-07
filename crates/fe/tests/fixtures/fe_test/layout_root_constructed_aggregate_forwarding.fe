@@ -19,11 +19,12 @@ fn make_pair<const LEFT: u256, const RIGHT: u256>(
     Pair { left, right }
 }
 
+// The maps are copies, so the caller grants the authority over their fields.
 fn read_after_same_source_field_assignment<const LEFT: u256, const RIGHT: u256>(
     left: StorageMap<u256, u256, LEFT>,
     right: StorageMap<u256, u256, RIGHT>,
     key: u256,
-) -> u256 {
+) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
     let mut pair = Pair { left, right }
     pair.left = left
     pair.left.get(key: key)
@@ -42,7 +43,7 @@ fn read_reassigned(
     left: StorageMap<u256, u256>,
     right: StorageMap<u256, u256>,
     key: u256,
-) -> u256 {
+) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
     read_after_same_source_field_assignment(left: left, right: right, key: key)
 }
 

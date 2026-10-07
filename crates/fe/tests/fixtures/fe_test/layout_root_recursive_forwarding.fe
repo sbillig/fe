@@ -1,12 +1,15 @@
 use std::evm::{Evm, StorageMap}
 
+// The maps are copies, so the caller grants the authority over their fields.
 fn direct_dynamic(
     first: StorageMap<u256, u256>,
     second: StorageMap<u256, u256>,
     lane: usize,
     depth: u256,
     key: u256,
-) -> u256 {
+) -> u256
+    uses (storage: Field(StorageMap<u256, u256>))
+{
     if depth == 0 {
         return if lane == 0 { first.get(key: key) } else { second.get(key: key) }
     }
@@ -18,7 +21,9 @@ fn direct_static(
     second: StorageMap<u256, u256>,
     depth: u256,
     key: u256,
-) -> u256 {
+) -> u256
+    uses (storage: Field(StorageMap<u256, u256>))
+{
     if depth == 0 {
         return second.get(key: key)
     }
@@ -31,7 +36,9 @@ fn mutual_a(
     lane: usize,
     depth: u256,
     key: u256,
-) -> u256 {
+) -> u256
+    uses (storage: Field(StorageMap<u256, u256>))
+{
     if depth == 0 {
         return if lane == 0 { first.get(key: key) } else { second.get(key: key) }
     }
@@ -44,7 +51,9 @@ fn mutual_b(
     lane: usize,
     depth: u256,
     key: u256,
-) -> u256 {
+) -> u256
+    uses (storage: Field(StorageMap<u256, u256>))
+{
     if depth == 0 {
         return if lane == 0 { first.get(key: key) } else { second.get(key: key) }
     }

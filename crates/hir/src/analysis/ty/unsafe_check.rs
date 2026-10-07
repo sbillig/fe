@@ -11,9 +11,8 @@ use crate::analysis::ty::provider::{
 };
 use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::{TraitSolveCx, is_goal_satisfiable};
-use crate::analysis::ty::ty_check::{BindingAccess, BodyOwner, LocalBinding, TypedBody};
+use crate::analysis::ty::ty_check::{BodyOwner, TypedBody};
 use crate::analysis::ty::ty_def::TyId;
-use crate::analysis::ty::ty_is_copy;
 use crate::analysis::ty::ty_lower::collect_layout_arg_bindings;
 use crate::core::semantic::EffectEnvView;
 use crate::hir_def::{
@@ -123,9 +122,9 @@ impl<'db> UnsafeChecker<'db, '_> {
 
     /// Reports a `with` binding whose provider names existing storage or
     /// transient state that the function's own effects do not cover, so that
-    /// nonlocal interference never disappears from its contract. A place in
-    /// one of its effects, or in an access, carries that authority; a copied
-    /// handle needs an effect of its type (`Field(T)`) or raw state authority.
+    /// nonlocal interference never disappears from its contract. A place with
+    /// effect authority carries it (`binding_has_authority`); a copied handle
+    /// needs an effect of its type (`Field(T)`) or raw state authority.
     fn check_provider_coverage(&mut self, value: ExprId) {
         let scope = self.body.scope();
         let assumptions = self.typed_body.assumptions();
@@ -141,16 +140,8 @@ impl<'db> UnsafeChecker<'db, '_> {
         ) || !field_handle_spaces(self.db, scope, assumptions, ty).is_empty();
         let authority = self.typed_body.expr_place(value).is_some_and(|place| {
             let PlaceBase::Binding(binding) = place.base;
-            match (binding, self.typed_body.binding_access(binding)) {
-                (LocalBinding::EffectParam { .. }, _) => true,
-                (_, Some(BindingAccess::View)) => !ty_is_copy(
-                    self.db,
-                    scope,
-                    self.typed_body.binding_ty(self.db, binding),
-                    assumptions,
-                ),
-                (_, access) => access.is_some(),
-            }
+            self.typed_body
+                .binding_has_authority(self.db, scope, binding)
         });
         if authority || !names_resource {
             return;

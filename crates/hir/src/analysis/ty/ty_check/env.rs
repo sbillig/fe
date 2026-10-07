@@ -44,7 +44,7 @@ use crate::analysis::{
         trait_resolution::{PredicateListId, constraint::collect_func_effect_provider_constraints},
         ty_contains_const_hole,
         ty_def::{BorrowKind, ClosureTy, InvalidCause, StringFallback, TyData, TyId, TyVarSort},
-        ty_is_copy,
+        ty_is_copy, ty_is_snapshot,
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -878,6 +878,12 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn binding_access(&self, binding: &LocalBinding<'db>) -> Option<BindingAccess> {
         binding_access(binding, |pat| self.pat_binding_modes[pat])
+    }
+
+    pub(super) fn binding_has_authority(&self, binding: &LocalBinding<'db>) -> bool {
+        binding_has_authority(self.db, self.scope(), self.assumptions(), binding, |pat| {
+            self.pat_binding_modes[pat]
+        })
     }
 
     pub(super) fn local_borrow_provider(&self, pat: PatId) -> Option<ProviderAddressSpace> {
@@ -1917,8 +1923,12 @@ pub enum LocalBinding<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum PatBindingMode {
     ByValue,
-    /// The binding is a named access to a place, open until its last use.
-    Access(BorrowKind),
+    /// The binding is a named access to a place, open until its last use,
+    /// with the effect authority of the place it names (`binding_has_authority`).
+    Access {
+        kind: BorrowKind,
+        authority: bool,
+    },
 }
 
 /// How a binding refers to its value: an owned value has no access; a view
@@ -1944,8 +1954,14 @@ pub(crate) fn binding_access<'db>(
     match binding {
         LocalBinding::Local { pat, .. } => match pat_mode(*pat)? {
             PatBindingMode::ByValue => None,
-            PatBindingMode::Access(BorrowKind::Ref) => Some(BindingAccess::Ref),
-            PatBindingMode::Access(BorrowKind::Mut) => Some(BindingAccess::Mut),
+            PatBindingMode::Access {
+                kind: BorrowKind::Ref,
+                ..
+            } => Some(BindingAccess::Ref),
+            PatBindingMode::Access {
+                kind: BorrowKind::Mut,
+                ..
+            } => Some(BindingAccess::Mut),
         },
         LocalBinding::Param { mode, .. } => match mode {
             FuncParamMode::View => Some(BindingAccess::View),
@@ -1953,6 +1969,43 @@ pub(crate) fn binding_access<'db>(
             FuncParamMode::Own => None,
         },
         LocalBinding::EffectParam { .. } => None,
+    }
+}
+
+/// Whether a place rooted in `binding` carries effect authority, as the
+/// handle a `Field(T)` effect takes from a call argument must: an effect
+/// binding, a data parameter naming the caller's place (a `mut` one, or a
+/// view of a non-snapshot), or an access to such a place. An owned value,
+/// a local copy or a snapshot carries none.
+pub(crate) fn binding_has_authority<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    binding: &LocalBinding<'db>,
+    pat_mode: impl FnOnce(PatId) -> Option<PatBindingMode>,
+) -> bool {
+    match binding {
+        LocalBinding::EffectParam { .. }
+        | LocalBinding::Param {
+            mode: FuncParamMode::Mut,
+            ..
+        } => true,
+        LocalBinding::Param {
+            mode: FuncParamMode::View,
+            ty,
+            ..
+        } => !ty_is_snapshot(db, scope, *ty, assumptions),
+        LocalBinding::Param {
+            mode: FuncParamMode::Own,
+            ..
+        } => false,
+        LocalBinding::Local { pat, .. } => matches!(
+            pat_mode(*pat),
+            Some(PatBindingMode::Access {
+                authority: true,
+                ..
+            })
+        ),
     }
 }
 

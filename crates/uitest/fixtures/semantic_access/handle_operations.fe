@@ -1,7 +1,7 @@
 // An operation through a handle accesses the field it names for its
-// duration: a call reads the fields of the handles a view argument holds and
-// writes those of a `mut` or owned argument. A handle read from its field
-// names that field; a copy elsewhere may name any field of its space.
+// duration, under the `Field(Self)` authority it declares: the handle's own
+// field when it lies there, and any field of its space for a copy. A call
+// given an aggregate holding handles accesses the fields they name.
 use std::evm::StorageMap
 
 struct Ledger {
@@ -14,7 +14,8 @@ impl Ledger {
     }
 }
 
-fn store_owned(_ map: own StorageMap<u256, u256>) {
+// An owned copy carries no authority, so the caller grants it.
+fn store_owned(_ map: own StorageMap<u256, u256>) uses (storage: mut Field(StorageMap<u256, u256>)) {
     let mut copy = map
     let access = mut copy
     access.set(key: 1, value: 3)

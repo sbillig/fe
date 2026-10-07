@@ -37,8 +37,8 @@ use crate::{
     hir_def::{
         BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
         GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
-        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
-        WhereClauseOwner,
+        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, UnOp,
+        WhereClauseOwner, scope_graph::ScopeId,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -2920,11 +2920,35 @@ impl<'db> TyChecker<'db> {
     fn bind_pattern_source(&mut self, pat: PatId, source: ExprId, prop: &ExprProp<'db>) {
         if let Some(shape) = &prop.shape {
             self.consume_access(source);
+            let authority = self.expr_has_authority(source);
             if self.env.is_matched_place(source) {
-                self.bind_mut_pattern_accesses(pat);
+                self.bind_mut_pattern_accesses(pat, authority);
             } else {
-                self.bind_pattern_accesses(pat, shape);
+                self.bind_pattern_accesses(pat, shape, authority);
             }
+        }
+    }
+
+    /// Whether the place `expr` names, or a projection result derives from,
+    /// carries effect authority (`binding_has_authority`).
+    pub(super) fn expr_has_authority(&self, expr: ExprId) -> bool {
+        if let Some(place) = self.env.expr_place(expr) {
+            let PlaceBase::Binding(binding) = place.base;
+            return self.env.binding_has_authority(&binding);
+        }
+        match expr.data(self.db, self.body()) {
+            Partial::Present(Expr::Un(inner, UnOp::Mut | UnOp::Ref)) => {
+                self.expr_has_authority(*inner)
+            }
+            Partial::Present(Expr::Bin(base, _, BinOp::Index)) => self.expr_has_authority(*base),
+            Partial::Present(Expr::MethodCall(receiver, _, _, args)) => {
+                self.expr_has_authority(*receiver)
+                    || args.iter().any(|arg| self.expr_has_authority(arg.expr))
+            }
+            Partial::Present(Expr::Call(_, args)) => {
+                args.iter().any(|arg| self.expr_has_authority(arg.expr))
+            }
+            _ => false,
         }
     }
 
@@ -3009,26 +3033,26 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn bind_mut_pattern_accesses(&mut self, pat: PatId) {
+    fn bind_mut_pattern_accesses(&mut self, pat: PatId, authority: bool) {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
             return;
         };
         match pat_data {
-            Pat::Path(_, true) => self.set_pattern_access(pat, BorrowKind::Mut),
+            Pat::Path(_, true) => self.set_pattern_access(pat, BorrowKind::Mut, authority),
             Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(..) => {}
             Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
                 for pat in pats {
-                    self.bind_mut_pattern_accesses(*pat);
+                    self.bind_mut_pattern_accesses(*pat, authority);
                 }
             }
             Pat::Record(_, fields) => {
                 for field in fields {
-                    self.bind_mut_pattern_accesses(field.pat);
+                    self.bind_mut_pattern_accesses(field.pat, authority);
                 }
             }
             Pat::Or(lhs, rhs) => {
-                self.bind_mut_pattern_accesses(*lhs);
-                self.bind_mut_pattern_accesses(*rhs);
+                self.bind_mut_pattern_accesses(*lhs, authority);
+                self.bind_mut_pattern_accesses(*rhs, authority);
             }
         }
     }
@@ -3038,16 +3062,16 @@ impl<'db> TyChecker<'db> {
     /// kind. Tuple and sum shapes assign their components, and owned
     /// components bind by value. A shape is not a value, so a single binding
     /// cannot hold a whole tuple or sum shape.
-    fn bind_pattern_accesses(&mut self, pat: PatId, shape: &Shape<'db>) {
+    fn bind_pattern_accesses(&mut self, pat: PatId, shape: &Shape<'db>, authority: bool) {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
             return;
         };
         match (shape, pat_data) {
             (Shape::Owned(_), _) | (_, Pat::WildCard | Pat::Rest | Pat::Lit(_)) => {}
-            (Shape::Access(kind, _), _) => self.set_pattern_access(pat, *kind),
+            (Shape::Access(kind, _), _) => self.set_pattern_access(pat, *kind, authority),
             (_, Pat::Or(lhs, rhs)) => {
-                self.bind_pattern_accesses(*lhs, shape);
-                self.bind_pattern_accesses(*rhs, shape);
+                self.bind_pattern_accesses(*lhs, shape, authority);
+                self.bind_pattern_accesses(*rhs, shape, authority);
             }
             (Shape::Tuple(elems), Pat::Tuple(pats)) => {
                 let rest = pats
@@ -3059,7 +3083,7 @@ impl<'db> TyChecker<'db> {
                         _ => Some(idx),
                     };
                     if let Some(elem) = elem.and_then(|elem| elems.get(elem)) {
-                        self.bind_pattern_accesses(pat, elem);
+                        self.bind_pattern_accesses(pat, elem, authority);
                     }
                 }
             }
@@ -3072,7 +3096,7 @@ impl<'db> TyChecker<'db> {
                 if self.pattern_variant(pat) == Some(*variant)
                     && let [payload_pat] = pats.as_slice()
                 {
-                    self.bind_pattern_accesses(*payload_pat, payload);
+                    self.bind_pattern_accesses(*payload_pat, payload, authority);
                 }
             }
             (_, Pat::Path(..)) if self.env.pat_binding(pat).is_some() => {
@@ -3096,7 +3120,7 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn set_pattern_access(&mut self, pat: PatId, kind: BorrowKind) {
+    fn set_pattern_access(&mut self, pat: PatId, kind: BorrowKind, authority: bool) {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
             return;
         };
@@ -3110,22 +3134,22 @@ impl<'db> TyChecker<'db> {
                         self.check_view_mut_access(ty, pat.span(self.body()).into());
                     }
                     self.env
-                        .set_pat_binding_mode(pat, PatBindingMode::Access(kind));
+                        .set_pat_binding_mode(pat, PatBindingMode::Access { kind, authority });
                 }
             }
             Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
                 for pat in pats {
-                    self.set_pattern_access(*pat, kind);
+                    self.set_pattern_access(*pat, kind, authority);
                 }
             }
             Pat::Record(_, fields) => {
                 for field in fields {
-                    self.set_pattern_access(field.pat, kind);
+                    self.set_pattern_access(field.pat, kind, authority);
                 }
             }
             Pat::Or(lhs, rhs) => {
-                self.set_pattern_access(*lhs, kind);
-                self.set_pattern_access(*rhs, kind);
+                self.set_pattern_access(*lhs, kind, authority);
+                self.set_pattern_access(*rhs, kind, authority);
             }
             Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
         }
@@ -4401,6 +4425,18 @@ impl<'db> TypedBody<'db> {
     /// How `binding` refers to its value.
     pub fn binding_access(&self, binding: LocalBinding<'db>) -> Option<BindingAccess> {
         env::binding_access(&binding, |pat| self.pat_binding_mode(pat))
+    }
+
+    /// Whether a place rooted in `binding` carries effect authority.
+    pub fn binding_has_authority(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        binding: LocalBinding<'db>,
+    ) -> bool {
+        env::binding_has_authority(db, scope, self.assumptions(), &binding, |pat| {
+            self.pat_binding_mode(pat)
+        })
     }
 
     /// The semantic-IR type of `binding`: an access binding or a view or

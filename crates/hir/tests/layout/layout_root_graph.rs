@@ -3012,13 +3012,18 @@ fn control_flow_selected_local_layout_backing_sources_are_accepted() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 fn read_direct<const ROOT: u256>(
     maps: [StorageMap<u256, u256, ROOT>; 2],
     lane: usize,
     key: u256,
 ) -> u256 {
     let map = if lane == 0 { maps[0] } else { maps[1] }
-    map.get(key: key)
+    salt(map) + key
 }
 
 fn read_same_landing<const ROOT: u256>(
@@ -3027,7 +3032,7 @@ fn read_same_landing<const ROOT: u256>(
     key: u256,
 ) -> u256 {
     let map = if lane == 0 { maps[0] } else { maps[0] }
-    map.get(key: key)
+    salt(map) + key
 }
 "#,
     );
@@ -3146,6 +3151,11 @@ fn reassigned_layout_backing_sources_follow_the_current_value() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Pair<const LEFT: u256, const RIGHT: u256> {
     left: StorageMap<u256, u256, LEFT>,
     right: StorageMap<u256, u256, RIGHT>,
@@ -3157,7 +3167,7 @@ fn invalid<const ROOT: u256>(
 ) -> u256 {
     let mut map = maps[0]
     map = maps[1]
-    map.get(key: key)
+    salt(map) + key
 }
 
 fn valid<const ROOT: u256>(
@@ -3166,7 +3176,7 @@ fn valid<const ROOT: u256>(
 ) -> u256 {
     let mut map = maps[0]
     map = maps[0]
-    map.get(key: key)
+    salt(map) + key
 }
 
 fn invalid_partial<const ROOT: u256>(
@@ -3175,7 +3185,7 @@ fn invalid_partial<const ROOT: u256>(
 ) -> u256 {
     let mut pair = Pair { left: maps[0], right: maps[0] }
     pair.left = maps[1]
-    pair.left.get(key: key)
+    salt(pair.left) + key
 }
 "#,
     );
@@ -3211,6 +3221,11 @@ fn trait_dispatch_transports_control_flow_selected_layout_evidence() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Reader {}
 
 trait Read {
@@ -3227,7 +3242,7 @@ impl Read for Reader {
         map: StorageMap<u256, u256, ROOT>,
         key: u256,
     ) -> u256 {
-        map.get(key: key)
+        salt(map) + key
     }
 }
 
@@ -3251,6 +3266,11 @@ fn trait_dispatch_uses_the_selected_impl_return_provenance() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Reader {}
 
 trait Identity {
@@ -3273,7 +3293,7 @@ fn valid<const ROOT: u256>(
     maps: [StorageMap<u256, u256, ROOT>; 2],
     key: u256,
 ) -> u256 {
-    Reader {}.identity(map: maps[0]).get(key: key)
+    salt(Reader {}.identity(map: maps[0])) + key
 }
 "#,
     );
@@ -3288,6 +3308,11 @@ fn overloaded_calls_transport_control_flow_selected_layout_evidence() {
 use core::ops::{Add, AddAssign, Neg}
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Rooted<const ROOT: u256> {
     map: StorageMap<u256, u256, ROOT>,
 }
@@ -3298,7 +3323,7 @@ impl<const ROOT: u256> Add<u256> for Rooted<ROOT> {
     type Output = u256
 
     fn add(own self, _ key: own u256) -> u256 {
-        self.map.get(key: key)
+        salt(self.map) + key
     }
 }
 
@@ -3306,13 +3331,13 @@ impl<const ROOT: u256> Neg for Rooted<ROOT> {
     type Output = u256
 
     fn neg(own self) -> u256 {
-        self.map.get(key: 0)
+        salt(self.map)
     }
 }
 
 impl<const ROOT: u256> AddAssign<u256> for Rooted<ROOT> {
     fn add_assign(mut self, _ key: own u256) {
-        let _value = self.map.get(key: key)
+        let _value = salt(self.map) + key
     }
 }
 
@@ -3354,6 +3379,11 @@ fn overloaded_index_return_provenance_uses_the_selected_impl() {
 use core::ops::Index
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Rooted<const ROOT: u256> {
     map: StorageMap<u256, u256, ROOT>,
 }
@@ -3370,7 +3400,7 @@ impl<const ROOT: u256> Index<usize> for Rooted<ROOT> {
 }
 
 fn valid<const ROOT: u256>(rooted: Rooted<ROOT>, key: u256) -> u256 {
-    rooted[0].get(key: key)
+    salt(rooted[0]) + key
 }
 
 fn through_index<const ROOT: u256>(
@@ -3380,7 +3410,7 @@ fn through_index<const ROOT: u256>(
 }
 
 fn valid_helper<const ROOT: u256>(rooted: Rooted<ROOT>, key: u256) -> u256 {
-    through_index(rooted: rooted).get(key: key)
+    salt(through_index(rooted: rooted)) + key
 }
 
 fn invalid<const ROOT: u256>(
@@ -3389,7 +3419,7 @@ fn invalid<const ROOT: u256>(
     key: u256,
 ) -> u256 {
     let rooted = if lane == 0 { values[0] } else { values[1] }
-    rooted[0].get(key: key)
+    salt(rooted[0]) + key
 }
 
 fn invalid_helper<const ROOT: u256>(
@@ -3398,7 +3428,7 @@ fn invalid_helper<const ROOT: u256>(
     key: u256,
 ) -> u256 {
     let rooted = if lane == 0 { values[0] } else { values[1] }
-    through_index(rooted: rooted).get(key: key)
+    salt(through_index(rooted: rooted)) + key
 }
 "#,
     );

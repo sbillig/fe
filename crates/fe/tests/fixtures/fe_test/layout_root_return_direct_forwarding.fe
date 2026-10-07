@@ -12,7 +12,10 @@ fn pass_map_nested<const SALT: u256>(
     return pass_map(map: map)
 }
 
-fn read_map(map: StorageMap<u256, u256>, key: u256) -> u256 {
+// `map` is a copy, so the caller grants the authority over its field.
+fn read_map(map: StorageMap<u256, u256>, key: u256) -> u256
+    uses (storage: Field(StorageMap<u256, u256>))
+{
     pass_map_nested(map: map).get(key: key)
 }
 

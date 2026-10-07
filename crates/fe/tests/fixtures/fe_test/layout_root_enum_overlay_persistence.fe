@@ -8,7 +8,7 @@ enum Choice {
 impl Copy for Choice {}
 
 impl Choice {
-    fn set(mut own self, key: u256, value: u256) {
+    fn set(mut self, key: u256, value: u256) {
         match self {
             Choice::Left(mut map) => map.set(key: key, value: value),
             Choice::Right(mut map) => map.set(key: key, value: value),
@@ -16,7 +16,7 @@ impl Choice {
     }
 
     fn get(self, key: u256) -> u256 {
-        match self {
+        match ref self {
             Choice::Left(map) => map.get(key: key),
             Choice::Right(map) => map.get(key: key),
         }

@@ -11,7 +11,9 @@ fn unwrap_map<const ROOT: u256>(
     map
 }
 
-fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 {
+// The map `unwrap_map` returns is a copy, so the caller grants the authority
+// over its field.
+fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
     unwrap_map(wrapped: wrapped).get(key: key)
 }
 
@@ -41,10 +43,15 @@ pub contract C {
         }
 
         Get { lane, key } -> u256 uses (first, second) {
+            // The wrapped map is a place in the field this arm reads.
             if lane == 0 {
-                read_wrapped(wrapped: first, key: key)
+                match ref first {
+                    Wrapped::Map(map) => with (map) { read_wrapped(wrapped: first, key: key) },
+                }
             } else {
-                read_wrapped(wrapped: second, key: key)
+                match ref second {
+                    Wrapped::Map(map) => with (map) { read_wrapped(wrapped: second, key: key) },
+                }
             }
         }
     }
