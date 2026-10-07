@@ -1,0 +1,47 @@
+use std::evm::StorageMap
+
+// `Field(T)` authority comes from an effect provider holding a handle of type
+// `T`, a handle's type naming its field. A data parameter carries none.
+
+struct Pair {
+    left: StorageMap<u256, u256>,
+    right: StorageMap<u256, u256>,
+}
+
+// Rejected: a data parameter carries no authority, `mut` or not.
+fn poke(pair: mut Pair) {
+    pair.left.set(key: 1, value: 2)
+}
+
+fn peek(pair: Pair) -> u256 {
+    pair.left.get(key: 1)
+}
+
+// Rejected: a copy of a read-only provider's map is read-only, whichever
+// other provider is `mut`.
+fn escalate() uses (first: mut Pair, second: Pair) {
+    let mut map = second.left
+    map.set(key: 1, value: 2)
+}
+
+// Rejected: an owned map names a field no provider holds.
+fn owned(_ map: own StorageMap<u256, u256>) uses (pair: mut Pair) {
+    let mut map = map
+    map.set(key: 1, value: 2)
+}
+
+fn write_any(_ pair: Pair) uses (storage: mut Field(StorageMap<u256, u256>)) {
+    let mut left = pair.left
+    left.set(key: 1, value: 2)
+}
+
+// Accepted: `write_any` may write any map `first` holds.
+fn lend() uses (first: mut Pair) {
+    write_any(first)
+}
+
+// Rejected: `write_any` may write any map `second` holds, which is read-only
+// here.
+fn lend_read_only() uses (first: mut Pair, second: Pair) {
+    write_any(second)
+}

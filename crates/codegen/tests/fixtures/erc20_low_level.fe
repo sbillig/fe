@@ -37,15 +37,19 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
     Erc20<BALANCES_ROOT, ALLOWANCES_ROOT>
 {
 
-    fn balance_of(self, addr: Address) -> u256 {
+    fn balance_of(self, addr: Address) -> u256 uses (balances: Field(StorageMap<Address, u256, BALANCES_ROOT>)) {
         self.balances.get(key: addr)
     }
 
-    fn allowance(self, owner: Address, spender: Address) -> u256 {
+    fn allowance(self, owner: Address, spender: Address) -> u256
+        uses (allowances: Field(StorageMap<(Address, Address), u256, ALLOWANCES_ROOT>))
+    {
         self.allowances.get(key: (owner, spender))
     }
 
-    fn approve(mut self, owner: Address, spender: Address, value: u256) {
+    fn approve(mut self, owner: Address, spender: Address, value: u256)
+        uses (allowances: mut Field(StorageMap<(Address, Address), u256, ALLOWANCES_ROOT>))
+    {
         self.allowances.set(key: (owner, spender), value: value)
     }
 
@@ -63,8 +67,10 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
 
     // A receiver in storage cannot be held across a call to effects that
     // may reach it, so the methods take the caller and revert without raw
-    // storage authority.
-    fn transfer(mut self, from: Address, to: Address, amount: u256) {
+    // storage authority. Operations on the maps take their fields' authority.
+    fn transfer(mut self, from: Address, to: Address, amount: u256)
+        uses (balances: mut Field(StorageMap<Address, u256, BALANCES_ROOT>))
+    {
         let from_bal = self.balance_of(addr: from)
         if from_bal < amount {
             revert_empty()
@@ -74,7 +80,9 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
         self.balances.set(key: to, value: to_bal + amount)
     }
 
-    fn transfer_from(mut self, spender: Address, owner: Address, to: Address, amount: u256) {
+    fn transfer_from(mut self, spender: Address, owner: Address, to: Address, amount: u256)
+        uses (balances: mut Field(StorageMap<Address, u256, BALANCES_ROOT>), allowances: mut Field(StorageMap<(Address, Address), u256, ALLOWANCES_ROOT>))
+    {
         let allowed = self.allowance(owner: owner, spender: spender)
         if allowed < amount {
             revert_empty()
@@ -83,7 +91,9 @@ impl<const BALANCES_ROOT: u256, const ALLOWANCES_ROOT: u256>
         self.allowances.set(key: (owner, spender), value: allowed - amount)
     }
 
-    fn mint(mut self, caller: Address, to: Address, amount: u256) {
+    fn mint(mut self, caller: Address, to: Address, amount: u256)
+        uses (balances: mut Field(StorageMap<Address, u256, BALANCES_ROOT>))
+    {
         if caller != self.owner {
             revert_empty()
         }

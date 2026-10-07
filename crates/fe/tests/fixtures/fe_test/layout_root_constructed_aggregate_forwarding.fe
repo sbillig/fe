@@ -5,10 +5,12 @@ struct Pair<const LEFT: u256, const RIGHT: u256> {
     right: StorageMap<u256, u256, RIGHT>,
 }
 
+// A data parameter carries no authority, so the caller grants the
+// authority over the maps' fields.
 fn read_left<const LEFT: u256, const RIGHT: u256>(
     pair: Pair<LEFT, RIGHT>,
     key: u256,
-) -> u256 {
+) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
     pair.left.get(key: key)
 }
 
@@ -19,7 +21,6 @@ fn make_pair<const LEFT: u256, const RIGHT: u256>(
     Pair { left, right }
 }
 
-// The maps are copies, so the caller grants the authority over their fields.
 fn read_after_same_source_field_assignment<const LEFT: u256, const RIGHT: u256>(
     left: StorageMap<u256, u256, LEFT>,
     right: StorageMap<u256, u256, RIGHT>,
@@ -34,7 +35,7 @@ fn read_constructed(
     left: StorageMap<u256, u256>,
     right: StorageMap<u256, u256>,
     key: u256,
-) -> u256 {
+) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
     let pair = make_pair(left: left, right: right)
     read_left(pair: pair, key: key)
 }

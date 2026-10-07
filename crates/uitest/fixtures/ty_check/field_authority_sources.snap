@@ -1,0 +1,50 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/field_authority_sources.fe
+---
+error[8-0036]: missing effect `Field(Self)` required by `set`
+   ┌─ field_authority_sources.fe:13:5
+   │
+13 │     pair.left.set(key: 1, value: 2)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `set` requires effect `Field(Self)` to be in scope
+   │
+   = the authority over the field a handle names comes from an effect provider holding it, such as a contract field under `uses (mut store)`, or from a `uses (storage: Field(T))` effect
+
+error[8-0036]: missing effect `Field(Self)` required by `get`
+   ┌─ field_authority_sources.fe:17:5
+   │
+17 │     pair.left.get(key: 1)
+   │     ^^^^^^^^^^^^^^^^^^^^^ `get` requires effect `Field(Self)` to be in scope
+   │
+   = the authority over the field a handle names comes from an effect provider holding it, such as a contract field under `uses (mut store)`, or from a `uses (storage: Field(T))` effect
+
+error[8-0036]: missing effect `Field(Self)` required by `set`
+   ┌─ field_authority_sources.fe:30:5
+   │
+30 │     map.set(key: 1, value: 2)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ `set` requires effect `Field(Self)` to be in scope
+   │
+   = the authority over the field a handle names comes from an effect provider holding it, such as a contract field under `uses (mut store)`, or from a `uses (storage: Field(T))` effect
+
+error[8-0037]: effect `Field(Self)` must be mutable when calling `set`
+   ┌─ field_authority_sources.fe:24:5
+   │
+22 │ fn escalate() uses (first: mut Pair, second: Pair) {
+   │                                      ------ effect `Field(Self)` is provided here
+23 │     let mut map = second.left
+24 │     map.set(key: 1, value: 2)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ `set` requires `mut Field(Self)`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `Field(StorageMap<u256, u256>)` must be mutable when calling `write_any`
+   ┌─ field_authority_sources.fe:46:5
+   │
+45 │ fn lend_read_only() uses (first: mut Pair, second: Pair) {
+   │                                            ------ effect `Field(StorageMap<u256, u256>)` is provided here
+46 │     write_any(second)
+   │     ^^^^^^^^^^^^^^^^^ `write_any` requires `mut Field(StorageMap<u256, u256>)`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block

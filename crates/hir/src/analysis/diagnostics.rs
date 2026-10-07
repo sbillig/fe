@@ -3119,9 +3119,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         span: primary.resolve(db),
                     }],
                     notes: vec![match key.field_key_handle(db) {
-                        Some(_) => "the authority over a storage field comes with a handle \
-                            argument that lies in an effect provider, such as a contract \
-                            field under `uses (mut store)`"
+                        Some(_) => "the authority over the field a handle names comes from \
+                            an effect provider holding it, such as a contract field under \
+                            `uses (mut store)`, or from a `uses (storage: Field(T))` effect"
                             .to_string(),
                         None => format!(
                             "provide it with `with ({key_str} = value)` or require it via `uses {key_str}`"

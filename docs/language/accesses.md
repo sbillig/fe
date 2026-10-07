@@ -81,12 +81,15 @@ buffer reserved until its last use.
 A storage handle, such as a `StorageMap`, is a snapshot naming the field
 whose entries it reaches. An operation through it declares that field's
 authority, `uses (storage: Field(Self))` (`mut` to write), and accesses the
-field for its duration. The authority comes with a handle argument whose
-place carries it, or with a struct or tuple argument holding the handle in
-a field: a place in an effect, or in a data parameter or access naming the
-caller's place. A copy (a local, an owned value, a call's
-result) carries none, so a function operating on one declares
-`uses (storage: Field(StorageMap<K, V>))` and its caller grants it.
+field for its duration. A static slot handle's type names its field, since
+distinct fields' handles never share a type, so the authority comes from an
+effect provider holding a value of that type: `uses (balances)` covers
+`balances.get(k)`, a copy of `balances`, the map a projection over
+`balances` yields and one in an enum payload of a provider alike. A handle
+whose slot is a runtime value, such as a `StorPtr`, carries its authority
+only in place, as an argument lying in an effect provider. A data parameter
+carries none: a function operating on handles it is given declares
+`uses (storage: Field(StorageMap<K, V>))`, and its caller grants it.
 
 ```fe
 let x = mut balances[from]
@@ -98,9 +101,10 @@ x -= amount
 
 A `Field(T)` that leaves `T`'s salt open (`Field(StorageMap<K, V>)`) is
 authority over any map of that shape, so a call holding it accesses every
-such field. A call given an aggregate holding handles accesses the fields
-they name. A `with` block may install a handle copy as a provider only under
-the function's own authority over its field, or raw storage authority.
+such field. A callee may exercise a `Field(T)` authority over any handle of
+`T`'s shape its arguments hold, so each of those must be covered. A `with`
+block may install a handle copy as a provider only under the function's own
+authority over its field, or raw storage authority.
 
 ## External calls
 

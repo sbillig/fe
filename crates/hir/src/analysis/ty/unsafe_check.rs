@@ -140,8 +140,7 @@ impl<'db> UnsafeChecker<'db, '_> {
         ) || !field_handle_spaces(self.db, scope, assumptions, ty).is_empty();
         let authority = self.typed_body.expr_place(value).is_some_and(|place| {
             let PlaceBase::Binding(binding) = place.base;
-            self.typed_body
-                .binding_has_authority(self.db, scope, binding)
+            self.typed_body.binding_has_authority(binding)
         });
         if authority || !names_resource {
             return;

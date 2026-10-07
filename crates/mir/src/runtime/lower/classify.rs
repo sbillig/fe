@@ -3604,7 +3604,10 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
         let signature = callee.interface_signature(&db);
 
         assert_eq!(
-            plans.len(),
+            plans
+                .iter()
+                .filter(|plan| !matches!(plan.binding, LocalBinding::EffectParam { .. }))
+                .count(),
             2,
             "specialized grant callee should expose only its two non-ZST arguments after the assigned root becomes concrete:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
@@ -3612,14 +3615,15 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
             matches!(param_plans.first(), Some(RuntimeParamPlan::Erased)),
             "specialized grant receiver should erase once its nested layout root is a concrete assigned literal:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
+        // `grant`'s `Field` authority binding is passed too.
         assert_eq!(
             abi.visible_params.len(),
-            2,
+            3,
             "specialized grant visible ABI should omit the inert receiver:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nabi={abi:#?}"
         );
         assert_eq!(
             abi.evidence_params.len(),
-            1,
+            2,
             "the declared receiver layout must remain an explicit evidence parameter:\nabi={abi:#?}"
         );
         assert_eq!(signature, abi.signature());

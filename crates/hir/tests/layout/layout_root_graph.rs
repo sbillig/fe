@@ -2638,8 +2638,13 @@ fn callable_array_input_of_layout_roots_is_unrepresentable() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 fn read(maps: [StorageMap<u256, u256>; 2], lane: usize, key: u256) -> u256 {
-    maps[lane].get(key: key)
+    salt(maps[lane]) + key
 }
 "#,
     );
@@ -2717,6 +2722,11 @@ fn callable_layout_bundle_splits_sibling_field_landings() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Pair<T> {
     left: T,
     right: T,
@@ -2724,7 +2734,7 @@ struct Pair<T> {
 
 impl Pair<StorageMap<u256, u256>> {
     fn read_left(self, key: u256) -> u256 {
-        self.left.get(key: key)
+        salt(self.left) + key
     }
 }
 "#,
@@ -2981,13 +2991,18 @@ fn terminal_callable_sources_ignore_shape_only_ancestors() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 enum Choice<T> { Primary(T), Secondary(T) }
 
 impl Choice<StorageMap<u256, u256>> {
-    fn set(mut self, key: u256, value: u256) {
+    fn salt_of(mut self) -> u256 {
         match self {
-            Choice::Primary(mut map) => map.set(key: key, value: value),
-            Choice::Secondary(mut map) => map.set(key: key, value: value),
+            Choice::Primary(mut map) => salt(map),
+            Choice::Secondary(mut map) => salt(map),
         }
     }
 }
@@ -2998,7 +3013,7 @@ fn get_lane(
     col: usize,
     key: u256,
 ) -> u256 {
-    maps[row][col].get(key: key)
+    salt(maps[row][col]) + key
 }
 "#,
     );
@@ -3079,6 +3094,11 @@ fn constructed_aggregate_layout_backing_sources_are_selected_by_result_field() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Pair<const LEFT: u256, const RIGHT: u256> {
     left: StorageMap<u256, u256, LEFT>,
     right: StorageMap<u256, u256, RIGHT>,
@@ -3095,7 +3115,7 @@ fn read_left<const LEFT: u256, const RIGHT: u256>(
     pair: Pair<LEFT, RIGHT>,
     key: u256,
 ) -> u256 {
-    pair.left.get(key: key)
+    salt(pair.left) + key
 }
 
 fn valid<const ROOT: u256>(
@@ -3118,6 +3138,11 @@ fn control_flow_selected_aggregate_field_is_accepted() {
         r#"
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct Pair<const LEFT: u256, const RIGHT: u256> {
     left: StorageMap<u256, u256, LEFT>,
     right: StorageMap<u256, u256, RIGHT>,
@@ -3127,7 +3152,7 @@ fn read_left<const LEFT: u256, const RIGHT: u256>(
     pair: Pair<LEFT, RIGHT>,
     key: u256,
 ) -> u256 {
-    pair.left.get(key: key)
+    salt(pair.left) + key
 }
 
 fn ambiguous<const ROOT: u256>(
@@ -3444,6 +3469,11 @@ use core::iter::Collection
 use core::option::Option
 use std::evm::StorageMap
 
+// Reads a map's salt, the layout argument its operations need.
+fn salt<const S: u256>(_ map: StorageMap<u256, u256, S>) -> u256 {
+    S
+}
+
 struct RootedSeq<const ROOT: u256> {
     map: StorageMap<u256, u256, ROOT>,
 }
@@ -3464,7 +3494,7 @@ impl<const ROOT: u256> Collection for RootedSeq<ROOT> {
     }
 
     fn at(self, _ c: usize) -> ref u256 {
-        let value = self.map.get(key: 0)
+        let value = salt(self.map)
         yield ref value
     }
 }

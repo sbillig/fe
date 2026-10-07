@@ -118,14 +118,14 @@ Each operation is checked against the open tokens it is not derived from:
 - Calls that start external executions themselves (call intrinsics and
   methods of the reentrant std capabilities) access all state.
 - A handle operation's `Field(Self)` effect accesses the field the handle
-  names: its place where it lies in a resource, and a dynamic domain of its
-  space for a copy in memory. A `Field(T)` key with open layout arguments
-  names a dynamic domain wherever it came from. A handle argument itself is a
-  snapshot, but a call given an aggregate holding *field handles* (values of
-  a `StaticSlot` type at any path; `field_handle_spaces`) accesses the fields
-  they name, reading them for a view parameter and writing them otherwise,
-  since the callee may operate through them with the argument's authority.
-  A projection reserves those fields for its session.
+  names. The type checker supplies, as its effect argument, the place within
+  an effect provider that holds the handle (a static slot handle's type names
+  its field, so a copy's is the original's), else the handle argument: a
+  dynamic domain of its space when that is a copy in memory. A `Field(T)` key
+  with open layout arguments names a dynamic domain wherever it came from. A
+  handle argument, alone or in an aggregate, is data: a callee operates
+  through it only under a `Field` effect of its own, whose footprint the call
+  carries.
 
 So `let v = mut store.value` held across a call whose effects permit
 reentrancy is rejected, while closing the access before the call is accepted.

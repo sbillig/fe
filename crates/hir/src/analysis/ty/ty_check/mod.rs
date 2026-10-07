@@ -38,7 +38,7 @@ use crate::{
         BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
         GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
         StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId, UnOp,
-        WhereClauseOwner, scope_graph::ScopeId,
+        WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -4428,15 +4428,8 @@ impl<'db> TypedBody<'db> {
     }
 
     /// Whether a place rooted in `binding` carries effect authority.
-    pub fn binding_has_authority(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        scope: ScopeId<'db>,
-        binding: LocalBinding<'db>,
-    ) -> bool {
-        env::binding_has_authority(db, scope, self.assumptions(), &binding, |pat| {
-            self.pat_binding_mode(pat)
-        })
+    pub fn binding_has_authority(&self, binding: LocalBinding<'db>) -> bool {
+        env::binding_has_authority(&binding, |pat| self.pat_binding_mode(pat))
     }
 
     /// The semantic-IR type of `binding`: an access binding or a view or
@@ -5042,6 +5035,12 @@ impl<'db> TypedBody<'db> {
                 }
                 PlaceProjection::Index { index_expr, .. } => {
                     Some(self.return_index_projection(db, body, *index_expr))
+                }
+                PlaceProjection::VariantField { variant, field, .. } => {
+                    Some(Some(ReturnProjectionStep::VariantField {
+                        variant: *variant,
+                        field: *field,
+                    }))
                 }
             })
             .collect::<Option<Vec<_>>>()?;

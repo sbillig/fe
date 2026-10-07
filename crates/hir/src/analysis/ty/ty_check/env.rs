@@ -44,7 +44,7 @@ use crate::analysis::{
         trait_resolution::{PredicateListId, constraint::collect_func_effect_provider_constraints},
         ty_contains_const_hole,
         ty_def::{BorrowKind, ClosureTy, InvalidCause, StringFallback, TyData, TyId, TyVarSort},
-        ty_is_copy, ty_is_snapshot,
+        ty_is_copy,
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -861,9 +861,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn binding_has_authority(&self, binding: &LocalBinding<'db>) -> bool {
-        binding_has_authority(self.db, self.scope(), self.assumptions(), binding, |pat| {
-            self.pat_binding_modes[pat]
-        })
+        binding_has_authority(binding, |pat| self.pat_binding_modes[pat])
     }
 
     pub(super) fn local_borrow_provider(&self, pat: PatId) -> Option<ProviderAddressSpace> {
@@ -1766,7 +1764,7 @@ fn effect_param_name<'db>(
     }
 }
 
-fn effect_param_span<'db>(
+pub(super) fn effect_param_span<'db>(
     db: &'db dyn HirAnalysisDb,
     site: EffectParamSite<'db>,
     idx: usize,
@@ -1823,8 +1821,10 @@ pub(crate) enum EffectOrigin<'db> {
     With {
         value_expr: ExprId,
     },
-    /// A call's argument whose place lies in an effect provider: the
-    /// authority `Field(T)` takes from the handle it passes.
+    /// A call's argument holding the handle a `Field(T)` authority names,
+    /// passed as its effect argument: a handle whose slot is a runtime value,
+    /// lying in an effect provider, or one an array element of a provider
+    /// holds, which has no place of its own.
     Arg {
         expr: ExprId,
     },
@@ -1952,33 +1952,20 @@ pub(crate) fn binding_access<'db>(
     }
 }
 
-/// Whether a place rooted in `binding` carries effect authority, as the
-/// handle a `Field(T)` effect takes from a call argument must: an effect
-/// binding, a data parameter naming the caller's place (a `mut` one, or a
-/// view of a non-snapshot), or an access to such a place. An owned value,
-/// a local copy or a snapshot carries none.
+/// Whether a place rooted in `binding` lies in an effect provider, and so
+/// carries its authority: an effect binding, or an access to such a place.
+/// A data parameter carries none: its caller's place may be a copy.
 pub(crate) fn binding_has_authority<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
     binding: &LocalBinding<'db>,
     pat_mode: impl FnOnce(PatId) -> Option<PatBindingMode>,
 ) -> bool {
     match binding {
         LocalBinding::EffectParam { .. }
         | LocalBinding::Param {
-            mode: FuncParamMode::Mut,
+            site: ParamSite::EffectField(_),
             ..
         } => true,
-        LocalBinding::Param {
-            mode: FuncParamMode::View,
-            ty,
-            ..
-        } => !ty_is_snapshot(db, scope, *ty, assumptions),
-        LocalBinding::Param {
-            mode: FuncParamMode::Own,
-            ..
-        } => false,
+        LocalBinding::Param { .. } => false,
         LocalBinding::Local { pat, .. } => matches!(
             pat_mode(*pat),
             Some(PatBindingMode::Access {
