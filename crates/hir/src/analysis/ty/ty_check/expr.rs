@@ -9,8 +9,8 @@ use smallvec1::SmallVec;
 use crate::core::{
     hir_def::{
         ArithBinOp, BinOp, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr, ExprId,
-        FieldIndex, Func, IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId, PathId, Stmt,
-        StmtId, UnOp, VariantKind, WithBinding,
+        FieldIndex, Func, FuncParamMode, IdentId, IntegerId, LitKind, LogicalBinOp, Partial, PatId,
+        PathId, Stmt, StmtId, UnOp, VariantKind, WithBinding,
     },
     semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
 };
@@ -3495,6 +3495,34 @@ impl<'db> TyChecker<'db> {
         }
         let candidate = match candidate {
             Ok(candidate) => candidate,
+            // Mutability variants, `at(self)` and `at(mut self)`: the view one,
+            // unless the context needs a `mut` place (`select_mut_place`).
+            Err(MethodSelectionError::AmbiguousTraitMethod(ref ambiguous))
+                if let [first, second] = ambiguous.candidates.as_slice()
+                    && let Some((view, mutable)) = [(first, second), (second, first)]
+                        .into_iter()
+                        .find(|(view, mutable)| {
+                            let mode = |method| CallableDef::Func(method).param_mode(self.db, 0);
+                            mode(view.cand.method) == FuncParamMode::View
+                                && mode(mutable.cand.method) == FuncParamMode::Mut
+                        }) =>
+            {
+                let inst = canonical_r_ty.extract_solution(&mut self.table, mutable.cand.inst);
+                self.env.register_mut_variant(
+                    expr,
+                    selected_receiver_ty,
+                    super::env::PendingMethodCandidate {
+                        inst,
+                        method: mutable.cand.method,
+                        needs_confirmation: mutable.needs_confirmation,
+                    },
+                );
+                if view.needs_confirmation {
+                    MethodCandidate::NeedsConfirmation(view.cand)
+                } else {
+                    MethodCandidate::TraitMethod(view.cand)
+                }
+            }
             Err(err) => {
                 if let MethodSelectionError::AmbiguousTraitMethod(ambiguous) = err {
                     // Defer resolution using return-type constraints
@@ -3642,6 +3670,66 @@ impl<'db> TyChecker<'db> {
     /// Registers a checked call and types its result. A projection's result
     /// is a place granted by the call's session; its shape says which parts
     /// are accesses.
+    /// Re-resolves the method call `expr`, which selected the view variant
+    /// of a method, to its `mut self` variant, for a context that needs a
+    /// `mut` place. Returns whether it has one.
+    pub(super) fn check_mut_method_variant(&mut self, expr: ExprId) -> bool {
+        let Partial::Present(Expr::MethodCall(receiver, _, generic_args, args)) =
+            expr.data(self.db, self.body())
+        else {
+            return false;
+        };
+        let Some((recv_ty, variant)) = self.env.take_mut_variant(expr) else {
+            return false;
+        };
+        let Some(receiver_prop) = self.env.typed_expr(*receiver) else {
+            return false;
+        };
+        self.env.forget_call(expr);
+        let call_span = expr.span(self.body()).into_method_call_expr();
+        let func_ty = self.instantiate_trait_method_to_term(variant.method, recv_ty, variant.inst);
+        let Ok(mut callable) = Callable::new(
+            self.db,
+            func_ty,
+            receiver.span(self.body()).into(),
+            Some(variant.inst),
+        ) else {
+            return false;
+        };
+        if variant.needs_confirmation {
+            self.env.register_trait_obligation(TraitObligation {
+                goal: variant.inst,
+                origin: TraitObligationOrigin::GenericConfirmation,
+                span: call_span.clone().into(),
+            });
+        }
+        let anchor = HoleAnchor::BodySyntax {
+            body: self.body(),
+            site: BodyHoleSite::Expr(expr),
+        };
+        if !callable.unify_generic_args(
+            self,
+            *generic_args,
+            anchor,
+            call_span.clone().generic_args(),
+        ) {
+            return false;
+        }
+        callable.check_args(
+            self,
+            args,
+            call_span.clone().args(),
+            Some((*receiver, receiver_prop)),
+            true,
+        );
+        self.specialize_callable_layout_args(&mut callable, Some(*receiver), args);
+        self.check_callable_effects(expr, &mut callable);
+        callable.process_constraints(self, expr, call_span.method_name().into());
+        let typed = self.finish_call(expr, callable);
+        self.env.type_expr(expr, typed);
+        true
+    }
+
     fn finish_call(&mut self, expr: ExprId, callable: Callable<'db>) -> ExprProp<'db> {
         let ret_ty = callable.ret_ty(self.db);
         let ret_ty = self.normalize_ty(ret_ty);

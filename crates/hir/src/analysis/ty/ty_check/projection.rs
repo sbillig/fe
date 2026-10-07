@@ -148,6 +148,7 @@ impl<'db> TyChecker<'db> {
                     !indexed.ty.has_invalid(self.db)
                 }
             }
+            Partial::Present(Expr::MethodCall(..)) => self.check_mut_method_variant(expr),
             _ => false,
         };
         if selected {

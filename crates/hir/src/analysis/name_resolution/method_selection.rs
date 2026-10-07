@@ -306,16 +306,40 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn insert_assumption_trait_method_cand(&mut self, inst: TraitInstId<'db>) {
         let trait_def = inst.def(self.db);
-        if self.allow_trait(trait_def)
-            && let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name)
-        {
-            self.candidates
-                .traits
-                .insert(AssembledTraitMethodCand::Assumption {
-                    inst,
-                    method: trait_method,
-                });
+        if !self.allow_trait(trait_def) {
+            return;
         }
+        let Some(&trait_method) = trait_def.method_defs(self.db).get(&self.method_name) else {
+            return;
+        };
+        // Bounds on one trait instance that differ only in associated type
+        // bindings, such as `A<T = u256>` and the `A` a bound on a subtrait
+        // implies, are one candidate with every binding.
+        let same = self.candidates.traits.iter().copied().find(|cand| {
+            matches!(cand, AssembledTraitMethodCand::Assumption { inst: known, .. }
+                if known.def(self.db) == trait_def && known.args(self.db) == inst.args(self.db))
+        });
+        let inst = match same {
+            Some(
+                known @ AssembledTraitMethodCand::Assumption {
+                    inst: known_inst, ..
+                },
+            ) => {
+                self.candidates.traits.remove(&known);
+                let mut bindings = known_inst.assoc_type_bindings(self.db).clone();
+                for (&name, &ty) in inst.assoc_type_bindings(self.db) {
+                    bindings.entry(name).or_insert(ty);
+                }
+                TraitInstId::new(self.db, trait_def, inst.args(self.db).to_vec(), bindings)
+            }
+            _ => inst,
+        };
+        self.candidates
+            .traits
+            .insert(AssembledTraitMethodCand::Assumption {
+                inst,
+                method: trait_method,
+            });
     }
 }
 
