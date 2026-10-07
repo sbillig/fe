@@ -65,6 +65,7 @@ fn matching(_ xs: [u256; 4]) -> usize uses (store: Store) {
 The provider is the one in scope where `count` is called, so a closure made
 under `with (Store = a)` and passed to a higher-order function called under
 `with (Store = b)` uses `b`. A `with` inside the closure's body provides the
-effect itself. Only effects keyed by a type can be part of a closure's row.
+effect itself. An enclosing row (`uses C::E`) cannot be part of a closure's
+row; call the function that needs it outside the closure.
 
 A closure cannot be used in a constant context.

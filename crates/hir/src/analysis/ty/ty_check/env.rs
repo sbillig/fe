@@ -1030,7 +1030,9 @@ impl<'db> TyCheckEnv<'db> {
 
     /// The component of the innermost closure's row keyed by `key`, added
     /// as `name` if the row has none, with its provider if it is new. A
-    /// component required `mut` anywhere is `mut`.
+    /// component required `mut` anywhere is `mut`. A new trait-keyed
+    /// component's provider is assumed to implement the trait for the rest
+    /// of the body.
     pub(super) fn closure_effect(
         &mut self,
         key: EffectRequirementKey<'db>,
@@ -1039,11 +1041,20 @@ impl<'db> TyCheckEnv<'db> {
         is_mut: bool,
     ) -> Option<(LocalBinding<'db>, Option<ProvidedEffect<'db>>)> {
         let db = self.db;
+        // A trait-keyed component is keyed by its provider: `P: Trait`.
+        let same_key = |held: &EffectRequirementKey<'db>| match (held, &key) {
+            (EffectRequirementKey::Trait(held), EffectRequirementKey::Trait(key)) => {
+                held.def(db) == key.def(db)
+                    && held.args(db)[1..] == key.args(db)[1..]
+                    && held.assoc_ty_bindings(db) == key.assoc_ty_bindings(db)
+            }
+            (held, key) => held == key,
+        };
         let active = self.closure_stack.last_mut()?;
         if let Some(effect) = active
             .effects
             .iter_mut()
-            .find(|effect| effect.requirement.key == key)
+            .find(|effect| same_key(&effect.requirement.key))
         {
             effect.requirement.is_mut |= is_mut;
             effect.provider.is_mut |= is_mut;
@@ -1057,7 +1068,7 @@ impl<'db> TyCheckEnv<'db> {
             binding_idx: active.effects.len() as u32,
             binding_ty: key_syntax,
         };
-        let info = ResolvedEffectBindingInfo {
+        let mut info = ResolvedEffectBindingInfo {
             provider: row_effect_provider(
                 db,
                 active.def.body.scope(),
@@ -1066,6 +1077,12 @@ impl<'db> TyCheckEnv<'db> {
             ),
             requirement,
         };
+        let provider_ty = info.provider.provider_ty;
+        if let EffectRequirementKey::Trait(inst) = info.requirement.key {
+            info.requirement.key = EffectRequirementKey::Trait(
+                super::super::instantiate_trait_self(db, inst, provider_ty),
+            );
+        }
         let binding = LocalBinding::effect_param(&info);
         let provided = ProvidedEffect {
             origin: EffectOrigin::Param {
@@ -1073,11 +1090,20 @@ impl<'db> TyCheckEnv<'db> {
                 index: info.requirement.binding_idx as usize,
                 name: Some(name),
             },
-            ty: info.requirement.key.binding_ty(db)?,
+            ty: match info.requirement.key {
+                EffectRequirementKey::Trait(_) => provider_ty,
+                _ => info.requirement.key.binding_ty(db)?,
+            },
             is_mut: true,
             binding: Some(binding),
         };
+        let bound = info.requirement.key.key_trait();
         active.effects.push(info);
+        if let Some(bound) = bound {
+            let mut preds = self.assumptions.list(db).to_vec();
+            preds.push(bound);
+            self.assumptions = PredicateListId::new(db, preds).extend_all_bounds(db);
+        }
         Some((binding, Some(provided)))
     }
 

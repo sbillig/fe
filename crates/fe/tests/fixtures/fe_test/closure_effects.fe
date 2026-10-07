@@ -82,6 +82,46 @@ fn providers_inside_and_at_the_call() {
     }
 }
 
+trait Scale {
+    fn factor(self) -> u256
+}
+
+struct Fixed { n: u256 }
+
+impl Scale for Fixed {
+    fn factor(self) -> u256 {
+        self.n
+    }
+}
+
+fn scaled(_ x: u256) -> u256 uses (scale: Scale) {
+    x * scale.factor()
+}
+
+// Effects keyed by a trait are row components too: the provider meets the
+// trait wherever the higher-order function is called.
+fn scaled_sum(_ xs: [u256; 3]) -> u256 uses (scale: Scale) {
+    xs.fold(0, |acc, x| acc + scaled(x))
+}
+
+fn scaled_count(_ xs: [u256; 3], _ at_least: u256) -> usize uses (scale: Scale) {
+    xs.count(|x| x * scale.factor() >= at_least)
+}
+
+#[test]
+fn trait_keyed_effects() {
+    let xs: [u256; 3] = [1, 2, 3]
+    let two = Fixed { n: 2 }
+    with (Scale = two) {
+        assert!(scaled_sum(xs) == 12)
+        assert!(scaled_count(xs, 4) == 2)
+    }
+    let ten = Fixed { n: 10 }
+    with (Scale = ten) {
+        assert!(xs.fold(0, |acc, x| acc + scaled(x)) == 60)
+    }
+}
+
 msg TallyMsg {
     #[selector = sol("add(uint256,uint256)")]
     Add { a: u256, b: u256 } -> u256,

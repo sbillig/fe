@@ -990,8 +990,8 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
-    /// An effect a closure body uses that its row cannot carry: one keyed
-    /// by a trait, or an enclosing row.
+    /// An effect a closure body uses that its row cannot carry: an enclosing
+    /// row.
     UnsupportedClosureEffect {
         primary: DynLazySpan<'db>,
     },

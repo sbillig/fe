@@ -4982,10 +4982,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             BodyDiag::UnsupportedClosureEffect { primary } => CompleteDiagnostic {
                 severity,
-                message: "a closure can only use effects keyed by a type".to_string(),
+                message: "a closure cannot use a row of effects".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this needs an effect keyed by a trait, or a row".to_string(),
+                    message: "this needs an enclosing row".to_string(),
                     span: primary.resolve(db),
                 }],
                 notes: vec![

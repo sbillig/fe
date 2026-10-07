@@ -33,7 +33,8 @@ Uses of a binding registered outside the closure are its captures. The
 parent's effect environment is swapped out for the body: an effect the body
 needs and its `with` blocks do not provide becomes a component of the row,
 seeded as the body's own effect on first use, and the body is generic over
-the component's provider through a closure-owned provider parameter
+the component's provider through a closure-owned provider parameter, assumed
+to implement a trait key's trait for the rest of the body
 (`TyParam::row_effect_provider`). A function body names its rows' components
 the same way where its view expands every row, so a `Bidirectional` method can
 use the components of `Collection`'s row `E`.

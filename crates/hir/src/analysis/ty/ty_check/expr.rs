@@ -46,8 +46,8 @@ use crate::analysis::ty::{
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
         EffectRequirementDecl, EffectRequirementKey, EffectWitness, ForwardedEffectKey,
-        PatternSlotKind, StoredEffectKey, StoredTraitKey, StoredTypeKey, TraitPatternKey,
-        TypePatternKey, WitnessTransport,
+        PatternSlotKind, StoredEffectKey, StoredTraitKey, StoredTypeKey, TraitKeySchema,
+        TraitPatternKey, TypePatternKey, WitnessTransport,
         elaborate::{
             build_barrier_pattern_for_with_key,
             build_conservative_same_family_barrier_pattern_in_scope, build_effect_query_for_call,
@@ -675,7 +675,12 @@ impl<'db> TyChecker<'db> {
         let component = self
             .env
             .semantic_effect_requirement(site, idx)
-            .filter(|requirement| matches!(requirement.key, SemanticEffectRequirementKey::Type(_)))
+            .filter(|requirement| {
+                matches!(
+                    requirement.key,
+                    SemanticEffectRequirementKey::Type(_) | SemanticEffectRequirementKey::Trait(_)
+                )
+            })
             .and_then(|requirement| {
                 self.env.closure_effect(
                     requirement.key,
@@ -700,8 +705,7 @@ impl<'db> TyChecker<'db> {
     }
 
     /// Makes `req`, which no provider in a closure body meets, a component
-    /// of the closure's row, returning whether it did. Only effects keyed by
-    /// type can be.
+    /// of the closure's row, returning whether it did. Rows cannot be.
     fn provide_closure_effect(
         &mut self,
         req: &EffectRequirementDecl<'db>,
@@ -710,23 +714,41 @@ impl<'db> TyChecker<'db> {
         if !self.env.in_closure() {
             return false;
         }
-        let Some(key_ty) = self
-            .query_type_key(&query.key)
-            .map(|ty| self.table.fold_ty(self.db, ty))
-            .filter(|ty| !ty.has_var(self.db))
-        else {
-            return false;
+        let key = match &query.key {
+            EffectPatternKey::Type(key) => {
+                SemanticEffectRequirementKey::Type(self.table.fold_ty(self.db, key.carrier))
+            }
+            EffectPatternKey::Trait(key) => SemanticEffectRequirementKey::Trait(
+                TraitKeySchema {
+                    def: key.def,
+                    args_no_self: key.args_no_self.clone(),
+                    assoc_bindings: key.assoc_bindings.clone(),
+                }
+                .into_trait_inst(self.db)
+                .fold_with(self.db, &mut self.table),
+            ),
         };
+        let has_var = match &key {
+            SemanticEffectRequirementKey::Trait(inst) => {
+                inst.args(self.db).iter().any(|ty| ty.has_var(self.db))
+                    || inst
+                        .assoc_ty_bindings(self.db)
+                        .iter()
+                        .any(|(_, ty)| ty.has_var(self.db))
+            }
+            key => key.binding_ty(self.db).is_none_or(|ty| ty.has_var(self.db)),
+        };
+        if has_var {
+            return false;
+        }
         let name = req
             .name
             .or_else(|| req.key_ty.as_path(self.db)?.ident(self.db).to_opt())
             .unwrap_or_else(|| IdentId::new(self.db, "effect".to_string()));
-        let Some((_, provided)) = self.env.closure_effect(
-            SemanticEffectRequirementKey::Type(key_ty),
-            name,
-            req.key_ty,
-            req.required_mut,
-        ) else {
+        let Some((_, provided)) = self
+            .env
+            .closure_effect(key, name, req.key_ty, req.required_mut)
+        else {
             return false;
         };
         if let Some(provided) = provided {
