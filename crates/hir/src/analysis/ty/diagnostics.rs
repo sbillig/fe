@@ -944,6 +944,12 @@ pub enum BodyDiag<'db> {
     UnsafeProviderRequiresUnsafe {
         primary: DynLazySpan<'db>,
     },
+    /// A `with` provider naming existing storage or transient state that the
+    /// function's own effects do not cover.
+    UncoveredProvider {
+        primary: DynLazySpan<'db>,
+        is_mut: bool,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1081,6 +1087,7 @@ impl<'db> BodyDiag<'db> {
             Self::TryReturnMismatch { .. } => 104,
             Self::ViewInstantiation { .. } => 105,
             Self::MissingRow { .. } => 106,
+            Self::UncoveredProvider { .. } => 107,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

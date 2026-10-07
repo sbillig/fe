@@ -178,7 +178,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         SEffectArgValue::Value(SOperand::inherited(local))
                     }
                 }
-                EffectArg::Value(_) => unreachable!("with provider is missing its source"),
+                // A handle argument a `Field` authority is taken from: its
+                // place, read again.
+                EffectArg::Value(expr) => SEffectArgValue::Value(self.lower_expr_operand(*expr)),
                 EffectArg::Unknown => {
                     SEffectArgValue::Value(SOperand::synthetic(self.unit_value()))
                 }

@@ -4890,6 +4890,23 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            BodyDiag::UncoveredProvider { primary, is_mut } => CompleteDiagnostic {
+                severity,
+                message: "a `with` provider naming storage needs the function's own authority"
+                    .to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this handle names storage the function's `uses` does not cover"
+                        .to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![format!(
+                    "require it via `uses (storage: {}RawStorage)`, or vouch for it in an `unsafe` block",
+                    if *is_mut { "mut " } else { "" }
+                )],
+                error_code,
+            },
+
             BodyDiag::UnsafeProviderRequiresUnsafe { primary } => primary_diag(
                 severity,
                 "binding a raw-pointer effect provider requires an `unsafe` block or function",
