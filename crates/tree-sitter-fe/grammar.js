@@ -55,6 +55,8 @@ module.exports = grammar({
     // Self type vs self path segment vs expression
     [$.self_type, $.path_segment],
     [$.self_type, $._expression, $.path_segment],
+    // `Fn(..)` callable shape vs a path in a where-clause bound
+    [$.fn_shape, $.path_segment],
     // recv arm pattern
     [$.recv_arm_pattern],
     // _condition variants use the same terminals as expressions.
@@ -407,10 +409,20 @@ module.exports = grammar({
       sep1($.trait_ref, '+'),
     ),
 
-    trait_ref: $ => seq(
-      $.path,
-      optional($.generic_arg_list),
+    trait_ref: $ => choice(
+      seq(
+        $.path,
+        optional($.generic_arg_list),
+      ),
+      $.fn_shape,
     ),
+
+    // `Fn(own A, B) -> R`: the callable trait of a shape
+    fn_shape: $ => prec.right(seq(
+      field('name', $.identifier),
+      field('params', $.tuple_type),
+      optional(seq('->', field('return_type', $._type))),
+    )),
 
     trait_item_list: $ => seq(
       '{',
@@ -559,6 +571,8 @@ module.exports = grammar({
     type_bound: $ => choice(
       // Trait bound: Path<Args>
       prec.right(PREC.PATH + 5, seq($.path, optional($.generic_arg_list))),
+      // Callable shape: Fn(own A, B) -> R
+      $.fn_shape,
       // Kind bound: * -> * -> *, (* -> *) -> *, etc.
       $.kind_bound,
     ),

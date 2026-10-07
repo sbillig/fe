@@ -2,7 +2,8 @@ use parser::ast::{self};
 
 use super::FileLowerCtxt;
 use crate::core::hir_def::{
-    Body, Partial, PathId, TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode,
+    Body, GenericArg, GenericArgListId, Partial, PathId, TraitRefId, TupleTypeId, TypeGenericArg,
+    TypeId, TypeKind, TypeMode,
 };
 
 impl<'db> TypeId<'db> {
@@ -71,7 +72,45 @@ impl<'db> TupleTypeId<'db> {
 
 impl<'db> TraitRefId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitRef) -> Self {
-        let path = ast.path().map(|ast| PathId::lower_ast(ctxt, ast));
+        let path = match ast.fn_shape() {
+            // `Fn(own A, B) -> R` names the core trait of its shape,
+            // `Fn_ov<A, B, R>`; `Fn(own T) -> U` is `Fn<T, U>`.
+            Some(shape) => shape.name().zip(shape.params()).map(|(name, params)| {
+                let db = ctxt.db();
+                let mut modes = String::new();
+                let mut args = Vec::new();
+                for param in params {
+                    let ty = TypeId::lower_ast(ctxt, param);
+                    let (mode, ty) = match ty.data(db) {
+                        TypeKind::Mode(TypeMode::Own, inner) => ('o', *inner),
+                        TypeKind::Mode(TypeMode::Mut, inner) => ('m', *inner),
+                        TypeKind::Mode(TypeMode::Ref, inner) => ('v', *inner),
+                        _ => ('v', Partial::Present(ty)),
+                    };
+                    modes.push(mode);
+                    args.push(GenericArg::Type(TypeGenericArg { ty }));
+                }
+                let ret = shape.ret_ty().map_or_else(
+                    || TupleTypeId::new(db, Vec::new()).to_ty(db),
+                    |ty| TypeId::lower_ast(ctxt, ty),
+                );
+                args.push(GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(ret),
+                }));
+                let receiver = name.text();
+                let trait_name = match modes.as_str() {
+                    "" => format!("{receiver}0"),
+                    "o" if receiver == "Fn" => receiver.to_string(),
+                    modes => format!("{receiver}_{modes}"),
+                };
+                ctxt.core_path().push_str(db, "functional").push_str_args(
+                    db,
+                    &trait_name,
+                    GenericArgListId::new(db, args, true),
+                )
+            }),
+            None => ast.path().map(|ast| PathId::lower_ast(ctxt, ast)),
+        };
         Self::new(ctxt.db(), Partial::from(path))
     }
 

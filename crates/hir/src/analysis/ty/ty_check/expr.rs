@@ -1853,6 +1853,17 @@ impl<'db> TyChecker<'db> {
                     provider: None,
                     row_arg: Some(RowArg::Forwarded { callee: path, own }),
                 }),
+                // A row of an instance no implementation satisfies is the
+                // unsatisfied bound's error, reported once.
+                None if matches!(
+                    is_goal_satisfiable(
+                        self.db,
+                        TraitSolveCx::new(self.db, self.env.scope())
+                            .with_assumptions(self.env.assumptions()),
+                        row.inst,
+                    ),
+                    GoalSatisfiability::UnSat(_)
+                ) => {}
                 None => self.push_diag(BodyDiag::MissingRow {
                     primary: call_span.clone(),
                     func,

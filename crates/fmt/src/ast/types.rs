@@ -821,9 +821,28 @@ impl ToDoc for ast::TypeBound {
 
 impl ToDoc for ast::TraitRef {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+        if let Some(shape) = self.fn_shape() {
+            let name = shape
+                .name()
+                .map_or_else(|| alloc.nil(), |name| alloc.text(name.text().to_string()));
+            // A parameter list, not a tuple: one parameter has no comma.
+            let params = shape.params().map_or_else(Vec::new, |params| {
+                params.elem_tys().map(|ty| ty.to_doc(ctx)).collect()
+            });
+            let params = alloc
+                .text("(")
+                .append(intersperse(alloc, params, alloc.text(", ")))
+                .append(alloc.text(")"));
+            let ret = shape.ret_ty().map_or_else(
+                || alloc.nil(),
+                |ty| alloc.text(" -> ").append(ty.to_doc(ctx)),
+            );
+            return name.append(params).append(ret);
+        }
         match self.path() {
             Some(p) => p.to_doc(ctx),
-            None => ctx.alloc.nil(),
+            None => alloc.nil(),
         }
     }
 }

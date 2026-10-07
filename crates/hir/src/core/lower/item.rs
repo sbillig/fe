@@ -1,4 +1,3 @@
-use common::ingot::IngotKind;
 use parser::ast::{self, WhereClauseOwner as _, prelude::*};
 use salsa::Accumulator as _;
 
@@ -617,11 +616,6 @@ fn lower_uses_params<'db>(
             let key_ty = match (p.field_key(), key_ty) {
                 (Some(_), Partial::Present(handle)) => {
                     let db = ctxt.db();
-                    let root = if ctxt.top_mod().ingot(db).kind(db) == IngotKind::Core {
-                        IdentId::make_ingot(db)
-                    } else {
-                        IdentId::new(db, "core".to_string())
-                    };
                     let args = GenericArgListId::new(
                         db,
                         vec![GenericArg::Type(TypeGenericArg {
@@ -629,7 +623,7 @@ fn lower_uses_params<'db>(
                         })],
                         true,
                     );
-                    let path = PathId::from_ident(db, root).push_str_args(db, "Field", args);
+                    let path = ctxt.core_path().push_str_args(db, "Field", args);
                     Partial::Present(TypeId::new(db, TypeKind::Path(Partial::Present(path))))
                 }
                 (_, key_ty) => key_ty,

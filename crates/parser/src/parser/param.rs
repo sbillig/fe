@@ -11,7 +11,7 @@ use super::{
     parse_list,
     path::PathScope,
     token_stream::TokenStream,
-    type_::{is_type_start, parse_type},
+    type_::{TupleTypeScope, is_type_start, parse_type},
 };
 
 define_scope! {
@@ -314,9 +314,34 @@ impl super::Parse for TraitRefScope {
     type Error = ParseError;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.parse(PathScope::default()).map_err(|_| {
+        let expected = |parser: &Parser<S>| {
             ParseError::expected(&[SyntaxKind::TraitRef], None, parser.end_of_prev_token)
-        })
+        };
+        // `Fn` and `FnMut` are keywords only before a parameter list.
+        if (parser.is_ident("Fn") || parser.is_ident("FnMut"))
+            && parser.peek_n_non_trivia(2).as_slice() == [SyntaxKind::Ident, SyntaxKind::LParen]
+        {
+            return parser
+                .parse(FnShapeScope::default())
+                .map_err(|_| expected(parser));
+        }
+        parser
+            .parse(PathScope::default())
+            .map_err(|_| expected(parser))
+    }
+}
+
+define_scope! { FnShapeScope, FnShape }
+impl super::Parse for FnShapeScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::Ident);
+        parser.parse(TupleTypeScope::default())?;
+        if parser.bump_if(SyntaxKind::Arrow) {
+            parse_type(parser, None)?;
+        }
+        Ok(())
     }
 }
 

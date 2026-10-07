@@ -504,9 +504,41 @@ impl TraitRef {
         support::child(self.syntax())
     }
 
+    /// The callable shape the trait ref names instead of a path.
+    pub fn fn_shape(&self) -> Option<FnShape> {
+        support::child(self.syntax())
+    }
+
     /// A generic argument list for the trait.
     pub fn generic_args(&self) -> Option<GenericArgList> {
         support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `Fn(own A, B) -> R`: the callable trait of the shape whose receiver
+    /// mode the name gives (`Fn` views, `FnMut` mutates) and whose parameter
+    /// modes the list gives.
+    pub struct FnShape,
+    SK::FnShape
+}
+impl FnShape {
+    /// `Fn` or `FnMut`.
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    /// The parameter types, each with its mode.
+    pub fn params(&self) -> Option<super::TupleType> {
+        support::child(self.syntax())
+    }
+
+    /// The result type after `->`.
+    pub fn ret_ty(&self) -> Option<super::Type> {
+        self.syntax()
+            .children()
+            .filter_map(super::Type::cast)
+            .nth(1)
     }
 }
 
