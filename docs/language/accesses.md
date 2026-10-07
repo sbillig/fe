@@ -62,6 +62,27 @@ result, no `own` parameter or owned result, no `Copy`, and no field of that
 type. A span such as `buffer.span()` is a `ref` projection, so it keeps the
 buffer reserved until its last use.
 
+## Storage handles
+
+A storage handle, such as a `StorageMap`, is a `Copy` value naming the field
+whose entries it reaches. An operation through a handle accesses that field
+for its duration: passing it to a view parameter reads the field, and to a
+`mut` or owned parameter writes it. A handle read from its field names that
+field; a copy held anywhere else may name any field, so an operation through
+it conflicts with every open storage access.
+
+```fe
+let x = mut balances[from]
+balances.set(key: to, value: 0)     // rejected: `x`'s session holds `balances`
+let copy = balances
+let y = copy.get(to)                // rejected: the copy names the same field
+x -= amount
+```
+
+A `with` block may install a handle copy as a provider only under the
+function's own authority over its field, `uses (storage: Field(StorageMap<K,
+V>))`, or raw storage authority.
+
 ## External calls
 
 A call that may start an external execution can reenter the contract and

@@ -1,5 +1,6 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::place::{PlaceBase, resolve_place_field};
+use crate::analysis::semantic::capability::semantics::field_handle_spaces;
 use crate::analysis::semantic::effect_param_site;
 use crate::analysis::ty::corelib::{effect_key_state_access, resolve_core_trait};
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
@@ -13,6 +14,7 @@ use crate::analysis::ty::trait_resolution::{TraitSolveCx, is_goal_satisfiable};
 use crate::analysis::ty::ty_check::{BindingAccess, BodyOwner, LocalBinding, TypedBody};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::ty_is_copy;
+use crate::analysis::ty::ty_lower::collect_layout_arg_bindings;
 use crate::core::semantic::EffectEnvView;
 use crate::hir_def::{
     BlockKind, Body, CallableDef, Cond, CondId, Expr, ExprId, Partial, Stmt, StmtId, UnOp,
@@ -133,7 +135,10 @@ impl<'db> UnsafeChecker<'db, '_> {
             scope,
             assumptions,
         );
-        let space = provider_semantics(self.db, scope, assumptions, ty).address_space;
+        let names_resource = matches!(
+            provider_semantics(self.db, scope, assumptions, ty).address_space,
+            Some(ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)
+        ) || !field_handle_spaces(self.db, scope, assumptions, ty).is_empty();
         let authority = self.typed_body.expr_place(value).is_some_and(|place| {
             let PlaceBase::Binding(binding) = place.base;
             match (binding, self.typed_body.binding_access(binding)) {
@@ -147,12 +152,7 @@ impl<'db> UnsafeChecker<'db, '_> {
                 (_, access) => access.is_some(),
             }
         });
-        if authority
-            || !matches!(
-                space,
-                Some(ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)
-            )
-        {
+        if authority || !names_resource {
             return;
         }
         let is_mut = self.typed_body.expr_prop(self.db, value).is_mut;
@@ -169,18 +169,17 @@ impl<'db> UnsafeChecker<'db, '_> {
             )
             .filter(|requirement| requirement.is_mut || !is_mut)
             .any(|requirement| {
-                requirement
-                    .key
-                    .key_ty()
-                    .is_some_and(|key| normalize_ty(self.db, key, scope, assumptions) == ty)
-                    || effect_key_state_access(
-                        self.db,
-                        scope,
-                        assumptions,
-                        requirement.key.clone(),
-                        requirement.is_mut,
-                    )
-                    .is_some()
+                requirement.key.key_ty().is_some_and(|key| {
+                    let key = normalize_ty(self.db, key, scope, assumptions);
+                    collect_layout_arg_bindings(self.db, key, ty, &mut Vec::new())
+                }) || effect_key_state_access(
+                    self.db,
+                    scope,
+                    assumptions,
+                    requirement.key.clone(),
+                    requirement.is_mut,
+                )
+                .is_some()
             });
         if !covered {
             self.diags.push(

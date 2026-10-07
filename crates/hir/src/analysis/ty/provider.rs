@@ -353,6 +353,13 @@ pub fn resolve_static_slot_layout<'db>(
     };
     let inst = TraitInstId::new(db, static_slot, vec![owner_ty], IndexMap::new());
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    // An unresolved argument cannot instantiate an impl, only select one.
+    if owner_ty.has_var(db) {
+        return match solve_cx.select_impl(db, inst) {
+            Selection::NotFound => StaticSlotLayoutResolution::NotStaticSlot,
+            Selection::Unique(_) | Selection::Ambiguous(_) => StaticSlotLayoutResolution::Ambiguous,
+        };
+    }
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved)
             if !matches!(

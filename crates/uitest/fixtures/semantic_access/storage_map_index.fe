@@ -26,8 +26,20 @@ fn same_field(_ key: u256) uses (store: mut Store) {
     x += 1
 }
 
-// Accepted: distinct contract fields are disjoint.
-fn distinct_fields(_ key: u256) uses (store: mut Store) {
+// Accepted: the maps of a contract field lie in their own fields, which are
+// disjoint.
+pub contract Distinct {
+    mut store: Store,
+    init() uses (mut store) {
+        let x = mut store.counts[1]
+        store.other[1] = 3
+        x += 1
+    }
+}
+
+// Rejected: a provided `Store` may be a memory value holding copies of one
+// map, so its handles may name the same field.
+fn provided_fields(_ key: u256) uses (store: mut Store) {
     let x = mut store.counts[key]
     store.other[key] = 3
     x += 1

@@ -108,6 +108,13 @@ Each operation is checked against the open tokens it is not derived from:
   directly (`RawStorage`). Immutable authority only reads.
 - Calls that start external executions themselves (call intrinsics and
   methods of the reentrant std capabilities) access all state.
+- A call also accesses the fields the *field handles* of each argument name
+  (values of a `StaticSlot` type, such as a `StorageMap`, at any path of the
+  argument; `field_handle_spaces`): reading them for a view parameter and
+  writing them for a `mut` or owned one, since the callee may operate through
+  the handles. A handle that lies in a resource names its own place there; a
+  copy in memory, or a handle a call returns, names a dynamic domain of its
+  space. A projection reserves those fields for its session.
 
 So `let v = mut store.value` held across a call whose effects permit
 reentrancy is rejected, while closing the access before the call is accepted.
