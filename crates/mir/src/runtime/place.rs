@@ -341,13 +341,18 @@ fn runtime_place_transport_root<'db>(
             crate::runtime::AddressSpaceKind::Memory,
             false,
         ),
-        PlaceRoot::Ref(value) => (
-            body.place_value_class(*value)
+        PlaceRoot::Ref(value) => {
+            let class = body
+                .place_value_class(*value)
                 .ok_or(VerifyError::ErasedRuntimeValue(*value))?
-                .clone(),
-            crate::runtime::AddressSpaceKind::Memory,
-            false,
-        ),
+                .clone();
+            // A reference root addresses its referent's space, like a
+            // dereferenced carrier: a storage reference projects storage lanes.
+            let space = class
+                .address_space()
+                .unwrap_or(crate::runtime::AddressSpaceKind::Memory);
+            (class, space, false)
+        }
         PlaceRoot::Provider(binding) => {
             let class = body
                 .place_provider_binding(*binding)
