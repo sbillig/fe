@@ -1009,7 +1009,7 @@ struct CounterStore {
 pub contract Counter {
   mut store: CounterStore,
   mut foo: u256,
-  mut baz: StorageMap<u256, u256, 0>,
+  mut baz: StorageMap<u256, u256>,
 }
 "#;
     client.did_change(&uri, 701, code);
@@ -1019,9 +1019,10 @@ pub contract Counter {
     let store_text = hover_text(&store_hover);
     assert!(
         store_text.contains("### Field Layout")
-            && store_text.contains("- `1`: `store.global` (inline field, `u256`)")
-            && store_text.contains("- `2`: `store.counts.SALT` (inferred parameter, `u256`)")
-            && !store_text.contains("baz.SALT")
+            && store_text.contains("- `0`: `store.global` (inline field, `u256`)")
+            && store_text
+                .contains("- `1`: `store.counts` (storage collection, `StorageMap<u256, u256>`)")
+            && !store_text.contains("`baz`")
             && !store_text.contains("`foo`"),
         "expected source-labeled field layout, got:\n{store_text}"
     );
@@ -1029,27 +1030,26 @@ pub contract Counter {
     let baz_hover = hover_at(&mut client, &uri, 10, 7).await;
     let baz_text = hover_text(&baz_hover);
     assert!(
-        baz_text.contains("- `0`: `baz.SALT` (explicit parameter, `u256`)")
-            && !baz_text.contains("- `4`:")
+        baz_text.contains("- `3`: `baz` (storage collection, `StorageMap<u256, u256>`)")
             && !baz_text.contains("slot:")
             && !baz_text.contains("root:"),
-        "the explicit SALT must not be confused with the allocator cursor:\n{baz_text}"
+        "a map is reported at its own slot:\n{baz_text}"
     );
 
     let contract_hover = hover_at(&mut client, &uri, 7, 14).await;
     let contract_text = hover_text(&contract_hover);
     for line in [
-        "- `0`: `baz.SALT` (explicit parameter, `u256`)",
-        "- `1`: `store.global` (inline field, `u256`)",
-        "- `2`: `store.counts.SALT` (inferred parameter, `u256`)",
-        "- `3`: `foo` (inline field, `u256`)",
+        "- `0`: `store.global` (inline field, `u256`)",
+        "- `1`: `store.counts` (storage collection, `StorageMap<u256, u256>`)",
+        "- `2`: `foo` (inline field, `u256`)",
+        "- `3`: `baz` (storage collection, `StorageMap<u256, u256>`)",
     ] {
         assert!(
             contract_text.contains(line),
             "missing `{line}` from contract layout:\n{contract_text}"
         );
     }
-    let positions = ["baz.SALT", "store.global", "store.counts.SALT", "`foo`"]
+    let positions = ["store.global", "store.counts", "`foo`", "`baz`"]
         .map(|label| contract_text.find(label).unwrap());
     assert!(
         positions.is_sorted(),

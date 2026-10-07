@@ -212,6 +212,7 @@ fn layout_entry_markdown(db: &DriverDataBase, entry: &ContractLayoutEntry<'_>) -
     });
     let kind = match entry.kind {
         ContractLayoutEntryKind::InlineField => "inline field",
+        ContractLayoutEntryKind::Collection => "storage collection",
         ContractLayoutEntryKind::EnumTag => "enum tag",
         ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit) => {
             "explicit parameter"

@@ -13,7 +13,7 @@ msg M {
 }
 
 contract C {
-    balances: StorageMap<u256, u256>
+    mut balances: StorageMap<u256, u256>
 
     recv M {
         Get -> u256 uses (balances) {

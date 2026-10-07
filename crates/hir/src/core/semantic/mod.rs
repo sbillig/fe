@@ -5757,6 +5757,23 @@ impl<'db> FieldView<'db> {
             );
             return out;
         }
+        // An immutable contract field lives in code, where no storage
+        // collection can.
+        if let FieldParent::Contract(_) = self.parent
+            && !self.parent.fields_list(db).data(db)[self.idx].is_mut
+            && let Some(collection) = ty.storage_collection(db)
+        {
+            out.push(
+                TyLowerDiag::StorageOnlyValue {
+                    span: span.clone(),
+                    ty,
+                    collection,
+                    position: "an immutable contract field, which lives in code",
+                }
+                .into(),
+            );
+            return out;
+        }
 
         // Trait-bound well-formedness for field type.
         let owner_item = self.owner_item();

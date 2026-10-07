@@ -1,19 +1,17 @@
 use std::evm::{Evm, StorageMap}
 
-struct Wrapped<const ROOT: u256 = _> {
-    map: StorageMap<u256, u256, ROOT>,
+// A projection yields the map place it was given; the caller reads through
+// the grant.
+fn pass_map(map: StorageMap<u256, u256>) -> ref StorageMap<u256, u256> {
+    ref map
 }
 
-impl<const ROOT: u256> Wrapped<ROOT> {
-    fn into_map(self) -> StorageMap<u256, u256, ROOT> {
-        self.map
-    }
+fn pass_map_nested(map: StorageMap<u256, u256>) -> ref StorageMap<u256, u256> {
+    pass_map(map: map)
 }
 
-// A data parameter carries no authority, so the caller grants the authority
-// over the maps it passes.
-fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
-    wrapped.into_map().get(key: key)
+fn read_map(map: StorageMap<u256, u256>, key: u256) -> u256 {
+    pass_map_nested(map: map).get(key: key)
 }
 
 msg Msg {
@@ -25,31 +23,30 @@ msg Msg {
 }
 
 pub contract C {
-    mut first: Wrapped,
-    mut second: Wrapped,
+    mut first: StorageMap<u256, u256>,
+    mut second: StorageMap<u256, u256>,
 
     recv Msg {
         Set { lane, key, value } uses (mut first, mut second) {
             if lane == 0 {
-                first.map.set(key: key, value: value)
+                first.set(key: key, value: value)
             } else {
-                second.map.set(key: key, value: value)
+                second.set(key: key, value: value)
             }
         }
 
         Get { lane, key } -> u256 uses (first, second) {
-            // The wrapped map is a place in the field this arm reads.
             if lane == 0 {
-                read_wrapped(wrapped: first, key: key)
+                read_map(map: first, key: key)
             } else {
-                read_wrapped(wrapped: second, key: key)
+                read_map(map: second, key: key)
             }
         }
     }
 }
 
 #[test]
-fn returned_receiver_fields_preserve_layout_sources() uses (evm: mut Evm) {
+fn projections_forward_the_given_map() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 1)
     evm.call(
         addr: c,

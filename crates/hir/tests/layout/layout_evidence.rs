@@ -8,20 +8,17 @@ use fe_hir::{
         initialize_analysis_pass,
         semantic::{
             EffectProviderSubst, GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceBody,
-            LayoutEvidenceComponentValue, LayoutEvidenceError, LayoutEvidenceExpr,
-            LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr, NStatementKind,
-            NormalizedArtifacts, SExpr, SStmtKind, SemanticInstanceKey,
-            collect_layout_evidence_diagnostic_vouchers, get_or_build_semantic_instance,
-            identity_semantic_instance_key, layout_evidence_body, normalize_runtime_semantic_body,
-            normalized::{NLayoutLocals, NStatementId},
+            LayoutEvidenceError, LayoutEvidenceExpr, LayoutEvidenceOperand,
+            LayoutEvidenceVerifyError, NExpr, NStatementKind, NormalizedArtifacts, SExpr,
+            SStmtKind, SemanticInstanceKey, collect_layout_evidence_diagnostic_vouchers,
+            get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
+            normalize_runtime_semantic_body, normalized::NStatementId,
             verify_layout_evidence_body as verify_normalized_layout_evidence_body,
             verify_layout_evidence_runtime_compatibility as verify_normalized_layout_evidence_runtime_compatibility,
         },
         ty::{
-            CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponentId,
-            LayoutBundleComponentTransport, LayoutBundleSchemaError, LayoutBundleUnrepresentable,
-            LayoutEvidencePathStep, LayoutViewAlias, const_ty::CallableInputLayoutHoleOrigin,
-            ty_check::BodyOwner,
+            CallableLayoutParamPort, LayoutBundleSchemaError, LayoutBundleUnrepresentable,
+            LayoutEvidencePathStep, LayoutViewAlias, ty_check::BodyOwner,
         },
     },
     core::semantic::ContractLayoutError,
@@ -221,50 +218,6 @@ fn assert_layoutizes_in(name: &str, src: &str, std_module: bool) {
 }
 
 #[test]
-fn runtime_const_uses_bind_one_explicit_layout_input_port() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
-    ROOT
-}
-"#,
-    );
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "root"))),
-    );
-    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    assert!(std::ptr::eq(
-        evidence,
-        layout_evidence_body(&db, instance).expect("cached layoutization failed")
-    ));
-    let bindings = evidence
-        .constant_bindings
-        .iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    let [binding] = bindings.as_slice() else {
-        panic!("root use must have one explicit layout binding")
-    };
-    assert!(matches!(
-        binding.source,
-        CallableLayoutParamPort::Input(CallableLayoutPort {
-            origin: CallableInputLayoutHoleOrigin::ValueParam(0),
-            ..
-        })
-    ));
-    assert!(matches!(binding.value, LayoutEvidenceOperand::Local(_)));
-    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
-    verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
-        .expect("evidence must match the runtime body");
-}
-
-#[test]
 fn derived_layout_values_do_not_reify_their_const_dependencies() {
     parse_ok!(
         db,
@@ -285,51 +238,6 @@ fn original<const ROOT: u256>(value: Rooted<{ ROOT + 1 }>) -> u256 {
         layout_evidence_body(&db, instance),
         Err(LayoutEvidenceError::MissingConstBinding { .. })
     ));
-}
-
-#[test]
-fn equal_specialized_args_preserve_formal_const_binding_identity() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-struct Independent<const FIRST: u256, const SECOND: u256> {
-    first: StorageMap<u256, u256, FIRST>,
-    second: StorageMap<u256, u256, SECOND>,
-}
-
-fn first<const FIRST: u256, const SECOND: u256>(
-    value: Independent<FIRST, SECOND>,
-) -> u256 {
-    FIRST
-}
-"#,
-    );
-    let func = find_func(&db, top_mod, "first");
-    let params = CallableDef::Func(func).params(&db);
-    let key = SemanticInstanceKey::new(
-        &db,
-        BodyOwner::Func(func),
-        GenericSubst::for_owner(&db, func.into(), vec![params[1], params[1]]),
-        EffectProviderSubst::empty(&db),
-        ImplEnv::empty(&db, func.scope()),
-    );
-    let instance = get_or_build_semantic_instance(&db, key);
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let bindings = evidence
-        .constant_bindings
-        .iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    let [binding] = bindings.as_slice() else {
-        panic!("FIRST must bind exactly one formal layout component")
-    };
-    assert_eq!(
-        binding.param, params[0],
-        "the binding must retain the declaration-level FIRST parameter"
-    );
 }
 
 #[test]
@@ -734,44 +642,6 @@ extern {
         ),
         "{error:?}"
     );
-}
-
-#[test]
-fn ambiguous_runtime_const_layout_sources_are_rejected() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-fn root<const ROOT: u256>(
-    left: StorageMap<u256, u256, ROOT>,
-    right: StorageMap<u256, u256, ROOT>,
-) -> u256 {
-    ROOT
-}
-"#,
-    );
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "root"))),
-    );
-    assert!(matches!(
-        layout_evidence_body(&db, instance),
-        Err(LayoutEvidenceError::AmbiguousConstBinding { sources, .. })
-            if sources.len() == 2
-    ));
-    let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
-    let rendered = diagnostics
-        .iter()
-        .map(|diagnostic| format!("{:?}", diagnostic.to_complete(&db)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(diagnostics.len(), 1, "{rendered}");
-    assert!(rendered.contains("cannot determine inferred layout in `root`"));
-    assert!(rendered.contains("this inferred slot has multiple runtime values"));
-    assert!(rendered.contains("value parameter 1"));
-    assert!(rendered.contains("value parameter 2"));
 }
 
 #[test]
@@ -1394,145 +1264,6 @@ fn root<const ROOT: u256>(pair: Pair<ROOT>) -> u256 {
                 CallableLayoutParamPort::Input(right),
             ] if left.component != right.component)
     ));
-}
-
-#[test]
-fn layout_evidence_uses_one_descriptor_local_per_component() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-fn select<const ROOT: u256>(
-    map: StorageMap<u256, u256, ROOT>,
-) -> StorageMap<u256, u256, ROOT> {
-    map
-}
-"#,
-    );
-    let func = find_func(&db, top_mod, "select");
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
-    );
-    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let source = normalized.body.owner.body(&db);
-    let input = source
-        .locals
-        .iter()
-        .enumerate()
-        .find_map(|(idx, local)| {
-            (local
-                .source
-                .and_then(|source| source.callable_input_origin(&db))
-                == Some(CallableInputLayoutHoleOrigin::ValueParam(0)))
-            .then_some(idx)
-        })
-        .expect("missing map input");
-    let value = &evidence.semantic_values[input];
-    let [component] = value.components.as_ref() else {
-        panic!("a map must have one evidence component")
-    };
-    let LayoutEvidenceComponentValue::Dynamic(descriptor) = component else {
-        panic!("generic map roots must be dynamic evidence")
-    };
-
-    assert_eq!(evidence.params, [*descriptor]);
-    let representations = NLayoutLocals::new(&normalized.body, &normalized.layout_plan, source);
-    assert_eq!(evidence.semantic_values.len(), representations.locals.len());
-    assert_eq!(evidence.output.schema.components.len(), 1);
-    assert_eq!(evidence.output.runtime_descriptor_count(), 1);
-    assert_eq!(evidence.terminators.len(), normalized.body.blocks.len());
-    assert_eq!(
-        evidence.statements.len(),
-        normalized
-            .body
-            .blocks
-            .iter()
-            .map(|block| block.statements.len())
-            .sum::<usize>()
-    );
-    let returns = evidence
-        .terminators
-        .iter()
-        .find_map(|terminator| (!terminator.returns.is_empty()).then_some(&terminator.returns))
-        .expect("missing layout evidence return");
-    assert_eq!(returns.len(), 1);
-    assert!(matches!(&returns[0].value, LayoutEvidenceOperand::Local(_)));
-}
-
-#[test]
-fn mixed_compile_time_and_runtime_components_use_canonical_abi_order() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-struct Mixed<const ROOT: u256> {
-    fixed: StorageMap<u256, u256, 7>,
-    dynamic: StorageMap<u256, u256, ROOT>,
-}
-
-fn pass<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
-    value
-}
-
-fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
-    pass(value: value)
-}
-"#,
-    );
-
-    let pass = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
-    );
-    let signature = pass.key(&db).layout_bundle_signature(&db);
-    let input = &signature.inputs[0].interface;
-    assert_eq!(input.schema.components.len(), 2);
-    assert_eq!(
-        input.transport.component(LayoutBundleComponentId(0)),
-        Some(LayoutBundleComponentTransport::CompileTime)
-    );
-    assert_eq!(
-        input.transport.component(LayoutBundleComponentId(1)),
-        Some(LayoutBundleComponentTransport::Runtime)
-    );
-    let mapping = input
-        .runtime_view_mapping(&input.schema, &[])
-        .expect("valid schema")
-        .expect("identity view must map the runtime component");
-    assert_eq!(mapping.source(LayoutBundleComponentId(0)), None);
-    assert_eq!(
-        mapping.source(LayoutBundleComponentId(1)),
-        Some(LayoutBundleComponentId(1))
-    );
-    let params = signature.runtime_params().collect::<Vec<_>>();
-    assert_eq!(params.len(), 1);
-    assert_eq!(params[0].component_id, LayoutBundleComponentId(1));
-    layout_evidence_body(&db, pass).expect("pass layoutization failed");
-
-    let forward = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "forward"))),
-    );
-    let normalized = normalize_runtime_semantic_body(&db, forward).expect("normalization failed");
-    let evidence = layout_evidence_body(&db, forward).expect("layoutization failed");
-    let call = evidence
-        .statements
-        .iter()
-        .find_map(|statement| statement.call.as_ref())
-        .expect("missing call evidence");
-    assert_eq!(call.args.len(), 1);
-    assert!(matches!(
-        &call.args[0].target,
-        CallableLayoutParamPort::Input(port)
-            if port.component == input.schema.components[1].port
-    ));
-    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
 }
 
 #[test]
@@ -2504,50 +2235,34 @@ contract C {
 fn layout_evidence_covers_existing_forwarding_matrix() {
     for (name, src) in [
         (
-            "layout_root_constructed_aggregate_forwarding.fe",
-            include_str!(
-                "../../../fe/tests/fixtures/fe_test/layout_root_constructed_aggregate_forwarding.fe"
-            ),
-        ),
-        (
             "layout_root_fresh_constructor_forwarding.fe",
             include_str!(
                 "../../../fe/tests/fixtures/fe_test/layout_root_fresh_constructor_forwarding.fe"
             ),
         ),
         (
-            "layout_root_enum_helper_forwarding.fe",
-            include_str!(
-                "../../../fe/tests/fixtures/fe_test/layout_root_enum_helper_forwarding.fe"
-            ),
+            "storage_map_enum_payload_methods.fe",
+            include_str!("../../../fe/tests/fixtures/fe_test/storage_map_enum_payload_methods.fe"),
         ),
         (
-            "layout_root_return_effect_forwarding.fe",
-            include_str!(
-                "../../../fe/tests/fixtures/fe_test/layout_root_return_effect_forwarding.fe"
-            ),
+            "storage_map_effect_projection.fe",
+            include_str!("../../../fe/tests/fixtures/fe_test/storage_map_effect_projection.fe"),
         ),
         (
             "effect_handle_field_deref.fe",
             include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
         ),
         (
-            "layout_root_aggregate_effect_forwarding.fe",
-            include_str!(
-                "../../../fe/tests/fixtures/fe_test/layout_root_aggregate_effect_forwarding.fe"
-            ),
+            "storage_map_aggregate_effects.fe",
+            include_str!("../../../fe/tests/fixtures/fe_test/storage_map_aggregate_effects.fe"),
         ),
         (
-            "layout_root_recursive_forwarding.fe",
-            include_str!("../../../fe/tests/fixtures/fe_test/layout_root_recursive_forwarding.fe"),
+            "storage_map_recursive_views.fe",
+            include_str!("../../../fe/tests/fixtures/fe_test/storage_map_recursive_views.fe"),
         ),
         (
             "mutable_array_args_and_effects.fe",
             include_str!("../../../fe/tests/fixtures/fe_test/mutable_array_args_and_effects.fe"),
-        ),
-        (
-            "nested_provider_layout_roots.fe",
-            include_str!("../../../fe/tests/fixtures/fe_test/nested_provider_layout_roots.fe"),
         ),
         (
             "with_block_custom_effect.fe",

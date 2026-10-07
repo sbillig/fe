@@ -522,7 +522,7 @@ pub contract Other {
 
             for (field, space, span) in [
                 (words, ProviderAddressSpace::Storage, 4),
-                (maps, ProviderAddressSpace::Storage, 0),
+                (maps, ProviderAddressSpace::Storage, 1),
                 (temp, ProviderAddressSpace::Transient, 1),
                 (fixed, ProviderAddressSpace::Code, 1),
             ] {
@@ -697,7 +697,7 @@ pub contract Other {
     }
 
     #[test]
-    fn package_verifier_rejects_array_and_hole_field_span_mutations() {
+    fn package_verifier_rejects_array_and_map_field_span_mutations() {
         with_package(|db, package| {
             let contract = contract_named(db, package, "Layouts");
             let words = field_named(db, contract, "words");
@@ -714,7 +714,7 @@ pub contract Other {
                 VerifyError::ContractFieldSpanMismatch {
                     field,
                     hir_span: 4,
-                    mir_span: 0,
+                    mir_span: 1,
                 } if field == words
             ));
 
@@ -724,7 +724,7 @@ pub contract Other {
                 }),
                 VerifyError::ContractFieldSpanMismatch {
                     field,
-                    hir_span: 0,
+                    hir_span: 1,
                     mir_span: 4,
                 } if field == maps
             ));

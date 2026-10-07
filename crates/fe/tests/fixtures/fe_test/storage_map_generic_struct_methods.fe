@@ -6,13 +6,11 @@ struct Pair<T> {
 }
 
 impl Pair<StorageMap<u256, u256>> {
-    fn set_left(mut self, key: u256, value: u256)
-        uses (storage: mut Field(StorageMap<u256, u256>))
-    {
+    fn set_left(mut self, key: u256, value: u256) {
         self.left.set(key: key, value: value)
     }
 
-    fn get_left(self, key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
+    fn get_left(self, key: u256) -> u256 {
         self.left.get(key: key)
     }
 }
@@ -49,7 +47,7 @@ pub contract NestedHelper {
 }
 
 #[test]
-fn nested_dynamic_layout_roots_cross_helpers() uses (evm: mut Evm) {
+fn generic_struct_maps_cross_helpers() uses (evm: mut Evm) {
     let c = evm.create2<NestedHelper>(value: 0, args: (), salt: 1)
     evm.call(
         addr: c,

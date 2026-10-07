@@ -16,7 +16,7 @@ use super::{
         LayoutInstantiation, LayoutRootUse, LayoutTemplateSubst, instantiate_layout_template,
     },
     trait_resolution::{PredicateListId, constraint::collect_constraints},
-    ty_def::{InvalidCause, TyId},
+    ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
     ty_lower::{
         CompleteSubst, GenericParamTypeSet, ParamBasis, ParamDomainId, ParamSchemaId,
         lower_hir_ty_in_mode, lower_layout_root_uses_in_hir_ty,
@@ -38,6 +38,52 @@ pub struct AdtDef<'db> {
     /// Otherwise, `fields[0]` represents all fields of the struct.
     #[return_ref]
     pub fields: Vec<AdtField<'db>>,
+}
+
+/// The storage collection `ty` is or holds in a field, or in a tuple or
+/// array element; see `TyId::storage_collection`.
+#[salsa::tracked(cycle_fn = ty_storage_collection_cycle_recover, cycle_initial = ty_storage_collection_cycle_initial)]
+pub(crate) fn ty_storage_collection<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Adt(adt)) => {
+            if adt.adt_ref(db).is_storage_only(db) {
+                return Some(ty);
+            }
+            // A type not applied to all its arguments has no values.
+            let args = ty.generic_args(db);
+            if args.len() != adt.params(db).len() {
+                return None;
+            }
+            adt.fields(db)
+                .iter()
+                .flat_map(|variant| variant.iter_types(db))
+                .find_map(|field| field.instantiate(db, args).storage_collection(db))
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_) | PrimTy::Array)) => ty
+            .generic_args(db)
+            .iter()
+            .find_map(|elem| elem.storage_collection(db)),
+        _ => None,
+    }
+}
+
+fn ty_storage_collection_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: TyId<'db>,
+) -> Option<TyId<'db>> {
+    None
+}
+
+fn ty_storage_collection_cycle_recover<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: &Option<TyId<'db>>,
+    _: u32,
+    _: TyId<'db>,
+) -> salsa::CycleRecoveryAction<Option<TyId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 impl<'db> AdtDef<'db> {
@@ -237,6 +283,14 @@ impl<'db> AdtRef<'db> {
         match self {
             AdtRef::Enum(enum_) => enum_.is_view(db),
             AdtRef::Struct(struct_) => struct_.is_view(db),
+        }
+    }
+
+    /// Whether this is a storage collection (`#[storage_only]`).
+    pub fn is_storage_only(self, db: &'db dyn HirAnalysisDb) -> bool {
+        match self {
+            AdtRef::Enum(enum_) => enum_.is_storage_only(db),
+            AdtRef::Struct(struct_) => struct_.is_storage_only(db),
         }
     }
 

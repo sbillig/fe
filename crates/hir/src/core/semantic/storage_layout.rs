@@ -203,6 +203,8 @@ impl From<StorageLane> for ContractLayoutLane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ContractLayoutEntryKind {
     InlineField,
+    /// A storage collection, whose place is its identity.
+    Collection,
     EnumTag,
     Parameter(ContractLayoutParameterOrigin),
 }
@@ -1228,6 +1230,7 @@ fn storage_packable_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u32> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 enum InlineLayoutLeafKind {
     Field,
+    Collection,
     EnumTag,
 }
 
@@ -1834,7 +1837,22 @@ impl<'db> FieldCollector<'db> {
         } else if ty.is_array(self.db) {
             self.walk_array(views, parent_instance, place.clone(), dimensions, mode)
         } else if let Some(adt) = ty.adt_def(self.db) {
-            self.walk_adt(views, adt, parent_instance, place.clone(), dimensions, mode)
+            let mut output =
+                self.walk_adt(views, adt, parent_instance, place.clone(), dimensions, mode);
+            // A storage collection is reported at its place, which is its
+            // identity, rather than by the slots its private fields take.
+            if adt.adt_ref(self.db).is_storage_only(self.db) && output.inline_span != 0 {
+                output.inline_leaves = vec![InlineLayoutLeaf {
+                    place,
+                    ty,
+                    offset: 0,
+                    lane: None,
+                    dimensions: dimensions.to_vec(),
+                    strides: vec![0; dimensions.len()],
+                    kind: InlineLayoutLeafKind::Collection,
+                }];
+            }
+            output
         } else {
             let inline_span = if ty.is_never(self.db)
                 || ty.is_zero_sized(self.db)
@@ -3521,6 +3539,7 @@ fn allocated_contract_layout_report<'db>(
             let mut path = contract_layout_path(db, field, &leaf.place);
             let kind = match leaf.kind {
                 InlineLayoutLeafKind::Field => ContractLayoutEntryKind::InlineField,
+                InlineLayoutLeafKind::Collection => ContractLayoutEntryKind::Collection,
                 InlineLayoutLeafKind::EnumTag => {
                     path.segments.push(ContractLayoutPathSegment::EnumTag);
                     ContractLayoutEntryKind::EnumTag

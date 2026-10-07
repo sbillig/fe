@@ -1,6 +1,6 @@
 ---
 source: crates/language-server/src/functionality/hover.rs
-assertion_line: 604
+assertion_line: 622
 expression: snapshot
 input_file: test_files/layout_hover.fe
 ---
@@ -11,10 +11,10 @@ range: 7:13..7:20
 
 #### Storage
 
-- `0`: `baz.SALT` (explicit parameter, `u256`)
-- `1`: `store.global` (inline field, `u256`)
-- `2`: `store.counts.SALT` (inferred parameter, `u256`)
-- `3`: `foo` (inline field, `u256`)
+- `0`: `store.global` (inline field, `u256`)
+- `1`: `store.counts` (storage collection, `StorageMap<u256, u256>`)
+- `2`: `foo` (inline field, `u256`)
+- `3`: `baz` (storage collection, `StorageMap<u256, u256>`)
 
 ---
 
@@ -25,8 +25,8 @@ range: 8:6..8:11
 
 #### Storage
 
-- `1`: `store.global` (inline field, `u256`)
-- `2`: `store.counts.SALT` (inferred parameter, `u256`)
+- `0`: `store.global` (inline field, `u256`)
+- `1`: `store.counts` (storage collection, `StorageMap<u256, u256>`)
 
 ---
 
@@ -37,7 +37,7 @@ range: 10:6..10:9
 
 #### Storage
 
-- `0`: `baz.SALT` (explicit parameter, `u256`)
+- `3`: `baz` (storage collection, `StorageMap<u256, u256>`)
 
 ---
 

@@ -1,7 +1,7 @@
 use std::evm::{Evm, RawStorage, SolMapping, StorageMap}
 
 // ---------------------------------------------------------------------------
-// Struct values in a StorageMap, accessed through entry pointers.
+// Struct values in a StorageMap, reached as entry places.
 // ---------------------------------------------------------------------------
 
 /// What a walker did on one day.
@@ -25,10 +25,9 @@ fn calories() -> u256 uses (day: DaySummary) {
     day.calories
 }
 
-const DAYS_SALT: u256 = 0xd4f5
-
+// The diary is the contract's only field, so the map takes slot 0.
 pub struct Diary {
-    pub days: StorageMap<u256, DaySummary, DAYS_SALT>,
+    pub days: StorageMap<u256, DaySummary>,
     pub walks: u256,
 }
 
@@ -57,51 +56,42 @@ pub contract StepDiary {
     recv DiaryMsg {
         Record { day, steps, distance_m, calories } uses (mut diary) {
             // Replace the whole value.
-            diary.days.mut_ptr(day).write(DaySummary { steps, distance_m, calories })
+            diary.days[day] = DaySummary { steps, distance_m, calories }
         }
         AddSteps { day, steps } uses (mut diary) {
             // Update one field in place: one SLOAD and one SSTORE.
-            let mut entry = diary.days.mut_ptr(day)
-            with (entry) {
+            with (mut diary.days[day]) {
                 add_steps(steps)
             }
         }
         Steps { day } -> u256 uses (diary) {
             // Read one field: one SLOAD.
-            with (diary.days.ptr(day)) {
-                steps()
-            }
+            with (diary.days[day]) { steps() }
         }
         Calories { day } -> u256 uses (diary) {
-            with (diary.days.ptr(day)) {
-                calories()
-            }
+            diary.days[day].calories
         }
         Total { day } -> u256 uses (diary) {
             // Read the whole value.
-            let summary = diary.days.ptr(day).read()
+            let summary = diary.days[day]
             summary.steps + summary.distance_m + summary.calories
         }
         RawWord { day, index } -> u256 uses (raw: RawStorage) {
             // Solidity layout: the value starts at keccak256(key ++ slot).
-            raw.sload(SolMapping::at(DAYS_SALT).slot_of(day) + index)
+            unsafe { raw.sload(SolMapping::at(0).slot_of(day) + index) }
         }
         AddStepsCountingWalks { day, steps } -> u256 uses (mut diary) {
-            // A borrow of a plain field survives a write through an entry
-            // pointer: map entries never overlap contract fields.
+            // An access of a plain field survives a write to an entry: the
+            // map's entries are paths under `days`, apart from `walks`.
             let walks = mut diary.walks
-            let mut entry = diary.days.mut_ptr(day)
-            with (entry) {
-                add_steps(steps)
-            }
+            let entry = mut diary.days[day]
+            entry.steps += steps
             walks += 1
             walks
         }
         StepsCountingWalks { day } -> u256 uses (mut diary) {
             let walks = mut diary.walks
-            let today = with (diary.days.ptr(day)) {
-                steps()
-            }
+            let today = with (diary.days[day]) { steps() }
             walks += 1
             today
         }

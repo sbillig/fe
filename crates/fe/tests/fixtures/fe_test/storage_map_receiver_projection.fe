@@ -1,23 +1,17 @@
 use std::evm::{Evm, StorageMap}
 
-fn pass_map<const SALT: u256>(
-    map: StorageMap<u256, u256, SALT>,
-) -> StorageMap<u256, u256, SALT> {
-    map
+struct Wrapped {
+    map: StorageMap<u256, u256>,
 }
 
-fn pass_map_nested<const SALT: u256>(
-    map: StorageMap<u256, u256, SALT>,
-) -> StorageMap<u256, u256, SALT> {
-    return pass_map(map: map)
+impl Wrapped {
+    fn map(self) -> ref StorageMap<u256, u256> {
+        ref self.map
+    }
 }
 
-// A data parameter carries no authority, so the caller grants the authority
-// over the maps it passes.
-fn read_map(map: StorageMap<u256, u256>, key: u256) -> u256
-    uses (storage: Field(StorageMap<u256, u256>))
-{
-    pass_map_nested(map: map).get(key: key)
+fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 {
+    wrapped.map().get(key: key)
 }
 
 msg Msg {
@@ -29,30 +23,31 @@ msg Msg {
 }
 
 pub contract C {
-    mut first: StorageMap<u256, u256>,
-    mut second: StorageMap<u256, u256>,
+    mut first: Wrapped,
+    mut second: Wrapped,
 
     recv Msg {
         Set { lane, key, value } uses (mut first, mut second) {
             if lane == 0 {
-                first.set(key: key, value: value)
+                first.map.set(key: key, value: value)
             } else {
-                second.set(key: key, value: value)
+                second.map.set(key: key, value: value)
             }
         }
 
         Get { lane, key } -> u256 uses (first, second) {
+            // The wrapped map is a place in the field this arm reads.
             if lane == 0 {
-                read_map(map: first, key: key)
+                read_wrapped(wrapped: first, key: key)
             } else {
-                read_map(map: second, key: key)
+                read_wrapped(wrapped: second, key: key)
             }
         }
     }
 }
 
 #[test]
-fn returned_values_preserve_direct_layout_sources() uses (evm: mut Evm) {
+fn receiver_projections_yield_the_field_map() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 1)
     evm.call(
         addr: c,

@@ -1647,6 +1647,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::StorageOnlyValue {
+                span,
+                ty,
+                collection,
+                position,
+            } => {
+                let ty_name = ty.pretty_print(db);
+                let collection_name = collection.pretty_print(db);
+                let mut diag = primary_diag(
+                    Severity::Error,
+                    format!("`{ty_name}` lives only in storage"),
+                    format!("a storage-only type cannot be {position}"),
+                    span.resolve(db),
+                    error_code,
+                );
+                if ty != collection {
+                    diag.notes
+                        .push(format!("`{ty_name}` holds `{collection_name}`, a storage collection"));
+                }
+                diag.notes.push(
+                    "a storage collection lives at its storage place; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter".into(),
+                );
+                diag
+            }
+
             Self::UnknownResultSpace(span) => primary_diag(
                 Severity::Error,
                 "unknown result space",

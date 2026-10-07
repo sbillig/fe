@@ -90,7 +90,7 @@ pub contract C {
 }
 
 #[test]
-fn aggregate_effect_helpers_forward_projected_roots() uses (evm: mut Evm) {
+fn aggregate_effect_helpers_reach_each_map() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 1)
     evm.call(
         addr: c,

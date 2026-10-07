@@ -1,20 +1,11 @@
-use std::evm::{StorageBytes, StorageMap, StoragePackedArray, TSlot}
+use std::evm::{StorageMap, StoragePackedArray, TSlot}
 
 struct Store {
-    balances: StorageMap<u256, u256, 0>,
+    balances: StorageMap<u256, u256>,
 }
 
-pub fn map_new_without_effect() -> u256 {
-    let map: StorageMap<u256, u256, 0> = StorageMap::new()
-    map.get(1)
-}
-
-pub fn map_literal() -> StorageMap<u256, u256, 0> {
-    StorageMap {}
-}
-
-pub fn bytes_new_without_effect() -> StorageBytes<u256, 0, 1> {
-    StorageBytes::new()
+pub fn map_literal(_ store: mut Store) {
+    store.balances = StorageMap { seed: 0 }
 }
 
 pub fn array_new_without_effect() -> StoragePackedArray<8, 0> {

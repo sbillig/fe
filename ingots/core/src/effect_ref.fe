@@ -76,6 +76,12 @@ pub fn write<H: EffectHandle>(_ handle: H, _ value: own H::Target) uses (target:
     target = value
 }
 
+/// The place a handle points at, as a projection, with the handle installed
+/// by `with`. The handle argument anchors the effect key to its `Target`.
+pub fn target_mut<H: EffectHandle>(_ handle: H) -> mut H::Target uses (target: mut H::Target) {
+    mut target
+}
+
 /// Marker for zero-sized pointer types whose const slot parameter is
 /// assigned by the contract layout.
 ///

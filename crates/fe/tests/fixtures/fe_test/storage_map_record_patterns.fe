@@ -6,12 +6,12 @@ struct Pair<T> {
 }
 
 impl Pair<StorageMap<u256, u256>> {
-    fn get_left(self, key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
+    fn get_left(self, key: u256) -> u256 {
         let Self { left, .. } = ref self
         left.get(key: key)
     }
 
-    fn get_right(self, key: u256) -> u256 uses (storage: Field(StorageMap<u256, u256>)) {
+    fn get_right(self, key: u256) -> u256 {
         let Self { right, .. } = ref self
         right.get(key: key)
     }
@@ -49,7 +49,7 @@ pub contract C {
 }
 
 #[test]
-fn record_patterns_preserve_projected_layout_roots() uses (evm: mut Evm) {
+fn record_patterns_view_each_map() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 1)
     evm.call(
         addr: c,

@@ -3703,7 +3703,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
     }
 
     #[test]
-    fn specialized_grant_callee_erases_self_after_root_assignment() {
+    fn grant_callee_passes_its_storage_receiver_slot() {
         let mut db = DriverDataBase::default();
         let file_url =
             Url::parse("file:///specialized_grant_callee_keeps_self_runtime_visible.fe").unwrap();
@@ -3755,26 +3755,26 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
         let abi = runtime_declaration_abi_plan(&db, callee.key(&db));
         let signature = callee.interface_signature(&db);
 
+        // A map takes a slot, so a storage receiver holding one passes the
+        // slot of its place, beside the two arguments. Nothing is passed for
+        // its layout.
         assert_eq!(
             plans.len(),
-            2,
-            "specialized grant callee should expose only its two non-ZST arguments after the assigned root becomes concrete:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+            3,
+            "grant should pass its receiver's slot and its two arguments:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
         assert!(
-            matches!(param_plans.first(), Some(RuntimeParamPlan::Erased)),
-            "specialized grant receiver should erase once its nested layout root is a concrete assigned literal:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nsignature={signature:#?}"
+            !matches!(param_plans.first(), Some(RuntimeParamPlan::Erased)),
+            "a storage receiver holding a map is its place's slot:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
         assert_eq!(
             abi.visible_params.len(),
-            2,
-            "specialized grant visible ABI should omit the inert receiver:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nabi={abi:#?}"
+            3,
+            "grant's visible ABI takes the receiver:\nabi={abi:#?}"
         );
-        // `grant`'s `Field` authority has no runtime value, but its layout
-        // is still passed.
-        assert_eq!(
-            abi.evidence_params.len(),
-            2,
-            "the declared receiver layout must remain an explicit evidence parameter:\nabi={abi:#?}"
+        assert!(
+            abi.evidence_params.is_empty(),
+            "a receiver without layout holes has no layout evidence:\nabi={abi:#?}"
         );
         assert_eq!(signature, abi.signature());
     }
@@ -4050,8 +4050,8 @@ uses (slot: Slot<u256>)
                 };
                 let receiver_plan = runtime_param_plans(&db, call_facts.semantic).first();
                 assert!(
-                    matches!(receiver_plan, Some(RuntimeParamPlan::Erased)),
-                    "non-forwarding `{name}` must erase its zero-width receiver and use only hidden layout roots:\nplans={:#?}",
+                    !matches!(receiver_plan, Some(RuntimeParamPlan::Erased)),
+                    "`{name}`'s receiver holds a map, which takes a slot, so it is its place's slot:\nplans={:#?}",
                     runtime_param_plans(&db, call_facts.semantic),
                 );
                 let receiver = args.first().and_then(|arg| normalized.operand_local(*arg));
@@ -4116,145 +4116,6 @@ uses (slot: Slot<u256>)
             "LockAndCheck should contain the expected mutex method calls",
         );
         let _ = instance.body(&db);
-    }
-
-    #[test]
-    fn concrete_zero_width_storage_map_effect_args_erase_from_runtime_calls() {
-        let mut db = DriverDataBase::default();
-        let file_url = Url::parse(
-            "file:///concrete_zero_width_storage_map_effect_args_erase_from_runtime_calls.fe",
-        )
-        .unwrap();
-        db.workspace().touch(
-            &mut db,
-            file_url.clone(),
-            Some(
-                include_str!("../../../../codegen/tests/fixtures/storage_map_contract.fe")
-                    .to_string(),
-            ),
-        );
-        let file = db
-            .workspace()
-            .get(&db, &file_url)
-            .expect("file should be loaded");
-        let top_mod = db.top_mod(file);
-        let runtime = semantic_instance_for_named_func(&db, top_mod, "runtime");
-        let mut owners = vec![("runtime".to_string(), runtime)];
-        let mut checked_calls = 0;
-        let mut owner_idx = 0;
-
-        while owner_idx < owners.len() {
-            let (owner_name, semantic) = owners[owner_idx].clone();
-            owner_idx += 1;
-            let instance = runtime_instance_for_semantic(&db, semantic);
-            let normalized = normalize_semantic_body(&db, semantic)
-                .unwrap_or_else(|err| panic!("failed to normalize {owner_name}: {err:?}"));
-            let facts = BodyStaticFacts::new(&db, &normalized);
-            let env = BodyEnv::new(&db, &normalized, &facts);
-            let params = instance.key(&db).params(&db);
-            let inferred = LocalStateInferer::new(
-                env,
-                params,
-                &runtime_param_locals(&db, semantic, &normalized.source, params),
-            )
-            .run();
-
-            for (block_idx, block) in normalized.normalized.blocks.iter().enumerate() {
-                for (stmt_idx, stmt) in block.statements.iter().enumerate() {
-                    let NStatementKind::Define { expr, .. } = &stmt.kind else {
-                        continue;
-                    };
-                    let NExpr::Call {
-                        callee,
-                        args,
-                        effect_args,
-                        ..
-                    } = expr
-                    else {
-                        continue;
-                    };
-                    let BodyOwner::Func(func) = callee.key.owner(&db) else {
-                        continue;
-                    };
-                    let Some(name) = func.name(&db).to_opt().map(|name| name.data(&db)) else {
-                        continue;
-                    };
-                    let is_storage_map_call = matches!(
-                        name.as_str(),
-                        "new"
-                            | "get"
-                            | "set"
-                            | "get_unchecked"
-                            | "set_unchecked"
-                            | "get_balance"
-                            | "set_balance"
-                            | "get_allowance"
-                            | "set_allowance"
-                            | "transfer"
-                    );
-                    if !is_storage_map_call {
-                        continue;
-                    }
-                    let ExprStaticFacts::Call(call_facts) =
-                        facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
-                            panic!("missing staged call facts for {block_idx}:{stmt_idx}")
-                        })
-                    else {
-                        panic!("{name} expression should keep staged call facts");
-                    };
-                    if func.is_method(&db) {
-                        assert!(
-                            matches!(
-                                runtime_param_plans(&db, call_facts.semantic).first(),
-                                Some(RuntimeParamPlan::Erased)
-                            ),
-                            "zero-width StorageMap receiver should erase independently of its explicit runtime layout-root ABI for `{owner_name}` -> `{name}`:\nplans={:#?}",
-                            runtime_param_plans(&db, call_facts.semantic),
-                        );
-                    }
-                    let input_plan =
-                        call_input_plan_for_test(&db, &normalized, call_facts, effect_args);
-
-                    assert!(
-                        input_plan
-                            .effect_plans
-                            .iter()
-                            .all(|plan| matches!(plan, CompiledEffectArgPlan::Erased)),
-                        "StorageMap effect arg should erase for `{owner_name}` -> `{name}`:\nargs={args:#?}\neffect_args={effect_args:#?}\ninput_plan={input_plan:#?}",
-                    );
-
-                    let mut class_cache = InferClassCache::new(normalized.locals.len());
-                    let selected =
-                        RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
-                            .with_concrete_roots(&inferred.roots)
-                            .selected_call_inputs(args, effect_args, &input_plan);
-                    for selected_arg in &selected {
-                        let erased_place = selected_erased_place_root(
-                            &normalized,
-                            &inferred.carriers,
-                            &inferred.roots,
-                            selected_arg,
-                        );
-                        assert!(
-                            erased_place.is_none(),
-                            "selected runtime input for `{owner_name}` -> `{name}` would lower an erased place root:\nerased_place={erased_place:#?}\nselected={selected:#?}",
-                        );
-                    }
-                    if !owners
-                        .iter()
-                        .any(|(_, existing)| existing.key(&db) == call_facts.semantic.key(&db))
-                    {
-                        owners.push((name.to_string(), call_facts.semantic));
-                    }
-                    checked_calls += 1;
-                }
-            }
-        }
-
-        assert!(
-            checked_calls >= 5,
-            "runtime should contain all StorageMap helper calls; checked {checked_calls}"
-        );
     }
 
     #[test]

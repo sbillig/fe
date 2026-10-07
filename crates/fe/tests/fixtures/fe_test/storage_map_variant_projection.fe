@@ -1,25 +1,18 @@
 use std::evm::{Evm, StorageMap}
 
-fn current_map<const SALT: u256>() -> StorageMap<u256, u256, SALT>
-    uses (map: StorageMap<u256, u256, SALT>)
-{
-    map
+enum Wrapped {
+    Map(StorageMap<u256, u256>),
 }
 
-fn read_current<const SALT: u256>(key: u256) -> u256
-    uses (map: StorageMap<u256, u256, SALT>)
-{
-    current_map().get(key: key)
-}
-
-// A data parameter carries no authority, so the caller grants the authority
-// over the maps it passes.
-fn read_through_effect(map: StorageMap<u256, u256>, key: u256) -> u256
-    uses (storage: Field(StorageMap<u256, u256>))
-{
-    with (map) {
-        read_current<_>(key: key)
+// A projection yields the payload of the enum place it was given.
+fn unwrap_map(wrapped: Wrapped) -> ref StorageMap<u256, u256> {
+    match ref wrapped {
+        Wrapped::Map(map) => ref map,
     }
+}
+
+fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 {
+    unwrap_map(wrapped: wrapped).get(key: key)
 }
 
 msg Msg {
@@ -31,30 +24,34 @@ msg Msg {
 }
 
 pub contract C {
-    mut first: StorageMap<u256, u256>,
-    mut second: StorageMap<u256, u256>,
+    mut first: Wrapped,
+    mut second: Wrapped,
 
     recv Msg {
         Set { lane, key, value } uses (mut first, mut second) {
             if lane == 0 {
-                first.set(key: key, value: value)
+                match first {
+                    Wrapped::Map(mut map) => map.set(key: key, value: value),
+                }
             } else {
-                second.set(key: key, value: value)
+                match second {
+                    Wrapped::Map(mut map) => map.set(key: key, value: value),
+                }
             }
         }
 
         Get { lane, key } -> u256 uses (first, second) {
             if lane == 0 {
-                read_through_effect(map: first, key: key)
+                read_wrapped(wrapped: first, key: key)
             } else {
-                read_through_effect(map: second, key: key)
+                read_wrapped(wrapped: second, key: key)
             }
         }
     }
 }
 
 #[test]
-fn returned_effect_values_preserve_layout_sources() uses (evm: mut Evm) {
+fn variant_projections_yield_the_payload_map() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 1)
     evm.call(
         addr: c,

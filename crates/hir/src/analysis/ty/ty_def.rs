@@ -103,6 +103,14 @@ impl<'db> TyId<'db> {
         })
     }
 
+    /// The storage collection this type is or holds in a field, or in a
+    /// tuple or array element. Such a type is storage-only: it exists only at
+    /// storage places, never as a value in memory. A pointer or handle does
+    /// not hold its target.
+    pub fn storage_collection(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
+        super::adt_def::ty_storage_collection(db, self)
+    }
+
     /// Returns teh base type of this type.
     /// ## Example
     /// `TyApp<Adt, i32>` returns `Adt`.
