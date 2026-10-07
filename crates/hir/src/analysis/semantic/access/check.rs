@@ -829,7 +829,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             reservations.push(id);
         }
         for (position, effect) in effect_args.iter().enumerate() {
-            let Some(footprint) = self.effect_footprint(func, effect, args) else {
+            let Some(footprint) = self.effect_footprint(func, effect, args, effect_args) else {
                 continue;
             };
             let id = self.token(
@@ -863,6 +863,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         func: crate::hir_def::Func<'db>,
         effect: &NEffectArg<'db>,
         args: &[NOperand],
+        effect_args: &[NEffectArg<'db>],
     ) -> Option<Footprint> {
         let mode = if effect.required_mut {
             BorrowKind::Mut
@@ -911,19 +912,36 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 let mut regions = self.named_regions(resolved.regions, arg_ty, !field_key);
                 let mut parents = resolved.direct;
                 // The callee may exercise a `Field(T)` authority over the
-                // handles its arguments hold, of whatever field: those of
-                // another type than the one supplied name other fields.
+                // handles its arguments and other effects hold, of whatever
+                // field: those of another type than the one supplied name
+                // other fields.
                 if field_key {
+                    let holds_handles = |this: &Self, ty: TyId<'db>| {
+                        ty != arg_ty
+                            && !field_handle_spaces(this.db, this.scope, this.assumptions, ty)
+                                .is_empty()
+                    };
                     for arg in args {
                         let ty = self.body.values[arg.value.index()].ty;
                         let ty = ty.as_capability(self.db).map_or(ty, |(_, target)| target);
-                        if ty != arg_ty
-                            && !field_handle_spaces(self.db, self.scope, self.assumptions, ty)
-                                .is_empty()
-                        {
+                        if holds_handles(self, ty) {
                             let (source, _) = self.source_place(arg.value);
                             regions.extend(self.named_regions(source, ty, false));
                             parents.extend(self.direct(arg.value));
+                        }
+                    }
+                    for other in effect_args {
+                        if let NEffectArgValue::Place(other_place) = &other.arg
+                            && other.binding_idx != effect.binding_idx
+                            && holds_handles(self, other_place.ty)
+                        {
+                            let resolved = self.resolve(other_place);
+                            regions.extend(self.named_regions(
+                                resolved.regions,
+                                other_place.ty,
+                                false,
+                            ));
+                            parents.extend(resolved.direct);
                         }
                     }
                 }
@@ -1817,7 +1835,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         }
         let mut footprints: Vec<_> = effect_args
             .iter()
-            .filter_map(|effect| self.effect_footprint(func, effect, args))
+            .filter_map(|effect| self.effect_footprint(func, effect, args, effect_args))
             .collect();
         if let Some(access) = external_call_state_access(self.db, func) {
             footprints.push(Footprint {

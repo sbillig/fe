@@ -49,3 +49,26 @@ fn lend() uses (first: mut Pair) {
 fn lend_read_only() uses (first: mut Pair, second: Pair) {
     write_any(second)
 }
+
+struct Holder {
+    map: StorageMap<u256, u256>,
+}
+
+fn write_held() uses (storage: mut Field(StorageMap<u256, u256>), holder: Holder) {
+    let mut map = holder.map
+    map.set(key: 1, value: 2)
+}
+
+// Accepted: the map `holder` holds is `first`'s, which this function may
+// write.
+fn lend_over_effect() uses (first: mut Holder) {
+    write_held()
+}
+
+// Rejected: `write_held` may write the map its effect `holder` holds, which
+// is read-only here.
+fn lend_over_read_only_effect() uses (first: mut Holder, second: Holder) {
+    with (Holder = second) {
+        write_held()
+    }
+}

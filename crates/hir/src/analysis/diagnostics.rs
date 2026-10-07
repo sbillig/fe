@@ -3206,6 +3206,42 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::LentFieldAuthority {
+                primary,
+                func,
+                key,
+                effect,
+                is_mut,
+            } => {
+                let func_name = func
+                    .name(db)
+                    .to_opt()
+                    .map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
+                let key_str = key.pretty_print(db);
+                let effect = effect.map_or_else(|| "an effect".to_string(), |name| {
+                    format!("its effect `{}`", name.data(db))
+                });
+                let (mode, verb) = if *is_mut { ("mut ", "write") } else { ("", "read") };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "`{func_name}` may use `{mode}{key_str}` on the handles {effect} holds"
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "this function's authority does not {verb} the fields those handles name"
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "a call lending a `Field` authority must hold it over every handle of its shape the callee is given"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::EffectTypeMismatch {
                 primary,
                 func,

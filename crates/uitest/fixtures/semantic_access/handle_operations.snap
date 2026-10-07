@@ -43,3 +43,12 @@ error[16-0001]: access conflict in `fn NestedSession::__init__`
     │                     ------------- projection opened here
 107 │         let v = read_left(pair, 1)
     │                 ^^^^^^^^^^^^^^^^^^ cannot read this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn HeldSession::__init__`
+    ┌─ handle_operations.fe:131:13
+    │
+129 │         let x = ref b.map[1]
+    │                     -------- projection opened here
+130 │         with (Holder = b) {
+131 │             write_held(a.map)
+    │             ^^^^^^^^^^^^^^^^^ cannot write to this place while a `ref` projection of it is open

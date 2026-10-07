@@ -503,6 +503,17 @@ pub enum BodyDiag<'db> {
         provided_span: Option<DynLazySpan<'db>>,
     },
 
+    /// A call lends a `Field` authority its callee may exercise over the
+    /// handles another effect it is given holds, which the caller does not
+    /// cover with that authority's mode.
+    LentFieldAuthority {
+        primary: DynLazySpan<'db>,
+        func: Func<'db>,
+        key: HirTypeId<'db>,
+        effect: Option<IdentId<'db>>,
+        is_mut: bool,
+    },
+
     EffectTypeMismatch {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
@@ -1088,6 +1099,7 @@ impl<'db> BodyDiag<'db> {
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
+            Self::LentFieldAuthority { .. } => 115,
             Self::EffectTypeMismatch { .. } => 38,
             Self::EffectProviderMismatch { .. } => 52,
             Self::EffectTraitUnsatisfied { .. } => 39,

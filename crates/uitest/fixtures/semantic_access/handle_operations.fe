@@ -108,3 +108,28 @@ pub contract NestedSession {
         x += v
     }
 }
+
+struct Holder {
+    map: StorageMap<u256, u256>,
+}
+
+// The caller grants the authority over `copy`'s map and over the map
+// `holder` holds.
+fn write_held(_ copy: StorageMap<u256, u256>) uses (storage: mut Field(StorageMap<u256, u256>), holder: Holder) {
+    let mut map = holder.map
+    map.set(key: 1, value: copy.get(1))
+}
+
+// Rejected: `write_held` may write the map its effect holds, which a session
+// holds.
+pub contract HeldSession {
+    mut a: Holder,
+    mut b: Holder,
+    init() uses (mut a, mut b) {
+        let x = ref b.map[1]
+        with (Holder = b) {
+            write_held(a.map)
+        }
+        let _ = x + 1
+    }
+}

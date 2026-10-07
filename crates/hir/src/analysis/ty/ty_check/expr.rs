@@ -1834,6 +1834,7 @@ impl<'db> TyChecker<'db> {
                 EffectRequirementDecl::from_effect_requirement(self.db, &component.requirement)
             }))
             .collect();
+        let mut field_queries = Vec::new();
         for (param_idx, req) in reqs.iter().enumerate() {
             let key_ty = req.key_ty;
             let Some(query) = build_effect_query_for_call(self, callable, req) else {
@@ -1844,6 +1845,11 @@ impl<'db> TyChecker<'db> {
                 .copied()
                 .flatten();
 
+            if req.key_ty.field_key_handle(self.db).is_some()
+                && let EffectPatternKey::Type(type_query) = &query.key
+            {
+                field_queries.push((type_query.clone(), req.clone()));
+            }
             let mut resolution = self.resolve_effect_query(req.clone(), query.clone(), call_args);
             if matches!(resolution, EffectResolution::Missing)
                 && self.provide_closure_effect(req, &query)
@@ -2095,6 +2101,45 @@ impl<'db> TyChecker<'db> {
                         primary: call_span.clone(),
                         func,
                         key: key_ty,
+                    });
+                }
+            }
+        }
+        // The callee may exercise a `Field(T)` authority over the handles its
+        // other effects hold too, so those of `T`'s shape must be covered
+        // with its mode: a static slot handle by a provider of its type, one
+        // whose slot is a runtime value by its effect's place.
+        for (query, req) in field_queries {
+            for other in &resolved_args {
+                let super::EffectArg::Place(place) = &other.arg else {
+                    continue;
+                };
+                if other.binding_idx == req.binding_idx {
+                    continue;
+                }
+                let PlaceBase::Binding(root) = place.base;
+                let parts = self.handle_places(Some(place.clone()), self.place_ty(place));
+                let uncovered = parts.into_iter().any(|(_, part)| {
+                    self.key_matches(&query, part)
+                        && !if self.is_static_slot(part) {
+                            self.handle_authority(&query, req.required_mut, None, None, part)
+                                .is_some_and(|evidence| {
+                                    !req.required_mut || evidence_provider(&evidence).is_mut
+                                })
+                        } else {
+                            !req.required_mut || root.is_mut()
+                        }
+                });
+                if uncovered {
+                    self.push_diag(BodyDiag::LentFieldAuthority {
+                        primary: call_span.clone(),
+                        func,
+                        key: req.key_ty,
+                        effect: reqs
+                            .iter()
+                            .find(|other_req| other_req.binding_idx == other.binding_idx)
+                            .and_then(|other_req| other_req.name),
+                        is_mut: req.required_mut,
                     });
                 }
             }
@@ -2397,27 +2442,25 @@ impl<'db> TyChecker<'db> {
         ok
     }
 
-    /// The authority over a handle of type `ty` that argument `arg` holds,
-    /// as a whole if `whole`, at `place`. A static slot handle's type names
-    /// its field (distinct fields' handles never share a type), so a provider
-    /// in scope holding a `ty` gives it, passed as the place within the
-    /// provider that holds it, or as the argument's for an array element. A
-    /// handle whose slot is a runtime value has the authority of a provider
-    /// of its type, or of its place (`binding_has_authority`) when passed
-    /// whole. A `Field` effect binding of its shape gives either.
+    /// The authority over a handle of type `ty`, held by argument `arg` if
+    /// any and lying at `place` if that is a whole argument. A static slot
+    /// handle's type names its field (distinct fields' handles never share a
+    /// type), so a provider in scope holding a `ty` gives it, passed as the
+    /// place within the provider that holds it, or as the argument's for an
+    /// array element. A handle whose slot is a runtime value has the
+    /// authority of a provider of its type, or of its place
+    /// (`binding_has_authority`). A `Field` effect binding of its shape gives
+    /// either. A provider whose mode suffices is preferred.
     fn handle_authority(
         &mut self,
         query: &TypePatternKey<'db>,
         required_mut: bool,
-        arg: ExprId,
-        whole: bool,
+        arg: Option<ExprId>,
         place: Option<Place<'db>>,
         ty: TyId<'db>,
     ) -> Option<EffectEvidence<'db>> {
-        let static_slot = matches!(
-            resolve_static_slot_layout(self.db, self.env.scope(), self.env.assumptions(), ty),
-            StaticSlotLayoutResolution::Resolved(_) | StaticSlotLayoutResolution::UnresolvedSpace
-        );
+        let static_slot = self.is_static_slot(ty);
+        let mut found = None;
         let providers: Vec<_> = self.env.effect_env().providers().collect();
         for provider in providers {
             let parts = if self.is_field_provider(provider) || !static_slot {
@@ -2428,9 +2471,9 @@ impl<'db> TyChecker<'db> {
                 self.handle_places(Some(provider_place), provider.ty)
                     .into_iter()
                     .filter(|(_, part)| *part == ty)
-                    .map(|(part, _)| match part {
-                        Some(_) => (provider.origin, ty),
-                        None => (EffectOrigin::Arg { expr: arg }, ty),
+                    .filter_map(|(part, _)| match part {
+                        Some(_) => Some((provider.origin, ty)),
+                        None => arg.map(|expr| (EffectOrigin::Arg { expr }, ty)),
                     })
                     .collect()
             } else {
@@ -2446,12 +2489,19 @@ impl<'db> TyChecker<'db> {
                     },
                     required_mut,
                 ) {
-                    return Some(evidence);
+                    if provider.is_mut || !required_mut {
+                        return Some(evidence);
+                    }
+                    found.get_or_insert(evidence);
                 }
             }
         }
+        if found.is_some() {
+            return found;
+        }
+        let arg = arg?;
         let PlaceBase::Binding(binding) = place?.base;
-        (!static_slot && whole && self.env.binding_has_authority(&binding)).then_some(())?;
+        (!static_slot && self.env.binding_has_authority(&binding)).then_some(())?;
         self.evaluate_unkeyed_type_provider(
             query.clone(),
             ProvidedEffect {
@@ -2464,6 +2514,23 @@ impl<'db> TyChecker<'db> {
         )
     }
 
+    /// Whether `ty` is a static slot handle, whose type names its field.
+    fn is_static_slot(&self, ty: TyId<'db>) -> bool {
+        matches!(
+            resolve_static_slot_layout(self.db, self.env.scope(), self.env.assumptions(), ty),
+            StaticSlotLayoutResolution::Resolved(_) | StaticSlotLayoutResolution::UnresolvedSpace
+        )
+    }
+
+    /// The type of the value at `place`.
+    fn place_ty(&self, place: &Place<'db>) -> TyId<'db> {
+        let PlaceBase::Binding(binding) = place.base;
+        place.projections.last().map_or_else(
+            || self.env.lookup_binding_ty(&binding),
+            |projection| projection.result_ty(),
+        )
+    }
+
     fn resolve_effect_query(
         &mut self,
         req: EffectRequirementDecl<'db>,
@@ -2472,8 +2539,7 @@ impl<'db> TyChecker<'db> {
     ) -> EffectResolution<'db> {
         // The callee may exercise a `Field(T)` authority over any handle of
         // `T`'s shape its arguments hold, so each must be authorized; the
-        // effect argument names the first. Without one, a provider of the
-        // key gives it.
+        // effect argument names the first.
         if req.key_ty.field_key_handle(self.db).is_some()
             && let EffectPatternKey::Type(type_query) = &query.key
         {
@@ -2493,12 +2559,41 @@ impl<'db> TyChecker<'db> {
             }
             let mut chosen = None;
             for (arg, whole, place, ty) in handles {
+                // A handle whose slot is a runtime value carries its place's
+                // authority only when passed whole.
+                let place = place.filter(|_| whole);
                 let Some(evidence) =
-                    self.handle_authority(type_query, query.required_mut, arg, whole, place, ty)
+                    self.handle_authority(type_query, query.required_mut, Some(arg), place, ty)
                 else {
                     return EffectResolution::Missing;
                 };
                 chosen.get_or_insert(evidence);
+            }
+            // Without one, a provider holding a handle of the key's shape
+            // gives it, one whose mode suffices first.
+            if chosen.is_none() {
+                let providers: Vec<_> = self.env.effect_env().providers().collect();
+                for provider in providers {
+                    let Some(place) = self.provider_place(provider) else {
+                        continue;
+                    };
+                    for (_, part) in self.handle_places(Some(place), provider.ty) {
+                        if self.key_matches(type_query, part)
+                            && let Some(evidence) = self.handle_authority(
+                                type_query,
+                                query.required_mut,
+                                None,
+                                None,
+                                part,
+                            )
+                        {
+                            if !query.required_mut || evidence_provider(&evidence).is_mut {
+                                return EffectResolution::Chosen(Box::new(evidence));
+                            }
+                            chosen.get_or_insert(evidence);
+                        }
+                    }
+                }
             }
             if let Some(evidence) = chosen {
                 return EffectResolution::Chosen(Box::new(evidence));
@@ -2870,11 +2965,7 @@ impl<'db> TyChecker<'db> {
                     EffectOrigin::Arg { expr } => self.arg_handle_place(expr, provider.ty),
                     EffectOrigin::With { .. } | EffectOrigin::Param { .. } => {
                         self.provider_place(provider).map(|place| {
-                            let PlaceBase::Binding(binding) = place.base;
-                            let ty = place.projections.last().map_or_else(
-                                || self.env.lookup_binding_ty(&binding),
-                                |projection| projection.result_ty(),
-                            );
+                            let ty = self.place_ty(&place);
                             self.handle_places(Some(place.clone()), ty)
                                 .into_iter()
                                 .find_map(|(place, ty)| place.filter(|_| ty == provider.ty))
