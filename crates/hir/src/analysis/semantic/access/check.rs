@@ -31,10 +31,10 @@ use crate::{
             },
             get_or_build_semantic_instance,
             normalized::{
-                HandleOrigin, NBlockId, NDataPath, NEffectArg, NEffectArgValue, NExpr, NOperand,
-                NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind, NStructuralPath,
-                NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, ReadMode,
-                access::AccessTarget,
+                HandleOrigin, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue,
+                NExpr, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind,
+                NStructuralPath, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
+                ReadMode, access::AccessTarget,
             },
         },
         ty::{
@@ -420,12 +420,27 @@ impl<'a, 'db> Analysis<'a, 'db> {
             .collect()
     }
 
+    /// The space the innermost entry along `place` lies in: its collection's
+    /// contents' space.
+    fn entry_space(&self, place: &NPlace<'db>) -> Option<ProviderAddressSpace> {
+        place
+            .path
+            .as_slice()
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, projection)| matches!(projection, NDataProjection::Entry(_)))
+            .and_then(|(index, _)| self.body.place_prefix_ty(self.db, place, index))
+            .and_then(|collection| self.instance.place_index_space(self.db, collection))
+    }
+
     pub fn resolve(&mut self, place: &NPlace<'db>) -> Resolved {
         let path = self.path(&place.path);
+        let space = self.entry_space(place);
         let (regions, direct) = match place.base {
             NPlaceBase::Root(root) => {
                 let base = self.root_domain[root.index()].map_or(Base::Root(root), Base::Domain);
-                (vec![AbsPlace { base, path }], TokenSet::new())
+                (vec![AbsPlace { base, path, space }], TokenSet::new())
             }
             NPlaceBase::CapabilityTarget { carrier } => {
                 let carrier_ty = self.body.values[carrier.index()].ty;
@@ -433,14 +448,14 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 let mut regions: Vec<AbsPlace> = direct
                     .iter()
                     .flat_map(|token| &self.tokens[*token as usize].regions)
-                    .map(|region| region.extended(&path))
+                    .map(|region| region.extended(&path, space))
                     .collect();
                 if regions.is_empty() || carrier_ty.as_ptr(self.db).is_some() {
                     let base = self
                         .dynamic_handle(carrier_ty)
                         .filter(|_| carrier_ty.as_ptr(self.db).is_none())
                         .map_or(Base::Raw, Base::Domain);
-                    regions = vec![AbsPlace { base, path }];
+                    regions = vec![AbsPlace { base, path, space }];
                 }
                 regions.sort();
                 regions.dedup();
@@ -2049,7 +2064,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .collect();
             for (index, component) in regions.iter().enumerate() {
                 for region in component {
-                    let Some(space) = self.space(region.base) else {
+                    let Some(space) = region.space.or_else(|| self.space(region.base)) else {
                         continue;
                     };
                     match spaces[index] {
