@@ -143,8 +143,15 @@ stack; they end at their `end`, in any order. In the projection's body:
 - Each component of every yield site names places in one address space per
   instantiation. That space is the projection's *result-space contract*
   (`projection_result_spaces`), inferred from the body and exported with the
-  instance: callers combine grants by their contracts, never by bodies.
+  instance: callers combine grants by their contracts, never by bodies. A
+  place's space is its root's, unless an entry along its path moves it into
+  its collection's contents' space: `mut self.lock[()]` of a `TSlot` held in
+  a storage struct is transient.
 - The `mut` components of a split are structurally disjoint.
+- A `#[raw_place]` projection has nothing to resume: after each yield it
+  only ends the accesses its grant derives from, a session among them is a
+  `#[raw_place]` call's, and it yields no place of its own frame. An unsafe
+  split takes places and calls of such projections as its components.
 - Every path that completes yields exactly once; a sum shape's empty variant
   is returned only before the yield, and the ramp's sessions still finish on
   that exit.
