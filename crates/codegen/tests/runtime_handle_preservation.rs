@@ -2397,3 +2397,73 @@ fn capability_gated_provider_ref_conversion_preserves_transport_in_rmir() {
         }
     );
 }
+
+/// A sum shape is not a value: the caller of a projection yielding
+/// `Option<mut T>` binds the grant where the yield takes its variant, so no
+/// enum value carries it and it needs no `Native` reference, whether it is
+/// a storage place or a memory one.
+#[test]
+fn sum_shape_grants_are_bound_without_enum_values() {
+    let source = r#"
+struct Counter { value: u256 }
+
+impl Counter {
+    fn maybe(mut self, _ present: bool) -> Option<mut u256> {
+        if present { Option::Some(mut self.value) } else { Option::None }
+    }
+}
+
+msg Msg {
+    #[selector = 1]
+    Inc -> u256,
+}
+
+pub contract C {
+    mut counter: Counter,
+
+    recv Msg {
+        Inc -> u256 uses (mut counter) {
+            match counter.maybe(true) {
+                Option::Some(mut value) => { value += 1 }
+                Option::None => {}
+            }
+            counter.value
+        }
+    }
+}
+
+#[test]
+fn in_memory() {
+    let mut counter = Counter { value: 1 }
+    if let Option::Some(value) = counter.maybe(true) {
+        value += 1
+    }
+    assert(counter.value == 2)
+}
+"#;
+    with_top_mod_for_source("sum_shapes.fe", source, |db, top_mod| {
+        for (package, symbol) in [
+            (build_runtime_package(db, top_mod), "__C_recv_0_0"),
+            (build_test_runtime_package(db, top_mod, None), "in_memory"),
+        ] {
+            let package = package.expect("the package lowers");
+            let body = runtime_body_for_symbol(db, package, symbol);
+            assert!(
+                !runtime_body_stmts(&body).any(|stmt| matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::NativeRef { .. },
+                        ..
+                    }
+                ) || matches!(
+                    stmt,
+                    RStmt::Assign {
+                        expr: RExpr::EnumMake { fields, .. },
+                        ..
+                    } if !fields.is_empty()
+                )),
+                "`{symbol}` builds a reference into a value: {body:#?}"
+            );
+        }
+    });
+}

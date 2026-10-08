@@ -4621,8 +4621,48 @@ impl<'db> RmirEmitter<'db> {
     fn lower_return(&mut self, bb: RBlockId, value: Option<NOperand>) -> RTerminator<'db> {
         let ret = self.signature.ret.clone();
         RTerminator::Return(ret.and_then(|class| {
-            value.map(|value| self.lower_semantic_operand_for_class(bb, value, &class))
+            value.map(|value| {
+                self.lower_enum_make_for_class(bb, value, &class)
+                    .unwrap_or_else(|| self.lower_semantic_operand_for_class(bb, value, &class))
+            })
         }))
+    }
+
+    /// `operand`, built as an enum variant here, built again as `class`. The
+    /// value has no payload in the other variants, which `class` may give
+    /// other fields: the join of the values a body returns takes each
+    /// variant's fields from the values built as it.
+    fn lower_enum_make_for_class(
+        &mut self,
+        bb: RBlockId,
+        operand: NOperand,
+        class: &RuntimeClass<'db>,
+    ) -> Option<RLocalId> {
+        let (
+            _,
+            NExpr::EnumMake {
+                enum_ty,
+                variant,
+                fields,
+            },
+        ) = self.semantic_body.normalized.defining_expr(operand.value)?
+        else {
+            return None;
+        };
+        let (enum_ty, variant, fields) = (*enum_ty, *variant, fields.clone());
+        let RuntimeClass::AggregateValue { .. } = class else {
+            return None;
+        };
+        let value = self.read_semantic_operand(bb, operand);
+        if self.value_class(value) == Some(class) {
+            return Some(value);
+        }
+        let dst = self.alloc_runtime_temp(
+            self.locals[value.index()].semantic_ty,
+            RuntimeCarrier::Value(class.clone()),
+        );
+        self.lower_enum_make(bb, dst, enum_ty, variant, &fields);
+        Some(dst)
     }
 
     fn lower_successor(&mut self, successor: &NSuccessor) -> RBlockId {

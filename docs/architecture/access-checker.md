@@ -156,8 +156,13 @@ At runtime every projection call is inlined into its caller
 (`mir/src/runtime/lower/inline.rs`): the ramp replaces the call, each `end`
 of the session runs its own copy of the slide, and a projection with several
 yield sites records which one its ramp took. A projection's grant has the
-runtime class its body yields. Recursion through projection calls cannot be
-inlined and is rejected by the checker.
+runtime class its body yields. A sum shape is not a value: when each yield
+builds a variant and the caller only tests the variant and binds its fields,
+each yield goes straight to the caller's case for the variant it built, with
+the variant's fields as locals, so no enum value carries a grant. The class
+of a returned enum takes each variant's fields from the values built as that
+variant. Recursion through projection calls cannot be inlined and is
+rejected by the checker.
 
 ## Moves and initialization
 
