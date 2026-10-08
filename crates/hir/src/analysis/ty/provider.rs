@@ -642,6 +642,54 @@ pub fn place_index_space<'db>(
     effect_space_from_resolved_trait_const(db, scope, resolved)
 }
 
+/// How a collection whose elements are places (`core::ops::PlaceIndex`)
+/// packs its elements into lanes: its `Lanes` codec, when that codes the
+/// element type (`LaneCodec<Output>`) in at most 128 bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct PlaceIndexLanes<'db> {
+    pub codec: TyId<'db>,
+    pub bits: u16,
+}
+
+#[salsa::tracked]
+pub fn place_index_lanes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    collection_ty: TyId<'db>,
+) -> Option<PlaceIndexLanes<'db>> {
+    let place_index = super::corelib::resolve_core_trait(db, scope, &["ops", "PlaceIndex"])?;
+    let inst = TraitInstId::new_simple(db, place_index, vec![collection_ty]);
+    let assoc = |name: &str| {
+        let projected = inst
+            .trait_ref(db)
+            .project_assoc_ty(db, IdentId::new(db, name.to_string()))?;
+        Some(normalize_ty(db, projected, scope, assumptions))
+    };
+    let (codec, output) = (assoc("Lanes")?, assoc("Output")?);
+    if codec == TyId::unit(db) {
+        return None;
+    }
+    let lane_codec = super::corelib::resolve_core_trait(db, scope, &["ops", "LaneCodec"])?;
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let Selection::Unique(resolved) = resolve_trait_impl_instance(
+        db,
+        solve_cx,
+        TraitInstId::new_simple(db, lane_codec, vec![codec, output]),
+    ) else {
+        return None;
+    };
+    let bits = super::const_ty::const_ty_from_resolved_trait_const(
+        db,
+        resolved,
+        IdentId::new(db, "BITS".to_string()),
+    )?
+    .evaluate(db, Some(TyId::u256(db)))
+    .integer_value(db)?;
+    let bits = u16::try_from(bits).ok()?;
+    (bits > 0 && bits <= 128 && bits % 8 == 0).then_some(PlaceIndexLanes { codec, bits })
+}
+
 fn effect_space_from_resolved_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,

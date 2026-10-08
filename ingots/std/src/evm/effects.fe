@@ -247,7 +247,7 @@ impl<T> PlaceIndex for TSlot<T> {
     type Output = T
 
     #[inline(always)]
-    fn locate(_ base: u256, _ key: (), _ width: u256) -> (u256, u256) {
+    fn locate(self, _ base: u256, _ key: (), _ width: u256) -> (u256, u256) {
         (base, 0)
     }
 }

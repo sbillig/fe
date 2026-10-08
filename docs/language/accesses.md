@@ -89,6 +89,12 @@ overlap. A `mut` access to a struct holding collections covers their
 entries. A collection's methods take `self` or `mut self` and declare no
 effects: the authority is the access to its place, as for any data.
 
+A collection may pack small elements into lanes of shared slots, as a
+`SolArray` does for Solidity's packed array elements. A lane is read and
+written in place, but a `mut` binding, argument, provided effect or yield of
+one works on a memory copy that is stored back into the lane when the access
+ends.
+
 ```fe
 let x = mut balances[from]
 balances.set(key: to, value: 0)     // rejected: `x` holds an entry of `balances`

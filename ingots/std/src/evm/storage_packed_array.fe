@@ -56,7 +56,7 @@ impl PlaceIndex for PackedWords {
 
     #[arithmetic(unchecked)]
     #[inline(always)]
-    fn locate(_ base: u256, _ word: u256, _ width: u256) -> (u256, u256) {
+    fn locate(self, _ base: u256, _ word: u256, _ width: u256) -> (u256, u256) {
         (data_slot(base) + word, 0)
     }
 }

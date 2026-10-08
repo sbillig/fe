@@ -215,7 +215,7 @@ impl<K: StorageKey + Copy, V> PlaceIndex for StorageMap<K, V> {
     type Output = V
 
     #[inline(always)]
-    fn locate(_ base: u256, _ key: K, _ width: u256) -> (u256, u256) {
+    fn locate(self, _ base: u256, _ key: K, _ width: u256) -> (u256, u256) {
         // keccak256(key ++ slot) - standard Solidity mapping layout
         // Reserve the entire preimage before encoding: key encoders may allocate.
         let key_len = K::encoded_len(key)

@@ -206,12 +206,29 @@ pub trait PlaceIndex {
     const SPACE: ingot::effect_ref::AddressSpace
     type Key: Copy
     type Output
+    /// The codec of elements packed into lanes: an element is a lane of
+    /// `Lanes::BITS` bits when `Lanes: LaneCodec<Output>` with `BITS` at most
+    /// 128, and otherwise keeps its type's storage layout. `()` packs none.
+    type Lanes = ()
 
     /// The slot holding the element at `key` of the collection whose place
     /// starts at slot `base`, and the element's byte offset within that slot.
-    /// `width` is the element's size in storage: the bytes of a scalar packed
-    /// with others when below 32, else 32 bytes per slot it spans.
-    fn locate(_ base: u256, _ key: Self::Key, _ width: u256) -> (u256, u256)
+    /// `width` is the element's size in storage: a lane's bytes, else 32
+    /// bytes per slot the element's storage layout spans.
+    fn locate(self, _ base: u256, _ key: Self::Key, _ width: u256) -> (u256, u256)
+}
+
+/// How a place-indexed collection encodes an element it packs into a lane:
+/// `BITS` bits of a storage word, `offset` bytes above its low end, shared
+/// with the neighbouring elements. Reading the element loads the word and
+/// decodes it with `get`; writing it stores the word `set` returns, so only
+/// the element's bits change.
+pub trait LaneCodec<T> {
+    const BITS: u256
+    /// The element in `word`'s lane at `offset`.
+    fn get(_ word: u256, offset: u256) -> T
+    /// `word` with its lane at `offset` holding `value`.
+    fn set(_ word: u256, offset: u256, value: own T) -> u256
 }
 
 /// `t[i]` where the context reads the element.

@@ -33,7 +33,7 @@ use crate::{
         storage_lane_view,
     },
     runtime::{
-        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RuntimeBoundarySpec,
+        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec,
         RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
         SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole,
     },
@@ -77,9 +77,12 @@ use super::{
 };
 
 /// The last entry a place reaches, from which it is classified.
-struct EntryRoot<'db> {
+pub(crate) struct EntryRoot<'db> {
     element_ty: TyId<'db>,
     space: AddressSpaceKind,
+    /// Whether the collection packs the element into a lane, which is
+    /// accessed through a memory copy of the element.
+    pub(crate) lane: bool,
     /// The path after the entry.
     path: NDataPath,
 }
@@ -821,7 +824,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     /// places, its last entry: the element at the slot the collection
     /// computes, in the space the collection keeps its elements in, and the
     /// path after it. `None` for a place without entries.
-    fn place_entry_root(self, place: &NPlace<'db>) -> Option<Option<EntryRoot<'db>>> {
+    pub(crate) fn place_entry_root(self, place: &NPlace<'db>) -> Option<Option<EntryRoot<'db>>> {
         let path = place.path.as_slice();
         let index = path
             .iter()
@@ -831,17 +834,16 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 .body
                 .normalized
                 .place_prefix_ty(self.db, place, index)?;
-            let space = provider_address_space_to_runtime(
-                self.body
-                    .owner()
-                    .place_index_space(self.db, collection_ty)?,
-            );
+            let owner = self.body.owner();
+            let space =
+                provider_address_space_to_runtime(owner.place_index_space(self.db, collection_ty)?);
             Some(EntryRoot {
                 element_ty: self
                     .body
                     .normalized
                     .place_prefix_ty(self.db, place, index + 1)?,
                 space,
+                lane: owner.place_index_lanes(self.db, collection_ty).is_some(),
                 path: NDataPath::new(&path[index + 1..]),
             })
         })())
@@ -924,8 +926,21 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             let EntryRoot {
                 element_ty,
                 space,
+                lane,
                 path,
             } = entry?;
+            if lane {
+                // The memory copy of a lane's element.
+                let copy = stored_class_for_ty_in_env(self.db, self.type_env(), element_ty);
+                return Some(ref_class_for_place_result(
+                    self.db,
+                    &copy,
+                    &value_class,
+                    AddressSpaceKind::Memory,
+                    false,
+                    RefView::Whole,
+                ));
+            }
             let root_class =
                 provider_class_for_target_in_env(self.db, self.type_env(), Some(element_ty), space);
             let root = || {

@@ -1495,6 +1495,22 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
+    /// How `ty` packs its elements into lanes when its elements are places
+    /// (`core::ops::PlaceIndex`), in this instance.
+    #[salsa::tracked]
+    pub fn place_index_lanes(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+    ) -> Option<crate::analysis::ty::provider::PlaceIndexLanes<'db>> {
+        crate::analysis::ty::provider::place_index_lanes(
+            db,
+            self.normalization_scope(db),
+            self.assumptions(db),
+            self.normalized_ty(db, ty),
+        )
+    }
+
     /// The key and element types of `ty` when its elements are places
     /// (`core::ops::PlaceIndex`), in this instance.
     #[salsa::tracked]

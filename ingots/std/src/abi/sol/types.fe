@@ -669,6 +669,13 @@ impl<const N: usize> TopicValue for FixedBytes<N> {
     fn as_topic(self) -> u256 { self.word() }
 }
 
+// All zero bytes, like a Solidity `bytesN`'s default value.
+impl<const N: usize> Default for FixedBytes<N> {
+    fn default() -> Self {
+        FixedBytes { val: 0 }
+    }
+}
+
 impl<const N: usize> ingot::evm::SolPacked for FixedBytes<N> {
     const BITS: u256 = N as u256 * 8
     fn to_packed(own self) -> u256 {
