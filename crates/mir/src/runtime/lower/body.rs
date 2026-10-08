@@ -2572,16 +2572,6 @@ impl<'db> RmirEmitter<'db> {
             let value = self.lower_zst_value_placeholder(bb, field_ty, stored.clone());
             return (value, stored);
         }
-        if matches!(
-            stored,
-            RuntimeClass::Ref {
-                kind: RefKind::Native,
-                ..
-            }
-        ) {
-            let value = self.lower_semantic_operand_for_class(bb, field, &stored);
-            return (value, stored);
-        }
         let value = if let Some(boundary) =
             boundary_spec_for_ty_in_env(self.db, self.env, field_ty, AddressSpaceKind::Memory)
         {
