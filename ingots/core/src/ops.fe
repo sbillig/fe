@@ -1,3 +1,5 @@
+use ingot::marker::Clearable
+
 pub trait Add<T = Self> {
     type Output = Self
 
@@ -219,11 +221,12 @@ pub trait PlaceIndex {
 }
 
 /// Zeroes the element at `key` of a collection whose elements live in a
-/// space that starts zeroed, like Solidity's `delete`: its slots, or only its
-/// bits of a slot it shares. The element reads as its type's zero value,
-/// which in such a space every type has.
+/// space that starts zeroed: its slots, or only its bits of a slot it shares.
+/// The element reads as its type's zero value, which in such a space every
+/// type has. The element must be `Clearable`: one holding a storage
+/// collection is not cleared by zeroing its own slots.
 pub fn clear_storage<C: PlaceIndex>(_ collection: mut C, _ key: C::Key)
-    where C::SPACE.starts_zeroed()
+    where C::SPACE.starts_zeroed(), C::Output: Clearable
 {
     unsafe { ingot::intrinsic::clear(mut collection[key]) }
 }

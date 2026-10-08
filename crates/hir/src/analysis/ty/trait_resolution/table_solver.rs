@@ -24,6 +24,7 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         canonical::{Canonical, Solution},
+        clearable::clearable_implementor,
         closure::closure_implementor,
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
@@ -153,6 +154,9 @@ enum Clause<'db> {
     /// The builtin implementation of the closure that is the goal's self
     /// type (`ty::closure`), built from the goal in its own table.
     Closure,
+    /// The compiler's `Clearable` implementation for the goal's self type
+    /// (`ty::clearable`), proved through its component types.
+    Clearable,
 }
 
 #[derive(Clone)]
@@ -387,6 +391,9 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         if closure_implementor(self.db, prepared.normalized_goal).is_some() {
             clauses.push(Clause::Closure);
         }
+        if clearable_implementor(self.db, prepared.normalized_goal).is_some() {
+            clauses.push(Clause::Clearable);
+        }
         if !prepared.query.require_impl && self.goal_can_use_assumptions(prepared.normalized_goal) {
             clauses.extend(
                 (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
@@ -463,6 +470,20 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     return Ok(Transition::Reject);
                 }
                 ImplementorId::assumption(self.db, query.goal.fold_with(self.db, &mut table))
+            }
+            Clause::Clearable => {
+                let Some((selected_impl, remaining_goals)) =
+                    clearable_implementor(self.db, normalized_goal)
+                else {
+                    return Ok(Transition::Reject);
+                };
+                let branch = Branch {
+                    table,
+                    root_goal: query.goal,
+                    remaining_goals,
+                    selected_impl,
+                };
+                return Ok(self.continue_branch(key, branch, query.assumptions));
             }
             Clause::Closure => {
                 let Some(implementor) = closure_implementor(self.db, normalized_goal) else {

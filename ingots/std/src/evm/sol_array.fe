@@ -21,6 +21,7 @@
 use core::abi::{AbiSize, DynArray, Encode, store_word}
 use core::effect_ref::AddressSpace
 use core::iter::{Bidirectional, Collection, CollectionMut}
+use core::marker::Clearable
 use core::ops::{LaneCodec, PlaceIndex, clear_storage}
 use core::option::Option
 use core::ptr
@@ -129,7 +130,9 @@ impl<T> SolArray<T> {
 
     /// Removes the last element, zeroing its storage like Solidity's `pop()`.
     /// Reverts with `Panic(0x31)` if the array is empty.
-    pub fn pop(mut self) {
+    pub fn pop(mut self)
+        where T: Clearable
+    {
         let len = self.len
         if len == 0 {
             revert_error(Panic::from(PANIC_POP_EMPTY))
@@ -138,10 +141,20 @@ impl<T> SolArray<T> {
         self.len = len - 1
     }
 
-    /// Removes every element, zeroing their storage like Solidity's
-    /// `delete`. Costs a slot write per element, and a read too for elements
-    /// packed into shared slots.
-    pub fn clear(mut self) {
+    /// Zeroes the element at `i`, leaving the length: it reads as its type's
+    /// zero value. Reverts with `Panic(0x32)` if `i` is out of bounds.
+    pub fn clear_at(mut self, _ i: u256)
+        where T: Clearable
+    {
+        clear_storage(mut self, i)
+    }
+
+    /// Removes every element, zeroing their storage, so that growing the
+    /// array again exposes no old element. Costs a slot write per element,
+    /// and a read too for elements packed into shared slots.
+    pub fn clear(mut self)
+        where T: Clearable
+    {
         let len = self.len
         let mut i: u256 = 0
         while i < len {

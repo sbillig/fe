@@ -1421,6 +1421,12 @@ pub enum ImplDiag<'db> {
         trait_: Trait<'db>,
         name: IdentId<'db>,
     },
+
+    /// An `impl` of a trait only the compiler implements.
+    CompilerImplementedTrait {
+        primary: DynLazySpan<'db>,
+        trait_: Trait<'db>,
+    },
 }
 
 impl ImplDiag<'_> {
@@ -1454,6 +1460,7 @@ impl ImplDiag<'_> {
             Self::TypeNotDefinedInTrait { .. } => 23,
             Self::AccessItemNotDefinedInTrait { .. } => 26,
             Self::MissingAssociatedSpace { .. } => 27,
+            Self::CompilerImplementedTrait { .. } => 28,
         }
     }
 }

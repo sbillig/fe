@@ -784,6 +784,22 @@ impl<'db> ImplTrait<'db> {
         })
     }
 
+    fn diags_compiler_implemented_trait(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implementor: ImplementorId<'db>,
+    ) -> Option<TyDiagCollection<'db>> {
+        let clearable =
+            ty::corelib::resolve_core_trait(db, self.scope(), &["marker", "Clearable"])?;
+        (implementor.trait_def(db) == clearable).then(|| {
+            ty::diagnostics::ImplDiag::CompilerImplementedTrait {
+                primary: self.span().trait_ref().into(),
+                trait_: clearable,
+            }
+            .into()
+        })
+    }
+
     fn diags_effect_handle_raw(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1930,6 +1946,7 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         out.extend(self.diags_effect_handle_raw(db, implementor));
         out.extend(self.diags_view_copy(db, implementor));
         out.extend(self.diags_storage_only_copy(db, implementor));
+        out.extend(self.diags_compiler_implemented_trait(db, implementor));
         out.extend(self.diags_trait_ref_and_wf(db));
         out.extend(self.diags_assoc_types_wf(db));
         out.extend(self.diags_assoc_types(db));

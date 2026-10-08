@@ -4,6 +4,7 @@ use ingot::evm::ops::mstore
 use core::num::IntWord
 use core::ptr
 use core::effect_ref::AddressSpace
+use core::marker::Clearable
 use core::ops::{PlaceIndex, clear_storage}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
@@ -258,10 +259,13 @@ impl<K: StorageKey + Copy, V> StorageMap<K, V> {
         self[key] = value
     }
 
-    /// Zeroes the value at `key`, like Solidity's `delete m[key]`: it reads
-    /// as its type's zero value, as a key no one set does.
+    /// Zeroes the value at `key`: it reads as its type's zero value, as a
+    /// key no one set does. A value holding a storage collection cannot be
+    /// removed, since zeroing its slots would leave the collection's entries.
     #[inline(always)]
-    pub fn remove(mut self, _ key: K) {
+    pub fn remove(mut self, _ key: K)
+        where V: Clearable
+    {
         clear_storage(mut self, key)
     }
 }

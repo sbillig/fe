@@ -5588,6 +5588,17 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 error_code,
             ),
 
+            Self::CompilerImplementedTrait { primary, trait_ } => primary_diag(
+                severity,
+                "trait implemented by the compiler",
+                format!(
+                    "`{}` is implemented by the compiler and cannot be implemented",
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::MissingAssociatedType {
                 primary,
                 type_name,

@@ -522,13 +522,15 @@ fn validate_effect_handle_raw<'db>(
         ImplementorOrigin::Hir(_)
         | ImplementorOrigin::VirtualContract(_)
         | ImplementorOrigin::Closure
+        | ImplementorOrigin::Structural
             if space != ProviderAddressSpace::Memory || raw_pointee != Some(target_ty) =>
         {
             Err(ProviderLayoutFailure::UntrustedRaw)
         }
         ImplementorOrigin::Hir(_)
         | ImplementorOrigin::VirtualContract(_)
-        | ImplementorOrigin::Closure => Ok(()),
+        | ImplementorOrigin::Closure
+        | ImplementorOrigin::Structural => Ok(()),
     }
 }
 

@@ -19,12 +19,21 @@ lies, as Solidity nests mappings.
 A slot no one wrote reads as zero, so in storage and transient storage the
 all-zero representation is a value of every type: `false`, the zero
 address, an enum's first variant, an empty collection. Clearing an element
-zeroes its slots, or only its bits of a slot it shares, as Solidity's
-`delete` does. `core::ops::clear_storage(mut c, key)` clears the element at
-`key` of any collection whose elements live in such a space;
-`StorageMap::remove(key)`, `SolArray::pop()` and `clear()` on `SolArray`,
-`TSlot` and `SolEnumerableSet` are built on it. A map has no `clear`: its
-keys cannot be enumerated.
+zeroes its slots, or only its bits of a slot it shares.
+`core::ops::clear_storage(mut c, key)` clears the element at `key` of any
+collection whose elements live in such a space; `StorageMap::remove(key)`,
+`SolArray::pop()`, `clear_at(i)` and `clear()`, `TSlot::clear()`,
+`StorageHeap::pop()` and `SolEnumerableSet::clear()` are built on it.
+
+Only a `core::marker::Clearable` element is cleared: scalars, raw pointers
+and aggregates of clearable types, which the compiler recognizes without an
+`impl`. A value holding a storage collection is not clearable, since its
+collection's entries lie outside its own slots: removing a map entry whose
+value holds a map is an error, not a shallow `delete` whose old entries
+would reappear. Such a value's scalar fields stay assignable, and its
+collections are cleared through their own methods. A map has no `clear`:
+its keys cannot be enumerated. Resetting an element to a default value is
+an ordinary assignment, `arr[i] = T::default()`.
 
 ## Explicit slots
 

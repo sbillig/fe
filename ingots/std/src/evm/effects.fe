@@ -1,5 +1,6 @@
 use core::effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut}
 use core::ops::{PlaceIndex, clear_storage}
+use core::marker::Clearable
 use core::{ptr, size_of}
 use core::abi::{
     Abi,
@@ -266,7 +267,9 @@ impl<T> TSlot<T> {
     }
 
     /// Zeroes the value.
-    pub fn clear(mut self) {
+    pub fn clear(mut self)
+        where T: Clearable
+    {
         clear_storage(mut self, ())
     }
 }

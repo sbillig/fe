@@ -121,6 +121,10 @@ fn collections_clear_their_elements() uses (evm: mut Evm) {
         let pairs = unsafe { SolArray<Pair>::at(8) }
         pairs.push(Pair { small: 1, other: 2, big: 3 })
         pairs.push(Pair { small: 4, other: 5, big: 6 })
+        // `clear_at` zeroes one element and leaves the length.
+        pairs.clear_at(0)
+        assert(pairs.len() == 2)
+        assert(pairs[0].small == 0 && pairs[0].big == 0 && pairs[1].big == 6)
         pairs.clear()
         assert(pairs.len() == 0)
         let data = keccak(8 as u256)

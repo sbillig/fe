@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/clear_storage_space.fe
 ---
@@ -9,7 +10,7 @@ error[8-0093]: const requirement is not satisfied
  20 │     clear_storage(mut words, 0)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
     │
-    ┌─ src/ops.fe:226:11
+    ┌─ src/ops.fe:229:11
     │
-226 │     where C::SPACE.starts_zeroed()
+229 │     where C::SPACE.starts_zeroed(), C::Output: Clearable
     │           ------------------------ required by this predicate
