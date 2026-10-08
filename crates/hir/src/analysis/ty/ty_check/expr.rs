@@ -4063,8 +4063,20 @@ impl<'db> TyChecker<'db> {
                 }
             }
             ResolvedPathInBody::NewBinding(ident) => {
-                let assoc_fn = enclosing_assoc_fn(self.db, self.body(), ident);
-                let diag = BodyDiag::UndefinedVariable(path_expr_span.into(), ident, assoc_fn);
+                let diag = match self.env.owner() {
+                    BodyOwner::ContractRecvArm { contract, .. }
+                        if contract.fields(self.db).contains_key(&ident) =>
+                    {
+                        BodyDiag::ContractFieldNotInUses {
+                            primary: path_expr_span.into(),
+                            field: ident,
+                        }
+                    }
+                    _ => {
+                        let assoc_fn = enclosing_assoc_fn(self.db, self.body(), ident);
+                        BodyDiag::UndefinedVariable(path_expr_span.into(), ident, assoc_fn)
+                    }
+                };
                 self.push_diag(diag);
 
                 ExprProp::invalid(self.db)

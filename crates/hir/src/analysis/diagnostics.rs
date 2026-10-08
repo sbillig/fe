@@ -2993,6 +2993,23 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ContractFieldNotInUses { primary, field } => {
+                let field = field.data(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("contract field `{field}` is not in this handler's `uses`"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{field}` is not reachable here"),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "name it in the handler's `uses` clause: `uses ({field})` to read it, `uses (mut {field})` to write it"
+                    )],
+                    error_code,
+                }
+            }
+
             Self::InvalidEffectKey { owner, key, idx } => {
                 let idx = *idx;
                 let key_str = key.pretty_print(db);
@@ -3115,9 +3132,15 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         ),
                         span: primary.resolve(db),
                     }],
-                    notes: vec![format!(
-                        "provide it with `with ({key_str} = value)` or require it via `uses {key_str}`"
-                    )],
+                    notes: vec![
+                        format!(
+                            "require it in this function's signature with `uses {}`, so that its callers provide it",
+                            effect_clause(db, *func, *key)
+                        ),
+                        format!(
+                            "or provide it to a block of this function with `with ({key_str} = value) {{ .. }}`"
+                        ),
+                    ],
                     error_code,
                 }
             }
@@ -3780,6 +3803,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }],
                 notes: vec![
                     "bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::AccessChoiceNeedsProjection { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "a runtime choice between accesses needs a projection".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this chooses between accesses at runtime".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "move the choice into a projection, whose branches are yield sites: `fn pick(mut self, _ c: bool) -> mut T { if c { mut self.a } else { mut self.b } }`"
                         .to_string(),
                 ],
                 error_code,
@@ -5922,4 +5960,29 @@ impl DiagnosticVoucher for ImplDiag<'_> {
             }
         }
     }
+}
+
+/// The `uses` entry of `func` whose key is `key`, as a clause naming it with
+/// its mode: `(storage: mut RawStorage)`.
+fn effect_clause<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: crate::hir_def::Func<'db>,
+    key: crate::hir_def::TypeId<'db>,
+) -> String {
+    let key_str = key.pretty_print(db);
+    func.effects(db)
+        .data(db)
+        .iter()
+        .find(|param| param.key_ty.to_opt() == Some(key))
+        .map_or_else(
+            || key_str.clone(),
+            |param| {
+                let name = param
+                    .name
+                    .map(|name| format!("{}: ", name.data(db)))
+                    .unwrap_or_default();
+                let mode = if param.is_mut { "mut " } else { "" };
+                format!("({name}{mode}{key_str})")
+            },
+        )
 }

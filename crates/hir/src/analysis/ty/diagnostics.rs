@@ -455,6 +455,12 @@ pub enum BodyDiag<'db> {
     /// and whether that function takes `self`.
     UndefinedVariable(DynLazySpan<'db>, IdentId<'db>, Option<(&'static str, bool)>),
 
+    /// A `recv` arm names a contract field its `uses` clause does not.
+    ContractFieldNotInUses {
+        primary: DynLazySpan<'db>,
+        field: IdentId<'db>,
+    },
+
     InvalidEffectKey {
         owner: EffectParamOwner<'db>,
         key: HirTypeId<'db>,
@@ -641,6 +647,12 @@ pub enum BodyDiag<'db> {
 
     /// `ref p`, `mut p`, or a tuple or sum yield shape used as a value.
     AccessNotValue {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// An `if` or `match` outside a projection's yield whose branches end in
+    /// accesses: a runtime choice between accesses.
+    AccessChoiceNeedsProjection {
         primary: DynLazySpan<'db>,
     },
 
@@ -1137,6 +1149,8 @@ impl<'db> BodyDiag<'db> {
             Self::MoveOutOfCapture { .. } => 112,
             Self::MixedLoopBases { .. } => 114,
             Self::TupleOfAccesses { .. } => 115,
+            Self::ContractFieldNotInUses { .. } => 116,
+            Self::AccessChoiceNeedsProjection { .. } => 117,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

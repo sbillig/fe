@@ -48,7 +48,8 @@ error[8-0036]: missing effect `RawStorage` required by `at`
 18 │     unsafe { StorageMap<u256, u256>::at(0).get(1) }
    │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `at` requires effect `RawStorage` to be in scope
    │
-   = provide it with `with (RawStorage = value)` or require it via `uses RawStorage`
+   = require it in this function's signature with `uses (storage: mut RawStorage)`, so that its callers provide it
+   = or provide it to a block of this function with `with (RawStorage = value) { .. }`
 
 error[8-0066]: mutable borrow requires a mutable place
    ┌─ storage_capability_boundaries.fe:26:5
@@ -62,7 +63,7 @@ error[8-0066]: mutable borrow requires a mutable place
    ┌─ storage_capability_boundaries.fe:32:5
    │
 30 │ uses (store: Store)
-   │       ----- `store` does not provide mutable access
+   │       ------------ `store` does not provide mutable access
 31 │ {
 32 │     store.balances.set(key: 1, value: 2)
    │     ^^^^^^^^^^^^^^ cannot borrow as `mut`

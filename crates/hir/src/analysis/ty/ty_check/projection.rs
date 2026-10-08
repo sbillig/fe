@@ -188,6 +188,35 @@ impl<'db> TyChecker<'db> {
         });
     }
 
+    /// The expressions the branches of the `if` or `match` `expr` end in,
+    /// through blocks.
+    fn branch_tails(&self, expr: ExprId) -> Option<Vec<ExprId>> {
+        let branches = match expr.data(self.db, self.body()) {
+            Partial::Present(Expr::If(_, then, Some(else_))) => vec![*then, *else_],
+            Partial::Present(Expr::Match(_, Partial::Present(arms))) => {
+                arms.iter().map(|arm| arm.body).collect()
+            }
+            _ => return None,
+        };
+        Some(
+            branches
+                .into_iter()
+                .map(|branch| self.tail_of(branch))
+                .collect(),
+        )
+    }
+
+    /// The expression `expr` evaluates last: a block's tail, through blocks.
+    fn tail_of(&self, expr: ExprId) -> ExprId {
+        if let Partial::Present(Expr::Block(stmts, _)) = expr.data(self.db, self.body())
+            && let Some(Partial::Present(Stmt::Expr(tail))) =
+                stmts.last().map(|stmt| stmt.data(self.db, self.body()))
+        {
+            return self.tail_of(*tail);
+        }
+        expr
+    }
+
     /// `ref p`, `mut p` and tuple or sum yield shapes are not values: any use
     /// other than binding, passing, projecting or yielding them is an error.
     pub(super) fn check_access_uses(&mut self) {
@@ -207,8 +236,29 @@ impl<'db> TyChecker<'db> {
                     && !self.env.is_consumed_access(expr)
             })
             .collect::<Vec<_>>();
-        for expr in misused {
+        // An `if` or `match` whose branches end in accesses chooses one at
+        // runtime, which only a projection's yield sites can.
+        let choices = self
+            .body()
+            .exprs(self.db)
+            .keys()
+            .filter(|&expr| {
+                self.branch_tails(expr)
+                    .is_some_and(|tails| tails.iter().any(|tail| misused.contains(tail)))
+            })
+            .collect::<Vec<_>>();
+        let chosen: Vec<_> = choices
+            .iter()
+            .filter_map(|&choice| self.branch_tails(choice))
+            .flatten()
+            .collect();
+        for expr in misused.into_iter().filter(|expr| !chosen.contains(expr)) {
             self.push_diag(BodyDiag::AccessNotValue {
+                primary: expr.span(self.body()).into(),
+            });
+        }
+        for expr in choices {
+            self.push_diag(BodyDiag::AccessChoiceNeedsProjection {
                 primary: expr.span(self.body()).into(),
             });
         }

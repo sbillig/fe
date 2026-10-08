@@ -1812,18 +1812,11 @@ pub(super) fn effect_param_span<'db>(
             .span()
             .effects()
             .param_idx(func.effect_origin(db, idx))
-            .name()
             .into(),
-        EffectParamSite::Contract(contract) => {
-            contract.span().effects().param_idx(idx).name().into()
+        EffectParamSite::Contract(contract) => contract.span().effects().param_idx(idx).into(),
+        EffectParamSite::ContractInit { contract } => {
+            contract.span().init_block().effects().param_idx(idx).into()
         }
-        EffectParamSite::ContractInit { contract } => contract
-            .span()
-            .init_block()
-            .effects()
-            .param_idx(idx)
-            .name()
-            .into(),
         EffectParamSite::ContractRecvArm {
             contract,
             recv_idx,
@@ -1835,7 +1828,6 @@ pub(super) fn effect_param_span<'db>(
             .arm(arm_idx as usize)
             .effects()
             .param_idx(idx)
-            .name()
             .into(),
         EffectParamSite::Closure(def) => def.expr.span(def.body).into(),
     }
