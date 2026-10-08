@@ -2663,7 +2663,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                                 "contract field ref should carry a word slot, got {slot}"
                             )));
                         };
-                        self.fb.make_imm_value(I256::from(*words))
+                        self.fb
+                            .make_imm_value(I256::from_be_bytes(&words.to_be_bytes::<32>()))
                     }
                 }
             }

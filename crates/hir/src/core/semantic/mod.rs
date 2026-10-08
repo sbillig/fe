@@ -1764,13 +1764,7 @@ impl<'db> Contract<'db> {
         self.storage_layout(db)
             .allocated
             .as_ref()
-            .and_then(|layout| {
-                layout
-                    .high_water_by_address_space
-                    .get(&crate::analysis::ty::ProviderAddressSpace::Code)
-                    .copied()
-            })
-            .unwrap_or(0)
+            .map_or(0, |layout| layout.code_slot_count)
     }
 
     #[salsa::tracked(return_ref)]
@@ -5322,6 +5316,11 @@ impl<'db> FieldView<'db> {
         list.data(db)[self.idx].name.to_opt()
     }
 
+    /// The argument of a contract field's `#[slot(e)]`.
+    pub fn slot(self, db: &'db dyn HirDb) -> Option<Body<'db>> {
+        self.parent.fields_list(db).data(db)[self.idx].slot
+    }
+
     pub fn contract_field_id(self, db: &'db dyn HirDb) -> Option<ContractFieldId<'db>> {
         let FieldParent::Contract(contract) = self.parent else {
             return None;
@@ -5357,6 +5356,39 @@ impl<'db> FieldView<'db> {
             FieldParent::Contract(c) => c.span().fields().field(self.idx).ty().into(),
             FieldParent::Variant(v) => v.span().fields().field(self.idx).ty().into(),
         }
+    }
+
+    /// The span of a contract field's `#[slot(e)]` argument, or of its type
+    /// when it has none.
+    fn slot_span(self, db: &'db dyn HirDb) -> crate::span::DynLazySpan<'db> {
+        let FieldParent::Contract(contract) = self.parent else {
+            return self.ty_span();
+        };
+        self.parent.fields_list(db).data(db)[self.idx]
+            .attributes
+            .data(db)
+            .iter()
+            .position(|attr| {
+                matches!(attr, Attr::Normal(attr) if attr
+                    .path
+                    .to_opt()
+                    .and_then(|path| path.as_ident(db))
+                    .is_some_and(|ident| ident.data(db) == "slot"))
+            })
+            .map_or_else(
+                || self.ty_span(),
+                |idx| {
+                    contract
+                        .span()
+                        .fields()
+                        .field(self.idx)
+                        .attributes()
+                        .attr(idx)
+                        .into_normal_attr()
+                        .args()
+                        .into()
+                },
+            )
     }
 
     /// Returns the lazy span for this field's type in `LazyTySpan` form.
@@ -5516,7 +5548,24 @@ impl<'db> FieldView<'db> {
                 ContractLayoutError::NonRegularProviderCycle => {
                     TyLowerDiag::ContractFieldProviderCycle { span, ty }
                 }
-                ContractLayoutError::InvalidFieldType => return out,
+                ContractLayoutError::ExplicitSlotInCode => TyLowerDiag::ContractFieldSlotInCode {
+                    span: self.slot_span(db),
+                },
+                ContractLayoutError::ExplicitSlotOverlap { other } => {
+                    let Some(field) = self.name(db) else {
+                        return out;
+                    };
+                    TyLowerDiag::ContractFieldSlotOverlap {
+                        span: self.slot_span(db),
+                        field,
+                        other: *other,
+                    }
+                }
+                // `check_contract_field_slots` reports the slot's own errors.
+                ContractLayoutError::InvalidFieldType
+                | ContractLayoutError::InvalidExplicitSlot => {
+                    return out;
+                }
                 ContractLayoutError::LayoutExtentOverflow => {
                     TyLowerDiag::ContractFieldLayoutInvariant {
                         span,

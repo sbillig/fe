@@ -265,13 +265,7 @@ fn contract_field_binding<'db>(
                 },
             )?)
         }
-        _ => ContractFieldSlot::Words(u128::try_from(field.slot_offset).map_err(|_| {
-            LowerError::Unsupported(format!(
-                "contract field offset overflow for `{}` in {}",
-                field.name.data(db),
-                context.label(db),
-            ))
-        })?),
+        _ => ContractFieldSlot::Words(field.slot_offset),
     };
     Ok(ContractFieldBinding {
         field: field.field,

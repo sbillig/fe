@@ -106,6 +106,89 @@ contract C {
 }
 
 #[test]
+fn report_places_explicit_slot_fields() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use core::keccak
+use std::evm::TStorPtr
+
+struct Pair { left: u256, right: u256 }
+
+contract C {
+    mut first: u256,
+    #[slot(1)]
+    mut placed: u256,
+    mut pair: Pair,
+    #[slot(keccak(keccak("example.main") - 1) & !(0xff as u256))]
+    mut main: Pair,
+    #[slot(1)]
+    mut flag: TStorPtr<bool>,
+    mut after: TStorPtr<bool>,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let report = contract.layout_report(&db).unwrap();
+    // `pair` skips slot 1, which `placed` takes. `main` is at ERC-7201's
+    // slot for the namespace `example.main`. Transient slot 1 is free for
+    // `flag`, and `after` continues the shared counter.
+    for (path, space, value) in [
+        ("first", ProviderAddressSpace::Storage, "0"),
+        ("placed", ProviderAddressSpace::Storage, "1"),
+        ("pair.left", ProviderAddressSpace::Storage, "2"),
+        ("pair.right", ProviderAddressSpace::Storage, "3"),
+        (
+            "main.left",
+            ProviderAddressSpace::Storage,
+            "10958655983261152271848436692291137275443024275653522991983264966744321209600",
+        ),
+        (
+            "main.right",
+            ProviderAddressSpace::Storage,
+            "10958655983261152271848436692291137275443024275653522991983264966744321209601",
+        ),
+        ("flag", ProviderAddressSpace::Transient, "1"),
+        ("after", ProviderAddressSpace::Transient, "4"),
+    ] {
+        let entry = entry(&db, &report.entries, path);
+        assert_eq!(entry.address_space, space, "{path}");
+        assert_eq!(scalar_value(&db, entry), value, "{path}");
+    }
+}
+
+#[test]
+fn overlapping_explicit_slots_reject_the_later_field() {
+    parse_module!(
+        db,
+        top_mod,
+        r#"
+struct Pair { left: u256, right: u256 }
+
+contract C {
+    #[slot(4)]
+    mut a: Pair,
+    #[slot(5)]
+    mut b: u256,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let result = contract.storage_layout(&db);
+    assert!(result.allocated.is_none());
+    assert_eq!(
+        result.field_errors(&IdentId::new(&db, "b".to_string())),
+        Some(
+            [ContractLayoutError::ExplicitSlotOverlap {
+                other: IdentId::new(&db, "a".to_string())
+            }]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
 fn mutex_lock_cells_share_the_field_counter() {
     parse_ok!(
         db,

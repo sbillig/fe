@@ -1696,6 +1696,9 @@ pub struct FieldDef<'db> {
     pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub vis: Visibility,
     pub is_mut: bool,
+    /// A contract field's `#[slot(e)]`: the constant `e`, the slot it starts
+    /// at instead of the next free one.
+    pub slot: Option<Body<'db>>,
 }
 
 impl<'db> FieldDef<'db> {
@@ -1714,6 +1717,7 @@ impl<'db> FieldDef<'db> {
             type_ref,
             vis,
             is_mut,
+            slot: None,
         }
     }
 

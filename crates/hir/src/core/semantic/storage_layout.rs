@@ -4,6 +4,7 @@ use common::{
 };
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
+use ruint::aliases::U256;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
@@ -22,6 +23,7 @@ use crate::{
             },
             trait_def::ImplementorId,
             trait_resolution::PredicateListId,
+            ty_check::contract_field_slot,
             ty_def::{PrimTy, TyBase, TyData, TyId},
             ty_lower::lower_opt_hir_ty,
         },
@@ -162,15 +164,31 @@ pub enum ContractLayoutPathSegment<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum ContractLayoutError<'db> {
     InvalidFieldType,
-    InvalidConcreteArrayLength { invalid: TyId<'db> },
-    InconsistentConcreteArrayLength { array: TyId<'db> },
+    InvalidConcreteArrayLength {
+        invalid: TyId<'db>,
+    },
+    InconsistentConcreteArrayLength {
+        array: TyId<'db>,
+    },
     AmbiguousProviderLayout,
     UnresolvedProviderTarget,
     UnresolvedProviderSpace,
-    InvalidProviderRaw { failure: ProviderLayoutFailure },
+    InvalidProviderRaw {
+        failure: ProviderLayoutFailure,
+    },
     NonRegularProviderCycle,
+    /// `#[slot(e)]` whose `e` is not a constant `u256`.
+    InvalidExplicitSlot,
+    /// `#[slot(e)]` on a field that lives in code, which has no slots.
+    ExplicitSlotInCode,
+    /// `#[slot(e)]` whose slots overlap those of the explicitly placed `other`.
+    ExplicitSlotOverlap {
+        other: IdentId<'db>,
+    },
     LayoutExtentOverflow,
-    IncompleteAdtLayoutProjection { ty: TyId<'db> },
+    IncompleteAdtLayoutProjection {
+        ty: TyId<'db>,
+    },
 }
 
 impl ContractLayoutError<'_> {
@@ -186,6 +204,9 @@ impl ContractLayoutError<'_> {
             Self::UnresolvedProviderSpace => "provider address space is unresolved",
             Self::InvalidProviderRaw { .. } => "provider raw transport is invalid",
             Self::NonRegularProviderCycle => "provider target recursion changes its type arguments",
+            Self::InvalidExplicitSlot => "the explicit slot is not a constant `u256`",
+            Self::ExplicitSlotInCode => "a code field has no slot",
+            Self::ExplicitSlotOverlap { .. } => "the explicit slots overlap another field's",
             Self::LayoutExtentOverflow => "layout extent overflowed",
             Self::IncompleteAdtLayoutProjection { .. } => "layout projection is incomplete",
         }
@@ -203,6 +224,8 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     address_space: ProviderAddressSpace,
     declared: TyId<'db>,
     target: TyId<'db>,
+    /// The slot `#[slot(e)]` places the field at.
+    explicit_slot: Option<U256>,
     slot_count: usize,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
@@ -218,7 +241,8 @@ pub struct FieldStorageLayout<'db> {
     pub declared: TyId<'db>,
     /// The value the field holds: a provider's target, else `declared`.
     pub target: TyId<'db>,
-    pub slot_offset: usize,
+    /// The field's first slot, or for a code field its first word.
+    pub slot_offset: U256,
     pub slot_count: usize,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
@@ -226,7 +250,8 @@ pub struct FieldStorageLayout<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct AllocatedContractStorageLayout<'db> {
     pub fields: IndexMap<IdentId<'db>, FieldStorageLayout<'db>>,
-    pub high_water_by_address_space: FxHashMap<ProviderAddressSpace, usize>,
+    /// The words the code fields take.
+    pub code_slot_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -947,6 +972,16 @@ fn collect_field_plan<'db>(
                 ));
             }
         };
+    let explicit_slot = match field.slot {
+        Some(_) if address_space == ProviderAddressSpace::Code => {
+            return Some((name, Err(vec![ContractLayoutError::ExplicitSlotInCode])));
+        }
+        Some(body) => match contract_field_slot(db, body) {
+            Ok(slot) => Some(slot),
+            Err(_) => return Some((name, Err(vec![ContractLayoutError::InvalidExplicitSlot]))),
+        },
+        None => None,
+    };
     let mut walker = FieldWalker {
         db,
         scope,
@@ -970,6 +1005,7 @@ fn collect_field_plan<'db>(
             address_space,
             declared,
             target,
+            explicit_slot,
             slot_count: output.span,
             inline_leaves: output.leaves,
         }),
@@ -1003,36 +1039,79 @@ fn slot_counter(space: ProviderAddressSpace) -> ProviderAddressSpace {
     }
 }
 
-/// Places each field after the previous fields numbered by its space's
-/// counter.
+/// Places each field: a field with `#[slot(e)]` at `e`, any other after the
+/// fields its space's counter numbered before it, skipping the slots explicit
+/// fields of its space take.
 fn allocate_contract<'db>(
     field_results: &[ContractFieldLayoutResult<'db>],
 ) -> Result<AllocatedContractStorageLayout<'db>, (ContractFieldId<'db>, ContractLayoutError<'db>)> {
-    let mut counters: FxHashMap<ProviderAddressSpace, usize> = FxHashMap::default();
-    let mut high_water: FxHashMap<ProviderAddressSpace, usize> = FxHashMap::default();
-    let mut fields = IndexMap::new();
-    for field in field_results {
-        let plan = field
+    let plans = field_results.iter().map(|field| {
+        field
             .result
             .as_ref()
             .expect("allocation requires every field to validate")
-            .clone();
-        let counter = counters
-            .entry(slot_counter(plan.address_space))
-            .or_insert(0);
-        let slot_offset = *counter;
-        let end = slot_offset
-            .checked_add(plan.slot_count)
-            .filter(|end| {
-                plan.address_space != ProviderAddressSpace::Code || end.checked_mul(32).is_some()
-            })
-            .ok_or((field.field, ContractLayoutError::LayoutExtentOverflow))?;
-        if plan.slot_count != 0 {
-            *counter = end;
-            high_water.insert(plan.address_space, end);
+    });
+    // The slots explicit fields take, by space.
+    let mut explicit: FxHashMap<ProviderAddressSpace, Vec<(U256, U256, IdentId<'db>)>> =
+        FxHashMap::default();
+    for plan in plans.clone() {
+        let Some(slot) = plan.explicit_slot else {
+            continue;
+        };
+        let end = slot
+            .checked_add(U256::from(plan.slot_count))
+            .ok_or((plan.field, ContractLayoutError::LayoutExtentOverflow))?;
+        let ranges = explicit.entry(plan.address_space).or_default();
+        if let Some(&(_, _, other)) = ranges
+            .iter()
+            .find(|(start, stop, _)| slot < *stop && *start < end)
+        {
+            return Err((
+                plan.field,
+                ContractLayoutError::ExplicitSlotOverlap { other },
+            ));
         }
+        if slot < end {
+            ranges.push((slot, end, plan.name));
+        }
+    }
+    let mut counters: FxHashMap<ProviderAddressSpace, U256> = FxHashMap::default();
+    let mut code_slot_count = 0;
+    let mut fields = IndexMap::new();
+    for plan in plans {
+        let count = U256::from(plan.slot_count);
+        let slot_offset = match plan.explicit_slot {
+            Some(slot) => slot,
+            None => {
+                let counter = counters
+                    .entry(slot_counter(plan.address_space))
+                    .or_insert(U256::ZERO);
+                let mut start = *counter;
+                let ranges = explicit
+                    .get(&plan.address_space)
+                    .map_or(&[][..], Vec::as_slice);
+                while let Some(&(_, stop, _)) = ranges.iter().find(|(first, stop, _)| {
+                    !count.is_zero() && start < *stop && *first < start.saturating_add(count)
+                }) {
+                    start = stop;
+                }
+                let end = start
+                    .checked_add(count)
+                    .ok_or((plan.field, ContractLayoutError::LayoutExtentOverflow))?;
+                if !count.is_zero() {
+                    *counter = end;
+                }
+                if plan.address_space == ProviderAddressSpace::Code {
+                    code_slot_count = usize::try_from(end)
+                        .ok()
+                        .filter(|end| end.checked_mul(32).is_some())
+                        .ok_or((plan.field, ContractLayoutError::LayoutExtentOverflow))?;
+                }
+                start
+            }
+        };
         fields.insert(
-            field.name,
+            plan.name,
             FieldStorageLayout {
                 field: plan.field,
                 name: plan.name,
@@ -1043,18 +1122,18 @@ fn allocate_contract<'db>(
                 target: plan.target,
                 slot_offset,
                 slot_count: plan.slot_count,
-                inline_leaves: plan.inline_leaves,
+                inline_leaves: plan.inline_leaves.clone(),
             },
         );
     }
     Ok(AllocatedContractStorageLayout {
         fields,
-        high_water_by_address_space: high_water,
+        code_slot_count,
     })
 }
 
-fn layout_integer<'db>(db: &'db dyn HirAnalysisDb, value: usize) -> IntegerId<'db> {
-    IntegerId::new(db, BigUint::from(value))
+fn layout_integer<'db>(db: &'db dyn HirAnalysisDb, value: U256) -> IntegerId<'db> {
+    IntegerId::new(db, BigUint::from_bytes_be(&value.to_be_bytes::<32>()))
 }
 
 fn allocated_contract_layout_report<'db>(
@@ -1064,10 +1143,8 @@ fn allocated_contract_layout_report<'db>(
     let mut entries = Vec::new();
     for field in fields.values() {
         for leaf in &field.inline_leaves {
-            let base = field
-                .slot_offset
-                .checked_add(leaf.offset)
-                .expect("an allocated field's leaves fit in usize");
+            // Slots wrap modulo `2**256`, like Solidity's.
+            let base = field.slot_offset.wrapping_add(U256::from(leaf.offset));
             let value = if leaf.dimensions.is_empty() {
                 ContractLayoutValue::Scalar(layout_integer(db, base))
             } else {

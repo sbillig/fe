@@ -242,6 +242,23 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
         issue: ContractFieldLayoutIssue,
     },
+
+    /// `#[slot(e)]` whose `e` is not a constant `u256`.
+    ContractFieldSlotNotConst {
+        span: DynLazySpan<'db>,
+    },
+
+    /// `#[slot(e)]` on a field that lives in code, which has no slots.
+    ContractFieldSlotInCode {
+        span: DynLazySpan<'db>,
+    },
+
+    /// Two fields placed with `#[slot]` in one address space share slots.
+    ContractFieldSlotOverlap {
+        span: DynLazySpan<'db>,
+        field: IdentId<'db>,
+        other: IdentId<'db>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -309,6 +326,9 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldLayoutInvariant { .. } => 46,
             Self::ContractFieldProviderCycle { .. } => 48,
             Self::ContractFieldProviderRawInvalid { .. } => 49,
+            Self::ContractFieldSlotNotConst { .. } => 62,
+            Self::ContractFieldSlotInCode { .. } => 63,
+            Self::ContractFieldSlotOverlap { .. } => 64,
         }
     }
 }

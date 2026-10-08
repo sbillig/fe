@@ -686,7 +686,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 panic!("init-time immutable field binding should carry a word slot offset");
             };
             let slot_words = usize::try_from(slot_words)
-                .expect("contract field slot was allocated from a usize layout extent");
+                .expect("a code field's word offset is within the code-space layout");
             let slot_words = self.push_const_word(bb, slot_words);
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
             let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);

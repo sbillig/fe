@@ -2175,8 +2175,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             Self::ContractFieldProviderCycle { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this provider target cycle changes its layout arguments"
-                        .to_string(),
+                    message: "this provider target cycle changes its type arguments".to_string(),
                     span: span.resolve(db),
                 }];
                 if let Some(name_span) = ty.name_span(db) {
@@ -2198,6 +2197,45 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::ContractFieldSlotNotConst { span } => CompleteDiagnostic::new(
+                Severity::Error,
+                "the slot is not a constant `u256`".to_string(),
+                vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    "this must evaluate to a `u256` at compile time".to_string(),
+                    span.resolve(db),
+                )],
+                vec!["write the slot as a literal, a `const`, or a `const fn` call".to_string()],
+                error_code,
+            ),
+
+            Self::ContractFieldSlotInCode { span } => primary_diag(
+                Severity::Error,
+                "a field that lives in code has no slot",
+                "`#[slot]` places a storage or transient field",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ContractFieldSlotOverlap { span, field, other } => CompleteDiagnostic::new(
+                Severity::Error,
+                format!(
+                    "`{}` overlaps the slots of `{}`",
+                    field.data(db),
+                    other.data(db)
+                ),
+                vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    format!("the slots from here overlap `{}`'s", other.data(db)),
+                    span.resolve(db),
+                )],
+                vec![
+                    "fields placed with `#[slot]` cannot share slots in one address space"
+                        .to_string(),
+                ],
+                error_code,
+            ),
 
             Self::ContractFieldLayoutInvariant { span, ty, issue } => {
                 let (message, label, note) = match issue {

@@ -166,8 +166,8 @@ fn verify_contract_field_binding<'db>(
     if binding.slot != expected_slot {
         return Err(VerifyError::ContractFieldSlotMismatch {
             field: binding.field,
-            expected: expected_slot,
-            actual: binding.slot,
+            expected: Box::new(expected_slot),
+            actual: Box::new(binding.slot),
         });
     }
 
@@ -215,9 +215,7 @@ fn expected_contract_field_slot<'db>(
             .checked_mul(32)
             .map(ContractFieldSlot::CodeTailBytes)
     } else {
-        u128::try_from(field.slot_offset)
-            .ok()
-            .map(ContractFieldSlot::Words)
+        Some(ContractFieldSlot::Words(field.slot_offset))
     }
 }
 
@@ -249,6 +247,7 @@ mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::{analysis::ty::ProviderAddressSpace, semantic::ContractFieldId};
+    use ruint::aliases::U256;
     use url::Url;
 
     use super::*;
@@ -598,7 +597,7 @@ pub contract Other {
                     let ContractFieldSlot::Words(slot) = binding.slot else {
                         panic!("storage field should use a word slot")
                     };
-                    binding.slot = ContractFieldSlot::Words(slot + 1);
+                    binding.slot = ContractFieldSlot::Words(slot + U256::from(1));
                 }),
                 VerifyError::ContractFieldSlotMismatch { field, .. } if field == words
             ));

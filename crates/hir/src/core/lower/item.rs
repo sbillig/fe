@@ -1181,6 +1181,13 @@ impl<'db> FieldDef<'db> {
         field_kind: &'static str,
     ) -> Self {
         report_payable_on_unsupported_target(ctxt, ast.attr_list(), "field", None);
+        report_unsupported_attr(
+            ctxt,
+            ast.attr_list(),
+            "slot",
+            target(field_kind, None),
+            super::contract::SLOT_TARGETS,
+        );
         report_unsupported_field_mut(ctxt, &ast, field_kind);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());

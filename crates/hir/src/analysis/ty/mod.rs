@@ -868,6 +868,12 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             );
 
             diags.extend(
+                ty_check::check_contract_field_slots(db, contract)
+                    .iter()
+                    .map(|diag| diag.to_voucher()),
+            );
+
+            diags.extend(
                 ty_check::check_contract_immutable_fields_initialized(db, contract)
                     .iter()
                     .map(|diag| diag.to_voucher()),

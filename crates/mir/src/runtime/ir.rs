@@ -7,6 +7,7 @@ use hir::analysis::{
 use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
 use hir::projection::IndexSource;
 use hir::semantic::{ContractFieldId, ProviderBinding};
+use ruint::aliases::U256;
 use salsa::Update;
 
 use crate::{
@@ -990,7 +991,7 @@ pub enum EntryEffectArgPlan<'db> {
 pub enum ContractFieldSlot {
     /// Word offset within the field's address space (storage, transient, or
     /// the init-time memory immutables buffer).
-    Words(u128),
+    Words(U256),
     /// Byte offset relative to the end of the deployed code (always
     /// negative), addressing the immutable data section appended after the
     /// runtime bytecode.
