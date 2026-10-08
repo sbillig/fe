@@ -32,7 +32,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
-use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait, params::FuncParamMode};
+use crate::hir_def::{CallableDef, ImplTrait, Trait, params::FuncParamMode};
 use crate::{
     hir_def::{
         BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
@@ -350,10 +350,9 @@ pub(crate) fn check_generic_default_body_types<'db>(
         return Vec::new();
     };
     let bodies = match default {
-        GenericDefault::Const {
-            value: ConstGenericArgValue::Expr(Partial::Present(body)),
-            expected,
-        } => vec![(*body, expected.instantiate_identity())],
+        GenericDefault::Const { value, expected } => {
+            vec![(*value, expected.instantiate_identity())]
+        }
         // The constants written in the default, not only those its lowering
         // holds: an alias can drop one, and a qualifier can use one only to
         // select an impl.
@@ -373,7 +372,6 @@ pub(crate) fn check_generic_default_body_types<'db>(
                 default_assumptions(db, owner),
             )
         }
-        GenericDefault::Const { .. } => Vec::new(),
     };
     bodies
         .into_iter()

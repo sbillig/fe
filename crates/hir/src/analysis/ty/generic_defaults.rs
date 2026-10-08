@@ -27,7 +27,7 @@ use crate::{
         name_resolution::{EarlyNameQueryId, NameResKind, QueryDirective, resolve_query},
     },
     hir_def::{
-        ConstGenericArgValue, GenericParam, GenericParamOwner, IdentId, ItemKind, Partial, PathId,
+        Body, GenericParam, GenericParamOwner, IdentId, ItemKind, Partial, PathId,
         scope_graph::ScopeId,
     },
     semantic::trait_self_predicate,
@@ -62,7 +62,7 @@ pub(crate) fn default_assumptions<'db>(
 pub(crate) enum GenericDefault<'db> {
     Type(Binder<'db, TyId<'db>>),
     Const {
-        value: ConstGenericArgValue<'db>,
+        value: Body<'db>,
         expected: Binder<'db, TyId<'db>>,
     },
 }
@@ -486,7 +486,7 @@ fn default_arg<'db>(
             instantiate_type_default(db, owner, *template, subst, application)
         }
         GenericDefault::Const { value, expected } => {
-            instantiate_const_default(db, owner, index, value, *expected, subst, application)
+            instantiate_const_default(db, owner, index, *value, *expected, subst, application)
         }
     }))
 }
@@ -517,7 +517,7 @@ fn instantiate_const_default<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
     index: SourceParamIndex,
-    value: &ConstGenericArgValue<'db>,
+    value: Body<'db>,
     expected: Binder<'db, TyId<'db>>,
     subst: &CompleteSubst<'db>,
     application: DefaultApplication<'_, 'db>,
@@ -526,16 +526,14 @@ fn instantiate_const_default<'db>(
     let expected = expected
         .instantiate_subst(db, subst)
         .unwrap_or_else(|error| panic!("invalid const default type for {owner:?}: {error:?}"));
-    let value = match value {
-        ConstGenericArgValue::Expr(body) => ConstTyId::unevaluated(
-            db,
-            *body,
-            Some(template_ty),
-            Some(expected),
-            ConstCaptureEnv::bound(db, owner, Some(index), subst.values().to_vec()),
-            application.const_policy(),
-        ),
-    };
+    let value = ConstTyId::unevaluated(
+        db,
+        Partial::Present(value),
+        Some(template_ty),
+        Some(expected),
+        ConstCaptureEnv::bound(db, owner, Some(index), subst.values().to_vec()),
+        application.const_policy(),
+    );
     TyId::const_ty(db, value)
 }
 
@@ -565,7 +563,7 @@ pub(crate) fn default_dependencies<'db>(
             }
         }
         GenericParam::Const(param) => {
-            if let Some(ConstGenericArgValue::Expr(Partial::Present(body))) = param.default {
+            if let Some(body) = param.default {
                 collector.visit_body(&mut VisitorCtxt::with_body(db, body), body);
             }
         }

@@ -2904,7 +2904,6 @@ mod tests {
             generic_defaults::{GenericDefault, generic_default},
             ty_def::PrimTy,
         },
-        hir_def::ConstGenericArgValue,
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -3028,10 +3027,7 @@ mod tests {
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
         let func = find_func(&db, module, "one");
-        let GenericDefault::Const {
-            value: ConstGenericArgValue::Expr(Partial::Present(body)),
-            ..
-        } = generic_default(&db, func.into(), 0)
+        let GenericDefault::Const { value: body, .. } = generic_default(&db, func.into(), 0)
             .as_ref()
             .unwrap()
             .as_ref()

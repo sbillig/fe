@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
-    Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
+    Body, CallableDef, Expr, GenericArg, GenericArgListId, GenericParam, GenericParamOwner,
+    GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
@@ -885,12 +885,10 @@ pub(crate) fn lower_generic_arg_list<'db>(
                 ),
                 _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, minter),
             },
-            GenericArg::Const(const_arg) => match const_arg.value {
-                ConstGenericArgValue::Expr(body) => {
-                    let const_ty = lower_opt_const_body(db, body, scope, assumptions, minter);
-                    TyId::const_ty(db, const_ty)
-                }
-            },
+            GenericArg::Const(const_arg) => TyId::const_ty(
+                db,
+                lower_opt_const_body(db, const_arg.value, scope, assumptions, minter),
+            ),
 
             GenericArg::AssocType(_assoc_type_arg) => {
                 // TODO: ?
@@ -1515,7 +1513,7 @@ pub struct TyParamPrecursor<'db> {
     kind: Option<Kind>,
     variant: Variant<'db>,
     default_hir_ty: Option<HirTyId<'db>>, // Only used for type params
-    default_hir_const: Option<ConstGenericArgValue<'db>>, // Only used for const params
+    default_hir_const: Option<Body<'db>>, // Only used for const params
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -1594,7 +1592,7 @@ impl<'db> TyParamPrecursor<'db> {
     fn const_ty_param(
         name: Partial<IdentId<'db>>,
         ty: Option<HirTyId<'db>>,
-        default: Option<ConstGenericArgValue<'db>>,
+        default: Option<Body<'db>>,
     ) -> Self {
         Self {
             name,

@@ -989,10 +989,7 @@ fn generic_arg_const_bodies<'db>(
     args: GenericArgListId<'db>,
 ) -> impl Iterator<Item = Body<'db>> + 'db {
     args.data(db).iter().filter_map(|arg| match arg {
-        GenericArg::Const(arg) => match arg.value {
-            ConstGenericArgValue::Expr(Partial::Present(body)) => Some(body),
-            _ => None,
-        },
+        GenericArg::Const(arg) => arg.value.to_opt(),
         _ => None,
     })
 }
@@ -1051,7 +1048,7 @@ fn segment_const_args<'db>(
             PathRes::TyAlias(alias, _) => {
                 for (arg, param) in args.data(db).iter().zip(alias.params(db)) {
                     if let GenericArg::Const(arg) = arg
-                        && let ConstGenericArgValue::Expr(Partial::Present(body)) = arg.value
+                        && let Partial::Present(body) = arg.value
                         && let Some(expected) = param.const_ty_ty(db)
                     {
                         found.push((body, expected));
@@ -1249,7 +1246,7 @@ fn expression_const_bodies<'db>(
                 let GenericArg::Const(arg) = arg else {
                     return None;
                 };
-                let ConstGenericArgValue::Expr(Partial::Present(body)) = arg.value else {
+                let Partial::Present(body) = arg.value else {
                     return None;
                 };
                 Some((body, expected(offset + idx)?))

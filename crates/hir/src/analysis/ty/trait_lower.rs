@@ -2,9 +2,9 @@
 
 use crate::{
     core::hir_def::{
-        AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
-        PathId, Trait, TraitRefId, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
-        params::GenericArg, scope_graph::ScopeId,
+        AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, ItemKind, Partial, PathId, Trait,
+        TraitRefId, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode, params::GenericArg,
+        scope_graph::ScopeId,
     },
     hir_def::Func,
 };
@@ -616,24 +616,23 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 let ty = lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, minter);
                 provided_explicit.push(ty);
             }
-            GenericArg::Const(const_arg) => match const_arg.value {
-                ConstGenericArgValue::Expr(body) => {
-                    let const_ty = match minter.const_bodies() {
-                        ConstBodyLowering::Eager => ConstTyId::from_opt_body(db, body),
-                        ConstBodyLowering::Deferred => ConstTyId::unevaluated(
-                            db,
-                            body,
-                            None,
-                            None,
-                            body.to_opt().map_or(ConstCaptureEnv::Empty, |body| {
-                                ConstCaptureEnv::identity_for_body(db, body, Some(minter))
-                            }),
-                            UnevaluatedConstPolicy::DeferValidation,
-                        ),
-                    };
-                    provided_explicit.push(TyId::const_ty(db, const_ty));
-                }
-            },
+            GenericArg::Const(const_arg) => {
+                let body = const_arg.value;
+                let const_ty = match minter.const_bodies() {
+                    ConstBodyLowering::Eager => ConstTyId::from_opt_body(db, body),
+                    ConstBodyLowering::Deferred => ConstTyId::unevaluated(
+                        db,
+                        body,
+                        None,
+                        None,
+                        body.to_opt().map_or(ConstCaptureEnv::Empty, |body| {
+                            ConstCaptureEnv::identity_for_body(db, body, Some(minter))
+                        }),
+                        UnevaluatedConstPolicy::DeferValidation,
+                    ),
+                };
+                provided_explicit.push(TyId::const_ty(db, const_ty));
+            }
             GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
                 if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
                     let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, minter);
