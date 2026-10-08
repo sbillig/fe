@@ -569,11 +569,33 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// The semantic-IR type of `expr`'s value: a projection's yield sites
-    /// carry their grants.
+    /// carry their grants. A leaf yielding an access to a value is lowered
+    /// as that value, of its own type: the grant of the frame temporary
+    /// holding it is typed by the shape (`lower_yield_leaf`). A call that
+    /// never returns yields nothing, and joins the other leaves' grants.
     pub(super) fn expr_ty(&self, expr: ExprId) -> TyId<'db> {
-        self.typed_body.yield_shape(expr).map_or_else(
-            || self.typed_body.expr_ty(self.db, expr),
-            |shape| shape.carrier_ty(self.db),
+        match self.typed_body.yield_shape(expr) {
+            Some(Shape::Access(..)) if self.is_yield_leaf(expr) && !self.never_returns(expr) => {
+                self.typed_body.expr_ty(self.db, expr)
+            }
+            Some(shape) => shape.carrier_ty(self.db),
+            None => self.typed_body.expr_ty(self.db, expr),
+        }
+    }
+
+    /// Whether `expr` calls something that never returns.
+    fn never_returns(&self, expr: ExprId) -> bool {
+        self.typed_body
+            .callable_expr(expr)
+            .is_some_and(|callable| callable.ret_ty(self.db).is_never(self.db))
+    }
+
+    /// Whether the yield site `expr` yields itself, rather than through the
+    /// branches or the tail of the block it is.
+    fn is_yield_leaf(&self, expr: ExprId) -> bool {
+        !matches!(
+            expr.data(self.db, self.body),
+            Partial::Present(Expr::Block(..) | Expr::If(..) | Expr::Match(..) | Expr::With(..))
         )
     }
 
@@ -762,16 +784,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// Lowers a projection's yield site to the carrier of what it grants.
     /// Tuples and variant constructors yield through their (yield-site)
     /// elements; an access binding is re-yielded; a `ref` yield of any
-    /// other place or value views it.
+    /// other place views it, and a value is held in a frame temporary that
+    /// the yield grants.
     fn lower_yield_leaf(&mut self, expr: ExprId, shape: Shape<'db>) -> SValueId {
         if self.typed_body.expr_prop(self.db, expr).shape.is_some() {
             return self.lower_access(expr);
         }
-        if self
-            .typed_body
-            .callable_expr(expr)
-            .is_some_and(|callable| callable.ret_ty(self.db).is_never(self.db))
-        {
+        if self.never_returns(expr) {
             return self.lower_expr_inner(expr);
         }
         let Shape::Access(kind, _) = shape else {
@@ -797,11 +816,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
         let place = self.try_lower_place(expr).unwrap_or_else(|| {
             let value = self.lower_expr_inner(expr);
-            let temp = self.alloc_local(
-                self.typed_body.expr_ty(self.db, expr),
-                Mutability::Immutable,
-                None,
-            );
+            let mutability = match kind {
+                BorrowKind::Mut => Mutability::Mutable,
+                BorrowKind::Ref => Mutability::Immutable,
+            };
+            let temp = self.alloc_local(self.typed_body.expr_ty(self.db, expr), mutability, None);
             self.push_stmt(
                 origin,
                 SStmtKind::Assign {
@@ -825,12 +844,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// Lowers `expr`. A projection's yield site yields on its own path, so
     /// each path's grant has its own resume point.
     pub(super) fn lower_expr(&mut self, expr: ExprId) -> SValueId {
-        let yield_leaf = self.typed_body.yield_shape(expr).filter(|_| {
-            !matches!(
-                expr.data(self.db, self.body),
-                Partial::Present(Expr::Block(..) | Expr::If(..) | Expr::Match(..) | Expr::With(..))
-            )
-        });
+        let yield_leaf = self
+            .typed_body
+            .yield_shape(expr)
+            .filter(|_| self.is_yield_leaf(expr));
         let value = match yield_leaf {
             Some(shape) => {
                 self.yield_depth += 1;

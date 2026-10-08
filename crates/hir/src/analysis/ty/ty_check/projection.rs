@@ -73,12 +73,17 @@ impl<'db> TyChecker<'db> {
                     .binding
                     .filter(|_| matches!(data, Expr::Path(..)))
                     .and_then(|binding| self.env.binding_access(&binding));
+                let is_place =
+                    self.env.expr_place(expr).is_some() || self.is_pointer_deref_expr(expr);
                 match (kind, binding_access) {
                     // Re-yield an access binding or parameter.
                     (BorrowKind::Mut, Some(access)) if access.is_mut() => {}
                     (BorrowKind::Ref, Some(_)) => {}
                     // A view of a place, or of a value held by the session.
                     (BorrowKind::Ref, None) => {}
+                    // A value held by the session. A place is granted only
+                    // when named `mut`.
+                    (BorrowKind::Mut, None) if !is_place => {}
                     _ => self.invalid_yield(expr, shape),
                 }
             }

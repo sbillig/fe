@@ -61,6 +61,13 @@ tail or with `yield`. The code after a `yield`, its *slide*, runs when the
 caller's last use of the access has passed. While the caller uses the
 access, the projection's session reserves the places its arguments named.
 
+A yield of a value, such as `-> ref u32 { self.word.low() }`, grants a
+temporary in the projection's frame holding it, as `let tmp = ..; ref tmp`
+would. A `ref` yield of a place views the place; a `mut` yield grants a
+place only when it is named `mut`, since `self.v` alone reads a copy. A
+`mut` yield of a frame temporary with no slide to write it back is a
+warning.
+
 A shape groups owned values and accesses, `-> (usize, ref T)`, and the
 caller destructures it with `let (i, x) = ..`. Two `mut` components must be
 structurally disjoint, as in `(mut self.a, mut self.b)`. An optional shape,
