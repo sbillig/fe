@@ -859,6 +859,10 @@ impl<'db> TyCheckEnv<'db> {
         self.place_entries.insert(expr);
     }
 
+    pub(super) fn is_place_entry(&self, expr: ExprId) -> bool {
+        self.place_entries.contains(&expr)
+    }
+
     /// Records that the function's own authority covers the resources the
     /// `with` value `expr` names.
     pub(super) fn cover_provider(&mut self, expr: ExprId) {

@@ -133,13 +133,15 @@ impl<'db> TyChecker<'db> {
                 let Some(base_prop) = self.env.typed_expr(*base) else {
                     return false;
                 };
-                if base_prop.ty.is_array(self.db) {
+                if base_prop.ty.is_array(self.db) || self.env.is_place_entry(expr) {
                     self.select_mut_place(*base)
                 } else {
-                    // `index_mut` takes `mut self`: a place base must be writable.
+                    // `index_mut` takes `mut self`: a place base must be
+                    // writable, and a base an outer index grants becomes so by
+                    // that index selecting `index_mut` too.
                     let is_place =
                         self.env.expr_place(*base).is_some() || self.is_pointer_deref_expr(*base);
-                    if is_place && !self.select_mut_place(*base) {
+                    if !self.select_mut_place(*base) && is_place {
                         return false;
                     }
                     self.env.forget_call(expr);
