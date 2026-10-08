@@ -18,6 +18,7 @@ use crate::{
                 AdtDef, AdtRef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand,
             },
             const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
+            place_index_tys,
             provider::{
                 ProviderLayoutFailure, ProviderLayoutResolution, place_index_space,
                 resolve_effect_handle_layout,
@@ -190,6 +191,14 @@ pub enum ContractLayoutError<'db> {
     IncompleteAdtLayoutProjection {
         ty: TyId<'db>,
     },
+    /// A field in storage or transient storage holding a memory pointer.
+    MemoryValueInState {
+        pointer: TyId<'db>,
+    },
+    /// A persistent collection inside a transient collection's contents.
+    PersistentUnderTransient {
+        collection: TyId<'db>,
+    },
 }
 
 impl ContractLayoutError<'_> {
@@ -210,6 +219,10 @@ impl ContractLayoutError<'_> {
             Self::ExplicitSlotOverlap { .. } => "the explicit slots overlap another field's",
             Self::LayoutExtentOverflow => "layout extent overflowed",
             Self::IncompleteAdtLayoutProjection { .. } => "layout projection is incomplete",
+            Self::MemoryValueInState { .. } => "contract state holds a memory pointer",
+            Self::PersistentUnderTransient { .. } => {
+                "a persistent collection lies in transient storage"
+            }
         }
     }
 }
@@ -436,6 +449,8 @@ struct FieldWalker<'db> {
     /// The handles whose targets are being checked, outermost first, with
     /// the implementation that selects each target.
     expanding: Vec<(TyId<'db>, ImplementorId<'db>)>,
+    /// The first memory pointer the walked value holds.
+    memory_pointer: Option<TyId<'db>>,
 }
 
 /// How a handle's target relates to the targets being checked around it.
@@ -602,6 +617,9 @@ impl<'db> FieldWalker<'db> {
         {
             WalkOutput::empty()
         } else {
+            if ty.as_ptr(self.db).is_some() {
+                self.memory_pointer.get_or_insert(ty);
+            }
             WalkOutput::leaf(self.db, ty, path, dimensions, InlineLayoutLeafKind::Field)
         }
     }
@@ -1004,8 +1022,27 @@ fn collect_field_plan<'db>(
         errors: Vec::new(),
         content_spaces: Vec::new(),
         expanding: Vec::new(),
+        memory_pointer: None,
     };
     let output = walker.walk_ty(ConcreteTypeView::identity(target), &[], &[]);
+    let in_state = walker.errors.is_empty()
+        && matches!(
+            address_space,
+            ProviderAddressSpace::Storage | ProviderAddressSpace::Transient
+        );
+    if in_state && let Some(pointer) = walker.memory_pointer {
+        walker.push_error(ContractLayoutError::MemoryValueInState { pointer });
+    }
+    if in_state
+        && let Some(collection) = persistent_under_transient(
+            db,
+            scope,
+            target,
+            address_space == ProviderAddressSpace::Transient,
+        )
+    {
+        walker.push_error(ContractLayoutError::PersistentUnderTransient { collection });
+    }
     if !walker.errors.is_empty() {
         return Some((name, Err(walker.errors)));
     }
@@ -1035,6 +1072,65 @@ fn collect_field_plan<'db>(
             inline_leaves: output.leaves,
         }),
     ))
+}
+
+/// How deep the search for a persistent collection under a transient one
+/// follows nested types: a collection's element type may grow without bound,
+/// as in `struct G<T> { m: StorageMap<u256, G<[T; 1]>> }`.
+const MAX_STATE_NESTING: usize = 64;
+
+/// The persistent collection `ty` keeps inside a transient collection's
+/// contents, as the map of a `TSlot<StorageMap<K, V>>`, whose entries would
+/// persist after the value holding them is gone. `transient` is whether `ty`
+/// itself lies in transient storage.
+fn persistent_under_transient<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    transient: bool,
+) -> Option<TyId<'db>> {
+    fn walk<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        mut transient: bool,
+        depth: usize,
+        seen: &mut FxHashSet<(TyId<'db>, bool)>,
+    ) -> Option<TyId<'db>> {
+        if depth > MAX_STATE_NESTING || !seen.insert((ty, transient)) {
+            return None;
+        }
+        let assumptions = PredicateListId::empty_list(db);
+        let mut parts = Vec::new();
+        if let Some(space) = place_index_space(db, scope, assumptions, ty) {
+            match space {
+                ProviderAddressSpace::Storage if transient => return Some(ty),
+                ProviderAddressSpace::Transient => transient = true,
+                _ => {}
+            }
+            parts.extend(place_index_tys(db, scope, ty, assumptions).map(|(_, output)| output));
+        }
+        if let Some(adt) = ty.adt_def(db) {
+            let args = ty.generic_args(db);
+            parts.extend(
+                adt.fields(db)
+                    .iter()
+                    .flat_map(|variant| variant.iter_types(db))
+                    .map(|field| field.instantiate(db, args)),
+            );
+        } else if ty.is_tuple(db) || ty.is_array(db) {
+            parts.extend(
+                ty.generic_args(db)
+                    .iter()
+                    .copied()
+                    .filter(|arg| !matches!(arg.data(db), TyData::ConstTy(_))),
+            );
+        }
+        parts
+            .into_iter()
+            .find_map(|part| walk(db, scope, part, transient, depth + 1, seen))
+    }
+    walk(db, scope, ty, transient, 0, &mut FxHashSet::default())
 }
 
 fn contract_layout_error_for_provider_failure<'db>(

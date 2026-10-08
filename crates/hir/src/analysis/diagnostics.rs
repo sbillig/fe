@@ -2172,6 +2172,48 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ContractFieldMemoryValue { span, ty, pointer } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "contract state cannot hold a memory value".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` holds the memory pointer `{}`",
+                        ty.pretty_print(db),
+                        pointer.pretty_print(db)
+                    ),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "memory lasts for one transaction, so a later one could not follow the pointer"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::ContractFieldPersistentUnderTransient {
+                span,
+                ty,
+                collection,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "a persistent collection cannot lie in transient storage".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` keeps `{}` in transient storage",
+                        ty.pretty_print(db),
+                        collection.pretty_print(db)
+                    ),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "its entries would persist after the transient value holding it is gone"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::ContractFieldProviderCycle { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,

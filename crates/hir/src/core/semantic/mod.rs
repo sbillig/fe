@@ -5548,6 +5548,20 @@ impl<'db> FieldView<'db> {
                 ContractLayoutError::NonRegularProviderCycle => {
                     TyLowerDiag::ContractFieldProviderCycle { span, ty }
                 }
+                ContractLayoutError::MemoryValueInState { pointer } => {
+                    TyLowerDiag::ContractFieldMemoryValue {
+                        span,
+                        ty,
+                        pointer: *pointer,
+                    }
+                }
+                ContractLayoutError::PersistentUnderTransient { collection } => {
+                    TyLowerDiag::ContractFieldPersistentUnderTransient {
+                        span,
+                        ty,
+                        collection: *collection,
+                    }
+                }
                 ContractLayoutError::ExplicitSlotInCode => TyLowerDiag::ContractFieldSlotInCode {
                     span: self.slot_span(db),
                 },

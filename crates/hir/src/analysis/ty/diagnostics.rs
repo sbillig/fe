@@ -237,6 +237,21 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
     },
 
+    /// A contract field in storage or transient storage holding a memory
+    /// pointer, which no later transaction can follow.
+    ContractFieldMemoryValue {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        pointer: TyId<'db>,
+    },
+
+    /// A persistent collection inside a transient one's contents.
+    ContractFieldPersistentUnderTransient {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        collection: TyId<'db>,
+    },
+
     ContractFieldLayoutInvariant {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
@@ -329,6 +344,8 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldSlotNotConst { .. } => 62,
             Self::ContractFieldSlotInCode { .. } => 63,
             Self::ContractFieldSlotOverlap { .. } => 64,
+            Self::ContractFieldMemoryValue { .. } => 65,
+            Self::ContractFieldPersistentUnderTransient { .. } => 66,
         }
     }
 }

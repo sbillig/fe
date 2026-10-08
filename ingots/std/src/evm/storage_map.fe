@@ -199,7 +199,7 @@ impl StorageKey for bool {
 /// value at `key` occupies the slots from `keccak256(key ++ slot)` onwards,
 /// laid out like any value of type `V` in storage, including packed struct
 /// fields, so a map in a map's value derives its slot from its entry's. The
-/// entries are persistent wherever the map lives, even in transient state.
+/// entries are persistent, so a map cannot lie in transient storage.
 /// `map[key]` names that entry's place: `map[key].f += 1` reads and writes
 /// one field, and `let e = mut map[key]` binds the entry. Keys use the stable
 /// encoding `StorageKey` defines.
