@@ -1252,6 +1252,7 @@ fn typed_body_for_bodyless_func<'db>(
         yield_shapes: SecondaryMap::new(),
         implicit_moves: FxHashSet::default(),
         place_entries: FxHashSet::default(),
+        unsafe_splits: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
@@ -3599,6 +3600,9 @@ mod typed_body_tables {
         /// Index expressions naming an entry of a collection whose elements
         /// are places.
         pub(super) place_entries: FxHashSet<ExprId>,
+        /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
+        /// of accesses, granted by one session.
+        pub(super) unsafe_splits: FxHashSet<ExprId>,
         /// `with` values whose resources the function's own authority covers.
         pub(super) covered_providers: FxHashSet<ExprId>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
@@ -4314,6 +4318,12 @@ impl<'db> TypedBody<'db> {
     /// whose elements are places (`core::ops::PlaceIndex`), a path step.
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains(&expr)
+    }
+
+    /// Whether the tuple `expr` is an unsafe split: one session granting
+    /// each of its components, disjoint by the `unsafe` block's promise.
+    pub fn is_unsafe_split(&self, expr: ExprId) -> bool {
+        self.tables.unsafe_splits.contains(&expr)
     }
 
     /// Whether the function's own authority covers the resources the `with`
@@ -5737,6 +5747,7 @@ impl<'db> TypedBody<'db> {
             yield_shapes: SecondaryMap::new(),
             implicit_moves: FxHashSet::default(),
             place_entries: FxHashSet::default(),
+            unsafe_splits: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),

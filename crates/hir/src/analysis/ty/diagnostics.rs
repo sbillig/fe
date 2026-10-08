@@ -644,6 +644,11 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// A tuple of projection grants outside an unsafe split or a yield.
+    TupleOfAccesses {
+        primary: DynLazySpan<'db>,
+    },
+
     /// A tuple or sum yield shape bound to a single name.
     ShapeNotDestructured {
         primary: DynLazySpan<'db>,
@@ -1131,6 +1136,7 @@ impl<'db> BodyDiag<'db> {
             Self::AccessCapture { .. } => 111,
             Self::MoveOutOfCapture { .. } => 112,
             Self::MixedLoopBases { .. } => 114,
+            Self::TupleOfAccesses { .. } => 115,
             Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,

@@ -162,6 +162,8 @@ pub(super) struct Analysis<'a, 'db> {
     ended: FxHashSet<NValueId>,
     /// The projection each session calls.
     sessions: FxHashMap<NValueId, SemanticInstance<'db>>,
+    /// Each unsafe split component's split and position in it.
+    split_of: FxHashMap<NValueId, (usize, usize)>,
     entry: Vec<Option<State>>,
     moved_at: FxHashMap<(MoveKey, Path), SemOrigin<'db>>,
     /// The statement at which each block diverges into a call that never returns.
@@ -208,6 +210,17 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 })
                 .collect(),
             sessions: FxHashMap::default(),
+            split_of: body
+                .unsafe_splits
+                .iter()
+                .enumerate()
+                .flat_map(|(split, components)| {
+                    components
+                        .iter()
+                        .enumerate()
+                        .map(move |(position, &component)| (component, (split, position)))
+                })
+                .collect(),
             entry: vec![None; body.blocks.len()],
             moved_at: FxHashMap::default(),
             divergence: vec![None; body.blocks.len()],
@@ -852,7 +865,40 @@ impl<'a, 'db> Analysis<'a, 'db> {
             grant.parents = reservations.clone();
             held.insert((self.token(result, Site::Grant(component), grant), path));
         }
+        // An unsafe split is one session: each component's grants derive
+        // from every component's reservations.
+        let siblings = self.split_siblings(result);
+        let of_kind = |this: &Self, tokens: &[TokenId], kind| -> TokenSet {
+            tokens
+                .iter()
+                .copied()
+                .filter(|token| this.tokens[*token as usize].kind == kind)
+                .collect()
+        };
+        let sibling_reservations = of_kind(self, &siblings, TokenKind::Reservation);
+        let sibling_grants = of_kind(self, &siblings, TokenKind::Grant);
+        for (grant, _) in held.iter() {
+            add_parents(
+                &mut self.tokens[*grant as usize].parents,
+                &sibling_reservations,
+            );
+        }
+        for grant in sibling_grants {
+            add_parents(&mut self.tokens[grant as usize].parents, &reservations);
+        }
         held
+    }
+
+    /// The tokens the components of `value`'s unsafe split before it opened:
+    /// they and `value` are one session, so never conflict.
+    fn split_siblings(&self, value: NValueId) -> TokenSet {
+        let Some(&(split, position)) = self.split_of.get(&value) else {
+            return TokenSet::new();
+        };
+        self.body.unsafe_splits[split][..position]
+            .iter()
+            .flat_map(|component| self.opened.get(component).into_iter().flatten().copied())
+            .collect()
     }
 
     /// The domains an effect argument confers authority over, with its mode:
@@ -1347,19 +1393,22 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     ..
                 } = expr
                 {
+                    let siblings = self.split_siblings(*result);
                     let result = self.check_call(
                         callee.key.owner(self.db),
                         args,
                         effect_args,
                         state,
+                        &siblings,
                         origin,
                     );
                     self.report(result)?;
                 }
                 let opened = self.opened.get(result).cloned().unwrap_or_default();
                 if self.checking {
+                    let siblings = self.split_siblings(*result);
                     for &token in &opened {
-                        self.check_opened(token, state)?;
+                        self.check_opened(token, state, &siblings)?;
                     }
                 }
                 // Accesses no `end` closes last for the operation using them.
@@ -1672,7 +1721,14 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     /// Check a token a statement opens against the accesses open around it.
-    fn check_opened(&self, token: TokenId, state: &State) -> Result<(), Diag<'db>> {
+    /// Checks a reservation `token` opens against the open accesses, apart
+    /// from those `siblings`, the earlier components of its unsafe split.
+    fn check_opened(
+        &self,
+        token: TokenId,
+        state: &State,
+        siblings: &[TokenId],
+    ) -> Result<(), Diag<'db>> {
         let data = &self.tokens[token as usize];
         if data.zero_sized || data.kind != TokenKind::Reservation {
             return Ok(());
@@ -1682,12 +1738,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
             BorrowKind::Mut => MemoryAccessKind::MutAccess,
             BorrowKind::Ref => MemoryAccessKind::Read,
         };
+        let own: TokenSet = siblings.iter().copied().chain([token]).collect();
         self.check_conflicts(
             state,
             &data.regions,
             data.mode,
             &authority,
-            &[token],
+            &own,
             kind,
             data.origin,
         )
@@ -1695,12 +1752,15 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     /// A call's interference footprint: its carrier arguments for the call's
     /// duration, its effects, and the state its external executions reach.
+    /// `siblings` are the tokens of the earlier components of the call's
+    /// unsafe split, which it never conflicts with.
     fn check_call(
         &mut self,
         owner: BodyOwner<'db>,
         args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
         state: &State,
+        siblings: &[TokenId],
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
         let BodyOwner::Func(func) = owner else {
@@ -1724,7 +1784,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         &regions,
                         BorrowKind::Ref,
                         &authority,
-                        &[],
+                        siblings,
                         MemoryAccessKind::Read,
                         arg_origin,
                     )?;
@@ -1753,7 +1813,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     hole,
                 ));
             }
-            self.check_conflicts(state, &regions, mode, &authority, &[], kind, arg_origin)?;
+            self.check_conflicts(
+                state, &regions, mode, &authority, siblings, kind, arg_origin,
+            )?;
         }
         let mut footprints: Vec<_> = effect_args
             .iter()
@@ -1777,7 +1839,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 &footprint.regions,
                 footprint.mode,
                 &authority,
-                &[],
+                siblings,
                 kind,
                 origin,
             )?;
@@ -2056,4 +2118,13 @@ pub(super) fn check_body<'db>(
     analysis.solve();
     let spaces = analysis.check()?;
     Ok((analysis.discarded_writes(), spaces))
+}
+
+/// Adds `extra` to `parents`, once each.
+fn add_parents(parents: &mut TokenSet, extra: &[TokenId]) {
+    for &token in extra {
+        if !parents.contains(&token) {
+            parents.push(token);
+        }
+    }
 }

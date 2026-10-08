@@ -143,6 +143,7 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
                     kind: STerminatorKind::Return(None),
                 },
             }],
+            unsafe_splits: Vec::new(),
         };
     };
 
@@ -224,6 +225,8 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) yield_depth: u32,
     /// The slide of the `yield` statement being lowered.
     slide: Option<SBlockId>,
+    /// The components of each unsafe split lowered so far.
+    unsafe_splits: Vec<Vec<SValueId>>,
 }
 
 pub(super) struct BlockState<'db> {
@@ -313,6 +316,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             loop_bases: FxHashMap::default(),
             yield_depth: 0,
             slide: None,
+            unsafe_splits: Vec::new(),
         };
         cx.collect_binding_locals();
         cx.current = cx.new_block();
@@ -338,6 +342,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             entry_locals: self.entry_locals,
             locals: self.locals,
             blocks,
+            unsafe_splits: self.unsafe_splits,
         }
     }
 
@@ -630,6 +635,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.lower_call_like_expr(expr, ty, Some(*base), &[*index])
             }
             Partial::Present(Expr::Try(inner)) => self.lower_try(expr, *inner, ty),
+            // An unsafe split: one session granting each component.
+            Partial::Present(Expr::Tuple(elems)) if self.typed_body.is_unsafe_split(expr) => {
+                let fields: Vec<_> = elems
+                    .iter()
+                    .map(|elem| SOperand::expr(self.lower_source(*elem), *elem))
+                    .collect();
+                self.unsafe_splits
+                    .push(fields.iter().map(|field| field.value).collect());
+                self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    ty,
+                    SExpr::AggregateMake {
+                        ty,
+                        fields: fields.into(),
+                    },
+                )
+            }
             Partial::Present(Expr::Block(stmts, _)) => {
                 let (tail, head) = stmts.split_last().expect("an access block has a tail");
                 for stmt in head {

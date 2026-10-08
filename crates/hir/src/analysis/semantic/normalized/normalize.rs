@@ -160,6 +160,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             self.rename_block(root, &cfg)?;
         }
 
+        let unsafe_splits = self.unsafe_splits();
         let body = NormalizedBody {
             owner: self.instance,
             template_owner: self.raw.template_owner,
@@ -167,6 +168,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             roots: self.roots,
             blocks: self.blocks,
             entry: NBlockId::new(0),
+            unsafe_splits,
         };
         Ok(NormalizedArtifacts {
             body,
@@ -176,6 +178,26 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 use_backings: self.use_backings,
             },
         })
+    }
+
+    /// The carriers the raw body's unsafe split components define.
+    fn unsafe_splits(&self) -> Vec<Vec<NValueId>> {
+        let defining = |local: SLocalId| {
+            self.raw
+                .blocks
+                .iter()
+                .flat_map(|block| &block.stmts)
+                .find_map(|stmt| {
+                    matches!(stmt.kind, SStmtKind::Assign { dst, .. } if dst == local)
+                        .then(|| self.defined.get(&stmt.id).copied())
+                        .flatten()
+                })
+        };
+        self.raw
+            .unsafe_splits
+            .iter()
+            .map(|split| split.iter().filter_map(|&local| defining(local)).collect())
+            .collect()
     }
 
     fn normalize_empty_body(mut self) -> Result<NormalizedArtifacts<'db>, NormalizeError<'db>> {
@@ -197,6 +219,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 roots: self.roots,
                 blocks: self.blocks,
                 entry: NBlockId::new(0),
+                unsafe_splits: Vec::new(),
             },
             layout_plan: NLayoutPlan {
                 value_representations: self.value_sources,

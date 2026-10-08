@@ -3785,6 +3785,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::TupleOfAccesses { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "a tuple does not hold accesses".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this tuple's elements are accesses".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "bind each access with its own `let`; accesses that are disjoint by a promise the checker cannot see form an unsafe split, `unsafe { (a, b) }`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::InvalidYield { primary, shape } => primary_diag(
                 Severity::Error,
                 "invalid yield",

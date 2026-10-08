@@ -122,6 +122,8 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Index expressions naming an entry of a collection whose elements are
     /// places (`core::ops::PlaceIndex`).
     place_entries: FxHashSet<ExprId>,
+    /// The tuples that are unsafe splits (`check_unsafe_split`).
+    unsafe_splits: FxHashSet<ExprId>,
     covered_providers: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
@@ -242,6 +244,7 @@ impl<'db> TyCheckEnv<'db> {
             consumed_accesses: FxHashSet::default(),
             matched_places: FxHashSet::default(),
             place_entries: FxHashSet::default(),
+            unsafe_splits: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
@@ -859,6 +862,10 @@ impl<'db> TyCheckEnv<'db> {
         self.place_entries.insert(expr);
     }
 
+    pub(super) fn record_unsafe_split(&mut self, tuple: ExprId) {
+        self.unsafe_splits.insert(tuple);
+    }
+
     pub(super) fn is_place_entry(&self, expr: ExprId) -> bool {
         self.place_entries.contains(&expr)
     }
@@ -871,6 +878,14 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn record_yield_shape(&mut self, expr: ExprId, shape: Shape<'db>) {
         self.yield_shapes[expr] = Some(shape);
+    }
+
+    pub(super) fn is_yield_site(&self, expr: ExprId) -> bool {
+        self.yield_shapes.get(expr).is_some_and(Option::is_some)
+    }
+
+    pub(super) fn is_unsafe_split(&self, expr: ExprId) -> bool {
+        self.unsafe_splits.contains(&expr)
     }
 
     pub(super) fn forget_implicit_move(&mut self, expr: ExprId) {
@@ -1436,6 +1451,7 @@ impl<'db> TyCheckEnv<'db> {
             yield_shapes: self.yield_shapes,
             implicit_moves,
             place_entries: self.place_entries,
+            unsafe_splits: self.unsafe_splits,
             covered_providers: self.covered_providers,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,

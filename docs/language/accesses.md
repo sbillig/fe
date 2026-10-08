@@ -68,6 +68,18 @@ structurally disjoint, as in `(mut self.a, mut self.b)`. An optional shape,
 `match`, `let .. else` or `?`; its empty variant may only be returned before
 the `yield`.
 
+A tuple holds accesses only as such a shape. Accesses the checker cannot see
+are disjoint form an *unsafe split*, an `unsafe` block whose tail is a tuple
+of them: one session whose reservations are all of theirs, and whose grants
+the block promises are disjoint. Two raw-slot collections are held at once
+this way, and `MemArray::pair_mut` is one inside a library function:
+
+```fe
+let (a, b) = unsafe { (SolArray<u256>::at(x), SolArray<u256>::at(y)) }
+a.push(1)                           // all storage stays reserved until both end
+b.push(2)
+```
+
 ## Views
 
 A type marked `#[view]`, such as `MemSlice`, describes memory its owner

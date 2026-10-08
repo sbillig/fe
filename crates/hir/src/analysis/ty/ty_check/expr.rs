@@ -112,7 +112,7 @@ use crate::analysis::{
         },
     },
 };
-use crate::hir_def::{FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
 use crate::semantic::{
     FieldStorageLayout, LayoutProjection, LayoutViewError, LayoutViewKind, ProviderBinding,
     ProviderSource,
@@ -460,7 +460,7 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
         result_discarded: bool,
     ) -> ExprProp<'db> {
-        let Expr::Block(stmts, _) = expr_data else {
+        let Expr::Block(stmts, kind) = expr_data else {
             unreachable!()
         };
 
@@ -496,8 +496,51 @@ impl<'db> TyChecker<'db> {
                 }
             };
             self.env.leave_scope();
+            if *kind == BlockKind::Unsafe
+                && let Partial::Present(Stmt::Expr(tail)) = self.env.stmt_data(last_stmt)
+                && let Some(shape) = self.check_unsafe_split(*tail)
+            {
+                return ExprProp {
+                    shape: Some(shape),
+                    ..res
+                };
+            }
             res
         }
+    }
+
+    /// The shape of an unsafe split: an `unsafe` block's tail `tail` that is a
+    /// tuple of accesses grants each of them, in one session whose
+    /// separation the block promises.
+    fn check_unsafe_split(&mut self, tail: ExprId) -> Option<Shape<'db>> {
+        let Partial::Present(Expr::Tuple(elems)) = self.env.expr_data(tail) else {
+            return None;
+        };
+        let elems = elems.clone();
+        let shapes: Vec<_> = elems
+            .iter()
+            .map(|elem| {
+                let prop = self.env.typed_expr(*elem)?;
+                Some(prop.shape.unwrap_or(Shape::Owned(prop.ty)))
+            })
+            .collect::<Option<_>>()?;
+        if !shapes.iter().any(|shape| !matches!(shape, Shape::Owned(_))) {
+            return None;
+        }
+        for elem in elems {
+            self.consume_access(elem);
+        }
+        let shape = Shape::Tuple(shapes);
+        let prop = self.env.typed_expr(tail)?;
+        self.env.type_expr(
+            tail,
+            ExprProp {
+                shape: Some(shape.clone()),
+                ..prop
+            },
+        );
+        self.env.record_unsafe_split(tail);
+        Some(shape)
     }
 
     fn check_discarded_stmt(&mut self, stmt: StmtId) {

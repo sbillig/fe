@@ -4,40 +4,21 @@
 // session, which reserves the array, is finished and the body may write
 // storage.
 use std::evm::{Evm, RawStorage, SolArray, SolEnumerableSet}
-use std::evm::effects::StorPtr
-
-// Two arrays at slots 0 and 1: distinct fields of one place, so a loop over
-// one may push onto the other. (Two raw-slot constructors would each access
-// all of storage.)
-struct Arrays {
-    a: SolArray<u256>,
-    doubled: SolArray<u256>,
-}
-
-impl Arrays {
-    unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
-        let mut ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
-        unsafe {
-            with (ptr) {
-                core::effect_ref::target_mut(ptr)
-            }
-        }
-    }
-}
 
 #[test]
 fn sol_array_loops() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let arrays = unsafe { Arrays::at(0) }
-        arrays.a.push(1)
-        arrays.a.push(2)
-        arrays.a.push(3)
+        // Two arrays at runtime slots at once: an unsafe split, whose grants
+        // are disjoint, so a loop over one may push onto the other.
+        let (a, doubled) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
+        a.push(1)
+        a.push(2)
+        a.push(3)
 
-        for x in arrays.a {
-            arrays.doubled.push(x * 2)
+        for x in a {
+            doubled.push(x * 2)
         }
-        assert(arrays.doubled.len() == 3 && arrays.doubled.get(2) == 6)
-        let a = mut arrays.a
+        assert(doubled.len() == 3 && doubled.get(2) == 6)
 
         for x in mut a {
             x *= 10

@@ -69,6 +69,8 @@ pub struct SemanticBody<'db> {
     pub entry_locals: Vec<SLocalId>,
     pub locals: Vec<SLocal<'db>>,
     pub blocks: Vec<SBlock<'db>>,
+    /// The components of each unsafe split, which one session grants.
+    pub unsafe_splits: Vec<Vec<SValueId>>,
 }
 
 impl<'db> SemanticBody<'db> {

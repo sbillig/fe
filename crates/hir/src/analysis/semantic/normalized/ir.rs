@@ -45,6 +45,9 @@ pub struct NormalizedBody<'db> {
     pub roots: Vec<NRoot<'db>>,
     pub blocks: Vec<NBlock<'db>>,
     pub entry: NBlockId,
+    /// The carriers of each unsafe split's components, which one session
+    /// grants: disjoint by the `unsafe` block's promise.
+    pub unsafe_splits: Vec<Vec<NValueId>>,
 }
 
 impl<'db> NormalizedBody<'db> {

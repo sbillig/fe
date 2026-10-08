@@ -212,5 +212,33 @@ impl<'db> TyChecker<'db> {
                 primary: expr.span(self.body()).into(),
             });
         }
+        // A tuple holds accesses only as a projection's yield or an unsafe
+        // split; elsewhere its projection-call elements would be copies.
+        let tuples = self
+            .body()
+            .exprs(self.db)
+            .keys()
+            .filter(|&expr| {
+                let Partial::Present(Expr::Tuple(elems)) = expr.data(self.db, self.body()) else {
+                    return false;
+                };
+                !self.env.is_unsafe_split(expr)
+                    && !self.env.is_yield_site(expr)
+                    && elems.iter().any(|elem| {
+                        !matches!(
+                            elem.data(self.db, self.body()),
+                            Partial::Present(Expr::Un(_, UnOp::Ref | UnOp::Mut))
+                        ) && self
+                            .env
+                            .typed_expr(*elem)
+                            .is_some_and(|prop| matches!(prop.shape, Some(Shape::Access(..))))
+                    })
+            })
+            .collect::<Vec<_>>();
+        for expr in tuples {
+            self.push_diag(BodyDiag::TupleOfAccesses {
+                primary: expr.span(self.body()).into(),
+            });
+        }
     }
 }
