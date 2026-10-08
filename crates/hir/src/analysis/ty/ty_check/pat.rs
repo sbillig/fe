@@ -395,13 +395,13 @@ impl<'db> TyChecker<'db> {
         }
 
         let span = pat.span(self.body()).into_path_pat();
-        let minter = LoweringContext::new();
+        let lowering_cx = LoweringContext::new();
         let res = self.resolve_path(
             *path,
             true,
             span.clone().path(),
             span.clone().into(),
-            &minter,
+            &lowering_cx,
         );
 
         // Bare identifiers that don't resolve to a type/variant are local bindings,
@@ -735,13 +735,13 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
     ) -> TupleVariantResolution<'db> {
         let span = pat.span(self.body()).into_path_tuple_pat();
-        let minter = LoweringContext::new();
+        let lowering_cx = LoweringContext::new();
         match self.resolve_path(
             path,
             true,
             span.clone().path(),
             span.clone().into(),
-            &minter,
+            &lowering_cx,
         ) {
             Ok(res) => match res {
                 PathRes::Ty(ty)
@@ -908,13 +908,13 @@ impl<'db> TyChecker<'db> {
             );
         }
 
-        let minter = LoweringContext::new();
+        let lowering_cx = LoweringContext::new();
         let (actual, analysis) = match self.resolve_path(
             *path,
             true,
             span.clone().path(),
             span.clone().into(),
-            &minter,
+            &lowering_cx,
         ) {
             Ok(reso) => match reso {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty)

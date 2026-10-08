@@ -3230,7 +3230,7 @@ impl<'db> TyChecker<'db> {
         resolve_tail_as_value: bool,
         span: LazyPathSpan<'db>,
         site: DynLazySpan<'db>,
-        minter: &LoweringContext<'db>,
+        lowering_cx: &LoweringContext<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
         let scope = self.env.scope();
         let mut invisible = None;
@@ -3252,7 +3252,7 @@ impl<'db> TyChecker<'db> {
             self.env.assumptions(),
             resolve_tail_as_value,
             &mut observe_segment,
-            minter,
+            lowering_cx,
         ) {
             Ok(r) => {
                 self.env.register_path_applications(site, applications);

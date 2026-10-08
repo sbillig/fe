@@ -749,8 +749,15 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = LoweringContext::new();
-    resolve_path_with_minter(db, path, scope, assumptions, resolve_tail_as_value, &minter)
+    let lowering_cx = LoweringContext::new();
+    resolve_path_with_minter(
+        db,
+        path,
+        scope,
+        assumptions,
+        resolve_tail_as_value,
+        &lowering_cx,
+    )
 }
 
 /// Like [`resolve_path`], but resolves with the caller's lowering context, so
@@ -762,7 +769,7 @@ pub(crate) fn resolve_path_with_minter<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
@@ -773,8 +780,8 @@ pub(crate) fn resolve_path_with_minter<'db>(
         resolve_tail_as_value,
         directive,
         true,
-        &mut |path, res| minter.record_resolution(path, res),
-        minter,
+        &mut |path, res| lowering_cx.record_resolution(path, res),
+        lowering_cx,
     )
 }
 
@@ -785,7 +792,7 @@ pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
     observer: &mut F,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
@@ -800,10 +807,10 @@ where
         directive,
         true,
         &mut |path, res| {
-            minter.record_resolution(path, res);
+            lowering_cx.record_resolution(path, res);
             observer(path, res)
         },
-        minter,
+        lowering_cx,
     )
 }
 
@@ -828,10 +835,11 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     position: TypePosition,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     let directive = QueryDirective::for_scope(db, scope);
-    let mut observer = |path: PathId<'db>, res: &PathRes<'db>| minter.record_resolution(path, res);
+    let mut observer =
+        |path: PathId<'db>, res: &PathRes<'db>| lowering_cx.record_resolution(path, res);
     let parent_res = path
         .parent(db)
         .map(|parent| {
@@ -844,7 +852,7 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
                 directive,
                 false,
                 &mut observer,
-                minter,
+                lowering_cx,
             )
         })
         .transpose()?;
@@ -859,7 +867,7 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
             directive,
             true,
             &mut observer,
-            minter,
+            lowering_cx,
             decided_by_value,
         )
     };
@@ -916,7 +924,7 @@ fn resolve_path_impl<'db, F>(
     base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
@@ -933,7 +941,7 @@ where
                 base_directive,
                 false,
                 observer,
-                minter,
+                lowering_cx,
             )
         })
         .transpose()?;
@@ -947,7 +955,7 @@ where
         base_directive,
         is_tail,
         observer,
-        minter,
+        lowering_cx,
         &mut false,
     )
 }
@@ -966,7 +974,7 @@ fn resolve_segment<'db, F>(
     base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
     decided_by_value: &mut bool,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
@@ -991,13 +999,13 @@ where
                 scope,
                 assumptions,
                 TypePosition::Type,
-                minter,
+                lowering_cx,
             )
             .map_err(|inner| PathResError {
                 kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
                 failed_at: path,
             })?,
-            _ => lower_hir_ty_with_minter(db, type_, scope, assumptions, minter),
+            _ => lower_hir_ty_with_minter(db, type_, scope, assumptions, lowering_cx),
         };
         if let Some(InvalidCause::NotAType(res)) = ty.invalid_cause(db) {
             return Err(PathResError::new(
@@ -1005,10 +1013,10 @@ where
                 path,
             ));
         }
-        let trait_inst_result = match minter.const_bodies() {
+        let trait_inst_result = match lowering_cx.const_bodies() {
             ConstBodyLowering::Eager => lower_trait_ref(db, ty, trait_, scope, assumptions, None),
             ConstBodyLowering::Deferred => {
-                lower_trait_ref_with_minter(db, ty, trait_, scope, assumptions, None, minter)
+                lower_trait_ref_with_minter(db, ty, trait_, scope, assumptions, None, lowering_cx)
             }
         };
         let trait_inst = match trait_inst_result {
@@ -1158,7 +1166,9 @@ where
             // Deferred signature lowering resolves type/const shapes, not callable
             // values. Method discovery checks signatures and their hidden parameters,
             // so entering it here would make shape discovery depend on validation.
-            if is_tail && resolve_tail_as_value && minter.const_bodies() == ConstBodyLowering::Eager
+            if is_tail
+                && resolve_tail_as_value
+                && lowering_cx.const_bodies() == ConstBodyLowering::Eager
             {
                 let receiver_ty = Canonicalized::new(db, ty);
                 match select_method_candidate(
@@ -1197,14 +1207,14 @@ where
                     },
                 };
                 impl_trait.and_then(|impl_trait| {
-                    let trait_inst = match minter.const_bodies() {
+                    let trait_inst = match lowering_cx.const_bodies() {
                         ConstBodyLowering::Eager => impl_trait.trait_inst_result(db).ok()?,
                         ConstBodyLowering::Deferred => {
                             impl_trait.candidate_trait_inst_result(db).ok()?
                         }
                     };
-                    if minter.impl_assoc_type() == Some(impl_trait) {
-                        match minter.const_bodies() {
+                    if lowering_cx.impl_assoc_type() == Some(impl_trait) {
+                        match lowering_cx.const_bodies() {
                             ConstBodyLowering::Eager => {
                                 lower_checked_impl_assoc_ty(db, impl_trait, ident)
                             }
@@ -1222,8 +1232,13 @@ where
             };
 
             if let Some(assoc_ty) = impl_self_assoc {
-                let seg_args =
-                    lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, minter);
+                let seg_args = lower_generic_arg_list(
+                    db,
+                    path.generic_args(db),
+                    scope,
+                    assumptions,
+                    lowering_cx,
+                );
                 let assoc_ty = TyId::foldl(db, assoc_ty, &seg_args);
                 if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
                     assoc_ty.data(db)
@@ -1248,7 +1263,7 @@ where
                 Canonicalized::new(db, ty),
                 ident,
                 assumptions,
-                minter.const_bodies(),
+                lowering_cx.const_bodies(),
             ) {
                 Ok(assoc_tys) => assoc_tys,
                 Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
@@ -1275,7 +1290,7 @@ where
             // (unnormalized) candidate to avoid prematurely collapsing projections
             // like `T::IntoIter::Item` into `T::Item`.
             let seg_args =
-                lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, minter);
+                lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, lowering_cx);
             let evidence = assoc_ty_candidate_evidence(db, ty, assumptions);
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
                 IndexMap::new();
@@ -1380,7 +1395,8 @@ where
         pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
     };
 
-    let r = resolve_name_res_with_minter(db, &res, parent_ty, path, scope, assumptions, minter)?;
+    let r =
+        resolve_name_res_with_minter(db, &res, parent_ty, path, scope, assumptions, lowering_cx)?;
     observer(path, &r);
     Ok(r)
 }
@@ -2057,8 +2073,16 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = LoweringContext::new();
-    resolve_name_res_with_minter(db, nameres, parent_ty, path, scope, assumptions, &minter)
+    let lowering_cx = LoweringContext::new();
+    resolve_name_res_with_minter(
+        db,
+        nameres,
+        parent_ty,
+        path,
+        scope,
+        assumptions,
+        &lowering_cx,
+    )
 }
 
 pub(crate) fn resolve_name_res_with_minter<'db>(
@@ -2068,12 +2092,13 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     // Lowered only by the resolutions that apply them: lowering arguments that
     // are then rejected or ignored repeats the whole nested lowering whenever a
     // caller resolves the path again in another namespace.
-    let args = || lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, minter);
+    let args =
+        || lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, lowering_cx);
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
             let ty = TyId::from_hir_prim_ty(db, prim);
@@ -2083,7 +2108,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args(), minter)?)
+                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args(), lowering_cx)?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -2115,7 +2140,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 }
 
                 ItemKind::TypeAlias(type_alias) => {
-                    let alias = match minter.const_bodies() {
+                    let alias = match lowering_cx.const_bodies() {
                         ConstBodyLowering::Eager => lower_type_alias(db, type_alias),
                         ConstBodyLowering::Deferred => lower_type_alias_deferred(db, type_alias),
                     };
@@ -2127,7 +2152,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                             path,
                         ));
                     }
-                    PathRes::TyAlias(alias.clone(), alias.instantiate(db, &args(), minter))
+                    PathRes::TyAlias(alias.clone(), alias.instantiate(db, &args(), lowering_cx))
                 }
 
                 ItemKind::Impl(impl_) => {
@@ -2163,7 +2188,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                         scope,
                                         assumptions,
                                         false,
-                                        minter,
+                                        lowering_cx,
                                     ) {
                                         Ok(res)
                                             if !matches!(
@@ -2197,7 +2222,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                             scope,
                             assumptions,
                             t,
-                            minter,
+                            lowering_cx,
                         );
                         match lowered {
                             Ok(t) => PathRes::Trait(t),
@@ -2266,7 +2291,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 } else {
                     // The variant was imported via `use`.
                     debug_assert!(path.parent(db).is_none());
-                    ty_from_adtref(db, path, var.enum_.into(), &[], minter)?
+                    ty_from_adtref(db, path, var.enum_.into(), &[], lowering_cx)?
                 };
                 PathRes::EnumVariant(ResolvedVariant {
                     ty: enum_ty,
@@ -2290,7 +2315,7 @@ fn ty_from_adtref<'db>(
     path: PathId<'db>,
     adt_ref: AdtRef<'db>,
     args: &[TyId<'db>],
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
@@ -2298,7 +2323,7 @@ fn ty_from_adtref<'db>(
         db,
         &[],
         args,
-        DefaultApplication::StructuralMetadata(minter),
+        DefaultApplication::StructuralMetadata(lowering_cx),
     );
     let applied = match completed_args {
         Ok(args) => TyId::foldl(db, ty, &args),

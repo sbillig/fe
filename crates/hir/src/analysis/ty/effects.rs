@@ -195,8 +195,8 @@ pub(crate) fn resolve_effect_key<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> ResolvedEffectKey<'db> {
-    let minter = LoweringContext::new();
-    match lower_effect_key_schema(db, key_ty, scope, assumptions, &minter) {
+    let lowering_cx = LoweringContext::new();
+    match lower_effect_key_schema(db, key_ty, scope, assumptions, &lowering_cx) {
         ResolvedEffectKey::Type(schema) if !type_key_schema_is_well_formed(db, schema) => {
             ResolvedEffectKey::Invalid
         }
@@ -225,12 +225,12 @@ pub(crate) fn lower_effect_key_schema<'db>(
     key_ty: HirTypeId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> ResolvedEffectKey<'db> {
     let TypeKind::Path(path) = key_ty.data(db) else {
         let carrier = normalize_from_assumptions(
             db,
-            lower_hir_ty_with_minter(db, key_ty, scope, assumptions, minter),
+            lower_hir_ty_with_minter(db, key_ty, scope, assumptions, lowering_cx),
             scope,
             assumptions,
         );
@@ -243,7 +243,7 @@ pub(crate) fn lower_effect_key_schema<'db>(
     let Some(key_path) = path.to_opt() else {
         return ResolvedEffectKey::Other;
     };
-    match resolve_path_with_minter(db, key_path, scope, assumptions, false, minter) {
+    match resolve_path_with_minter(db, key_path, scope, assumptions, false, lowering_cx) {
         Ok(PathRes::Ty(ty)) if ty.is_star_kind(db) => {
             let ty = normalize_from_assumptions(db, ty, scope, assumptions);
             ResolvedEffectKey::Type(TypeKeySchema { carrier: ty })

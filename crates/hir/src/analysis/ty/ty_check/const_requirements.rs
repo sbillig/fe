@@ -1175,14 +1175,14 @@ fn expression_const_bodies<'db>(
         };
         let definition = match expr.data(db, body).borrowed().to_opt()? {
             Expr::Path(Partial::Present(path)) => {
-                let minter = LoweringContext::deferred();
+                let lowering_cx = LoweringContext::deferred();
                 match resolve_path_with_minter(
                     db,
                     *path,
                     body.scope(),
                     typed.assumptions(),
                     true,
-                    &minter,
+                    &lowering_cx,
                 )
                 .ok()?
                 {
@@ -1259,15 +1259,22 @@ fn expression_const_bodies<'db>(
         if path_const_bodies(db, path).is_empty() {
             return Vec::new();
         }
-        let minter = LoweringContext::deferred().recording_resolutions();
+        let lowering_cx = LoweringContext::deferred().recording_resolutions();
         let resolve = |value| {
-            resolve_path_with_minter(db, path, body.scope(), typed.assumptions(), value, &minter)
+            resolve_path_with_minter(
+                db,
+                path,
+                body.scope(),
+                typed.assumptions(),
+                value,
+                &lowering_cx,
+            )
         };
         // A tail that is not a value can still be a type, as a record's is.
         if resolve(value).is_err() {
             let _ = resolve(!value);
         }
-        segment_const_args(db, path, &minter.into_resolutions())
+        segment_const_args(db, path, &lowering_cx.into_resolutions())
     };
 
     let mut found: Vec<(Body<'db>, TyId<'db>)> = Vec::new();
@@ -2032,9 +2039,9 @@ fn trait_ref_const_args<'db>(
     if path_const_bodies(db, path).is_empty() {
         return Vec::new();
     }
-    let minter = LoweringContext::deferred().recording_resolutions();
-    let _ = resolve_path_with_minter(db, path, scope, assumptions, false, &minter);
-    segment_const_args(db, path, &minter.into_resolutions())
+    let lowering_cx = LoweringContext::deferred().recording_resolutions();
+    let _ = resolve_path_with_minter(db, path, scope, assumptions, false, &lowering_cx);
+    segment_const_args(db, path, &lowering_cx.into_resolutions())
 }
 
 /// The anonymous constants written directly in `hir_ty`, each with the type

@@ -188,10 +188,10 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     mut unify_arg: impl FnMut(&mut TyChecker<'db>, usize, TyId<'db>, &mut TyId<'db>) -> bool,
 ) -> Result<(), CallGenericArgUnifyError<'db>> {
     let db = tc.db;
-    let minter = LoweringContext::new();
-    let given_args = args
-        .is_given(db)
-        .then(|| lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &minter));
+    let lowering_cx = LoweringContext::new();
+    let given_args = args.is_given(db).then(|| {
+        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
+    });
     let given_count = given_args.as_ref().map_or(0, Vec::len);
     let offset = callable.callable_def.offset_to_explicit_params_position(db);
     let explicit_arg_count = callable.generic_args.len() - offset;
@@ -222,9 +222,11 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
                     provided,
                     match phase {
                         CallGenericArgPhase::Probe => {
-                            DefaultApplication::StructuralMetadata(&minter)
+                            DefaultApplication::StructuralMetadata(&lowering_cx)
                         }
-                        CallGenericArgPhase::Check => DefaultApplication::CheckedMetadata(&minter),
+                        CallGenericArgPhase::Check => {
+                            DefaultApplication::CheckedMetadata(&lowering_cx)
+                        }
                     },
                 )
                 .map_err(CallGenericArgUnifyError::InvalidArgument)?

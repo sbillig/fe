@@ -429,7 +429,7 @@ fn lower_trait_ref_inner<'db>(
         return Err(TraitRefLowerError::Ignored);
     }
 
-    let minter = LoweringContext::for_const_bodies(const_bodies);
+    let lowering_cx = LoweringContext::for_const_bodies(const_bodies);
 
     lower_trait_ref_with_minter(
         db,
@@ -438,7 +438,7 @@ fn lower_trait_ref_inner<'db>(
         scope,
         assumptions,
         owner_self,
-        &minter,
+        &lowering_cx,
     )
 }
 
@@ -449,15 +449,16 @@ pub(crate) fn lower_trait_ref_with_minter<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     owner_self: Option<TyId<'db>>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
     let Partial::Present(path) = trait_ref.path(db) else {
         return Err(TraitRefLowerError::Ignored);
     };
     let self_subst = owner_self.unwrap_or(self_ty);
-    let resolved = match resolve_path_with_minter(db, path, scope, assumptions, false, minter) {
+    let resolved = match resolve_path_with_minter(db, path, scope, assumptions, false, lowering_cx)
+    {
         Ok(res @ PathRes::Ty(_)) => {
-            match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions, minter) {
+            match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions, lowering_cx) {
                 Some(trait_res) => Ok(trait_res),
                 None => Ok(res),
             }
@@ -515,7 +516,7 @@ fn resolve_shadowed_trait_ref<'db>(
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> Option<PathRes<'db>> {
     if path.parent(db).is_some() {
         return None;
@@ -552,7 +553,7 @@ fn resolve_shadowed_trait_ref<'db>(
         return None;
     }
 
-    resolve_name_res_with_minter(db, nameres, None, path, scope, assumptions, minter).ok()
+    resolve_name_res_with_minter(db, nameres, None, path, scope, assumptions, lowering_cx).ok()
 }
 
 fn lower_trait_ref_cycle_initial<'db>(
@@ -603,7 +604,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     t: Trait<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> Result<TraitInstId<'db>, TraitArgError<'db>> {
     let trait_params: &[TyId<'db>] = t.params(db);
     let args = path.generic_args(db).data(db);
@@ -613,12 +614,13 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     for arg in args {
         match arg {
             GenericArg::Type(ty_arg) => {
-                let ty = lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, minter);
+                let ty =
+                    lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, lowering_cx);
                 provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => {
                 let body = const_arg.value;
-                let const_ty = match minter.const_bodies() {
+                let const_ty = match lowering_cx.const_bodies() {
                     ConstBodyLowering::Eager => ConstTyId::from_opt_body(db, body),
                     ConstBodyLowering::Deferred => ConstTyId::unevaluated(
                         db,
@@ -626,7 +628,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                         None,
                         None,
                         body.to_opt().map_or(ConstCaptureEnv::Empty, |body| {
-                            ConstCaptureEnv::identity_for_body(db, body, Some(minter))
+                            ConstCaptureEnv::identity_for_body(db, body, Some(lowering_cx))
                         }),
                         UnevaluatedConstPolicy::DeferValidation,
                     ),
@@ -635,7 +637,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
             }
             GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
                 if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
-                    let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, minter);
+                    let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, lowering_cx);
                     assoc_bindings.insert(name, ty);
                 }
             }
@@ -649,9 +651,9 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
             db,
             &[t.self_param(db)],
             &provided_explicit,
-            match minter.const_bodies() {
-                ConstBodyLowering::Eager => DefaultApplication::Evaluate(minter),
-                ConstBodyLowering::Deferred => DefaultApplication::StructuralMetadata(minter),
+            match lowering_cx.const_bodies() {
+                ConstBodyLowering::Eager => DefaultApplication::Evaluate(lowering_cx),
+                ConstBodyLowering::Deferred => DefaultApplication::StructuralMetadata(lowering_cx),
             },
         )
         .map_err(|error| match error.cause {

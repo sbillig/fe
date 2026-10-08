@@ -4722,13 +4722,13 @@ impl<'db> ImplAssocTypeView<'db> {
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
         let assumptions = constraints_for(db, self.owner.into());
-        let minter = LoweringContext::new().for_impl_assoc_type(self.owner);
+        let lowering_cx = LoweringContext::new().for_impl_assoc_type(self.owner);
         Some(lower_hir_ty_with_minter(
             db,
             hir,
             self.owner.scope(),
             assumptions,
-            &minter,
+            &lowering_cx,
         ))
     }
 
@@ -4736,13 +4736,13 @@ impl<'db> ImplAssocTypeView<'db> {
         let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
         let assumptions =
             collect_candidate_constraints(db, self.owner.into()).instantiate_identity();
-        let minter = LoweringContext::deferred().for_impl_assoc_type(self.owner);
+        let lowering_cx = LoweringContext::deferred().for_impl_assoc_type(self.owner);
         Some(lower_hir_ty_with_minter(
             db,
             hir,
             self.owner.scope(),
             assumptions,
-            &minter,
+            &lowering_cx,
         ))
     }
 

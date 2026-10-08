@@ -134,14 +134,14 @@ pub(crate) fn generic_default<'db>(
             let Some(hir_ty) = param.default_ty else {
                 return Ok(None);
             };
-            let minter = LoweringContext::deferred()
+            let lowering_cx = LoweringContext::deferred()
                 .with_default_capture(owner, SourceParamIndex(param_idx));
             let ty = lower_hir_ty_with_minter(
                 db,
                 hir_ty,
                 owner.scope(),
                 default_assumptions(db, owner),
-                &minter,
+                &lowering_cx,
             );
             let set = collect_generic_params(db, owner);
             let formal = set
@@ -308,11 +308,11 @@ pub(crate) enum DefaultApplication<'a, 'db> {
 }
 
 impl<'a, 'db> DefaultApplication<'a, 'db> {
-    fn minter(self) -> Option<&'a LoweringContext<'db>> {
+    fn lowering_cx(self) -> Option<&'a LoweringContext<'db>> {
         match self {
-            Self::StructuralMetadata(minter)
-            | Self::CheckedMetadata(minter)
-            | Self::Evaluate(minter) => Some(minter),
+            Self::StructuralMetadata(lowering_cx)
+            | Self::CheckedMetadata(lowering_cx)
+            | Self::Evaluate(lowering_cx) => Some(lowering_cx),
             Self::Identity => None,
         }
     }
@@ -327,8 +327,8 @@ impl<'a, 'db> DefaultApplication<'a, 'db> {
 
     fn const_policy(self) -> UnevaluatedConstPolicy {
         if self
-            .minter()
-            .is_some_and(|minter| minter.const_bodies() == ConstBodyLowering::Deferred)
+            .lowering_cx()
+            .is_some_and(|lowering_cx| lowering_cx.const_bodies() == ConstBodyLowering::Deferred)
         {
             UnevaluatedConstPolicy::DeferValidation
         } else if self.evaluates() {
@@ -648,14 +648,14 @@ fn array<const N: usize, T = [u8; { N + 1 }]>() {}
         // The symbolic length has no concrete size until an application binds N.
         assert_eq!(runtime_size_bytes(&db, ty), Ok(None));
         let set = collect_generic_params(&db, func.into());
-        let minter = LoweringContext::deferred();
+        let lowering_cx = LoweringContext::deferred();
         let arg = set.explicit_params(&db)[0];
         let args = set
             .complete_args(
                 &db,
                 &[],
                 &[arg],
-                DefaultApplication::StructuralMetadata(&minter),
+                DefaultApplication::StructuralMetadata(&lowering_cx),
             )
             .unwrap();
         let TyData::ConstTy(length) = args[1].generic_args(&db)[1].data(&db) else {

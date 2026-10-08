@@ -657,8 +657,8 @@ fn try_resolve_type_bound<'db>(
             let ty = match const_bodies {
                 ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, deferred.scope, assumptions),
                 ConstBodyLowering::Deferred => {
-                    let minter = LoweringContext::deferred();
-                    lower_hir_ty_with_minter(db, hir_ty, deferred.scope, assumptions, &minter)
+                    let lowering_cx = LoweringContext::deferred();
+                    lower_hir_ty_with_minter(db, hir_ty, deferred.scope, assumptions, &lowering_cx)
                 }
             };
             if ty.has_invalid(db) {
@@ -679,7 +679,7 @@ fn try_resolve_type_bound<'db>(
             enclosing_trait_self_ty(db, deferred.scope),
         ),
         ConstBodyLowering::Deferred => {
-            let minter = LoweringContext::deferred();
+            let lowering_cx = LoweringContext::deferred();
             lower_trait_ref_with_minter(
                 db,
                 ty,
@@ -687,7 +687,7 @@ fn try_resolve_type_bound<'db>(
                 deferred.scope,
                 assumptions,
                 enclosing_trait_self_ty(db, deferred.scope),
-                &minter,
+                &lowering_cx,
             )
         }
     }

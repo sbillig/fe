@@ -3911,21 +3911,21 @@ impl<'db> TyChecker<'db> {
         let idx = path.segment_index(self.db);
         let generic_args = path.generic_args(self.db);
         let generic_args_span = path_span.clone().segment(idx).generic_args();
-        let minter = LoweringContext::new();
+        let lowering_cx = LoweringContext::new();
         let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
             callable.unify_generic_args(tc, generic_args, generic_args_span.clone())
         };
 
         let res = if path.is_bare_ident(self.db) {
             let ident_span: DynLazySpan<'db> = path_expr_span.clone().into();
-            resolve_ident_expr(self.db, &self.env, path, ident_span, &minter)
+            resolve_ident_expr(self.db, &self.env, path, ident_span, &lowering_cx)
         } else {
             match self.resolve_path(
                 path,
                 true,
                 path_span.clone(),
                 path_expr_span.clone().into(),
-                &minter,
+                &lowering_cx,
             ) {
                 Ok(r) => ResolvedPathInBody::Reso(r),
                 Err(err) => {
@@ -4344,19 +4344,24 @@ impl<'db> TyChecker<'db> {
         };
 
         let path_span = span.clone().path();
-        let minter = LoweringContext::new();
-        let reso =
-            match self.resolve_path(*path, true, path_span.clone(), span.clone().into(), &minter) {
-                Ok(reso) => reso,
-                Err(err) => {
-                    if let Some(diag) =
-                        err.into_diag(self.db, *path, path_span, ExpectedPathKind::Record)
-                    {
-                        self.push_diag(diag);
-                    }
-                    return ExprProp::invalid(self.db);
+        let lowering_cx = LoweringContext::new();
+        let reso = match self.resolve_path(
+            *path,
+            true,
+            path_span.clone(),
+            span.clone().into(),
+            &lowering_cx,
+        ) {
+            Ok(reso) => reso,
+            Err(err) => {
+                if let Some(diag) =
+                    err.into_diag(self.db, *path, path_span, ExpectedPathKind::Record)
+                {
+                    self.push_diag(diag);
                 }
-            };
+                return ExprProp::invalid(self.db);
+            }
+        };
 
         match reso {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -5438,7 +5443,7 @@ fn resolve_ident_expr<'db>(
     env: &TyCheckEnv<'db>,
     path: PathId<'db>,
     ident_span: DynLazySpan<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> ResolvedPathInBody<'db> {
     let ident = path.ident(db).unwrap();
 
@@ -5474,9 +5479,15 @@ fn resolve_ident_expr<'db>(
         let Ok(res) = bucket.pick_any(&[NameDomain::VALUE, NameDomain::TYPE]) else {
             return ResolvedPathInBody::Invalid;
         };
-        let Ok(reso) =
-            resolve_name_res_with_minter(db, res, None, path, scope, env.assumptions(), minter)
-        else {
+        let Ok(reso) = resolve_name_res_with_minter(
+            db,
+            res,
+            None,
+            path,
+            scope,
+            env.assumptions(),
+            lowering_cx,
+        ) else {
             return ResolvedPathInBody::Invalid;
         };
         ResolvedPathInBody::Reso(reso)

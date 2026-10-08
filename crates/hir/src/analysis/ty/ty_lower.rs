@@ -42,8 +42,8 @@ pub fn lower_hir_ty<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let minter = LoweringContext::new();
-    lower_hir_ty_impl(db, ty, scope, assumptions, &minter)
+    let lowering_cx = LoweringContext::new();
+    lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx)
 }
 
 fn lower_hir_ty_impl<'db>(
@@ -51,10 +51,10 @@ fn lower_hir_ty_impl<'db>(
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
     let lower_child =
-        |child_ty, _slot| lower_opt_hir_ty_impl(db, child_ty, scope, assumptions, minter);
+        |child_ty, _slot| lower_opt_hir_ty_impl(db, child_ty, scope, assumptions, lowering_cx);
 
     let lowered = match ty.data(db) {
         HirTyKind::Ptr(pointee) => {
@@ -68,9 +68,14 @@ fn lower_hir_ty_impl<'db>(
             TyId::invalid(db, InvalidCause::ModeNotType)
         }
 
-        HirTyKind::Path(path) => {
-            lower_path_impl(db, scope, *path, assumptions, TypePosition::Type, minter)
-        }
+        HirTyKind::Path(path) => lower_path_impl(
+            db,
+            scope,
+            *path,
+            assumptions,
+            TypePosition::Type,
+            lowering_cx,
+        ),
 
         HirTyKind::Tuple(tuple_id) => {
             let elems = tuple_id.data(db);
@@ -88,7 +93,7 @@ fn lower_hir_ty_impl<'db>(
 
         HirTyKind::Array(hir_elem_ty, len) => {
             let elem_ty = lower_child(*hir_elem_ty, 0);
-            let len_ty = lower_opt_const_body(db, *len, scope, assumptions, minter);
+            let len_ty = lower_opt_const_body(db, *len, scope, assumptions, lowering_cx);
             let len_ty = TyId::const_ty(db, len_ty);
             let array = TyId::array(db, elem_ty);
             TyId::app(db, array, len_ty)
@@ -118,9 +123,9 @@ pub(crate) fn lower_hir_ty_with_resolutions<'db>(
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
 ) -> (TyId<'db>, Vec<(PathId<'db>, PathRes<'db>)>) {
-    let minter = LoweringContext::for_const_bodies(const_bodies).recording_resolutions();
-    let lowered = lower_hir_ty_impl(db, ty, scope, assumptions, &minter);
-    (lowered, minter.into_resolutions())
+    let lowering_cx = LoweringContext::for_const_bodies(const_bodies).recording_resolutions();
+    let lowered = lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx);
+    (lowered, lowering_cx.into_resolutions())
 }
 
 /// Lowers `ty` with the caller's lowering context, which sets how const
@@ -130,9 +135,9 @@ pub(crate) fn lower_hir_ty_with_minter<'db>(
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
-    lower_hir_ty_impl(db, ty, scope, assumptions, minter)
+    lower_hir_ty_impl(db, ty, scope, assumptions, lowering_cx)
 }
 
 /// Lowers an item-signature type without validating or evaluating anonymous
@@ -144,8 +149,8 @@ pub(crate) fn lower_hir_ty_deferred<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    let minter = LoweringContext::deferred();
-    lower_hir_ty_impl(db, ty, scope, assumptions, &minter)
+    let lowering_cx = LoweringContext::deferred();
+    lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx)
 }
 
 pub(crate) fn lower_hir_ty_in_mode<'db>(
@@ -166,9 +171,9 @@ pub(crate) fn lower_opt_hir_ty_with_minter<'db>(
     ty: Partial<HirTyId<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
-    lower_opt_hir_ty_impl(db, ty, scope, assumptions, minter)
+    lower_opt_hir_ty_impl(db, ty, scope, assumptions, lowering_cx)
 }
 
 pub fn lower_opt_hir_ty<'db>(
@@ -180,8 +185,8 @@ pub fn lower_opt_hir_ty<'db>(
     let Some(hir_ty) = ty.to_opt() else {
         return TyId::invalid(db, InvalidCause::ParseError);
     };
-    let minter = LoweringContext::new();
-    lower_hir_ty_impl(db, hir_ty, scope, assumptions, &minter)
+    let lowering_cx = LoweringContext::new();
+    lower_hir_ty_impl(db, hir_ty, scope, assumptions, &lowering_cx)
 }
 
 fn lower_opt_hir_ty_impl<'db>(
@@ -189,11 +194,11 @@ fn lower_opt_hir_ty_impl<'db>(
     ty: Partial<HirTyId<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
     ty.to_opt().map_or_else(
         || TyId::invalid(db, InvalidCause::ParseError),
-        |hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions, minter),
+        |hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions, lowering_cx),
     )
 }
 
@@ -264,12 +269,12 @@ fn lower_opt_const_body<'db>(
     body: Partial<Body<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> ConstTyId<'db> {
     let Some(body) = body.to_opt() else {
         return ConstTyId::invalid(db, InvalidCause::ParseError);
     };
-    if minter.const_bodies() == ConstBodyLowering::Deferred {
+    if lowering_cx.const_bodies() == ConstBodyLowering::Deferred {
         if let Some(path) = const_body_simple_path(db, body)
             && path.parent(db).is_none()
             && matches!(
@@ -280,7 +285,7 @@ fn lower_opt_const_body<'db>(
                 Ok(NameResKind::Scope(ScopeId::GenericParam(..)))
             )
             && let Ok(PathRes::Ty(ty)) =
-                resolve_path_with_minter(db, path, scope, assumptions, true, minter)
+                resolve_path_with_minter(db, path, scope, assumptions, true, lowering_cx)
             && let TyData::ConstTy(const_ty) = ty.data(db)
         {
             return *const_ty;
@@ -290,11 +295,11 @@ fn lower_opt_const_body<'db>(
             Partial::Present(body),
             None,
             None,
-            ConstCaptureEnv::identity_for_body(db, body, Some(minter)),
+            ConstCaptureEnv::identity_for_body(db, body, Some(lowering_cx)),
             UnevaluatedConstPolicy::DeferValidation,
         );
     }
-    lower_const_body_path(db, body, scope, assumptions, minter)
+    lower_const_body_path(db, body, scope, assumptions, lowering_cx)
         .unwrap_or_else(|| ConstTyId::from_body(db, body, None, None))
 }
 
@@ -319,13 +324,13 @@ pub(crate) fn lower_const_body_path<'db>(
     body: Body<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> Option<ConstTyId<'db>> {
     let path = const_body_simple_path(db, body)?;
     let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     Some(
-        match minter.without_recording(|| {
-            resolve_path_with_minter(db, path, scope, assumptions, true, minter)
+        match lowering_cx.without_recording(|| {
+            resolve_path_with_minter(db, path, scope, assumptions, true, lowering_cx)
         }) {
             Ok(PathRes::Const(const_def, ty)) => {
                 if let Some(body) = const_def.body(db).to_opt() {
@@ -383,12 +388,12 @@ fn lower_path_impl<'db>(
     path: Partial<PathId<'db>>,
     assumptions: PredicateListId<'db>,
     position: TypePosition,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> TyId<'db> {
     let Some(path) = path.to_opt() else {
         return TyId::invalid(db, InvalidCause::ParseError);
     };
-    lower_type_position_path(db, path, scope, assumptions, position, minter)
+    lower_type_position_path(db, path, scope, assumptions, position, lowering_cx)
         .unwrap_or_else(|_| TyId::invalid(db, InvalidCause::PathResolutionFailed { path }))
 }
 
@@ -402,10 +407,16 @@ pub(crate) fn lower_type_position_path<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     position: TypePosition,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
-    let res =
-        resolve_type_position_path_with_minter(db, path, scope, assumptions, position, minter)?;
+    let res = resolve_type_position_path_with_minter(
+        db,
+        path,
+        scope,
+        assumptions,
+        position,
+        lowering_cx,
+    )?;
     Ok(match res {
         PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty) => ty,
         PathRes::Const(const_def, ty) => {
@@ -553,8 +564,15 @@ fn lower_path<'db>(
     if !path.is_present() {
         return TyId::invalid(db, InvalidCause::ParseError);
     }
-    let minter = LoweringContext::new();
-    lower_path_impl(db, scope, path, assumptions, TypePosition::Type, &minter)
+    let lowering_cx = LoweringContext::new();
+    lower_path_impl(
+        db,
+        scope,
+        path,
+        assumptions,
+        TypePosition::Type,
+        &lowering_cx,
+    )
 }
 
 pub(crate) fn generic_param_owner_assumptions<'db>(
@@ -723,11 +741,11 @@ fn lower_type_alias_from_hir_in_mode<'db>(
         ConstBodyLowering::Deferred => collect_candidate_constraints(db, alias.into()),
     }
     .instantiate_identity();
-    let minter = LoweringContext::for_const_bodies(const_bodies);
+    let lowering_cx = LoweringContext::for_const_bodies(const_bodies);
     let alias_to = match const_bodies {
         ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, alias.scope(), assumptions),
         ConstBodyLowering::Deferred => {
-            lower_hir_ty_impl(db, hir_ty, alias.scope(), assumptions, &minter)
+            lower_hir_ty_impl(db, hir_ty, alias.scope(), assumptions, &lowering_cx)
         }
     };
     let alias_to = if let TyData::Invalid(InvalidCause::AliasCycle(cycle)) = alias_to.data(db) {
@@ -828,7 +846,7 @@ impl<'db> TyAlias<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         args: &[TyId<'db>],
-        minter: &LoweringContext<'db>,
+        lowering_cx: &LoweringContext<'db>,
     ) -> TyId<'db> {
         let expected = self.param_set.explicit_param_count(db);
         debug_assert!(
@@ -841,7 +859,7 @@ impl<'db> TyAlias<'db> {
                 db,
                 &[],
                 args,
-                DefaultApplication::StructuralMetadata(minter),
+                DefaultApplication::StructuralMetadata(lowering_cx),
             )
             .map_err(|error| error.cause)
             .and_then(|args| {
@@ -866,7 +884,7 @@ pub(crate) fn lower_generic_arg_list<'db>(
     args: GenericArgListId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &LoweringContext<'db>,
+    lowering_cx: &LoweringContext<'db>,
 ) -> Vec<TyId<'db>> {
     args.data(db)
         .iter()
@@ -881,13 +899,13 @@ pub(crate) fn lower_generic_arg_list<'db>(
                     *path,
                     assumptions,
                     TypePosition::GenericArg,
-                    minter,
+                    lowering_cx,
                 ),
-                _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, minter),
+                _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, lowering_cx),
             },
             GenericArg::Const(const_arg) => TyId::const_ty(
                 db,
-                lower_opt_const_body(db, const_arg.value, scope, assumptions, minter),
+                lower_opt_const_body(db, const_arg.value, scope, assumptions, lowering_cx),
             ),
 
             GenericArg::AssocType(_assoc_type_arg) => {
