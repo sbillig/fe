@@ -650,6 +650,13 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// An unsafe split component calling a projection not declared
+    /// `#[raw_place]`.
+    UnsafeSplitOperand {
+        primary: DynLazySpan<'db>,
+        callee: IdentId<'db>,
+    },
+
     /// A tuple or sum yield shape bound to a single name.
     ShapeNotDestructured {
         primary: DynLazySpan<'db>,
@@ -1138,6 +1145,7 @@ impl<'db> BodyDiag<'db> {
             Self::MoveOutOfCapture { .. } => 112,
             Self::MixedLoopBases { .. } => 114,
             Self::TupleOfAccesses { .. } => 115,
+            Self::UnsafeSplitOperand { .. } => 118,
             Self::ContractFieldNotInUses { .. } => 116,
             Self::AccessChoiceNeedsProjection { .. } => 117,
             Self::MutableBindingCannotBeCapability { .. } => 73,

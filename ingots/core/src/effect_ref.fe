@@ -84,6 +84,7 @@ pub fn write<H: EffectHandle>(_ handle: H, _ value: own H::Target) uses (target:
 
 /// The place a handle points at, as a projection, with the handle installed
 /// by `with`. The handle argument anchors the effect key to its `Target`.
+#[raw_place]
 pub fn target_mut<H: EffectHandle>(_ handle: H) -> mut H::Target uses (target: mut H::Target) {
     mut target
 }

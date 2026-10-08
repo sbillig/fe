@@ -74,7 +74,7 @@ error[8-0097]: call to unsafe function `at` requires an `unsafe` block or functi
  14 │     StorageMap<u256, u256>::at(0).get(1)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/evm/storage_map.fe:239:19
+    ┌─ src/evm/storage_map.fe:240:19
     │
-239 │     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+240 │     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
     │                   -- callee defined here

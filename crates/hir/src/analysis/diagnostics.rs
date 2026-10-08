@@ -3736,6 +3736,22 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::UnsafeSplitOperand { primary, callee } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "an unsafe split component is a place or a `#[raw_place]` call"
+                    .to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`{}` is not declared `#[raw_place]`", callee.data(db)),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "an ordinary projection may keep accesses for code after its yield, which one split session cannot merge; bind its result with its own `let`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::TupleOfAccesses { primary } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "a tuple does not hold accesses".to_string(),

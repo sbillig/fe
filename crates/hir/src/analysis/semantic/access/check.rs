@@ -1133,8 +1133,107 @@ impl<'a, 'db> Analysis<'a, 'db> {
             }
         }
         self.check_yield_paths()?;
+        self.check_raw_place()?;
         self.check_projection_recursion()?;
         self.check_yields()
+    }
+
+    /// A `#[raw_place]` projection yields a place computed from its inputs,
+    /// with nothing to resume: after each yield it only closes the accesses
+    /// its grant derives from, a session among them is a `#[raw_place]`
+    /// call's, and the place is not one of its own frame.
+    fn check_raw_place(&self) -> Result<(), Diag<'db>> {
+        let owner = self.instance.key(self.db).owner(self.db);
+        let BodyOwner::Func(func) = owner else {
+            return Ok(());
+        };
+        if !func.is_raw_place(self.db) {
+            return Ok(());
+        }
+        let violation = |origin, message: &str| {
+            self.diag(
+                SemanticDiagnosticKind::RawPlaceViolation,
+                origin,
+                message.into(),
+            )
+        };
+        if func.return_shape(self.db).is_none() {
+            return Err(violation(
+                SemOrigin::Body(owner),
+                "a `#[raw_place]` function must be a projection",
+            ));
+        }
+        for block in &self.body.blocks {
+            let NTerminatorKind::Yield { value, resume } = &block.terminator.kind else {
+                continue;
+            };
+            let origin = operand_origin(*value, block.terminator.origin);
+            if self.values[value.value.index()].iter().any(|(token, _)| {
+                self.tokens[*token as usize]
+                    .regions
+                    .iter()
+                    .any(|region| matches!(region.base, Base::Root(_)))
+            }) {
+                return Err(violation(
+                    origin,
+                    "a `#[raw_place]` projection yields a place of its own frame",
+                ));
+            }
+            let mut derived = FxHashSet::default();
+            let mut work = vec![value.value];
+            while let Some(value) = work.pop() {
+                if derived.insert(value)
+                    && let Some((_, expr)) = self.body.defining_expr(value)
+                {
+                    expr.for_each_value_operand(|operand| work.push(operand.value));
+                }
+            }
+            let mut next = resume.block;
+            loop {
+                let data = &self.body.blocks[next.index()];
+                for statement in &data.statements {
+                    let NStatementKind::End { access } = statement.kind else {
+                        return Err(violation(
+                            statement.origin,
+                            "a `#[raw_place]` projection runs no code after its yield",
+                        ));
+                    };
+                    let raw_session = match self.body.defining_expr(access) {
+                        Some((_, NExpr::Call { callee, .. })) => matches!(
+                            callee.key.owner(self.db),
+                            BodyOwner::Func(callee) if callee.is_raw_place(self.db)
+                        ),
+                        _ => true,
+                    };
+                    if !derived.contains(&access) || !raw_session {
+                        // Point at what opened the access rather than its end.
+                        let opened = match self.body.value(access).map(|value| value.definition) {
+                            Some(NValueDefinition::Statement { block, statement }) => {
+                                self.body.blocks[block.index()].statements[statement as usize]
+                                    .origin
+                            }
+                            _ => statement.origin,
+                        };
+                        return Err(violation(
+                            opened,
+                            "a `#[raw_place]` projection keeps no access or session of its own \
+                             open across its yield",
+                        ));
+                    }
+                }
+                match &data.terminator.kind {
+                    NTerminatorKind::Goto(successor) => next = successor.block,
+                    NTerminatorKind::Return(_) => break,
+                    _ => {
+                        return Err(violation(
+                            data.terminator.origin,
+                            "a `#[raw_place]` projection runs no code after its yield",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Projections are inlined into their callers, so a projection may not

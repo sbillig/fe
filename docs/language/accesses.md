@@ -17,11 +17,11 @@ A view or `mut` argument is a place of the caller's (`bump(mut counter)`);
 an owned argument is moved, or copied if its type is `Copy`.
 
 A view argument that is a scalar or a handle (an integer, `bool`,
-`Address`, a storage map, or any `core::marker::Snapshot` type) is a
+`Address`, a raw pointer, or any `core::marker::Snapshot` type) is a
 *snapshot*: the callee gets a copy, and the caller may change the original
-during the call. Every other value, including `Copy` arrays and structs, is
-viewed in place: the caller cannot write it while the call, or a projection's
-result over it, is in use.
+during the call. Every other value, including `Copy` arrays and structs and
+storage collections, is viewed in place: the caller cannot write it while the
+call, or a projection's result over it, is in use.
 
 ```fe
 fn first(_ xs: [u256; 4]) -> ref u256 { ref xs[0] }
@@ -78,8 +78,13 @@ the `yield`.
 A tuple holds accesses only as such a shape. Accesses the checker cannot see
 are disjoint form an *unsafe split*, an `unsafe` block whose tail is a tuple
 of them: one session whose reservations are all of theirs, and whose grants
-the block promises are disjoint. Two raw-slot collections are held at once
-this way, and `MemArray::pair_mut` is one inside a library function:
+the block promises are disjoint. Its components are places, such as raw
+pointer dereferences, or calls of `#[raw_place]` projections: a projection
+declared `#[raw_place]` has nothing to resume after its yield, since no code
+runs there, it keeps no access or session of its own open across it, and it
+yields no place of its own frame, which is checked where it is written. Two
+raw-slot collections, whose `at` constructors are raw places, are held at
+once this way, and `MemArray::pair_mut` is one inside a library function:
 
 ```fe
 let (a, b) = unsafe { (SolArray<u256>::at(x), SolArray<u256>::at(y)) }

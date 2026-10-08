@@ -732,6 +732,14 @@ impl<'db> Func<'db> {
         self.attributes(db).has_marker_attr(db, "view")
     }
 
+    /// A `#[raw_place]` projection yields a place computed from its inputs
+    /// with nothing to resume: no code after its yield and no access of its
+    /// own kept open there, so an unsafe split may take its call as a
+    /// component.
+    pub fn is_raw_place(self, db: &'db dyn HirDb) -> bool {
+        self.attributes(db).has_marker_attr(db, "raw_place")
+    }
+
     fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {
         self.attributes(db).inline_attr(db)
     }
