@@ -1,5 +1,5 @@
 use core::keccak
-use std::evm::{RawStorage, StorageMap, StoragePackedArray}
+use std::evm::{RawStorage, StoragePackedArray}
 
 const U256_MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
@@ -345,22 +345,19 @@ fn load(_ slot: u256) -> u256 uses (storage: RawStorage) {
     unsafe { storage.sload(slot) }
 }
 
-// Word `w` of the array at slot `s` is entry `w` of a `StorageMap<u256,
-// u256>` at `s`, at `keccak256(w ++ s)`, so no index reaches storage outside
-// the array's words.
+// Word `w` of the array at slot `s` lies at `keccak256(s) + w`, from the
+// array's slot on, like a Solidity dynamic array's data.
 #[test]
-fn test_words_are_map_entries() uses (evm: mut Evm) {
+fn test_words_follow_the_hashed_slot() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         let lanes = unsafe { StoragePackedArray<8>::at(3) }
         // Index 33 is lane 1 of word 1; the last index is lane 31 of the
-        // last word.
+        // last word, which wraps around the slot space.
         lanes.set(i: 33, value: 7)
         lanes.set(i: U256_MAX, value: 0xff)
-        assert(load(keccak((1 as u256, 3 as u256))) == 0x0700)
-        assert(load(keccak((U256_MAX / 32, 3 as u256))) == 0xff << 248)
-        assert(load(keccak(3 as u256) + 1) == 0)
-
-        let words = unsafe { StorageMap<u256, u256>::at(3) }
-        assert(words[1] == 0x0700)
+        assert(lanes.get(33) == 7 && lanes.get(U256_MAX) == 0xff)
+        let data = keccak(3 as u256)
+        assert(load(data + 1) == 0x0700)
+        assert(load(data.wrapping_add(U256_MAX / 32)) == 0xff << 248)
     }
 }

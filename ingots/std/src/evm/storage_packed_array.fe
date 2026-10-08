@@ -1,21 +1,26 @@
+use core::effect_ref::AddressSpace
+use core::ops::PlaceIndex
 use core::option::Option
 
 use super::effects::{RawStorage, StorPtr}
-use super::storage_map::StorageMap
+use super::sol_slot::data_slot
 
 const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
-/// A storage-backed map from indices to fixed-bit-width integer lanes,
-/// packed into 256-bit words.
+/// A storage-backed packed array of fixed-bit-width integer lanes, indexed
+/// by any `u256`, with no length: a packed map of small integers.
 ///
-/// Index `i` is lane `i % (256 / BITS)` of word `i / (256 / BITS)`, and the
-/// words are the entries of a `StorageMap<u256, u256>` at the array's slot:
-/// word `w` of the array at slot `s` lies at `keccak256(w ++ s)`, as in
-/// OpenZeppelin's `BitMaps` and Solady's `LibMap`. Every index reads as zero
-/// until it is set, and no index reaches storage outside the array's words.
-/// Consecutive indices share words, so dense indices (token IDs, user IDs,
-/// order IDs, sequence positions) pack well; sparse keys such as addresses
-/// or hashes take a word each and are better kept in a `StorageMap`.
+/// Index `i` is lane `i % (256 / BITS)` of word `i / (256 / BITS)`, and word
+/// `w` lies at `keccak256(slot) + w`, from the array's slot on like a Solidity
+/// dynamic array's data. Consecutive indices share words, so dense integer
+/// indices (token IDs, user IDs, order IDs, sequence positions) pack well;
+/// addresses or hashes would take a word each and belong in a `StorageMap`.
+/// Every index reads as zero until it is set.
+///
+/// The words have no bound: the indices reach `BITS / 256` of all storage
+/// from `keccak256(slot)` on, which can include another field's slots or a
+/// map's entries. Keep indices in a range the contract controls rather than
+/// passing an untrusted `u256` through.
 ///
 /// `BITS` must be a power of two that divides 256 — one of
 /// 1, 2, 4, 8, 16, 32, 64, 128. The constraint is enforced at compile time
@@ -40,7 +45,26 @@ const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffff
 /// ```
 #[storage_only]
 pub struct StoragePackedArray<const BITS: u256> {
-    words: StorageMap<u256, u256>,
+    words: PackedWords,
+}
+
+/// The words of a packed array: word `w` of the array whose place starts at
+/// slot `s` is at `keccak256(s) + w`.
+#[storage_only]
+struct PackedWords {
+    seed: u256,
+}
+
+impl PlaceIndex for PackedWords {
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Key = u256
+    type Output = u256
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn locate(self, _ base: u256, _ word: u256, _ width: u256) -> (u256, u256) {
+        (data_slot(base) + word, 0)
+    }
 }
 
 /// Marker trait for `BITS` values that produce a well-formed packed layout
@@ -74,8 +98,7 @@ impl<const BITS: u256> StoragePackedArray<BITS>
     /// Mask covering the low `BITS` bits of a lane.
     const LANE_MASK: u256 = (1 << BITS) - 1
 
-    /// The array whose slot is `slot`, such as a Solidity
-    /// `mapping(uint256 => uint256)` of packed words at a known slot.
+    /// The array whose slot is `slot`.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the words' slots.
