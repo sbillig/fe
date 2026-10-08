@@ -46,7 +46,9 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
     resolve_runtime_place_address_class,
-    runtime::place::{project_field_class, project_index_class, project_variant_field_class},
+    runtime::place::{
+        project_field_class, project_index_class, project_variant_field_class, runtime_place_lane,
+    },
     runtime::{
         AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
         PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
@@ -487,9 +489,9 @@ pub(super) struct RmirEmitter<'db> {
     /// The local each projection call assigns, by its normalized statement:
     /// the session an `End` of the call's result finishes.
     sessions: FxHashMap<NStatementId, RLocalId>,
-    /// The memory copies of elements packed into lanes, by local: a write
-    /// to a copy is stored back into its lane.
-    lane_copies: FxHashMap<RLocalId, Lane<'db>>,
+    /// The memory copies of lanes, by local: a write to a copy is stored
+    /// back into its lane.
+    lane_copies: FxHashMap<RLocalId, LaneHome<'db>>,
     /// The lane copies `mut` borrows reach, by borrow: the `End` of the
     /// borrow stores the copy back.
     lane_borrows: FxHashMap<NValueId, RLocalId>,
@@ -517,6 +519,15 @@ struct Lane<'db> {
     space: AddressSpaceKind,
     codec: TyId<'db>,
     ty: TyId<'db>,
+}
+
+/// A lane a memory copy is stored back into.
+#[derive(Clone)]
+enum LaneHome<'db> {
+    /// An element a collection packs into a lane.
+    Entry(Lane<'db>),
+    /// A field packed into a storage word, which a store masks into it.
+    Field(RuntimePlace<'db>),
 }
 
 /// The element `lower_entry` addresses.
@@ -1037,7 +1048,8 @@ impl<'db> RmirEmitter<'db> {
                             .env
                             .place_entry_root(place)
                             .flatten()
-                            .is_some_and(|entry| entry.lane)),
+                            .is_some_and(|entry| entry.lane))
+                            || !self.semantic_body.normalized.access_is_used(*access),
                         "a lane borrow ends before it is lowered"
                     );
                 }
@@ -1224,6 +1236,7 @@ impl<'db> RmirEmitter<'db> {
                 || (stmt_id.is_none()
                     && matches!(expr, NExpr::Load { place, .. } if place.path.is_empty())))
                 && self.runtime_value_is_unused(result))
+            || self.is_dead_lane_access(result, expr)
         {
             self.normalized_value_temps[result.index()] = None;
             return;
@@ -1570,20 +1583,20 @@ impl<'db> RmirEmitter<'db> {
                     return;
                 }
                 let place = self.lower_place(bb, place);
-                if let NExpr::Borrow {
-                    kind: BorrowKind::Mut,
-                    ..
-                } = expr
-                    && let Some(copy) = self.lane_copy_root(&place)
-                {
-                    self.lane_borrows.insert(result, copy);
-                }
-                let value = self.lower_place_addr_of_for_class(
+                let (value, copy) = self.lower_place_address(
                     self.locals[dst.index()].semantic_ty,
                     bb,
                     place,
                     dst_class,
                 );
+                if let NExpr::Borrow {
+                    kind: BorrowKind::Mut,
+                    ..
+                } = expr
+                    && let Some(copy) = copy
+                {
+                    self.lane_borrows.insert(result, copy);
+                }
                 self.push_stmt(
                     bb,
                     RStmt::Assign {
@@ -5877,11 +5890,25 @@ impl<'db> RmirEmitter<'db> {
         let value = self.coerce_value(bb, value, &class);
         let copy = self.alloc_value_slot(lane.ty, class);
         self.push_value_use(bb, copy, value);
-        self.lane_copies.insert(copy, lane);
+        self.lane_copies.insert(copy, LaneHome::Entry(lane));
         RuntimePlace {
             root: PlaceRoot::Slot(copy),
             path: Box::default(),
         }
+    }
+
+    /// Whether `expr`, defining `value`, accesses a lane that nothing reads
+    /// through the access: it needs no copy.
+    fn is_dead_lane_access(&self, value: NValueId, expr: &NExpr<'db>) -> bool {
+        let (NExpr::Borrow { place, .. } | NExpr::MakeView { place, .. }) = expr else {
+            return false;
+        };
+        !self.semantic_body.normalized.access_is_used(value)
+            && self.with_current_body_cx(|cx| {
+                cx.env
+                    .normalized_place_is_lane(cx.carriers, place)
+                    .unwrap_or(false)
+            })
     }
 
     /// The lane copy `place` lies in.
@@ -5894,16 +5921,56 @@ impl<'db> RmirEmitter<'db> {
 
     /// Stores the lane copy `copy` back into its lane.
     fn store_lane_copy(&mut self, bb: RBlockId, copy: RLocalId) {
-        let lane = self.lane_copies[&copy].clone();
         let value = self.load_runtime_place_value(
             bb,
             RuntimePlace {
                 root: PlaceRoot::Slot(copy),
                 path: Box::default(),
             },
-            lane.ty,
+            self.locals[copy.index()].semantic_ty,
         );
-        self.write_lane(bb, &lane, value);
+        match self.lane_copies[&copy].clone() {
+            LaneHome::Entry(lane) => self.write_lane(bb, &lane, value),
+            LaneHome::Field(place) => {
+                let class = self.project_place_class(&place);
+                self.write_value_to_place(bb, place, value, &class);
+            }
+        }
+    }
+
+    /// The address of `place` as a `target`, and the lane copy it lies in:
+    /// a lane has no address, so a field packed into a storage word is
+    /// referenced as a fresh memory copy, which its users store back.
+    fn lower_place_address(
+        &mut self,
+        semantic_ty: TyId<'db>,
+        bb: RBlockId,
+        place: RuntimePlace<'db>,
+        target: RuntimeClass<'db>,
+    ) -> (RLocalId, Option<RLocalId>) {
+        let program = self.db as &dyn MirDb;
+        if let Some(copy) = self.lane_copy_root(&place) {
+            let value = self.lower_place_addr_of_for_class(semantic_ty, bb, place, target);
+            return (value, Some(copy));
+        }
+        if runtime_place_lane(self.db, &program, self, &place)
+            .unwrap_or_else(|err| panic!("invalid runtime place: {err:?}; {place:?}"))
+            .is_none()
+        {
+            let value = self.lower_place_addr_of_for_class(semantic_ty, bb, place, target);
+            return (value, None);
+        }
+        let class = self.project_place_class(&place);
+        let value = self.load_runtime_place_value(bb, place.clone(), semantic_ty);
+        let copy = self.alloc_value_slot(semantic_ty, class);
+        self.push_value_use(bb, copy, value);
+        self.lane_copies.insert(copy, LaneHome::Field(place));
+        let copy_place = RuntimePlace {
+            root: PlaceRoot::Slot(copy),
+            path: Box::default(),
+        };
+        let value = self.lower_place_addr_of_for_class(semantic_ty, bb, copy_place, target);
+        (value, Some(copy))
     }
 
     fn alloc_word_const(&mut self, bb: RBlockId, value: u64) -> RLocalId {
@@ -6618,15 +6685,15 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
             }
             (RuntimeArgSource::PlaceAddress(source, semantic_ty), use_plan) => {
                 let place = self.emitter.lower_place(self.bb, source);
-                if let Some(copy) = self.emitter.lane_copy_root(&place) {
-                    self.emitter.call_lane_copies.push((source.clone(), copy));
-                }
-                let value = self.emitter.lower_place_addr_of_for_class(
+                let (value, copy) = self.emitter.lower_place_address(
                     *semantic_ty,
                     self.bb,
                     place,
                     selected.class.clone(),
                 );
+                if let Some(copy) = copy {
+                    self.emitter.call_lane_copies.push((source.clone(), copy));
+                }
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
             (RuntimeArgSource::PlaceValue(place, semantic_ty), use_plan) => {

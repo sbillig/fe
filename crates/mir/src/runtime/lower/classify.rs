@@ -29,11 +29,10 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::place::{
-        inherited_lane_view, project_field_class, project_index_class, ref_class_for_place_result,
-        storage_lane_view,
+        place_reference_class, project_field_class, project_index_class, storage_field_lane,
     },
     runtime::{
-        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec,
+        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RuntimeBoundarySpec,
         RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
         SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole,
     },
@@ -75,6 +74,15 @@ use super::{
         top_level_class_for_ty_in_env,
     },
 };
+
+/// What a reference to a place is taken from: the transport root of its
+/// address, or a memory copy when the place is a lane.
+struct PlaceReference<'db> {
+    root_class: RuntimeClass<'db>,
+    root_space: AddressSpaceKind,
+    force_raw: bool,
+    lane: bool,
+}
 
 /// The last entry a place reaches, from which it is classified.
 pub(crate) struct EntryRoot<'db> {
@@ -916,12 +924,40 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         self.normalized_place_address_class(carriers, place)
     }
 
+    /// Whether `place` is a lane: an element its collection packs, or a
+    /// field packed into a storage word.
+    pub(crate) fn normalized_place_is_lane(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        place: &NPlace<'db>,
+    ) -> Option<bool> {
+        Some(self.normalized_place_reference(carriers, place)?.lane)
+    }
+
     pub(crate) fn normalized_place_address_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
         place: &NPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let value_class = self.normalized_place_class(carriers, place)?;
+        let reference = self.normalized_place_reference(carriers, place)?;
+        Some(place_reference_class(
+            self.db,
+            &reference.root_class,
+            &value_class,
+            reference.root_space,
+            reference.force_raw,
+            reference.lane,
+        ))
+    }
+
+    /// The transport root an address of `place` is taken from, and whether
+    /// the place is a lane, which has no address.
+    fn normalized_place_reference(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        place: &NPlace<'db>,
+    ) -> Option<PlaceReference<'db>> {
         if let Some(entry) = self.place_entry_root(place) {
             let EntryRoot {
                 element_ty,
@@ -929,20 +965,6 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 lane,
                 path,
             } = entry?;
-            if lane {
-                // The memory copy of a lane's element.
-                let copy = stored_class_for_ty_in_env(self.db, self.type_env(), element_ty);
-                return Some(ref_class_for_place_result(
-                    self.db,
-                    &copy,
-                    &value_class,
-                    AddressSpaceKind::Memory,
-                    false,
-                    RefView::Whole,
-                ));
-            }
-            let root_class =
-                provider_class_for_target_in_env(self.db, self.type_env(), Some(element_ty), space);
             let root = || {
                 Some(stored_class_for_ty_in_env(
                     self.db,
@@ -950,15 +972,17 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     element_ty,
                 ))
             };
-            let view = self.place_view(root, &root_class, &path, space)?;
-            return Some(ref_class_for_place_result(
-                self.db,
-                &root_class,
-                &value_class,
-                space,
-                false,
-                view,
-            ));
+            return Some(PlaceReference {
+                root_class: provider_class_for_target_in_env(
+                    self.db,
+                    self.type_env(),
+                    Some(element_ty),
+                    space,
+                ),
+                root_space: space,
+                force_raw: false,
+                lane: lane || self.place_is_lane(root, &path, space)?,
+            });
         }
         let root_class =
             normalized_place_root_transport_class_in_context(self, place.base, carriers)?;
@@ -985,41 +1009,34 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             },
         };
         let root = || normalized_place_root_class_in_context(self, place.base, carriers);
-        let view = self.place_view(root, &root_class, &place.path, root_space)?;
-        Some(ref_class_for_place_result(
-            self.db,
-            &root_class,
-            &value_class,
+        let lane = self.place_is_lane(root, &place.path, root_space)?;
+        Some(PlaceReference {
+            root_class,
             root_space,
             force_raw,
-            view,
-        ))
+            lane,
+        })
     }
 
-    /// The view of a place reached from a root of class `root` (its
-    /// transport `root_class`) by `path`: a packed field's lane, or the root's
-    /// own lane for an empty path.
-    fn place_view(
+    /// Whether the place reached from a root of class `root` by `path` is a
+    /// lane: a field packed into a storage word of `root_space`.
+    fn place_is_lane(
         self,
         root: impl FnOnce() -> Option<RuntimeClass<'db>>,
-        root_class: &RuntimeClass<'db>,
         path: &NDataPath,
         root_space: AddressSpaceKind,
-    ) -> Option<crate::runtime::RefView<'db>> {
+    ) -> Option<bool> {
         let projections: Vec<_> = path.iter().cloned().collect();
-        Some(match projections.split_last() {
-            Some((NDataProjection::Field(field), parent_path)) => {
-                let mut parent = self.walk_data_path_class(root()?, &NDataPath::new(parent_path));
-                if !parent_path.is_empty()
-                    && let Some(target) = parent.deref_target(self.db)
-                {
-                    parent = target;
-                }
-                storage_lane_view(self.db, &parent, *field, root_space)
-            }
-            None => inherited_lane_view(root_class),
-            _ => crate::runtime::RefView::Whole,
-        })
+        let Some((NDataProjection::Field(field), parent_path)) = projections.split_last() else {
+            return Some(false);
+        };
+        let mut parent = self.walk_data_path_class(root()?, &NDataPath::new(parent_path));
+        if !parent_path.is_empty()
+            && let Some(target) = parent.deref_target(self.db)
+        {
+            parent = target;
+        }
+        Some(storage_field_lane(self.db, &parent, *field, root_space).is_some())
     }
 
     pub(crate) fn specialize_boundary_for_source(

@@ -337,12 +337,11 @@ pub enum RefKind<'db> {
 pub enum RefView<'db> {
     Whole,
     EnumVariant(VariantId<'db>),
-    /// A scalar struct field packed into part of a storage word.
-    StorageLane(StorageLaneView),
 }
 
-/// The bytes of a storage word that hold a packed scalar struct field,
-/// counted from the low-order end (see `common::layout::storage_fields_layout`).
+/// The bytes of a storage word that hold a packed scalar struct field, a
+/// lane, counted from the low-order end (see
+/// `common::layout::storage_fields_layout`). A lane has no address.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub struct StorageLaneView {
     pub byte_offset: u8,

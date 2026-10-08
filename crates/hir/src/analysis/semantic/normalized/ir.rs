@@ -137,7 +137,29 @@ impl<'db> NormalizedBody<'db> {
     pub fn value_is_used_with(
         &self,
         target: NValueId,
+        expression_uses_value: impl FnMut(&NExpr<'db>) -> bool,
+    ) -> bool {
+        self.value_uses(target, expression_uses_value, true)
+    }
+
+    /// Whether anything but the `End`s of the access `target` defines uses it.
+    pub fn access_is_used(&self, target: NValueId) -> bool {
+        self.value_uses(
+            target,
+            |expr| {
+                let mut used = false;
+                expr.for_each_value_operand(|operand| used |= operand.value == target);
+                used
+            },
+            false,
+        )
+    }
+
+    fn value_uses(
+        &self,
+        target: NValueId,
         mut expression_uses_value: impl FnMut(&NExpr<'db>) -> bool,
+        end_uses: bool,
     ) -> bool {
         let place_uses_target =
             |place: &NPlace<'db>| self.place_values(place).any(|value| value == target);
@@ -157,7 +179,7 @@ impl<'db> NormalizedBody<'db> {
                     NStatementKind::Store { destination, value } => {
                         value.value == target || place_uses_target(destination)
                     }
-                    NStatementKind::End { access } => *access == target,
+                    NStatementKind::End { access } => end_uses && *access == target,
                 };
                 if used {
                     return true;
