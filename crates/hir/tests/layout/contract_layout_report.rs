@@ -189,6 +189,52 @@ contract C {
 }
 
 #[test]
+fn a_transient_cell_takes_its_slot_in_transient_storage_too() {
+    parse_module!(
+        db,
+        top_mod,
+        r#"
+use std::evm::{TSlot, TStorPtr}
+
+contract Overlapping {
+    #[slot(5)]
+    mut cell: TSlot<u256>,
+    #[slot(5)]
+    mut flag: TStorPtr<bool>,
+}
+
+contract Skipping {
+    #[slot(0)]
+    mut cell: TSlot<u256>,
+    mut flag: TStorPtr<bool>,
+}
+"#,
+    );
+    // The cell's value lives in transient slot 5, which `flag` also names.
+    let overlapping = find_contract(&db, top_mod, "Overlapping").storage_layout(&db);
+    assert_eq!(
+        overlapping.field_errors(&IdentId::new(&db, "flag".to_string())),
+        Some(
+            [ContractLayoutError::ExplicitSlotOverlap {
+                other: IdentId::new(&db, "cell".to_string())
+            }]
+            .as_slice()
+        )
+    );
+    // `flag` skips transient slot 0, which the cell's value takes.
+    let skipping = find_contract(&db, top_mod, "Skipping").storage_layout(&db);
+    let fields = &skipping
+        .allocated
+        .as_ref()
+        .expect("contract layout should be allocated")
+        .fields;
+    assert_eq!(
+        fields[&IdentId::new(&db, "flag".to_string())].slot_offset,
+        1
+    );
+}
+
+#[test]
 fn mutex_lock_cells_share_the_field_counter() {
     parse_ok!(
         db,
