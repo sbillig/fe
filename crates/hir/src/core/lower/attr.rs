@@ -408,7 +408,10 @@ impl<'db> AttrArgValue<'db> {
                 Some(Self::Ident(IdentId::lower_token(ctxt, token)))
             }
             Some(ast::AttrArgValueKind::Lit(lit)) => LitKind::lower_ast(ctxt, lit).map(Self::Lit),
-            Some(ast::AttrArgValueKind::Expr(_)) => None,
+            Some(ast::AttrArgValueKind::Expr(expr)) => Some(Self::Expr(StringId::new(
+                ctxt.db(),
+                expr.syntax().text().to_string(),
+            ))),
             None => None,
         }
     }

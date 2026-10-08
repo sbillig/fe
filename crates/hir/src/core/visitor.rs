@@ -1601,7 +1601,9 @@ pub fn walk_attribute<'db, V>(
                                                     |ctxt| visitor.visit_lit(ctxt, l),
                                                 );
                                             }
-                                            None => {}
+                                            // The attribute's owner lowers an
+                                            // expression into its own body.
+                                            Some(AttrArgValue::Expr(_)) | None => {}
                                         }
                                     },
                                 );
