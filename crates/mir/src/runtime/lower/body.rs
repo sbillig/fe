@@ -53,7 +53,7 @@ use crate::{
         RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
         RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
-        layout_utils::storage_element_width,
+        layout_utils::{RuntimeMemoryLayout, storage_element_width},
         package::{LowerError, generated_call_error, runtime_instance_for_semantic},
         synthetic::uint_scalar,
     },
@@ -3424,6 +3424,13 @@ impl<'db> RmirEmitter<'db> {
             };
             return Some(self.lower_panic_code(bb, *code));
         }
+        if kind == RuntimeBuiltinFuncKind::Clear {
+            let [place] = args.as_slice() else {
+                return None;
+            };
+            self.lower_clear(bb, *place);
+            return Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased));
+        }
         let lowered = self.lower_extern_builtin(semantic, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
         let _ = effect_args;
@@ -4405,8 +4412,9 @@ impl<'db> RmirEmitter<'db> {
                 let [_value] = args else { return None };
                 LoweredBuiltinCall::Terminator(RTerminator::Trap)
             }
-            // Lowered with its payload in `lower_panic_code`.
-            RuntimeBuiltinFuncKind::PanicCode => return None,
+            // Lowered with its payload in `lower_panic_code`, and by
+            // `lower_clear`.
+            RuntimeBuiltinFuncKind::PanicCode | RuntimeBuiltinFuncKind::Clear => return None,
             RuntimeBuiltinFuncKind::IntrinsicKeccak256 => return None,
         })
     }
@@ -5448,6 +5456,115 @@ impl<'db> RmirEmitter<'db> {
                 let class = self.project_place_class(&place);
                 self.write_value_to_place(bb, place, value, &class);
             }
+        }
+    }
+
+    /// Zeroes the representation of the place `place` refers to
+    /// (`core::intrinsic::clear`): its words in storage or transient storage,
+    /// its bytes in memory. A lane arrives as a memory copy, whose write-back
+    /// masks the zeros into the lane's word.
+    fn lower_clear(&mut self, bb: RBlockId, place: RLocalId) {
+        let Some(RuntimeClass::Ref { pointee, kind, .. }) = self.value_class(place).cloned() else {
+            panic!("`clear` takes a reference to its place");
+        };
+        let space = match kind {
+            RefKind::Provider { space, .. } => space,
+            RefKind::Object | RefKind::Native => AddressSpaceKind::Memory,
+            RefKind::Const => unreachable!("a `mut` place is not a constant"),
+        };
+        let ref_ty = self.locals[place.index()].semantic_ty;
+        let ty = ref_ty
+            .as_capability(self.db)
+            .map_or(ref_ty, |(_, inner)| inner);
+        let target = RuntimePlace {
+            root: PlaceRoot::Ref(place),
+            path: Box::default(),
+        };
+        if space.is_byte_addressed() {
+            let zero = match pointee.as_ref() {
+                RuntimeClass::Scalar(scalar) => {
+                    let zero = self
+                        .alloc_runtime_temp(ty, RuntimeCarrier::Value(pointee.as_ref().clone()));
+                    let expr = RExpr::ConstScalar(match scalar.repr {
+                        ScalarRepr::Bool => ConstScalar::Bool(false),
+                        ScalarRepr::Int { bits, signed } => ConstScalar::Int {
+                            bits,
+                            signed,
+                            words: Vec::new(),
+                        },
+                        ScalarRepr::Address { bits } => ConstScalar::Address {
+                            bits,
+                            bytes: Vec::new(),
+                        },
+                        ScalarRepr::FixedBytes { len } => {
+                            ConstScalar::FixedBytes(vec![0; usize::from(len)])
+                        }
+                    });
+                    self.push_stmt(bb, RStmt::Assign { dst: zero, expr });
+                    zero
+                }
+                // A fresh object is zeroed.
+                RuntimeClass::AggregateValue { layout } => {
+                    let zero = self.alloc_runtime_temp(
+                        ty,
+                        RuntimeCarrier::Value(RuntimeClass::object_ref(*layout)),
+                    );
+                    self.push_stmt(
+                        bb,
+                        RStmt::Assign {
+                            dst: zero,
+                            expr: RExpr::AllocObject { layout: *layout },
+                        },
+                    );
+                    zero
+                }
+                // An address or a storage handle is a word.
+                RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                    let zero = self.alloc_word_const(bb, 0);
+                    self.coerce_value(bb, zero, &pointee)
+                }
+            };
+            self.write_value_to_place(bb, target, zero, &pointee);
+            return;
+        }
+        let size = RuntimeMemoryLayout::for_space(self.db, space)
+            .class_size(&pointee)
+            .expect("a cleared place has a size");
+        let addr = self.lower_place_addr_of_for_class(
+            ref_ty,
+            bb,
+            target,
+            RuntimeClass::RawAddr {
+                space,
+                pointee: None,
+            },
+        );
+        let addr = self.coerce_value(bb, addr, &word_class());
+        let word_ref =
+            provider_class_for_target_in_env(self.db, self.env, Some(TyId::u256(self.db)), space);
+        let zero = self.alloc_word_const(bb, 0);
+        for offset in 0..size {
+            let slot = if offset == 0 {
+                addr
+            } else {
+                let offset = self.alloc_word_const(bb, offset);
+                let slot = self
+                    .alloc_runtime_temp(TyId::u256(self.db), RuntimeCarrier::Value(word_class()));
+                let expr = self.lower_intrinsic_arith_expr(
+                    IntrinsicArithBinOp::Add,
+                    false,
+                    addr,
+                    offset,
+                    &word_scalar_class(),
+                );
+                self.push_stmt(bb, RStmt::Assign { dst: slot, expr });
+                slot
+            };
+            let word = RuntimePlace {
+                root: PlaceRoot::Ref(self.coerce_value(bb, slot, &word_ref)),
+                path: Box::default(),
+            };
+            self.write_value_to_place(bb, word, zero, &word_class());
         }
     }
 

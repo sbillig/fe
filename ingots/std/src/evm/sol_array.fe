@@ -20,6 +20,7 @@
 //! ```
 use core::abi::{AbiSize, DynArray, Encode, store_word}
 use core::effect_ref::AddressSpace
+use core::intrinsic::clear
 use core::iter::{Bidirectional, Collection, CollectionMut}
 use core::ops::{LaneCodec, PlaceIndex}
 use core::option::Option
@@ -127,17 +128,16 @@ impl<T> SolArray<T> {
         self[len] = value
     }
 
-    /// Removes the last element, writing `T::default()` over it, which for
-    /// the standard element types zeroes its storage like Solidity's
-    /// `pop()`. Reverts with `Panic(0x31)` if the array is empty.
-    pub fn pop(mut self)
-        where T: Default
-    {
+    /// Removes the last element, zeroing its storage like Solidity's `pop()`.
+    /// Reverts with `Panic(0x31)` if the array is empty.
+    pub fn pop(mut self) {
         let len = self.len
         if len == 0 {
             revert_error(Panic::from(PANIC_POP_EMPTY))
         }
-        self[len - 1] = T::default()
+        // Past the new end, nothing reads the element before a `push`
+        // writes it.
+        unsafe { clear(mut self[len - 1]) }
         self.len = len - 1
     }
 

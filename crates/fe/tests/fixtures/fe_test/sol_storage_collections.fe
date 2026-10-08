@@ -2,6 +2,7 @@
 // Solidity 0.8 and OpenZeppelin's `EnumerableSet`. The expected slot
 // contents were produced by running the equivalent Solidity contract
 // (see `solidity_layout_parity`) and reading its storage with `vm.load`.
+use core::keccak
 use std::abi::Bytes32
 use std::abi::sol::{Uint24, Uint120}
 use std::abi::DynArray
@@ -187,12 +188,6 @@ struct Order {
     filled: u64,
 }
 
-impl Default for Order {
-    fn default() -> Self {
-        Order { amount: 0, open: false, filled: 0 }
-    }
-}
-
 #[test]
 fn array_element_places() uses (evm: mut Evm) {
     with (RawStorage = evm) {
@@ -230,6 +225,10 @@ fn array_element_places() uses (evm: mut Evm) {
             flag = !flag
         }
         assert(!flags[0] && flags[1])
+
+        // `pop` zeroed both words of the last order.
+        let data = keccak(13 as u256)
+        assert(load(data) == 10 && load(data + 2) == 0 && load(data + 3) == 0)
     }
 }
 
