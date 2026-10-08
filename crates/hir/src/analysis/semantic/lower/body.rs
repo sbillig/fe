@@ -1004,14 +1004,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 unreachable!("unsupported macro calls must be rejected before semantic lowering")
             }
             Expr::MethodCall(receiver, _, _, args) => self.lower_call(expr, Some(*receiver), args),
+            // The value is evaluated before the target's sessions open, so it
+            // may read what the target is reached through.
             Expr::Assign(dst, src) => {
+                let src = self.lower_expr_operand(*src);
                 if self.typed_body.semantic_expr_lowering(*dst).is_some() {
                     let dst = SPlace::new(self.lower_access(*dst));
-                    let src = self.lower_expr_operand(*src);
                     self.push_stmt(origin, SStmtKind::Store { dst, src });
                 } else {
                     let dst = self.lower_place(*dst);
-                    let src = self.lower_expr_operand(*src);
                     self.push_place_write(origin, dst, src);
                 }
                 self.unit_value()
@@ -1020,6 +1021,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
+                let rhs = self.lower_expr_operand(*src);
                 let dst_place = self.lower_place(*dst);
                 let lhs = if dst_place.path.is_empty() {
                     self.lower_expr_operand(*dst)
@@ -1035,7 +1037,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         *dst,
                     )
                 };
-                let rhs = self.lower_expr_operand(*src);
                 let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
                 let sum = self.emit_expr_with_origin(
                     origin,

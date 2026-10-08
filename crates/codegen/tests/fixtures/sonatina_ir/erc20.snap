@@ -2863,9 +2863,9 @@ func private %grant(v0.i256, v1.i256, v2.@layout_0) {
         jump block1;
 
     block1:
-        v7.@layout_9 = insert_value undef.@layout_9 0.i256 v1;
-        v9.@layout_9 = insert_value v7 1.i256 v2;
-        v13.@layout_3 = call %locate__g7bf9 v0 v0 v9 32.i256;
+        v8.@layout_9 = insert_value undef.@layout_9 0.i256 v1;
+        v10.@layout_9 = insert_value v8 1.i256 v2;
+        v13.@layout_3 = call %locate__g7bf9 v0 v0 v10 32.i256;
         v14.i256 = extract_value v13 0.i256;
         v15.i256 = zext 1.i1 i256;
         evm_sstore v14 v15;
@@ -4410,8 +4410,8 @@ func private %store_word(v0.i256, v1.i256) {
         jump block1;
 
     block1:
-        v3.i256 = call %cast v0;
-        mstore v3 v1 i256;
+        v4.i256 = call %cast v0;
+        mstore v4 v1 i256;
         return;
 }
 
