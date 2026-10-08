@@ -62,7 +62,7 @@ pub use owner::EffectParamOwner;
 use std::{iter, sync::Arc};
 pub use stmt::{ForLoopCall, ForLoopItem, ForLoopPlan, ForLoopStep};
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use crate::analysis::place::{
@@ -70,7 +70,6 @@ use crate::analysis::place::{
 };
 
 use super::{
-    LayoutBundlePath, LayoutBundlePathStep,
     adt_def::ConcreteTypeView,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::Canonical,
@@ -80,22 +79,15 @@ use super::{
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
-    layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
         goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     },
-    ty_contains_const_hole,
     ty_def::{
         BorrowKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback, TyId, TyVarSort,
     },
-    ty_lower::{
-        CallableInputLayoutBackingSource, callable_input_layout_backing_index_lengths,
-        callable_input_layout_backing_sources, collect_generic_params,
-        layout_param_projection_paths_in_ty, lower_hir_ty, lower_hir_ty_deferred,
-        resolve_callable_input_effect_key,
-    },
+    ty_lower::{collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
     unsafe_check::check_unsafe_ops,
 };
@@ -110,8 +102,8 @@ use crate::analysis::semantic::{
 use crate::analysis::ty::ty_def::{ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{
-        BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor,
-        LoweringContext, invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
+        CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext,
+        invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
@@ -1218,7 +1210,7 @@ fn typed_body_for_bodyless_func<'db>(
 ) -> TypedBody<'db> {
     let assumptions = crate::semantic::func_body_assumptions(db, func).extend_all_bounds(db);
     let mut result_ty = func.return_ty(db);
-    if !result_ty.is_star_kind(db) || ty_contains_const_hole(db, result_ty) {
+    if !result_ty.is_star_kind(db) {
         result_ty = TyId::invalid(db, InvalidCause::Other);
     }
     let param_bindings = func
@@ -1231,7 +1223,7 @@ fn typed_body_for_bodyless_func<'db>(
                 .map_or(&TyId::invalid(db, InvalidCause::ParseError), |binder| {
                     binder.skip_binder()
                 });
-            if !ty.is_star_kind(db) || (!view.is_self_param(db) && ty_contains_const_hole(db, ty)) {
+            if !ty.is_star_kind(db) {
                 ty = TyId::invalid(db, InvalidCause::Other);
             }
             LocalBinding::Param {
@@ -1287,20 +1279,6 @@ enum BindingInterfaceShape<'db> {
     },
     DirectCarrier {
         target_ty: TyId<'db>,
-    },
-}
-
-#[derive(Clone)]
-pub(super) enum PatternLayoutContext<'db> {
-    ContractField {
-        field: &'db crate::semantic::FieldStorageLayout<'db>,
-        view: crate::semantic::LayoutViewKind,
-        base_projections: Vec<crate::semantic::LayoutProjection>,
-    },
-    CallableInput {
-        func: Func<'db>,
-        origin: crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin,
-        base_path: LayoutBundlePath,
     },
 }
 
@@ -1412,15 +1390,8 @@ impl<'db> TyChecker<'db> {
                         continue;
                     };
                     let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
-                    let span = contract.span().init_block().params().param(idx).ty().into();
-
-                    if ty_contains_const_hole(self.db, ty) {
-                        self.push_diag(TyDiagCollection::from(
-                            TyLowerDiag::ConstHoleInValuePosition { span, ty },
-                        ));
-                        continue;
-                    }
-
+                    let span: DynLazySpan<'db> =
+                        contract.span().init_block().params().param(idx).ty().into();
                     let source = lower_hir_ty_deferred(self.db, hir_ty, scope, assumptions);
                     match runtime_size_bytes_with_source(self.db, ConcreteTypeView::new(ty, source))
                     {
@@ -1475,13 +1446,7 @@ impl<'db> TyChecker<'db> {
             };
 
             if !matches!(
-                resolve_callable_input_effect_key(
-                    self.db,
-                    func,
-                    idx,
-                    key_ty,
-                    self.env.assumptions(),
-                ),
+                resolve_effect_key(self.db, key_ty, func.scope(), self.env.assumptions()),
                 ResolvedEffectKey::Type(_)
                     | ResolvedEffectKey::Trait(_)
                     | ResolvedEffectKey::Row(_)
@@ -2169,10 +2134,6 @@ impl<'db> TyChecker<'db> {
                         &mut callable,
                         this,
                         generic_args,
-                        HoleAnchor::BodySyntax {
-                            body,
-                            site: BodyHoleSite::Expr(pending.expr),
-                        },
                         CallGenericArgPhase::Probe,
                         |this, _, given, current| this.table.unify(given, *current).is_ok(),
                     ) {
@@ -2356,10 +2317,6 @@ impl<'db> TyChecker<'db> {
                                 if !callable.unify_generic_args(
                                     self,
                                     generic_args,
-                                    HoleAnchor::BodySyntax {
-                                        body,
-                                        site: BodyHoleSite::Expr(pending.expr),
-                                    },
                                     call_span.clone().generic_args(),
                                 ) {
                                     progressed = true;
@@ -2397,12 +2354,6 @@ impl<'db> TyChecker<'db> {
                                         continue;
                                     }
                                 }
-
-                                self.specialize_callable_layout_args(
-                                    &mut callable,
-                                    Some(receiver),
-                                    call_args,
-                                );
 
                                 self.check_callable_effects(pending.expr, &mut callable);
 
@@ -2857,16 +2808,6 @@ impl<'db> TyChecker<'db> {
             self.push_diag(diag)
         }
 
-        if ty_contains_const_hole(self.db, ty) {
-            self.push_diag(TyDiagCollection::from(
-                TyLowerDiag::ConstHoleInValuePosition {
-                    span: span.clone().into(),
-                    ty,
-                },
-            ));
-            return TyId::invalid(self.db, InvalidCause::Other);
-        }
-
         if star_kind_required && ty.is_star_kind(self.db) {
             ty
         } else {
@@ -3260,8 +3201,7 @@ impl<'db> TyChecker<'db> {
                 if actual.is_never(self.db) {
                     expected
                 } else {
-                    let expected = expected.fold_with(self.db, &mut self.table);
-                    merge_equated_layout_holes(self.db, actual, expected)
+                    actual
                 }
             }
 
@@ -3652,7 +3592,7 @@ pub enum ReturnProjectionStep {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReturnSource {
     pub result_projection: Vec<ReturnProjectionStep>,
-    pub origin: CallableInputLayoutHoleOrigin,
+    pub origin: CallableInputOrigin,
     pub projection: Vec<ReturnProjectionStep>,
 }
 
@@ -3707,62 +3647,6 @@ fn call_like_expr_args(expr: &Expr<'_>) -> Option<Vec<ExprId>> {
         }
         _ => None,
     }
-}
-
-type LayoutBackingEquivalenceKey = (
-    usize,
-    Option<(CallableInputLayoutHoleOrigin, Vec<LayoutBundlePathStep>)>,
-);
-
-fn layout_backing_equivalence_key(
-    param_idx: usize,
-    source: &CallableInputLayoutBackingSource,
-) -> LayoutBackingEquivalenceKey {
-    let family = source
-        .projection
-        .iter()
-        .rposition(|step| matches!(step, LayoutBundlePathStep::Index))
-        .map(|last_index| (source.origin, source.projection[..=last_index].to_vec()));
-    (param_idx, family)
-}
-
-fn degenerate_return_projection(
-    path: &[LayoutBundlePathStep],
-    index_lengths: &[usize],
-) -> Option<Vec<ReturnProjectionStep>> {
-    let mut projection = Vec::new();
-    let mut path_idx = 0;
-    let mut length_idx = 0;
-    while path_idx < path.len() {
-        match path[path_idx] {
-            LayoutBundlePathStep::Field(field) => {
-                projection.push(ReturnProjectionStep::Field(field));
-                path_idx += 1;
-            }
-            LayoutBundlePathStep::Variant(variant) => {
-                let Some(LayoutBundlePathStep::Field(field)) = path.get(path_idx + 1) else {
-                    return None;
-                };
-                projection.push(ReturnProjectionStep::VariantField {
-                    variant,
-                    field: *field,
-                });
-                path_idx += 2;
-            }
-            LayoutBundlePathStep::Index => {
-                if index_lengths.get(length_idx) != Some(&1) {
-                    return None;
-                }
-                projection.push(ReturnProjectionStep::ConstantIndex(0));
-                path_idx += 1;
-                length_idx += 1;
-            }
-            LayoutBundlePathStep::ConstParam(_) => {
-                path_idx += 1;
-            }
-        }
-    }
-    (length_idx == index_lengths.len()).then_some(projection)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -4718,9 +4602,7 @@ impl<'db> TypedBody<'db> {
                     );
                     sources.extend(field_sources);
                 }
-                return (!sources.is_empty())
-                    .then_some(sources)
-                    .or_else(|| self.inferred_fresh_layout_return_sources(db, body, expr));
+                return (!sources.is_empty()).then_some(sources);
             }
             return self.forwarded_return_param_sources_from_call(
                 db,
@@ -4739,7 +4621,7 @@ impl<'db> TypedBody<'db> {
             )
             || {
                 let ty = self.expr_ty(db, expr);
-                ty.has_param(db) || ty.has_var(db) || ty_contains_const_hole(db, ty)
+                ty.has_param(db) || ty.has_var(db)
             })
             && let Some(place) = self.expr_place(expr).cloned()
             && let Some(sources) =
@@ -4748,7 +4630,7 @@ impl<'db> TypedBody<'db> {
             return Some(sources);
         }
 
-        let forwarded = match expr_data {
+        match expr_data {
             Expr::Block(stmts, _) => {
                 let tail = stmts.last()?;
                 match tail.data(db, body) {
@@ -4888,72 +4770,7 @@ impl<'db> TypedBody<'db> {
             Expr::Path(_) => None,
             Expr::Call(..) | Expr::MethodCall(..) => None,
             _ => None,
-        };
-        forwarded.or_else(|| self.inferred_fresh_layout_return_sources(db, body, expr))
-    }
-
-    fn inferred_fresh_layout_return_sources(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
-        expr: ExprId,
-    ) -> Option<Vec<ReturnSource>> {
-        let func = body.containing_func(db)?;
-        let result_ty = self.expr_ty(db, expr);
-        let mut out = FxHashSet::default();
-        let mut found_result_root = false;
-        for param_idx in collect_generic_params(db, func.into())
-            .params(db)
-            .iter()
-            .filter_map(|param| match param.data(db) {
-                TyData::ConstTy(const_ty) => match const_ty.data(db) {
-                    ConstTyData::TyParam(param, _) => Some(param.idx),
-                    _ => None,
-                },
-                _ => None,
-            })
-        {
-            let output_paths = layout_param_projection_paths_in_ty(db, result_ty, param_idx);
-            if output_paths.is_empty() {
-                continue;
-            }
-            found_result_root = true;
-            let output_projections = output_paths
-                .iter()
-                .map(|(path, lengths)| degenerate_return_projection(path, lengths))
-                .collect::<Option<Vec<_>>>()?;
-            let mut input_groups = FxHashMap::default();
-            for source in callable_input_layout_backing_sources(db, func, param_idx) {
-                let lengths = callable_input_layout_backing_index_lengths(db, func, &source)?;
-                let Some(projection) = degenerate_return_projection(&source.projection, &lengths)
-                else {
-                    continue;
-                };
-                input_groups
-                    .entry(layout_backing_equivalence_key(param_idx, &source))
-                    .or_insert((source.origin, projection));
-            }
-            if input_groups.len() != 1 {
-                return None;
-            }
-            let (origin, projection) = input_groups
-                .into_values()
-                .next()
-                .expect("one layout-source equivalence group must contain one source");
-            for result_projection in output_projections {
-                out.insert(ReturnSource {
-                    result_projection,
-                    origin,
-                    projection: projection.clone(),
-                });
-            }
         }
-        if !found_result_root || out.is_empty() {
-            return None;
-        }
-        let mut out = out.into_iter().collect::<Vec<_>>();
-        out.sort_unstable();
-        Some(out)
     }
 
     fn forwarded_return_param_sources_from_call(
@@ -5017,9 +4834,9 @@ impl<'db> TypedBody<'db> {
             } => vec![ReturnSource {
                 result_projection: Vec::new(),
                 origin: if func.is_method(db) && idx == 0 {
-                    CallableInputLayoutHoleOrigin::Receiver
+                    CallableInputOrigin::Receiver
                 } else {
-                    CallableInputLayoutHoleOrigin::ValueParam(idx)
+                    CallableInputOrigin::ValueParam(idx)
                 },
                 projection: Vec::new(),
             }],
@@ -5030,7 +4847,7 @@ impl<'db> TypedBody<'db> {
             }
             | LocalBinding::EffectParam { idx, .. } => vec![ReturnSource {
                 result_projection: Vec::new(),
-                origin: CallableInputLayoutHoleOrigin::Effect(idx),
+                origin: CallableInputOrigin::Effect(idx),
                 projection: Vec::new(),
             }],
             binding @ LocalBinding::Local { pat, .. } => {
@@ -5085,15 +4902,14 @@ impl<'db> TypedBody<'db> {
     ) -> Option<Vec<ReturnSource>> {
         let body = self.body()?;
         let sources = match callee_source.origin {
-            CallableInputLayoutHoleOrigin::Receiver => self
-                .forwarded_return_param_sources_from_expr(
-                    db,
-                    body,
-                    *call_args.first()?,
-                    seen,
-                    visited_locals,
-                ),
-            CallableInputLayoutHoleOrigin::ValueParam(param_idx) => self
+            CallableInputOrigin::Receiver => self.forwarded_return_param_sources_from_expr(
+                db,
+                body,
+                *call_args.first()?,
+                seen,
+                visited_locals,
+            ),
+            CallableInputOrigin::ValueParam(param_idx) => self
                 .forwarded_return_param_sources_from_expr(
                     db,
                     body,
@@ -5101,7 +4917,7 @@ impl<'db> TypedBody<'db> {
                     seen,
                     visited_locals,
                 ),
-            CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
+            CallableInputOrigin::Effect(effect_idx) => {
                 let effect_arg = self
                     .call_effect_args(call_expr)?
                     .iter()

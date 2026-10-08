@@ -202,10 +202,6 @@ impl ConstGenericParam {
     pub fn default_expr(&self) -> Option<super::Expr> {
         support::child(self.syntax())
     }
-
-    pub fn default_hole(&self) -> Option<SyntaxToken> {
-        support::token(self.syntax(), SK::Underscore)
-    }
 }
 
 ast_node! {
@@ -261,10 +257,6 @@ ast_node! {
 impl ConstGenericArg {
     pub fn expr(&self) -> Option<super::Expr> {
         support::child(self.syntax())
-    }
-
-    pub fn hole_token(&self) -> Option<SyntaxToken> {
-        support::token(self.syntax(), SK::Underscore)
     }
 }
 

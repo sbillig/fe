@@ -151,12 +151,6 @@ pub enum TyLowerDiag<'db> {
         given: TyId<'db>,
     },
 
-    /// Layout holes (`_`) are only allowed in callable input types and contract fields.
-    ConstHoleInValuePosition {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
     /// `self: ref Self` is written `self`.
     RefSelfType {
         span: DynLazySpan<'db>,
@@ -214,42 +208,10 @@ pub enum TyLowerDiag<'db> {
         name: IdentId<'db>,
     },
 
-    /// A contract field carries an unresolved const hole (`_`) whose type is not
-    /// a storage-slot index (e.g. a defaulted `const SP: AddressSpace = _`).
-    /// Contract layout only assigns slots to slot-index const holes; any other
-    /// unresolved const would be numbered as a bogus slot.
-    ContractFieldNonSlotConstHole {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
     /// A contract field is a selected `EffectHandle` whose `const SPACE` did not
     /// resolve to a concrete `AddressSpace`, so the field's storage space is
     /// unknown (a silent fallback would mis-place the field).
     ContractFieldHandleSpaceUnresolved {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
-    /// A contract field uses an explicit `_` const argument (e.g. `String<_>`).
-    /// Storage-slot layout holes must be declared by the type author via a `= _`
-    /// parameter default, not requested with an explicit `_` at the use site.
-    ContractFieldExplicitConstHole {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
-    /// A contract field contains an array whose elements carry layout roots.
-    /// The elements share one type, so they cannot have distinct roots.
-    ContractFieldLayoutRootArray {
-        span: DynLazySpan<'db>,
-        element: TyId<'db>,
-    },
-
-    /// A contract field explicitly supplies a slot-root expression that remains
-    /// symbolic after normal const evaluation. Explicit roots reserve their
-    /// exact slot, so layout cannot safely allocate around an unknown value.
-    ContractFieldConcreteLayoutRootUnresolved {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
@@ -284,14 +246,9 @@ pub enum TyLowerDiag<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ContractFieldLayoutIssue {
-    ConflictingRootSpaces,
     ExtentOverflow,
     IncompleteProjection,
     InconsistentArrayLength,
-    AmbiguousBindingSelector,
-    InconsistentRootType,
-    RootNeedsLanding,
-    InternalGraph,
 }
 
 impl TyLowerDiag<'_> {
@@ -316,7 +273,6 @@ impl TyLowerDiag<'_> {
             Self::ConstTyMismatch { .. } => 11,
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
-            Self::ConstHoleInValuePosition { .. } => 32,
             Self::RefSelfType { .. } => 14,
             Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
@@ -347,14 +303,10 @@ impl TyLowerDiag<'_> {
             Self::DuplicateGenericParamName(..) => 19,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
-            Self::ContractFieldNonSlotConstHole { .. } => 40,
             Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
-            Self::ContractFieldExplicitConstHole { .. } => 42,
-            Self::ContractFieldLayoutRootArray { .. } => 43,
             Self::ContractFieldProviderLayoutAmbiguous { .. } => 44,
             Self::ContractFieldProviderTargetUnresolved { .. } => 45,
             Self::ContractFieldLayoutInvariant { .. } => 46,
-            Self::ContractFieldConcreteLayoutRootUnresolved { .. } => 47,
             Self::ContractFieldProviderCycle { .. } => 48,
             Self::ContractFieldProviderRawInvalid { .. } => 49,
         }

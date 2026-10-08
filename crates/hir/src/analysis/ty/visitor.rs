@@ -133,7 +133,6 @@ where
     match &const_ty.data(db) {
         ConstTyData::TyVar(var, _) => visitor.visit_var(var),
         ConstTyData::TyParam(param, ty) => visitor.visit_const_param(param, *ty),
-        ConstTyData::Hole(..) => {}
         ConstTyData::Value(value) => walk_sem_const(visitor, value.value()),
         ConstTyData::Description(value) => walk_sem_const(visitor, *value),
         ConstTyData::Computation {

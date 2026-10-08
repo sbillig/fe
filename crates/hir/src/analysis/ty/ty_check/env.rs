@@ -28,7 +28,7 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         closure::closure_effect_requirements,
-        const_ty::{CallableInputLayoutHoleOrigin, const_body_assumptions},
+        const_ty::{CallableInputOrigin, const_body_assumptions},
         corelib::resolve_lib_type_path,
         effects::{
             EffectKeyKind,
@@ -42,7 +42,6 @@ use crate::analysis::{
         shape::Shape,
         trait_def::TraitInstId,
         trait_resolution::{PredicateListId, constraint::collect_func_effect_provider_constraints},
-        ty_contains_const_hole,
         ty_def::{BorrowKind, ClosureTy, InvalidCause, StringFallback, TyData, TyId, TyVarSort},
         ty_is_copy,
         ty_lower::lower_hir_ty,
@@ -266,9 +265,6 @@ impl<'db> TyCheckEnv<'db> {
                     if !ty.is_star_kind(db) {
                         ty = TyId::invalid(db, InvalidCause::Other);
                     }
-                    if !view.is_self_param(db) && ty_contains_const_hole(db, ty) {
-                        ty = TyId::invalid(db, InvalidCause::Other);
-                    }
                     let var = LocalBinding::Param {
                         site: ParamSite::Func(func),
                         idx,
@@ -300,9 +296,6 @@ impl<'db> TyCheckEnv<'db> {
                     };
 
                     if !ty.is_star_kind(db) {
-                        ty = TyId::invalid(db, InvalidCause::Other);
-                    }
-                    if ty_contains_const_hole(db, ty) {
                         ty = TyId::invalid(db, InvalidCause::Other);
                     }
 
@@ -776,7 +769,7 @@ impl<'db> TyCheckEnv<'db> {
             BodyOwner::Func(func) => {
                 let rt = func.return_ty(self.db);
                 if func.has_explicit_return_ty(self.db) {
-                    if rt.is_star_kind(self.db) && !ty_contains_const_hole(self.db, rt) {
+                    if rt.is_star_kind(self.db) {
                         rt
                     } else {
                         TyId::invalid(self.db, InvalidCause::Other)
@@ -810,7 +803,7 @@ impl<'db> TyCheckEnv<'db> {
                 };
 
                 let ty = lower_hir_ty(self.db, ret_ty, self.owner_scope, self.assumptions());
-                if ty.is_star_kind(self.db) && !ty_contains_const_hole(self.db, ty) {
+                if ty.is_star_kind(self.db) {
                     ty
                 } else {
                     TyId::invalid(self.db, InvalidCause::Other)
@@ -2012,26 +2005,23 @@ impl<'db> LocalBinding<'db> {
         }
     }
 
-    pub fn callable_input_origin(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<CallableInputLayoutHoleOrigin> {
+    pub fn callable_input_origin(self, db: &'db dyn HirAnalysisDb) -> Option<CallableInputOrigin> {
         match self {
             Self::Param {
                 site: ParamSite::Func(func),
                 idx,
                 ..
             } => Some(if func.is_method(db) && idx == 0 {
-                CallableInputLayoutHoleOrigin::Receiver
+                CallableInputOrigin::Receiver
             } else {
-                CallableInputLayoutHoleOrigin::ValueParam(idx)
+                CallableInputOrigin::ValueParam(idx)
             }),
             Self::Param {
                 site: ParamSite::EffectField(_),
                 idx,
                 ..
             }
-            | Self::EffectParam { idx, .. } => Some(CallableInputLayoutHoleOrigin::Effect(idx)),
+            | Self::EffectParam { idx, .. } => Some(CallableInputOrigin::Effect(idx)),
             Self::Local { .. }
             | Self::Param {
                 site: ParamSite::ContractInit(_) | ParamSite::Closure(_) | ParamSite::ClosureEnv(_),

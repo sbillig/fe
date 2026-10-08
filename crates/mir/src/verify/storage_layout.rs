@@ -130,9 +130,7 @@ fn verify_contract_field_binding<'db>(
         .values()
         .find(|field| field.field == binding.field)
         .ok_or(VerifyError::UnknownContractField(binding.field))?;
-    let expected_ty = field
-        .target_effect_binding_ty(db)
-        .map_err(|_| VerifyError::InvalidContractFieldLayout(binding.field))?;
+    let expected_ty = field.target;
     if binding.declared_ty != expected_ty {
         return Err(VerifyError::ContractFieldTypeMismatch {
             field: binding.field,
@@ -193,10 +191,10 @@ fn verify_contract_field_binding<'db>(
     let mir_span = RuntimeMemoryLayout::for_space(db, AddressSpaceKind::Storage)
         .class_size(&pointee)
         .map_err(|_| VerifyError::InvalidContractFieldLayout(binding.field))?;
-    if u64::try_from(field.inline_span).ok() != Some(mir_span) {
+    if u64::try_from(field.slot_count).ok() != Some(mir_span) {
         return Err(VerifyError::ContractFieldSpanMismatch {
             field: binding.field,
-            hir_span: field.inline_span,
+            hir_span: field.slot_count,
             mir_span,
         });
     }
@@ -271,7 +269,7 @@ mod tests {
 use std::evm::StorageMap
 use std::evm::effects::TStorPtr
 
-struct Rooted<const ROOT: u256 = _> {
+struct Word {
     value: u256,
 }
 
@@ -284,10 +282,10 @@ pub contract Layouts {
     mut words: [[u256; 2]; 2],
     mut maps: StorageMap<u256, u256>,
     mut temp: TStorPtr<u256>,
-    fixed: Rooted,
+    fixed: Word,
 
     init() uses (mut fixed) {
-        fixed = Rooted { value: 11 }
+        fixed = Word { value: 11 }
     }
 
     recv LayoutMsg {
@@ -533,7 +531,7 @@ pub contract Other {
                     .expect("field layout");
                 let binding = field_binding(&recv_args, field);
                 assert_eq!(hir.address_space, space);
-                assert_eq!(hir.inline_span, span);
+                assert_eq!(hir.slot_count, span);
                 assert_eq!(
                     RuntimeMemoryLayout::for_space(db, AddressSpaceKind::Storage)
                         .class_size(&binding.class.deref_target(db).unwrap())

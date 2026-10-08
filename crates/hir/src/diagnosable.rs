@@ -356,8 +356,6 @@ impl<'db> Func<'db> {
                 diags.push(TyLowerDiag::ExpectedStarKind(span).into());
             } else if ret.is_const_ty(db) {
                 diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
-            } else if ty::ty_contains_const_hole(db, ret) {
-                diags.push(TyLowerDiag::ConstHoleInValuePosition { span, ty: ret }.into());
             } else if let ty::trait_resolution::WellFormedness::IllFormed { goal, subgoal } =
                 ty::trait_resolution::check_ty_wf(
                     db,

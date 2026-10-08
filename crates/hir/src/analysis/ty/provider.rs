@@ -114,9 +114,10 @@ pub enum ProviderLayoutEvidence<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ProviderLayoutResolution<'db> {
     NotHandle,
+    /// A handle, by `impl_instance`, to a `target` in `space`.
     Resolved {
         impl_instance: ResolvedImplInstance<'db>,
-        target_template: TyId<'db>,
+        target: TyId<'db>,
         space: ProviderAddressSpace,
     },
     Invalid(ProviderLayoutFailure),
@@ -169,7 +170,6 @@ pub(crate) enum EffectHandleResolution<'db> {
     NotHandle,
     Resolved {
         impl_instance: ResolvedImplInstance<'db>,
-        target_template: TyId<'db>,
         target_ty: TyId<'db>,
         raw_ty: TyId<'db>,
     },
@@ -220,8 +220,7 @@ fn resolve_effect_handle_query<'db>(
         resolved.selected().origin(db),
         ImplementorOrigin::Assumption
     );
-    let Some((target_template, target_ty)) =
-        resolved_effect_handle_assoc_ty(db, resolved, trait_bound, "Target")
+    let Some(target_ty) = resolved_effect_handle_assoc_ty(db, resolved, trait_bound, "Target")
     else {
         return EffectHandleResolution::Invalid(ProviderLayoutFailure::UnresolvedTarget);
     };
@@ -233,8 +232,7 @@ fn resolve_effect_handle_query<'db>(
     {
         return EffectHandleResolution::Invalid(ProviderLayoutFailure::UnresolvedTarget);
     }
-    let Some((_, raw_ty)) = resolved_effect_handle_assoc_ty(db, resolved, trait_bound, "Raw")
-    else {
+    let Some(raw_ty) = resolved_effect_handle_assoc_ty(db, resolved, trait_bound, "Raw") else {
         return EffectHandleResolution::Invalid(ProviderLayoutFailure::UnresolvedRaw);
     };
     let raw_ty = normalize_ty(db, raw_ty, scope, assumptions);
@@ -247,7 +245,6 @@ fn resolve_effect_handle_query<'db>(
     }
     EffectHandleResolution::Resolved {
         impl_instance: resolved,
-        target_template,
         target_ty,
         raw_ty,
     }
@@ -258,15 +255,12 @@ fn resolved_effect_handle_assoc_ty<'db>(
     resolved: ResolvedImplInstance<'db>,
     trait_bound: bool,
     name: &str,
-) -> Option<(TyId<'db>, TyId<'db>)> {
+) -> Option<TyId<'db>> {
     let ident = IdentId::new(db, name.to_string());
     let trait_ty = trait_bound
         .then(|| resolved.trait_inst().project_assoc_ty(db, ident))
         .flatten();
-    Some((
-        resolved.assoc_ty_template(db, ident).or(trait_ty)?,
-        resolved.instantiated_assoc_ty(db, ident).or(trait_ty)?,
-    ))
+    resolved.instantiated_assoc_ty(db, ident).or(trait_ty)
 }
 
 /// Returns the semantic layout value carried by a nominal effect handle.
@@ -295,17 +289,16 @@ pub fn resolve_effect_handle_layout<'db>(
     assumptions: PredicateListId<'db>,
     provider_ty: TyId<'db>,
 ) -> ProviderLayoutResolution<'db> {
-    let (impl_instance, target_template, target_ty, raw_ty) =
+    let (impl_instance, target_ty, raw_ty) =
         match resolve_effect_handle(db, scope, assumptions, provider_ty) {
             EffectHandleResolution::NotHandle => {
                 return ProviderLayoutResolution::NotHandle;
             }
             EffectHandleResolution::Resolved {
                 impl_instance,
-                target_template,
                 target_ty,
                 raw_ty,
-            } => (impl_instance, target_template, target_ty, raw_ty),
+            } => (impl_instance, target_ty, raw_ty),
             EffectHandleResolution::Invalid(failure) => {
                 return ProviderLayoutResolution::Invalid(failure);
             }
@@ -328,7 +321,7 @@ pub fn resolve_effect_handle_layout<'db>(
     }
     ProviderLayoutResolution::Resolved {
         impl_instance,
-        target_template,
+        target: target_ty,
         space,
     }
 }
@@ -602,9 +595,7 @@ pub fn provider_semantics_for_specialized_call<'db>(
 ) -> ProviderSemantics<'db> {
     let mut semantics = provider_semantics(db, scope, assumptions, provider_ty);
     let root_object_refinement = matches!(semantics.evidence, ProviderLayoutEvidence::NotHandle)
-        && target_ty.is_some_and(|target| {
-            super::layout_shape_key(db, target) == super::layout_shape_key(db, provider_ty)
-        });
+        && target_ty.is_some_and(|target| target == provider_ty);
     if matches!(
         semantics.evidence,
         ProviderLayoutEvidence::Capability
@@ -912,17 +903,12 @@ fn probe(value: own Ptr<u8, AddressSpace::Memory>) {}
             resolve_effect_handle_layout(&db, scope, PredicateListId::empty_list(&db), provider_ty);
         let ProviderLayoutResolution::Resolved {
             impl_instance,
-            target_template,
+            target,
             space,
         } = resolution
         else {
             panic!("expected a unique provider layout, got {resolution:?}");
         };
-
-        let target = impl_instance
-            .instantiated_assoc_ty(&db, crate::hir_def::IdentId::new(&db, "Target"))
-            .expect("missing instantiated Target");
-        assert!(target_template.has_param(&db));
         assert_eq!(target.pretty_print(&db).to_string(), "u8");
         assert_eq!(impl_instance.impl_args(&db)[0], target);
         assert_eq!(space, ProviderAddressSpace::Memory);
@@ -1022,7 +1008,7 @@ fn probe(value: own MissingTarget) {}
             r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 
-struct Ptr<T, const SP: AddressSpace = _> { raw: u256 }
+struct Ptr<T, const SP: AddressSpace> { raw: u256 }
 
 impl<T, const SP: AddressSpace> EffectHandle for Ptr<T, SP> {
     type Target = T
@@ -1032,7 +1018,7 @@ impl<T, const SP: AddressSpace> EffectHandle for Ptr<T, SP> {
     fn raw(self) -> u256 { self.raw }
 }
 
-fn probe(value: own Ptr<u8>) {}
+fn probe<const SP: AddressSpace>(value: own Ptr<u8, SP>) {}
 "#,
         );
         let (unresolved_space_mod, _) = db.top_mod(unresolved_space_file);

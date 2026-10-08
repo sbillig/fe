@@ -163,11 +163,10 @@ pub(crate) fn layout_backing_query<'db>(
     Some((target, structural_path))
 }
 
-/// Physical place provenance for layout-bearing value projections.
+/// Physical place provenance for value projections.
 ///
 /// This keeps backing storage alive and lets borrow normalization recover a
-/// projectable carrier place. It is deliberately separate from
-/// `LayoutEvidenceBody`, which transports semantic runtime-root values.
+/// projectable carrier place.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum LayoutBackingPlace<'db> {
     Local(SPlace<'db>),
@@ -184,7 +183,7 @@ pub enum LayoutBackingPlace<'db> {
 }
 
 /// Maps a projection in the current value to the place that physically backs
-/// it. This is carrier provenance, not runtime layout evidence.
+/// it: carrier provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct LayoutBackingSource<'db> {
     pub target: Vec<LayoutBackingProjection>,

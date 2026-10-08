@@ -1119,26 +1119,23 @@ async fn mock_lsp_hover_shows_indexed_layouts_and_transactional_failures() {
         "expected indexed inline details, got:\n{array_text}"
     );
 
-    let invalid_code = r#"struct Good<const ROOT: u256 = _> {}
-struct Bad<const ROOT: u8 = _> {}
-
-pub contract C {
-  mut good: Good
-  mut bad: Bad
+    let invalid_code = r#"pub contract C {
+  mut good: u256
+  bad: [u256; 576460752303423488]
 }
 "#;
     client.did_change(&uri, 711, invalid_code);
     client.wait_for_text(&uri, invalid_code).await;
-    let good_hover = hover_at(&mut client, &uri, 4, 7).await;
+    let good_hover = hover_at(&mut client, &uri, 1, 7).await;
     let good_text = hover_text(&good_hover);
     assert!(
         good_text.contains("Unavailable because another contract field"),
         "expected transactional allocation status, got:\n{good_text}"
     );
-    let bad_hover = hover_at(&mut client, &uri, 5, 7).await;
+    let bad_hover = hover_at(&mut client, &uri, 2, 3).await;
     let bad_text = hover_text(&bad_hover);
     assert!(
-        bad_text.contains("Invalid:") && bad_text.contains("not a `u256` or `usize`"),
+        bad_text.contains("Invalid: layout extent overflowed"),
         "expected primary layout failure, got:\n{bad_text}"
     );
 

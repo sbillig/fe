@@ -887,9 +887,8 @@ impl<'a, 'db> BodyRequirements<'a, 'db> {
     /// expression type holds. An application reported before is not reported
     /// again, and any other is reported once, at the first expression that
     /// carries it. Patterns, binding uses, blocks and branches are left out:
-    /// their types come from an expression here or from the signature, and a
-    /// signature type reaches the body with its layout holes instantiated, so
-    /// it would not match the written type that reported it.
+    /// their types come from an expression here or from the signature, whose
+    /// written types report their own failures.
     ///
     /// An expression type that `check_expr` found no failure in has none here
     /// either, since `reported` only adds to `written`, so only a function
@@ -1179,11 +1178,7 @@ fn expression_const_bodies<'db>(
         };
         let definition = match expr.data(db, body).borrowed().to_opt()? {
             Expr::Path(Partial::Present(path)) => {
-                let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
-                    path: *path,
-                    scope: body.scope(),
-                    assumptions: typed.assumptions(),
-                });
+                let minter = LoweringContext::deferred();
                 match resolve_path_with_minter(
                     db,
                     *path,
@@ -1267,12 +1262,7 @@ fn expression_const_bodies<'db>(
         if path_const_bodies(db, path).is_empty() {
             return Vec::new();
         }
-        let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
-            path,
-            scope: body.scope(),
-            assumptions: typed.assumptions(),
-        })
-        .recording_resolutions();
+        let minter = LoweringContext::deferred().recording_resolutions();
         let resolve = |value| {
             resolve_path_with_minter(db, path, body.scope(), typed.assumptions(), value, &minter)
         };
@@ -2045,12 +2035,7 @@ fn trait_ref_const_args<'db>(
     if path_const_bodies(db, path).is_empty() {
         return Vec::new();
     }
-    let minter = LoweringContext::deferred(HoleAnchor::TemplatePath {
-        path,
-        scope,
-        assumptions,
-    })
-    .recording_resolutions();
+    let minter = LoweringContext::deferred().recording_resolutions();
     let _ = resolve_path_with_minter(db, path, scope, assumptions, false, &minter);
     segment_const_args(db, path, &minter.into_resolutions())
 }

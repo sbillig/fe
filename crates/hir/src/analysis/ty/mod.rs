@@ -45,8 +45,7 @@ pub mod decision_tree;
 pub mod diagnostics;
 pub mod fold;
 pub(crate) mod generic_defaults;
-pub mod layout_bundle;
-pub(crate) mod layout_holes;
+
 pub(crate) mod method_cmp;
 pub mod method_table;
 pub mod normalize;
@@ -69,20 +68,6 @@ pub mod unify;
 pub(crate) mod unsafe_check;
 pub mod visitor;
 
-pub use const_ty::CallableLayoutOwner;
-pub use layout_bundle::{
-    CallableLayoutBundleInput, CallableLayoutBundleParam, CallableLayoutBundleResult,
-    CallableLayoutBundleSignature, CallableLayoutParamPort, CallableLayoutPort,
-    LayoutBundleComponent, LayoutBundleComponentId, LayoutBundleComponentKey,
-    LayoutBundleComponentTransport, LayoutBundleInterface, LayoutBundleInterfaceError,
-    LayoutBundlePath, LayoutBundlePathStep, LayoutBundleSchema, LayoutBundleSchemaError,
-    LayoutBundleTransport, LayoutBundleUnrepresentable, LayoutBundleViewMapping,
-    LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey, LayoutRootPort, LayoutViewAlias,
-};
-pub use layout_holes::{
-    LayoutShapeKey, layout_root_descends_from, layout_root_id, layout_root_placeholder,
-    layout_shape_key, layout_shape_ty, ty_contains_const_hole,
-};
 pub use msg_selector::MsgAnalysisPass;
 pub use provider::{
     ProviderAddressSpace, ProviderKind, ProviderSemantics, ProviderTransport,

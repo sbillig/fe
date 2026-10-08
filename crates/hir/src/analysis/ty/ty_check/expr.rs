@@ -17,7 +17,7 @@ use crate::span::DynLazySpan;
 
 use super::{
     BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArgLayoutView,
-    PatternLayoutContext, RecordLike, RowArg, Typeable, ValuePathRef,
+    RecordLike, RowArg, Typeable, ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
@@ -30,13 +30,13 @@ use super::{
     path::ResolvedPathInBody,
     ty_may_be_code_region_token,
 };
-use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
+use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
 use crate::analysis::ty::{
     adt_def::AdtRef,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonicalized, Solution},
-    const_ty::{BodyHoleSite, HoleAnchor, LoweringContext, instantiate_inherent_const_decl_ty},
+    const_ty::{LoweringContext, instantiate_inherent_const_decl_ty},
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
@@ -97,26 +97,16 @@ use crate::analysis::{
         instance::resolve_semantic_const_ref, int_const,
     },
     ty::{
-        LayoutBundlePathStep,
         const_expr::ConstExpr,
         const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
-        ty_contains_const_hole,
         ty_def::{InvalidCause, TyId},
-        ty_lower::{
-            callable_input_carrier_projected_layout_ty, callable_input_layout_origin_ty,
-            callable_input_layout_projection_paths, callable_input_projected_layout_ty,
-            instantiate_callable_effect_layout_args, instantiate_callable_projection_layout_args,
-            lower_hir_ty,
-        },
+        ty_lower::lower_hir_ty,
     },
 };
 use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
-use crate::semantic::{
-    FieldStorageLayout, LayoutProjection, LayoutViewError, LayoutViewKind, ProviderBinding,
-    ProviderSource,
-};
+use crate::semantic::{ProviderBinding, ProviderSource};
 use common::indexmap::IndexMap;
 
 #[derive(Debug, Clone, Copy)]
@@ -136,33 +126,6 @@ pub(super) struct ProviderTargetResolution<'db> {
     handle_proof: Option<(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>)>,
     effect_ref_proof: Option<(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>)>,
     effect_ref_mut_proof: Option<(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>)>,
-}
-
-fn layout_projections_from_callable_path(
-    path: &[LayoutBundlePathStep],
-) -> Option<Vec<LayoutProjection>> {
-    let mut projections = Vec::new();
-    let mut steps = path.iter();
-    while let Some(step) = steps.next() {
-        match *step {
-            LayoutBundlePathStep::Field(field) => {
-                projections.push(LayoutProjection::Field(field));
-            }
-            LayoutBundlePathStep::Variant(variant) => {
-                let LayoutBundlePathStep::Field(field) = *steps.next()? else {
-                    return None;
-                };
-                projections.push(LayoutProjection::VariantField { variant, field });
-            }
-            LayoutBundlePathStep::Index => {
-                projections.push(LayoutProjection::Index);
-            }
-            LayoutBundlePathStep::ConstParam(param) => {
-                projections.push(LayoutProjection::ConstParam(param));
-            }
-        }
-    }
-    Some(projections)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -834,7 +797,7 @@ impl<'db> TyChecker<'db> {
 
     fn lower_closure_ty(&mut self, ty: HirTyId<'db>) -> TyId<'db> {
         let ty = lower_hir_ty(self.db, ty, self.env.scope(), self.env.assumptions());
-        if ty.is_star_kind(self.db) && !ty_contains_const_hole(self.db, ty) {
+        if ty.is_star_kind(self.db) {
             ty
         } else {
             TyId::invalid(self.db, InvalidCause::Other)
@@ -1310,9 +1273,6 @@ impl<'db> TyChecker<'db> {
                     len,
                 })
             }
-            if let Some(projected) = self.contract_field_projected_index_ty(lhs_expr) {
-                return ExprProp::new(self.table.fold_ty(self.db, projected), lhs.is_mut);
-            }
             return ExprProp::new(elem_ty, lhs.is_mut);
         }
         if matches!(op, BinOp::Index) {
@@ -1476,8 +1436,7 @@ impl<'db> TyChecker<'db> {
         let scrutinee_ty = self.fresh_ty();
         let scrutinee_prop = self.check_expr(scrutinee, scrutinee_ty);
         let scrutinee_prop = self.open_matched_place(scrutinee, scrutinee_prop, [pat]);
-        let layout = self.pattern_layout_context(scrutinee);
-        self.check_pat_with_layout(pat, scrutinee_prop.ty, layout.as_ref());
+        self.check_pat(pat, scrutinee_prop.ty);
         self.bind_pattern_source(pat, scrutinee, &scrutinee_prop);
 
         ExprProp::new(TyId::bool(self.db), true)
@@ -1744,7 +1703,6 @@ impl<'db> TyChecker<'db> {
         }
 
         callable.check_args(self, args, call_span.clone().args(), None, false);
-        self.specialize_callable_layout_args(&mut callable, None, args);
 
         self.check_callable_effects(expr, &mut callable);
 
@@ -2040,21 +1998,6 @@ impl<'db> TyChecker<'db> {
                             });
                         }
                     }
-                    if let Some(target_ty) = instantiated_key_ty {
-                        self.instantiate_callable_effect_layout_args(
-                            callable,
-                            func,
-                            req.binding_idx as usize,
-                            target_ty,
-                        );
-                    }
-                    self.specialize_callable_effect_layout_projections(
-                        callable,
-                        func,
-                        req.binding_idx as usize,
-                        provider,
-                        &arg,
-                    );
                     let provider_space = self
                         .effect_arg_provider_space(&arg, pass_mode)
                         .or_else(|| self.concrete_borrow_provider_for_effect_handle_ty(provider.ty))
@@ -2284,22 +2227,6 @@ impl<'db> TyChecker<'db> {
             is_mut: entry.is_mut,
         };
         Some((binding, path))
-    }
-
-    fn instantiate_callable_effect_layout_args(
-        &mut self,
-        callable: &mut Callable<'db>,
-        callee: Func<'db>,
-        effect_idx: usize,
-        actual_key_ty: TyId<'db>,
-    ) {
-        instantiate_callable_effect_layout_args(
-            self.db,
-            callee,
-            effect_idx,
-            self.table.fold_ty(self.db, actual_key_ty),
-            callable.generic_args_mut(),
-        );
     }
 
     /// The place a provider names: its `with` value's or effect binding's.
@@ -2756,7 +2683,7 @@ impl<'db> TyChecker<'db> {
                         contract
                             .fields(self.db)
                             .get(&ident)
-                            .map(|field| field.declared_shape_ty())?
+                            .map(|field| field.declared)?
                     }
                     LocalBinding::Local { .. } | LocalBinding::Param { .. } => provider.ty,
                 };
@@ -2918,7 +2845,6 @@ impl<'db> TyChecker<'db> {
                         is_mut: provided.is_mut,
                         source,
                         semantics,
-                        layout_env: None,
                     }
                 },
                 |provider| ProviderBinding {
@@ -3893,16 +3819,7 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let anchor = HoleAnchor::BodySyntax {
-            body: self.body(),
-            site: BodyHoleSite::Expr(expr),
-        };
-        if !callable.unify_generic_args(
-            self,
-            *generic_args,
-            anchor,
-            call_span.clone().generic_args(),
-        ) {
+        if !callable.unify_generic_args(self, *generic_args, call_span.clone().generic_args()) {
             return ExprProp::invalid(self.db);
         }
 
@@ -3940,7 +3857,6 @@ impl<'db> TyChecker<'db> {
             Some((*receiver, receiver_prop)),
             false,
         );
-        self.specialize_callable_layout_args(&mut callable, Some(*receiver), args);
 
         // Check required effects for the method call
         self.check_callable_effects(expr, &mut callable);
@@ -3995,13 +3911,9 @@ impl<'db> TyChecker<'db> {
         let idx = path.segment_index(self.db);
         let generic_args = path.generic_args(self.db);
         let generic_args_span = path_span.clone().segment(idx).generic_args();
-        let anchor = HoleAnchor::BodySyntax {
-            body: self.body(),
-            site: BodyHoleSite::Expr(expr),
-        };
-        let minter = LoweringContext::new(anchor);
+        let minter = LoweringContext::new();
         let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
-            callable.unify_generic_args(tc, generic_args, anchor, generic_args_span.clone())
+            callable.unify_generic_args(tc, generic_args, generic_args_span.clone())
         };
 
         let res = if path.is_bare_ident(self.db) {
@@ -4432,10 +4344,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let path_span = span.clone().path();
-        let minter = LoweringContext::new(HoleAnchor::BodySyntax {
-            body: self.body(),
-            site: BodyHoleSite::Expr(expr),
-        });
+        let minter = LoweringContext::new();
         let reso =
             match self.resolve_path(*path, true, path_span.clone(), span.clone().into(), &minter) {
                 Ok(reso) => reso,
@@ -4452,10 +4361,7 @@ impl<'db> TyChecker<'db> {
         match reso {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                 // Use the expected type to constrain the record's generic args
-                // before checking fields. A structural layout hole unifies as
-                // a wildcard, so a successful nominal match must also adopt
-                // the expected application; that is how an assigned layout
-                // view reaches aggregate construction.
+                // before checking fields.
                 let snapshot = self.snapshot_state();
                 let ty = if self.table.unify(ty, expected).is_ok() {
                     self.commit_state(snapshot);
@@ -4623,16 +4529,6 @@ impl<'db> TyChecker<'db> {
                         }
                         self.env
                             .register_resolved_field_index(expr, resolved_field.index);
-                        if let Some(projected) =
-                            self.contract_field_projected_field_ty(*lhs, resolved_field.index)
-                        {
-                            return ExprProp::new(self.table.fold_ty(self.db, projected), is_mut);
-                        }
-                        if let Some(projected) =
-                            self.callable_input_projected_field_ty(*lhs, resolved_field.index)
-                        {
-                            return ExprProp::new(self.table.fold_ty(self.db, projected), is_mut);
-                        }
                         return ExprProp::new(field_ty, is_mut);
                     }
                 }
@@ -4641,16 +4537,6 @@ impl<'db> TyChecker<'db> {
                     if ty_base.is_tuple(self.db) {
                         self.env
                             .register_resolved_field_index(expr, resolved_field.index);
-                        if let Some(projected) =
-                            self.contract_field_projected_field_ty(*lhs, resolved_field.index)
-                        {
-                            return ExprProp::new(self.table.fold_ty(self.db, projected), is_mut);
-                        }
-                        if let Some(projected) =
-                            self.callable_input_projected_field_ty(*lhs, resolved_field.index)
-                        {
-                            return ExprProp::new(self.table.fold_ty(self.db, projected), is_mut);
-                        }
                         let ty = ty_args[usize::from(resolved_field.index)];
                         return ExprProp::new(ty, is_mut);
                     }
@@ -4666,439 +4552,6 @@ impl<'db> TyChecker<'db> {
         self.push_diag(diag);
 
         ExprProp::invalid(self.db)
-    }
-
-    fn contract_field_projected_field_ty(
-        &self,
-        lhs: ExprId,
-        field_index: u16,
-    ) -> Option<TyId<'db>> {
-        let (field, view, mut projections) = self.contract_field_layout_context(lhs)?;
-        projections.push(LayoutProjection::Field(field_index));
-        let selection = field
-            .selection_for_projections(self.db, view, &projections)
-            .ok()?;
-        self.selected_contract_layout_ty(field, view, &selection)
-    }
-
-    fn contract_field_projected_index_ty(&self, lhs: ExprId) -> Option<TyId<'db>> {
-        let (field, view, mut projections) = self.contract_field_layout_context(lhs)?;
-        projections.push(LayoutProjection::Index);
-        let selection = field
-            .selection_for_projections(self.db, view, &projections)
-            .ok()?;
-        self.selected_contract_layout_ty(field, view, &selection)
-    }
-
-    fn selected_contract_layout_ty(
-        &self,
-        field: &FieldStorageLayout<'db>,
-        view: LayoutViewKind,
-        selection: &crate::semantic::LayoutSelection,
-    ) -> Option<TyId<'db>> {
-        match field.projected_concrete_ty(self.db, view, selection) {
-            Ok(ty) => Some(ty),
-            Err(
-                LayoutViewError::NonPhysicalRoot { .. } | LayoutViewError::RootNeedsLanding { .. },
-            ) => field
-                .project(self.db, view, selection)
-                .ok()
-                .map(|view| view.shape_ty()),
-            Err(
-                LayoutViewError::RootNotClassified { .. }
-                | LayoutViewError::MissingAllocation { .. }
-                | LayoutViewError::InvalidProjection,
-            ) => None,
-        }
-    }
-
-    fn contract_field_layout_context(
-        &self,
-        expr: ExprId,
-    ) -> Option<(
-        &'db FieldStorageLayout<'db>,
-        LayoutViewKind,
-        Vec<LayoutProjection>,
-    )> {
-        let place = self.env.expr_place(expr)?;
-        self.contract_field_layout_context_for_place(&place)
-    }
-
-    fn contract_field_layout_context_for_place(
-        &self,
-        place: &Place<'db>,
-    ) -> Option<(
-        &'db FieldStorageLayout<'db>,
-        LayoutViewKind,
-        Vec<LayoutProjection>,
-    )> {
-        let PlaceBase::Binding(binding) = place.base;
-        let provider = match binding {
-            LocalBinding::EffectParam {
-                site, provider_idx, ..
-            } => self.env.provider_binding(site, provider_idx),
-            LocalBinding::Param {
-                site: ParamSite::EffectField(site),
-                idx,
-                ..
-            } => self.env.resolved_provider_binding(site, idx),
-            LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
-        }?;
-        let layout_env = provider.layout_env?;
-        let field = layout_env
-            .field
-            .contract
-            .storage_layout(self.db)
-            .values()
-            .find(|field| field.field == layout_env.field)?;
-        // An entry lies at a slot computed at runtime, outside the field.
-        if place.has_entry() {
-            return None;
-        }
-        let projections = place
-            .projections
-            .iter()
-            .filter_map(|projection| match projection {
-                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
-                PlaceProjection::Field { index, .. } => Some(LayoutProjection::Field(*index)),
-                PlaceProjection::Index { .. } => Some(LayoutProjection::Index),
-            })
-            .collect::<Vec<_>>();
-        Some((field, layout_env.view, projections))
-    }
-
-    fn contract_field_layout_context_for_effect_arg(
-        &self,
-        arg: &super::EffectArg<'db>,
-    ) -> Option<(
-        &'db FieldStorageLayout<'db>,
-        LayoutViewKind,
-        Vec<LayoutProjection>,
-    )> {
-        match arg {
-            super::EffectArg::Place(place) => self.contract_field_layout_context_for_place(place),
-            super::EffectArg::Binding(binding) => self
-                .contract_field_layout_context_for_place(&Place::new(PlaceBase::Binding(*binding))),
-            super::EffectArg::Value(expr) => self.contract_field_layout_context(*expr),
-            super::EffectArg::Unknown => None,
-        }
-    }
-
-    pub(super) fn specialize_callable_layout_args(
-        &self,
-        callable: &mut Callable<'db>,
-        receiver: Option<ExprId>,
-        args: &[HirCallArg<'db>],
-    ) {
-        let CallableDef::Func(func) = callable.callable_def() else {
-            return;
-        };
-        if let Some(receiver) = receiver {
-            self.specialize_callable_layout_origin(
-                callable,
-                func,
-                receiver,
-                crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Receiver,
-            );
-        }
-        let param_offset = usize::from(receiver.is_some());
-        for (idx, arg) in args.iter().enumerate() {
-            self.specialize_callable_layout_origin(
-                callable,
-                func,
-                arg.expr,
-                crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::ValueParam(
-                    idx + param_offset,
-                ),
-            );
-        }
-    }
-
-    fn specialize_callable_layout_origin(
-        &self,
-        callable: &mut Callable<'db>,
-        func: Func<'db>,
-        expr: ExprId,
-        origin: crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin,
-    ) {
-        let Some((field, view, base_projections)) = self.contract_field_layout_context(expr) else {
-            return;
-        };
-        self.specialize_callable_layout_context(
-            callable,
-            func,
-            origin,
-            field,
-            view,
-            &base_projections,
-        );
-    }
-
-    fn specialize_callable_layout_context(
-        &self,
-        callable: &mut Callable<'db>,
-        func: Func<'db>,
-        origin: crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin,
-        field: &FieldStorageLayout<'db>,
-        view: LayoutViewKind,
-        base_projections: &[LayoutProjection],
-    ) {
-        if let Ok(selection) = field.selection_for_projections(self.db, view, base_projections)
-            && let Some(actual_ty) = self.selected_contract_layout_ty(field, view, &selection)
-        {
-            match origin {
-                crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Receiver => {
-                    callable.specialize_arg_from_actual(self.db, 0, actual_ty);
-                }
-                crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::ValueParam(idx) => {
-                    callable.specialize_arg_from_actual(self.db, idx, actual_ty);
-                }
-                crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Effect(_) => {
-                    if let Some(expected_ty) =
-                        callable_input_layout_origin_ty(self.db, func, origin)
-                    {
-                        callable.specialize_params_from_actual(self.db, expected_ty, actual_ty);
-                    }
-                }
-            }
-        }
-        for path in callable_input_layout_projection_paths(self.db, func, origin) {
-            let Some(path_projections) = layout_projections_from_callable_path(&path) else {
-                continue;
-            };
-            let mut projections = base_projections.to_vec();
-            projections.extend(path_projections);
-            let Ok(selection) = field.selection_for_projections(self.db, view, &projections) else {
-                continue;
-            };
-            let Some(actual_ty) = self.selected_contract_layout_ty(field, view, &selection) else {
-                continue;
-            };
-            instantiate_callable_projection_layout_args(
-                self.db,
-                func,
-                origin,
-                &path,
-                actual_ty,
-                callable.generic_args_mut(),
-            );
-        }
-    }
-
-    fn specialize_callable_effect_layout_projections(
-        &self,
-        callable: &mut Callable<'db>,
-        callee: Func<'db>,
-        effect_idx: usize,
-        provider: ProvidedEffect<'db>,
-        arg: &super::EffectArg<'db>,
-    ) {
-        let callee_origin =
-            crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Effect(effect_idx);
-        if let Some((field, view, base_projections)) =
-            self.contract_field_layout_context_for_effect_arg(arg)
-        {
-            self.specialize_callable_layout_context(
-                callable,
-                callee,
-                callee_origin,
-                field,
-                view,
-                &base_projections,
-            );
-            return;
-        }
-        let Some(LocalBinding::EffectParam {
-            site: EffectParamSite::Func(caller),
-            idx: caller_effect_idx,
-            ..
-        }) = provider.binding
-        else {
-            return;
-        };
-        let caller_origin =
-            crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Effect(caller_effect_idx);
-        for path in callable_input_layout_projection_paths(self.db, callee, callee_origin) {
-            let Some(actual_ty) =
-                callable_input_projected_layout_ty(self.db, caller, caller_origin, &path)
-            else {
-                continue;
-            };
-            instantiate_callable_projection_layout_args(
-                self.db,
-                callee,
-                callee_origin,
-                &path,
-                actual_ty,
-                callable.generic_args_mut(),
-            );
-        }
-    }
-
-    pub(super) fn pattern_layout_context(&self, expr: ExprId) -> Option<PatternLayoutContext<'db>> {
-        self.pattern_layout_context_for_projection(expr, &[])
-    }
-
-    pub(super) fn pattern_layout_context_for_projection(
-        &self,
-        expr: ExprId,
-        projection: &[LayoutBundlePathStep],
-    ) -> Option<PatternLayoutContext<'db>> {
-        self.place_layout_context(&self.env.expr_place(expr)?, projection)
-    }
-
-    /// The layout context of `place` extended by `projection`: where the
-    /// layout of a contract field or callable input it lies in assigns the
-    /// layout arguments of its parts.
-    fn place_layout_context(
-        &self,
-        place: &Place<'db>,
-        projection: &[LayoutBundlePathStep],
-    ) -> Option<PatternLayoutContext<'db>> {
-        if let Some((field, view, mut base_projections)) =
-            self.contract_field_layout_context_for_place(place)
-        {
-            base_projections.extend(layout_projections_from_callable_path(projection)?);
-            return Some(PatternLayoutContext::ContractField {
-                field,
-                view,
-                base_projections,
-            });
-        }
-        let (func, origin) = match place.base {
-            PlaceBase::Binding(LocalBinding::Param {
-                site: ParamSite::Func(func),
-                idx,
-                ..
-            }) => {
-                let param = func.params(self.db).nth(idx)?;
-                let origin = if param.is_self_param(self.db) {
-                    crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Receiver
-                } else {
-                    crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::ValueParam(idx)
-                };
-                (func, origin)
-            }
-            PlaceBase::Binding(LocalBinding::EffectParam {
-                site: EffectParamSite::Func(func),
-                idx,
-                ..
-            })
-            | PlaceBase::Binding(LocalBinding::Param {
-                site: ParamSite::EffectField(EffectParamSite::Func(func)),
-                idx,
-                ..
-            }) => (
-                func,
-                crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Effect(idx),
-            ),
-            PlaceBase::Binding(
-                LocalBinding::Local { .. }
-                | LocalBinding::Param { .. }
-                | LocalBinding::EffectParam { .. },
-            ) => return None,
-        };
-        if place.has_entry() {
-            return None;
-        }
-        let mut base_path = place
-            .projections
-            .iter()
-            .flat_map(|projection| match *projection {
-                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => vec![],
-                PlaceProjection::Field { index, .. } => vec![LayoutBundlePathStep::Field(index)],
-                PlaceProjection::Index { .. } => vec![LayoutBundlePathStep::Index],
-            })
-            .collect::<Vec<_>>();
-        base_path.extend_from_slice(projection);
-        Some(PatternLayoutContext::CallableInput {
-            func,
-            origin,
-            base_path,
-        })
-    }
-
-    pub(super) fn projected_pattern_layout_ty(
-        &self,
-        context: &PatternLayoutContext<'db>,
-        path: &[LayoutBundlePathStep],
-    ) -> Option<TyId<'db>> {
-        match context {
-            PatternLayoutContext::ContractField {
-                field,
-                view,
-                base_projections,
-            } => {
-                let mut projections = base_projections.clone();
-                projections.extend(layout_projections_from_callable_path(path)?);
-                let selection = field
-                    .selection_for_projections(self.db, *view, &projections)
-                    .ok()?;
-                self.selected_contract_layout_ty(field, *view, &selection)
-            }
-            PatternLayoutContext::CallableInput {
-                func,
-                origin,
-                base_path,
-            } => {
-                let mut projection = base_path.clone();
-                projection.extend_from_slice(path);
-                callable_input_projected_layout_ty(self.db, *func, *origin, &projection)
-            }
-        }
-    }
-
-    fn callable_input_projected_field_ty(
-        &self,
-        lhs: ExprId,
-        field_index: u16,
-    ) -> Option<TyId<'db>> {
-        let place = self.env.expr_place(lhs)?;
-        let (func, origin) = match place.base {
-            PlaceBase::Binding(LocalBinding::Param {
-                site: ParamSite::Func(func),
-                idx,
-                ..
-            }) => {
-                let param = func.params(self.db).nth(idx)?;
-                let origin = if param.is_self_param(self.db) {
-                    crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Receiver
-                } else {
-                    crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::ValueParam(idx)
-                };
-                (func, origin)
-            }
-            PlaceBase::Binding(
-                LocalBinding::EffectParam {
-                    site: EffectParamSite::Func(func),
-                    idx,
-                    ..
-                }
-                | LocalBinding::Param {
-                    site: ParamSite::EffectField(EffectParamSite::Func(func)),
-                    idx,
-                    ..
-                },
-            ) => (
-                func,
-                crate::analysis::ty::const_ty::CallableInputLayoutHoleOrigin::Effect(idx),
-            ),
-            PlaceBase::Binding(_) => return None,
-        };
-        if place.has_entry() {
-            return None;
-        }
-        let mut path = place
-            .projections
-            .iter()
-            .flat_map(|projection| match *projection {
-                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => vec![],
-                PlaceProjection::Field { index, .. } => vec![LayoutBundlePathStep::Field(index)],
-                PlaceProjection::Index { .. } => vec![LayoutBundlePathStep::Index],
-            })
-            .collect::<Vec<_>>();
-        path.push(LayoutBundlePathStep::Field(field_index));
-        callable_input_carrier_projected_layout_ty(self.db, func, origin, &path)
     }
 
     fn check_tuple(
@@ -5304,7 +4757,6 @@ impl<'db> TyChecker<'db> {
         let scrutinee_ty = self.fresh_ty();
         let scrutinee_prop = self.check_expr(*scrutinee, scrutinee_ty);
         let scrutinee_pat_ty = scrutinee_prop.ty;
-        let pattern_layout = self.pattern_layout_context(*scrutinee);
 
         let Partial::Present(arms) = arms else {
             return ExprProp::invalid(self.db);
@@ -5319,8 +4771,7 @@ impl<'db> TyChecker<'db> {
         let mut arm_statuses = Vec::with_capacity(arms.len());
 
         for arm in arms.iter() {
-            let pat_result =
-                self.check_pat_with_layout(arm.pat, scrutinee_pat_ty, pattern_layout.as_ref());
+            let pat_result = self.check_pat(arm.pat, scrutinee_pat_ty);
             self.bind_pattern_source(arm.pat, *scrutinee, &scrutinee_prop);
             arm_statuses.push(pat_result.analysis);
 
@@ -5421,9 +4872,8 @@ impl<'db> TyChecker<'db> {
         }
         // The target is a place, possibly a projection's result.
         self.consume_access(*lhs);
-        // Assignment is an expected-type boundary. In particular, an assigned
-        // contract-field view can carry concrete layout roots that must reach
-        // aggregate constructors before their runtime layout is selected.
+        // Assignment is an expected-type boundary: the value is checked
+        // against the target's type.
         let mut rhs_prop = self.check_expr(*rhs, typed_lhs.ty);
         rhs_prop.ty = self.unify_ty(
             Typeable::Expr(*rhs, rhs_prop.clone()),

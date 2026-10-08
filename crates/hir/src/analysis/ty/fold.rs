@@ -92,10 +92,6 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         let ty = folder.fold_ty(db, *ty);
                         TyParam(param.clone(), ty)
                     }
-                    Hole(ty, hole_id) => {
-                        let ty = folder.fold_ty(db, *ty);
-                        Hole(ty, *hole_id)
-                    }
                     Value(value) => {
                         const_ty_from_sem_const(db, fold_sem_const(db, folder, value.value()))
                             .data(db)

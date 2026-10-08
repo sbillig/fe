@@ -556,7 +556,7 @@ module.exports = grammar({
       field('name', $.identifier),
       ':',
       field('type', $._type),
-      optional(seq('=', field('default', choice('_', $.block, $.literal)))),
+      optional(seq('=', field('default', choice($.block, $.literal)))),
     ),
 
     type_bound_list: $ => choice(

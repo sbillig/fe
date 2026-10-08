@@ -238,7 +238,6 @@ pub struct ConstGenericArg<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ConstGenericArgValue<'db> {
     Expr(Partial<Body<'db>>),
-    Hole,
 }
 
 impl<'db> ConstGenericArgValue<'db> {
@@ -247,7 +246,6 @@ impl<'db> ConstGenericArgValue<'db> {
             Self::Expr(body) => body
                 .to_opt()
                 .map_or_else(|| "<missing>".into(), |b| b.pretty_print(db)),
-            Self::Hole => "_".to_string(),
         }
     }
 }

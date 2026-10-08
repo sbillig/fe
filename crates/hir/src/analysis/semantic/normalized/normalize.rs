@@ -36,7 +36,6 @@ use crate::{
         },
         ty::{
             adt_def::AdtRef,
-            const_ty::ConstTyData,
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, provider_semantics,
             },
@@ -2528,13 +2527,7 @@ impl<'db> StructuralRepackCollector<'db> {
             )
         };
         let deferred_const_leaf = |ty: TyId<'db>| {
-            matches!(
-                ty.data(db),
-                TyData::ConstTy(const_ty)
-                    if matches!(const_ty.data(db), ConstTyData::Hole(..))
-                        || ty.has_param(db)
-                        || ty.has_var(db)
-            )
+            matches!(ty.data(db), TyData::ConstTy(_)) && (ty.has_param(db) || ty.has_var(db))
         };
         let nominal_targets_match = if source != target
             && source.as_capability(db).is_none()

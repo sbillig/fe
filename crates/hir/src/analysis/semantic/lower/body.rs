@@ -11,11 +11,11 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource, Mutability, SBlock,
-            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
-            STerminator, STerminatorKind, SValueId, SemConstId, SemConstValue, SemOrigin,
-            SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const,
-            bytes_const, consts::instantiate_const_template, int_const, reify_runtime_const_for_ty,
+            CallSiteId, FieldIndex, LayoutBackingSource, Mutability, SBlock, SBlockId, SConst,
+            SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind, STerminator,
+            STerminatorKind, SValueId, SemConstId, SemConstValue, SemOrigin, SemanticBody,
+            SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
+            consts::instantiate_const_template, int_const, reify_runtime_const_for_ty,
             runtime_size_bytes, sem_const_from_ty, struct_const, unit_const,
         },
         ty::{
@@ -41,7 +41,6 @@ use crate::{
         expr::{BinOp, LogicalBinOp, UnOp},
         params::FuncParamMode,
     },
-    projection::{IndexSource, Projection},
 };
 
 use super::{
@@ -2138,22 +2137,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             ForLoopItem::Access(_) | ForLoopItem::Produced => element,
         };
-        if plan.element_layout_backing_source {
-            self.locals[element.index()].layout_backing_sources = vec![LayoutBackingSource {
-                target: Vec::new(),
-                source: LayoutBackingPlace::Local(match &bases[0].1 {
-                    LoopBase::Value(base) => SPlace::dynamic_index(*base, state),
-                    LoopBase::Place(place, _) => {
-                        let mut place = place.clone();
-                        place
-                            .path
-                            .push(Projection::Index(IndexSource::Dynamic(state)));
-                        place
-                    }
-                }),
-            }];
-            self.assigned_layout_backing_sources[element.index()] = true;
-        }
         self.bind_pattern(pat, element);
         let _ = self.lower_expr(body_expr);
         let falls_through = !self.is_terminated(self.current);

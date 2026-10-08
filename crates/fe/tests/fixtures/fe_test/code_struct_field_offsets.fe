@@ -1,15 +1,15 @@
 use std::evm::Evm
 
-struct Rooted<const ROOT: u256 = _> {
+struct Rooted {
     value: u256,
 }
 
-msg RootGapMsg {
+msg StructGapMsg {
     #[selector = 1]
     Values -> (u256, u256),
 }
 
-pub contract RootGap {
+pub contract StructGap {
     first: Rooted,
     after: u256,
 
@@ -18,7 +18,7 @@ pub contract RootGap {
         after = 22
     }
 
-    recv RootGapMsg {
+    recv StructGapMsg {
         Values -> (u256, u256) uses (first, after) {
             (first.value, after)
         }
@@ -26,13 +26,13 @@ pub contract RootGap {
 }
 
 #[test]
-fn code_layout_roots_reserve_real_immutable_buffer_gaps() uses (evm: mut Evm) {
-    let c = evm.create2<RootGap>(value: 0, args: (), salt: 0)
+fn code_fields_after_a_struct_field_keep_their_offsets() uses (evm: mut Evm) {
+    let c = evm.create2<StructGap>(value: 0, args: (), salt: 0)
     let values: (u256, u256) = evm.call(
         addr: c,
         gas: 100000,
         value: 0,
-        message: RootGapMsg::Values {},
+        message: StructGapMsg::Values {},
     )
     assert!(values.0 == 11)
     assert!(values.1 == 22)

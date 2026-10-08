@@ -1,8 +1,8 @@
 use common::layout::enum_tag_bits;
 use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::{
-    semantic::{FieldIndex, LayoutEvidenceConstant, SemOrigin, SemanticInstance},
-    ty::{CallableLayoutParamPort, ty_def::TyId},
+    semantic::{FieldIndex, SemOrigin, SemanticInstance},
+    ty::ty_def::TyId,
 };
 use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
 use hir::projection::IndexSource;
@@ -973,18 +973,10 @@ pub struct ContractRecvAbiPlan<'db> {
 }
 
 /// Runtime arguments that a synthetic boundary supplies on behalf of a
-/// semantic owner. Physical effect carriers and layout evidence are separate
-/// ABI lanes and are deliberately planned independently.
+/// semantic owner: its physical effect carriers.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct EntrySemanticArgsPlan<'db> {
     pub effects: Box<[EntryEffectArgPlan<'db>]>,
-    pub layout_evidence: Box<[EntryLayoutEvidenceArgPlan<'db>]>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub struct EntryLayoutEvidenceArgPlan<'db> {
-    pub target: CallableLayoutParamPort,
-    pub value: LayoutEvidenceConstant<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

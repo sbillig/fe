@@ -30,7 +30,7 @@ use crate::analysis::{
         adt_def::AdtRef,
         binder::Binder,
         canonical::Canonicalized,
-        const_ty::{ConstBodyLowering, HoleAnchor, LayoutHoleArgSite, LoweringContext},
+        const_ty::{ConstBodyLowering, LoweringContext},
         fold::TyFoldable as _,
         generic_defaults::DefaultApplication,
         method_table::{MethodProbe, probe_method},
@@ -47,9 +47,8 @@ use crate::analysis::{
         },
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
         ty_lower::{
-            TyAlias, collect_generic_params, collect_source_generic_params, lower_generic_arg_list,
-            lower_hir_ty_with_minter, lower_type_alias, lower_type_alias_deferred,
-            lower_type_position_path,
+            TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty_with_minter,
+            lower_type_alias, lower_type_alias_deferred, lower_type_position_path,
         },
         unify::UnificationTable,
     },
@@ -117,10 +116,6 @@ pub enum PathResErrorKind<'db> {
         expected: Option<TyId<'db>>,
         given: Option<TyId<'db>>,
     },
-    TraitConstHoleArg {
-        arg_idx: usize,
-    },
-
     /// Trait path generic argument expected a type; wrong domain was found.
     /// Carries the argument index and offending ident/kind for precise diagnostics.
     TraitGenericArgType {
@@ -206,9 +201,6 @@ impl<'db> PathResError<'db> {
             }
             PathResErrorKind::ArgTypeMismatch { .. } => {
                 "Generic const argument type mismatch".to_string()
-            }
-            PathResErrorKind::TraitConstHoleArg { .. } => {
-                "Layout hole is not allowed in trait generic arguments".to_string()
             }
             PathResErrorKind::TraitGenericArgType { .. } => {
                 "Trait generic argument expects a type".to_string()
@@ -323,14 +315,6 @@ impl<'db> PathResError<'db> {
                 expected,
                 given,
             },
-
-            PathResErrorKind::TraitConstHoleArg { arg_idx: _ } => {
-                let hole_span = seg_span.clone().into_atom();
-                PathResDiag::TraitConstHoleArg {
-                    span: hole_span.into(),
-                    ident,
-                }
-            }
 
             PathResErrorKind::InvalidPathSegment(res) => PathResDiag::InvalidPathSegment {
                 span,
@@ -765,20 +749,13 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
-        path,
-        scope,
-        assumptions,
-    });
+    let minter = LoweringContext::new();
     resolve_path_with_minter(db, path, scope, assumptions, resolve_tail_as_value, &minter)
 }
 
-/// Like [`resolve_path`], but mints structural-hole identities through the
-/// caller's minter so holes created during resolution (generic-arg wildcards,
-/// `= _` default completions) are keyed to the enclosing
-/// lowering execution rather than to this path's content-interned identity.
-/// Each resolved segment is also reported to the minter, which keeps it when
-/// its lowering records resolutions.
+/// Like [`resolve_path`], but resolves with the caller's lowering context, so
+/// const bodies follow its mode. Each resolved segment is also reported to
+/// the context, which keeps it when its lowering records resolutions.
 pub(crate) fn resolve_path_with_minter<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -1226,13 +1203,7 @@ where
                             impl_trait.candidate_trait_inst_result(db).ok()?
                         }
                     };
-                    if matches!(
-                        minter.holes().anchor(),
-                        HoleAnchor::ImplAssocType {
-                            impl_trait: owner,
-                            ..
-                        } if owner == impl_trait
-                    ) {
+                    if minter.impl_assoc_type() == Some(impl_trait) {
                         match minter.const_bodies() {
                             ConstBodyLowering::Eager => {
                                 lower_checked_impl_assoc_ty(db, impl_trait, ident)
@@ -1251,14 +1222,8 @@ where
             };
 
             if let Some(assoc_ty) = impl_self_assoc {
-                let seg_args = lower_generic_arg_list(
-                    db,
-                    path.generic_args(db),
-                    scope,
-                    assumptions,
-                    LayoutHoleArgSite::Path(path),
-                    minter,
-                );
+                let seg_args =
+                    lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, minter);
                 let assoc_ty = TyId::foldl(db, assoc_ty, &seg_args);
                 if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
                     assoc_ty.data(db)
@@ -1309,14 +1274,8 @@ where
             // Deduplicate by normalized type, but preserve and return the original
             // (unnormalized) candidate to avoid prematurely collapsing projections
             // like `T::IntoIter::Item` into `T::Item`.
-            let seg_args = lower_generic_arg_list(
-                db,
-                path.generic_args(db),
-                scope,
-                assumptions,
-                LayoutHoleArgSite::Path(path),
-                minter,
-            );
+            let seg_args =
+                lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, minter);
             let evidence = assoc_ty_candidate_evidence(db, ty, assumptions);
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
                 IndexMap::new();
@@ -2098,11 +2057,7 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
-        path,
-        scope,
-        assumptions,
-    });
+    let minter = LoweringContext::new();
     resolve_name_res_with_minter(db, nameres, parent_ty, path, scope, assumptions, &minter)
 }
 
@@ -2118,16 +2073,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
     // Lowered only by the resolutions that apply them: lowering arguments that
     // are then rejected or ignored repeats the whole nested lowering whenever a
     // caller resolves the path again in another namespace.
-    let args = || {
-        lower_generic_arg_list(
-            db,
-            path.generic_args(db),
-            scope,
-            assumptions,
-            LayoutHoleArgSite::Path(path),
-            minter,
-        )
-    };
+    let args = || lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, minter);
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
             let ty = TyId::from_hir_prim_ty(db, prim);
@@ -2266,9 +2212,6 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                     TraitArgError::ArgTypeMismatch { expected, given } => {
                                         PathResErrorKind::ArgTypeMismatch { expected, given }
                                     }
-                                    TraitArgError::ConstHoleNotAllowed { arg_idx } => {
-                                        PathResErrorKind::TraitConstHoleArg { arg_idx }
-                                    }
                                     TraitArgError::Ignored => PathResErrorKind::ParseError,
                                 };
                                 return Err(PathResError {
@@ -2284,11 +2227,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             },
             ScopeId::GenericParam(parent, idx) => {
                 let owner = GenericParamOwner::from_item_opt(parent).unwrap();
-                let param_set = if minter.source_params() == Some(owner) {
-                    collect_source_generic_params(db, owner)
-                } else {
-                    collect_generic_params(db, owner)
-                };
+                let param_set = collect_generic_params(db, owner);
                 let ty = param_set
                     .param_by_original_idx(db, idx as usize)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));

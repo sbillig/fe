@@ -1864,9 +1864,7 @@ pub(crate) fn provider_erases_runtime_root<'db>(
             .storage_layout(db)
             .values()
             .find(|field| field.field == field_id)
-            .is_none_or(|field| {
-                field.inline_span == 0 && field.cells.iter().all(|cell| cell.allocation.is_none())
-            });
+            .is_none_or(|field| field.slot_count == 0);
     }
 
     let value_ty = provider.semantics.target_ty.unwrap_or(provider.provider_ty);
@@ -3145,7 +3143,7 @@ mod tests {
     use url::Url;
 
     use super::super::{
-        abi::runtime_declaration_abi_plan,
+        abi::runtime_declaration_signature,
         arg_selector::RuntimeArgSelector,
         body::check_runtime_body_supported,
         boundary::BoundarySiteAllocator,
@@ -3301,11 +3299,11 @@ fn frame(flag: bool) -> Frame {
             file_url.clone(),
             Some(
                 r#"
-struct Slot<const ROOT: u256 = _> {}
+struct Slot<const ROOT: u256> {}
 trait Has { type Item; fn take(_ x: Self::Item) }
 impl Has for bool {
-    type Item = Slot
-    fn take(_ x: Slot) {}
+    type Item = Slot<7>
+    fn take(_ x: Slot<7>) {}
 }
 fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
 "#
@@ -3725,7 +3723,6 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
         let self_role = semantic.binding_role(&db, self_binding);
         let param_plans = runtime_param_plans(&db, semantic);
         let plans = runtime_visible_binding_plans(&db, semantic);
-        let abi = runtime_declaration_abi_plan(&db, callee.key(&db));
         let signature = callee.interface_signature(&db);
 
         // A map takes a slot, so a storage receiver holding one passes the
@@ -3741,15 +3738,14 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
             "a storage receiver holding a map is its place's slot:\nself_role={self_role:#?}\nparam_plans={param_plans:#?}\nplans={plans:#?}\nsignature={signature:#?}"
         );
         assert_eq!(
-            abi.visible_params.len(),
+            signature.params.len(),
             3,
-            "grant's visible ABI takes the receiver:\nabi={abi:#?}"
+            "grant's ABI takes the receiver:\nsignature={signature:#?}"
         );
-        assert!(
-            abi.evidence_params.is_empty(),
-            "a receiver without layout holes has no layout evidence:\nabi={abi:#?}"
+        assert_eq!(
+            signature,
+            runtime_declaration_signature(&db, callee.key(&db))
         );
-        assert_eq!(signature, abi.signature());
     }
 
     #[test]
