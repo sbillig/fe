@@ -96,8 +96,8 @@ use crate::analysis::semantic::{
     BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, EffectProviderSubst, EvalOutcome,
     GenericSubst, ImplEnv, RuntimeSizeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
     SemanticInstanceKey, const_computation_for_instance, describe_const_computation,
-    eval_body_owner_const, get_or_build_semantic_instance, reify_runtime_const_for_ty,
-    runtime_size_bytes_with_source,
+    eval_body_owner_const, eval_const_instance, get_or_build_semantic_instance,
+    reify_runtime_const_for_ty, runtime_size_bytes_with_source,
 };
 use crate::analysis::ty::ty_def::{ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
@@ -553,7 +553,29 @@ pub(super) fn condition_outcome<'db>(
     owner: BodyOwner<'db>,
     subst: GenericSubst<'db>,
 ) -> ConditionOutcome<'db> {
-    match eval_body_owner_const(db, owner, subst) {
+    condition_outcome_from(db, owner, eval_body_owner_const(db, owner, subst))
+}
+
+/// `condition_outcome` with `impl_env` deciding the impls `subst` selects:
+/// a substitution that mentions a caller's parameters selects impls under
+/// the caller's assumptions.
+pub(super) fn condition_outcome_in<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    subst: GenericSubst<'db>,
+    impl_env: ImplEnv<'db>,
+) -> ConditionOutcome<'db> {
+    let key = SemanticInstanceKey::new(db, owner, subst, EffectProviderSubst::empty(db), impl_env);
+    let outcome = eval_const_instance(db, get_or_build_semantic_instance(db, key));
+    condition_outcome_from(db, owner, outcome)
+}
+
+fn condition_outcome_from<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    outcome: EvalOutcome<'db, SemConstId<'db>>,
+) -> ConditionOutcome<'db> {
+    match outcome {
         EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
             Some(true) => ConditionOutcome::True,
             Some(false) => ConditionOutcome::False,

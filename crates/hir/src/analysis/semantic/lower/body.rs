@@ -1149,6 +1149,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
+        // A constant is selected in the instance's environment: the bounds its
+        // use was checked under, once substituted, may hold only by the bounds
+        // of the context the instance was made for.
+        let const_ref = match const_ref {
+            ConstRef::TraitConst(use_) => {
+                ConstRef::TraitConst(use_.with_env(use_.origin_scope(), self.assumptions))
+            }
+            ConstRef::InherentConst(use_) => {
+                ConstRef::InherentConst(use_.with_env(use_.origin_scope(), self.assumptions))
+            }
+            ConstRef::Const(_) => const_ref,
+        };
         if let Some(const_ref) =
             resolve_semantic_const_ref(self.db, const_ref, ty, SemOrigin::Expr(expr))
         {
