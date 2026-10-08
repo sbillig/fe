@@ -4,7 +4,7 @@ use ingot::evm::ops::mstore
 use core::num::IntWord
 use core::ptr
 use core::effect_ref::AddressSpace
-use core::ops::PlaceIndex
+use core::ops::{PlaceIndex, clear_storage}
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
@@ -256,6 +256,13 @@ impl<K: StorageKey + Copy, V> StorageMap<K, V> {
     #[inline(always)]
     pub fn set(mut self, key: K, value: own V) {
         self[key] = value
+    }
+
+    /// Zeroes the value at `key`, like Solidity's `delete m[key]`: it reads
+    /// as its type's zero value, as a key no one set does.
+    #[inline(always)]
+    pub fn remove(mut self, _ key: K) {
+        clear_storage(mut self, key)
     }
 }
 

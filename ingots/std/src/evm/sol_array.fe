@@ -20,9 +20,8 @@
 //! ```
 use core::abi::{AbiSize, DynArray, Encode, store_word}
 use core::effect_ref::AddressSpace
-use core::intrinsic::clear
 use core::iter::{Bidirectional, Collection, CollectionMut}
-use core::ops::{LaneCodec, PlaceIndex}
+use core::ops::{LaneCodec, PlaceIndex, clear_storage}
 use core::option::Option
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
@@ -135,10 +134,21 @@ impl<T> SolArray<T> {
         if len == 0 {
             revert_error(Panic::from(PANIC_POP_EMPTY))
         }
-        // Past the new end, nothing reads the element before a `push`
-        // writes it.
-        unsafe { clear(mut self[len - 1]) }
+        clear_storage(mut self, len - 1)
         self.len = len - 1
+    }
+
+    /// Removes every element, zeroing their storage like Solidity's
+    /// `delete`. Costs a slot write per element, and a read too for elements
+    /// packed into shared slots.
+    pub fn clear(mut self) {
+        let len = self.len
+        let mut i: u256 = 0
+        while i < len {
+            clear_storage(mut self, i)
+            i += 1
+        }
+        self.len = 0
     }
 
     /// All elements in index order, as an ABI `T[]` in memory, like

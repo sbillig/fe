@@ -144,7 +144,19 @@ impl<T: SolPacked> SolEnumerableSet<T> {
             self.positions[last_word] = position
         }
         self.values.pop()
-        self.positions[word] = 0
+        self.positions.remove(word)
         true
+    }
+
+    /// Removes every element.
+    pub fn clear(mut self) {
+        let len = self.values.len()
+        let mut i: u256 = 0
+        while i < len {
+            let word = self.values[i]
+            self.positions.remove(word)
+            i += 1
+        }
+        self.values.clear()
     }
 }

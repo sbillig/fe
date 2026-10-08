@@ -218,6 +218,16 @@ pub trait PlaceIndex {
     fn locate(self, _ base: u256, _ key: Self::Key, _ width: u256) -> (u256, u256)
 }
 
+/// Zeroes the element at `key` of a collection whose elements live in a
+/// space that starts zeroed, like Solidity's `delete`: its slots, or only its
+/// bits of a slot it shares. The element reads as its type's zero value,
+/// which in such a space every type has.
+pub fn clear_storage<C: PlaceIndex>(_ collection: mut C, _ key: C::Key)
+    where C::SPACE.starts_zeroed()
+{
+    unsafe { ingot::intrinsic::clear(mut collection[key]) }
+}
+
 /// How a place-indexed collection encodes an element it packs into a lane:
 /// `BITS` bits of a storage word, `offset` bytes above its low end, shared
 /// with the neighbouring elements. Reading the element loads the word and

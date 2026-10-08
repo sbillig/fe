@@ -1,5 +1,5 @@
 use core::effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut}
-use core::ops::PlaceIndex
+use core::ops::{PlaceIndex, clear_storage}
 use core::{ptr, size_of}
 use core::abi::{
     Abi,
@@ -263,6 +263,11 @@ impl<T> TSlot<T> {
     /// Writes the value.
     pub fn write(mut self, _ value: own T) {
         self[()] = value
+    }
+
+    /// Zeroes the value.
+    pub fn clear(mut self) {
+        clear_storage(mut self, ())
     }
 }
 

@@ -14,6 +14,18 @@ and a `TSlot`'s value lies in transient storage at the slot's own number. A
 collection nested in a struct or a map entry derives its slot from where it
 lies, as Solidity nests mappings.
 
+## Clearing
+
+A slot no one wrote reads as zero, so in storage and transient storage the
+all-zero representation is a value of every type: `false`, the zero
+address, an enum's first variant, an empty collection. Clearing an element
+zeroes its slots, or only its bits of a slot it shares, as Solidity's
+`delete` does. `core::ops::clear_storage(mut c, key)` clears the element at
+`key` of any collection whose elements live in such a space;
+`StorageMap::remove(key)`, `SolArray::pop()` and `clear()` on `SolArray`,
+`TSlot` and `SolEnumerableSet` are built on it. A map has no `clear`: its
+keys cannot be enumerated.
+
 ## Explicit slots
 
 `#[slot(e)]` places a `mut` field at slot `e` instead of the next free one.
