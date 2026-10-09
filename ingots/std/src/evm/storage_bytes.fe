@@ -193,7 +193,7 @@ impl<K: StorageKey + Copy> StorageBytes<K> {
     pub fn to_memory(self, key: K) -> ptr::MemBuffer {
         let len = self.lengths[key]
         let word_count = ceil_words(len)
-        let mut buffer = ptr::MemBuffer::alloc(word_count * 32)
+        let mut buffer = unsafe { ptr::MemBuffer::alloc_uninit(word_count * 32) }
 
         let mut i: u256 = 0
         while i < word_count {

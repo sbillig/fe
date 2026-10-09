@@ -129,7 +129,7 @@ pub contract Receiver {
     recv ReceiverMsg {
         OnErc721Received { operator, from, tokenId, data } -> Bytes4 uses (reply, raw: mut RawOps) {
             let expected = operator.inner == 7 && from.inner == 2 && tokenId == 42 && data.len() == 0
-            let alloc = if reply.len < 32 { 32 } else { reply.len }
+            let alloc = if reply.len < 32 || reply.len == REVERT { 32 } else { reply.len }
             let mut out = ptr::MemBuffer::alloc(alloc)
             if reply.len == REVERT {
                 unsafe { store_word(ptr: out.ptr(), value: 0xdeadbeefcafebabe << 192) }

@@ -219,7 +219,7 @@ pub fn create2_address(deployer: Address, salt: u256, init_code_hash: u256) -> A
     if deployer.inner >> 160 != 0 {
         ops::revert_empty()
     }
-    let preimage = MemBuffer::alloc(85)
+    let preimage = unsafe { MemBuffer::alloc_uninit(85) }
     unsafe {
         ops::mstore(addr: preimage.ptr(), value: (0xff << 248) | (deployer.inner << 88))
         ops::mstore(addr: offset(preimage.ptr(), 21), value: salt)
@@ -295,7 +295,7 @@ pub fn ecrecover_raw(
     r: u256,
     s: u256,
 ) -> Result<PrecompileError, Option<u256>> {
-    let buffer = FixedMemBuffer<128>::alloc()
+    let buffer = unsafe { FixedMemBuffer<128>::alloc_uninit() }
     unsafe {
         ops::mstore(addr: buffer.ptr(), value: hash)
         ops::mstore(addr: offset(buffer.ptr(), 32), value: v)
@@ -338,7 +338,7 @@ pub fn ec_add(
     bx: u256,
     by: u256,
 ) -> Result<PrecompileError, (u256, u256)> {
-    let buffer = FixedMemBuffer<128>::alloc()
+    let buffer = unsafe { FixedMemBuffer<128>::alloc_uninit() }
     unsafe {
         ops::mstore(addr: buffer.ptr(), value: ax)
         ops::mstore(addr: offset(buffer.ptr(), 32), value: ay)
@@ -358,7 +358,7 @@ pub fn ec_add(
 
 /// EC scalar multiplication on BN254 (precompile 0x07).
 pub fn ec_mul(px: u256, py: u256, s: u256) -> Result<PrecompileError, (u256, u256)> {
-    let buffer = FixedMemBuffer<96>::alloc()
+    let buffer = unsafe { FixedMemBuffer<96>::alloc_uninit() }
     unsafe {
         ops::mstore(addr: buffer.ptr(), value: px)
         ops::mstore(addr: offset(buffer.ptr(), 32), value: py)
@@ -398,7 +398,7 @@ pub fn ec_pairing(_ data: MemSpan) -> Result<PrecompileError, bool> {
 /// Modular exponentiation (precompile 0x05).
 /// Computes `base^exp % modulus` for u256-sized inputs.
 pub fn modexp(base: u256, exp: u256, modulus: u256) -> Result<PrecompileError, u256> {
-    let buffer = FixedMemBuffer<192>::alloc()
+    let buffer = unsafe { FixedMemBuffer<192>::alloc_uninit() }
     unsafe {
         ops::mstore(addr: buffer.ptr(), value: 32)
         ops::mstore(addr: offset(buffer.ptr(), 32), value: 32)

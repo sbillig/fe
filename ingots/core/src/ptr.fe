@@ -285,7 +285,17 @@ impl MemSlice<u8> {
 }
 
 impl MemBuffer {
+    /// A buffer of `len` zero bytes.
     pub fn alloc(_ len: u256) -> Self {
+        let buffer = unsafe { Self::alloc_uninit(len) }
+        unsafe { zero_bytes(buffer.ptr, len) }
+        buffer
+    }
+
+    /// A buffer of `len` bytes holding whatever the memory held.
+    ///
+    /// The caller must write every byte before anything reads it.
+    pub unsafe fn alloc_uninit(_ len: u256) -> Self {
         Self {
             ptr: alloc_raw(len),
             len,
@@ -420,8 +430,19 @@ impl MemBuffer {
 }
 
 impl<const N: usize> FixedMemBuffer<N> {
+    /// A buffer of `N` zero bytes.
     #[inline(always)]
     pub fn alloc() -> Self {
+        let buffer = unsafe { Self::alloc_uninit() }
+        unsafe { zero_bytes(buffer.ptr, N as u256) }
+        buffer
+    }
+
+    /// A buffer of `N` bytes holding whatever the memory held.
+    ///
+    /// The caller must write every byte before anything reads it.
+    #[inline(always)]
+    pub unsafe fn alloc_uninit() -> Self {
         Self {
             ptr: alloc_raw(N as u256),
         }

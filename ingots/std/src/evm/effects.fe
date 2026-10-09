@@ -469,12 +469,12 @@ fn contract_init_code<C: Contract>(_ args: own C::InitArgs) -> MemBuffer {
     let init_len = C::init_code_len()
     let init_off = C::init_code_offset()
     if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-        let init_code = MemBuffer::alloc(init_len)
+        let init_code = unsafe { MemBuffer::alloc_uninit(init_len) }
         unsafe { ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len) }
         init_code
     } else {
         let encoded = encode_abi_payload<C::InitArgs>(args)
-        let init_code = MemBuffer::alloc(init_len + encoded.len())
+        let init_code = unsafe { MemBuffer::alloc_uninit(init_len + encoded.len()) }
         unsafe {
             ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
             ptr::copy(
@@ -1203,7 +1203,7 @@ where M: Encode<Sol>
     let selector_size = size_of<Sol::Selector>()
     let selector_word = (selector as u256) << 224
     let encoded = encode_abi_payload(message)
-    let buffer = MemBuffer::alloc(selector_size + encoded.len())
+    let buffer = unsafe { MemBuffer::alloc_uninit(selector_size + encoded.len()) }
     unsafe {
         ops::mstore(addr: buffer.ptr(), value: selector_word)
         ptr::copy(
@@ -1225,7 +1225,7 @@ where M: MsgVariant<Sol> + Encode<Sol>
 /// Copy the complete current returndata into a fresh owner.
 pub fn copy_returndata() -> MemBuffer {
     let ret_len = ops::returndatasize()
-    let buffer = MemBuffer::alloc(ret_len)
+    let buffer = unsafe { MemBuffer::alloc_uninit(ret_len) }
     unsafe { ops::returndatacopy(dest: buffer.ptr(), offset: 0, len: ret_len) }
     buffer
 }

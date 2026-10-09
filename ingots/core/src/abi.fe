@@ -1054,6 +1054,7 @@ unsafe fn mem_word_at(base: *u8, offset: u256) -> u256 {
     }
 }
 
+/// A span's bytes read past its end as zeros, like calldata's.
 impl ByteInput for ptr::MemSpan {
     fn len(self) -> u256 {
         self.len()
@@ -1062,11 +1063,24 @@ impl ByteInput for ptr::MemSpan {
     #[arithmetic(unchecked)]
     #[inline(always)]
     fn word_at(self, _ byte_offset: u256) -> u256 {
-        unsafe { mem_word_at(base: self.ptr(), offset: byte_offset) }
+        let len = self.len()
+        if byte_offset >= len {
+            return 0
+        }
+        let word = unsafe { mem_word_at(base: self.ptr(), offset: byte_offset) }
+        let available = len - byte_offset
+        if available >= 32 {
+            word
+        } else {
+            word & !(u256::max() >> (available * 8))
+        }
     }
 
     #[arithmetic(unchecked)]
     fn byte_at(self, _ byte_offset: u256) -> u8 {
+        if byte_offset >= self.len() {
+            return 0
+        }
         let word_offset = byte_offset - (byte_offset % 32)
         let word = unsafe { mem_word_at(base: self.ptr(), offset: word_offset) }
         let idx = byte_offset - word_offset

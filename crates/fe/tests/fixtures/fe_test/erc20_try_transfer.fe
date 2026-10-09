@@ -47,7 +47,7 @@ pub contract RawReplyToken {
 const REVERT: u256 = 0xffffffff
 
 fn answer(word: u256, len: u256) -> ! uses (raw: mut RawOps) {
-    let alloc = if len < 32 { 32 } else { len }
+    let alloc = if len < 32 || len == REVERT { 32 } else { len }
     let mut data = ptr::MemBuffer::alloc(alloc)
     if len == REVERT {
         unsafe { store_word(ptr: data.ptr(), value: 0xdeadbeefcafebabe << 192) }
