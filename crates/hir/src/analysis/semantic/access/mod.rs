@@ -14,10 +14,12 @@ mod domain;
 mod place;
 mod refine;
 mod space;
+mod trust;
 
 use std::{collections::VecDeque, fmt};
 
 use common::diagnostics::CompleteDiagnostic;
+use cranelift_entity::EntityRef;
 use rustc_hash::FxHashSet;
 use salsa::Update;
 
@@ -34,17 +36,20 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            SemanticInstance,
+            SemOrigin, SemanticInstance,
             diagnostics::{
-                BlockedSemanticBody, SemanticDiagnosticId, SemanticNormalizationFailure,
+                BlockedSemanticBody, SemanticDiagnosticId, SemanticDiagnosticSpan,
+                SemanticNormalizationFailure,
             },
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalized::normalize_semantic_body,
         },
         ty::{provider::ProviderAddressSpace, ty_check::BodyOwner},
     },
-    hir_def::{ItemKind, TopLevelMod},
+    hir_def::{ExprId, ItemKind, StmtId, TopLevelMod},
 };
+
+use self::trust::{UnsafeTrust, UntrustedUnsafeUse};
 
 #[derive(Clone, Debug, PartialEq, Eq, Update)]
 pub enum SemanticAccessCheckResult<'db> {
@@ -178,7 +183,8 @@ impl ModuleAnalysisPass for SemanticAccessAnalysisPass {
 }
 
 /// Checks each item's identity instance and, transitively, the concrete
-/// instances it calls.
+/// instances it calls. From a trust root's module, the walk also reports
+/// calls that reach an untrusted dependency's unsafe code (`trust`).
 pub fn collect_semantic_access_diagnostic_vouchers<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -220,18 +226,40 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
             | ItemKind::Body(_) => {}
         }
     }
+    // Each instance carries the call in the module's own code that reached
+    // it, `None` for the module's own bodies.
     let mut pending: VecDeque<_> = owners
         .into_iter()
-        .map(|owner| get_or_build_semantic_instance(db, identity_semantic_instance_key(db, owner)))
+        .map(|owner| {
+            let key = identity_semantic_instance_key(db, owner);
+            (
+                get_or_build_semantic_instance(db, key),
+                None::<SemanticDiagnosticSpan>,
+            )
+        })
         .collect();
     // Warnings are reported once, for the module's own bodies.
-    let own: FxHashSet<_> = pending.iter().copied().collect();
+    let own: FxHashSet<_> = pending.iter().map(|(instance, _)| *instance).collect();
+    let trust = UnsafeTrust::for_root(db, top_mod);
     let mut seen = FxHashSet::default();
     let mut seen_diags = FxHashSet::default();
+    let mut seen_untrusted = FxHashSet::default();
     let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
-    while let Some(instance) = pending.pop_front() {
+    while let Some((instance, call)) = pending.pop_front() {
         if !seen.insert(instance) {
             continue;
+        }
+        let owner = instance.key(db).owner(db);
+        if let (Some(trust), Some(call)) = (&trust, &call)
+            && let Some(site) = trust.untrusted_site(db, owner)
+            && seen_untrusted.insert((owner.scope().ingot(db), call.clone()))
+        {
+            diags.push(Box::new(UntrustedUnsafeUse {
+                root: top_mod.ingot(db),
+                call: call.clone(),
+                user: owner,
+                site,
+            }));
         }
         match body_check(db, instance) {
             SemanticAccessCheckResult::Ok { warnings, .. } => {
@@ -242,11 +270,44 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
                             .map(|diag| Box::new(*diag) as Box<dyn DiagnosticVoucher + 'db>),
                     );
                 }
+                let callees: Vec<_> =
+                    match call {
+                        Some(call) => instance
+                            .callees(db)
+                            .iter()
+                            .map(|callee| (callee.key, call.clone()))
+                            .collect(),
+                        None => {
+                            let at = |origin| SemanticDiagnosticSpan::Origin { owner, origin };
+                            let calls = instance.call_sites(db).iter().enumerate().filter_map(
+                                |(idx, site)| {
+                                    Some((
+                                        site.as_ref()?.callee?.key,
+                                        at(SemOrigin::Expr(ExprId::new(idx))),
+                                    ))
+                                },
+                            );
+                            let loops = instance
+                                .for_loop_call_sites(db)
+                                .iter()
+                                .enumerate()
+                                .flat_map(|(idx, sites)| {
+                                    sites.iter().flat_map(move |sites| {
+                                        sites.sites.iter().filter_map(move |site| {
+                                            Some((
+                                                site.callee?.key,
+                                                at(SemOrigin::Stmt(StmtId::new(idx))),
+                                            ))
+                                        })
+                                    })
+                                });
+                            calls.chain(loops).collect()
+                        }
+                    };
                 pending.extend(
-                    instance
-                        .callees(db)
-                        .iter()
-                        .map(|callee| get_or_build_semantic_instance(db, callee.key)),
+                    callees
+                        .into_iter()
+                        .map(|(key, call)| (get_or_build_semantic_instance(db, key), Some(call))),
                 );
             }
             SemanticAccessCheckResult::Blocked(_) => {}
