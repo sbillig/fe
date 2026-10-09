@@ -144,9 +144,10 @@ stack; they end at their `end`, in any order. In the projection's body:
   instantiation. That space is the projection's *result-space contract*
   (`projection_result_spaces`), inferred from the body and exported with the
   instance: callers combine grants by their contracts, never by bodies. A
-  place's space is its root's, unless an entry along its path moves it into
-  its collection's contents' space: `mut self.lock[()]` of a `TSlot` held in
-  a storage struct is transient.
+  place's space is its root's, unless a pinned type or an entry along its
+  path moves it into the type's pin or the collection's `SPACE`: a `TSlot`
+  held in a storage struct, and its `mut self.lock[()]`, are transient. The
+  innermost such step decides.
 - The `mut` components of a split are structurally disjoint.
 - A `#[raw_place]` projection has nothing to resume: after each yield it
   only ends the accesses its grant derives from, a session among them is a
