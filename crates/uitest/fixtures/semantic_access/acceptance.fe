@@ -423,11 +423,12 @@ fn case27_view_closed() -> u256 {
 }
 
 // 33. Rejected: a read projection of a storage-rooted `Copy` array yields its
-// storage place, like the mutable one, so an external call conflicts with it.
+// storage place, like the mutable one, so an external call conflicts with the
+// access a `ref` binding keeps.
 pub contract Case33CopyArraySpace {
     mut cells: [u256; 4],
     init() uses (cells, call: mut Call) {
-        let x = cells.at(0)
+        let x = ref cells.at(0)
         ping()
         assert(x == 0)
     }
@@ -448,10 +449,10 @@ fn first(_ xs: [u256; 4]) -> ref u256 {
 }
 
 // 36. Rejected: a projection over a `Copy` array views it in place, so its
-// session reserves the array until the result's last use.
+// session reserves the array until the last use of a `ref` binding.
 fn case36_copy_array_view() -> u256 {
     let mut xs: [u256; 4] = [1, 2, 3, 4]
-    let x = first(xs)
+    let x = ref first(xs)
     xs[1] = 5
     x
 }

@@ -21,11 +21,11 @@ impl Collection for Grid {
     }
 }
 
-// Rejected: an aggregate cursor is viewed in place, so the element's session
-// reserves it.
+// Rejected: an aggregate cursor is viewed in place, so the session of an
+// element a `ref` binding keeps reserves it.
 fn aggregate_cursor(_ g: Grid) -> u256 {
     let mut cur = (0, 0)
-    let x = g.at(cur)
+    let x = ref g.at(cur)
     cur = (0, 1)
     x
 }

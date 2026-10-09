@@ -161,15 +161,21 @@ impl<'db> TyChecker<'db> {
                     .set_local_borrow_provider(pat, prop.borrow_provider);
             }
 
-            // `let mut x = p.get()` binds a mutable copy of a projection's
-            // `Copy` grant (an explicit `mut p` stays an access).
-            let copies_grant = matches!(
-                pat.data(self.db, self.body()),
-                Partial::Present(Pat::Path(_, true))
-            ) && !matches!(
-                self.env.expr_data(*expr),
-                Partial::Present(Expr::Un(_, UnOp::Ref | UnOp::Mut))
-            ) && matches!(prop.shape, Some(Shape::Access(_, ty)) if self.ty_is_copy(ty));
+            // `let x = p.get()` binds a copy of a projection's `Copy` read
+            // grant, and `let mut x` a mutable copy of any `Copy` grant. A
+            // plain `let` keeps a `mut` grant, and an explicit `ref p` or
+            // `mut p` stays an access.
+            let copies_grant = match (pat.data(self.db, self.body()), &prop.shape) {
+                (Partial::Present(Pat::Path(_, is_mut)), Some(Shape::Access(kind, ty))) => {
+                    (*is_mut || *kind == BorrowKind::Ref)
+                        && !matches!(
+                            self.env.expr_data(*expr),
+                            Partial::Present(Expr::Un(_, UnOp::Ref | UnOp::Mut))
+                        )
+                        && self.ty_is_copy(*ty)
+                }
+                _ => false,
+            };
             if copies_grant {
                 self.consume_access(*expr);
             } else if prop.shape.is_some() {

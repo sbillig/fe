@@ -26,7 +26,7 @@ call, or a projection's result over it, is in use.
 ```fe
 fn first(_ xs: [u256; 4]) -> ref u256 { ref xs[0] }
 
-let x = first(xs)
+let x = ref first(xs)
 xs[1] = 5        // rejected: `x` views `xs` in place
 ```
 
@@ -55,6 +55,12 @@ fn entry(mut self, _ key: u256) -> mut u256 {
     self.set(key, tmp)
 }
 ```
+
+A plain `let` of a `ref` result whose type is `Copy` binds a copy and ends
+the access at once: `let v = xs[i]` is an owned value, and `xs` may change
+while `v` lives. `let v = ref xs[i]` keeps the access instead. A `mut`
+result, or a result whose type is not `Copy`, binds the access; `let mut`
+binds a mutable copy of any `Copy` result.
 
 A projection yields once on each path that completes, implicitly at its
 tail or with `yield`. The code after a `yield`, its *slide*, runs when the
