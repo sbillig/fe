@@ -245,6 +245,17 @@ impl Packed {
         self.buffer.len()
     }
 
+    /// Borrow the bytes written so far without copying them.
+    /// The builder cannot grow or be consumed while the view is in use.
+    pub fn span(self) -> ref MemSpan {
+        self.buffer.span()
+    }
+
+    /// Transfer the initialized payload to an owned buffer without copying it.
+    pub fn into_buffer(own self) -> ptr::MemBuffer {
+        self.buffer
+    }
+
     /// keccak256 of the bytes written so far.
     pub fn keccak256(self) -> u256 {
         crypto::keccak256(self.buffer.span())

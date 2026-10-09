@@ -11,6 +11,30 @@ use std::evm::{crypto, RawMem}
 use std::evm::packed::{EncodePacked, Packed, encode_packed, keccak_packed}
 use std::abi::{Bytes4, FixedBytes, bytes_from_words_prefix}
 
+// A view excludes spare capacity, survives unaligned appends and growth,
+// and the terminal ownership transfer keeps the exact payload.
+#[test]
+fn test_builder_view_and_owned_buffer() uses (mem: mut RawMem) {
+    let mut p = Packed::with_capacity(bytes: 4)
+    assert!(p.span().is_empty())
+    p.u32(0xa9059cbb)
+    assert!(p.span().len() == 4)
+    assert!(p.span().byte_at(0) == 0xa9)
+    p.u256(0x1234)
+    p.u256(7)
+    let expected = encode_packed((0xa9059cbb as u32, 0x1234 as u256, 7 as u256))
+    assert!(p.span().len() == 68)
+    assert!(crypto::keccak256(p.span()) == expected.keccak256())
+    let mut buffer = p.into_buffer()
+    assert!(buffer.len() == 68)
+    assert!(buffer.span().byte_at(34) == 0x12)
+    assert!(buffer.span().byte_at(35) == 0x34)
+    buffer.extend_from(expected.span().head(4))
+    assert!(buffer.len() == 72)
+    assert!(buffer.span().byte_at(68) == 0xa9)
+    assert!(buffer.span().byte_at(71) == 0xbb)
+}
+
 // keccak256(abi.encodePacked(address(0x1111...), address(0x2222...)))
 // — the CREATE2 pair-salt case.
 const SALT_DIGEST: u256 = 0xa284ddd69adb56d959922d24c73d2cd9e6b24d5e789a4106eca975c86ec900e1
