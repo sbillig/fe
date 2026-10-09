@@ -1333,6 +1333,11 @@ pub enum RuntimeBuiltin<'db> {
         offset: RValueId,
         len: RValueId,
     },
+    /// `keccak256` of the words, each as 32 big-endian bytes, in order: a
+    /// value of the words alone, read from no memory.
+    KeccakWords {
+        words: Box<[RValueId]>,
+    },
     AddMod {
         lhs: RValueId,
         rhs: RValueId,
@@ -1820,6 +1825,7 @@ impl<'db> RuntimeBuiltin<'db> {
                 ret_offset,
                 ret_len,
             } => vec![gas, addr, value, args_offset, args_len, ret_offset, ret_len],
+            Self::KeccakWords { words } => words.iter_mut().collect(),
             Self::Msize
             | Self::CallValue
             | Self::ReturnDataSize

@@ -9,6 +9,7 @@
 /// path. Use `Call.raw_staticcall` for fork probing or explicit handling of
 /// absent precompiles.
 
+use core::intrinsic
 use core::option::Option
 use core::ptr::{self, FixedMemBuffer, MemBuffer, MemSpan}
 use core::result::Result
@@ -205,14 +206,11 @@ pub fn keccak256(_ data: MemSpan) -> u256 {
 /// Keccak256 of the concatenated 32-byte words, e.g. `keccak_words([a, b])`
 /// for Solidity's `keccak256(abi.encode(a, b))` over word-sized values.
 ///
-/// Much cheaper than `keccak_packed` for word tuples: the words are written
-/// into one buffer without the packed builder's per-field bookkeeping.
-pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
-    let buffer = ptr::alloc<[u256; N]>()
-    unsafe {
-        *buffer = words
-        ops::keccak256(offset: ptr::byte_ptr(buffer), len: N as u256 * 32)
-    }
+/// Much cheaper than `keccak_packed` for word tuples. The digest is a value
+/// of the words alone: the compiler folds it when the words are known and
+/// computes it once for equal words.
+pub const fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
+    intrinsic::__keccak_words(words)
 }
 
 /// Address of a contract created with `CREATE2` by `deployer`:

@@ -3392,6 +3392,9 @@ impl<'db> RmirEmitter<'db> {
         if let Some(ret) = self.lower_intrinsic_keccak256_call(bb, func, args) {
             return Some(ret);
         }
+        if let Some(ret) = self.lower_intrinsic_keccak_words_call(bb, func, args) {
+            return Some(ret);
+        }
         if let Some(builtin) = contract_metadata_builtin(self.db, semantic) {
             let ret_ty = semantic_return_ty(self.db, semantic);
             let class = RuntimeClass::Scalar(ScalarClass {
@@ -4437,8 +4440,70 @@ impl<'db> RmirEmitter<'db> {
             // Lowered with its payload in `lower_panic_code`, and by
             // `lower_clear`.
             RuntimeBuiltinFuncKind::PanicCode | RuntimeBuiltinFuncKind::Clear => return None,
-            RuntimeBuiltinFuncKind::IntrinsicKeccak256 => return None,
+            RuntimeBuiltinFuncKind::IntrinsicKeccak256
+            | RuntimeBuiltinFuncKind::IntrinsicKeccakWords => return None,
         })
+    }
+
+    /// Hashes the words of `__keccak_words`'s array as values: each element
+    /// is read into a scalar, so the digest depends on no memory.
+    fn lower_intrinsic_keccak_words_call(
+        &mut self,
+        bb: RBlockId,
+        func: Func<'db>,
+        args: &[NOperand],
+    ) -> Option<RLocalId> {
+        if runtime_builtin_func_kind(self.db, func)
+            != Some(RuntimeBuiltinFuncKind::IntrinsicKeccakWords)
+        {
+            return None;
+        }
+        let [words] = args else {
+            return None;
+        };
+        let words_ty = self.semantic_body.normalized.value(words.value)?.ty;
+        let layout = self.layout_for_ty(words_ty);
+        let crate::runtime::Layout::Array(array_layout) = layout.data(self.db) else {
+            panic!(
+                "__keccak_words expects a word-array argument, found {}",
+                words_ty.pretty_print(self.db)
+            );
+        };
+        let len = u32::try_from(array_layout.len).expect("too many hashed words");
+        let word_ty = TyId::u256(self.db);
+        // An empty array is erased; there is nothing to read.
+        let words = if len == 0 {
+            Box::default()
+        } else {
+            let array = self.read_semantic_operand(bb, *words);
+            let array = self.coerce_value(bb, array, &RuntimeClass::AggregateValue { layout });
+            (0..len)
+                .map(|index| {
+                    let word =
+                        self.alloc_runtime_temp(word_ty, RuntimeCarrier::Value(word_class()));
+                    self.push_stmt(
+                        bb,
+                        RStmt::Assign {
+                            dst: word,
+                            expr: RExpr::AggregateExtract {
+                                value: array,
+                                index,
+                            },
+                        },
+                    );
+                    word
+                })
+                .collect()
+        };
+        let ret = self.alloc_runtime_temp(word_ty, RuntimeCarrier::Value(word_class()));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: ret,
+                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::KeccakWords { words }),
+            },
+        );
+        Some(ret)
     }
 
     fn lower_intrinsic_keccak256_call(

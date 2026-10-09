@@ -33,10 +33,10 @@ use core::abi::{ByteInput, Bytes, DynString, store_word}
 use core::effect_ref::AddressSpace
 use core::num::IntDowncast
 use core::ops::{PlaceIndex, WrappingAdd}
-use core::ptr::{self, MemBuffer, MemSpan}
-use super::crypto::keccak256
+use core::ptr::{self, MemSpan}
+use super::crypto::keccak_words
 use super::effects::{Address, RawStorage, StorPtr, revert_error}
-use super::ops::{mstore, revert_empty, signextend}
+use super::ops::{revert_empty, signextend}
 use super::panic::{PANIC_STORAGE_ENCODING, Panic}
 
 /// A value with a fixed-width Solidity storage representation.
@@ -230,9 +230,7 @@ impl SolSlot {
 // First data slot of a long value (or of a dynamic array):
 // `keccak256(abi.encode(slot))`.
 pub(ingot) fn data_slot(_ slot: u256) -> u256 {
-    let buffer = MemBuffer::alloc(32)
-    unsafe { mstore(addr: buffer.ptr(), value: slot) }
-    keccak256(buffer.span())
+    keccak_words([slot])
 }
 
 // Panics like Solidity (0x22) on a head whose length contradicts its
