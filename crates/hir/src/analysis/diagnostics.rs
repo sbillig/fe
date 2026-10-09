@@ -1644,10 +1644,6 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             } => {
                 let ty_name = ty.pretty_print(db);
                 let collection_name = collection.pretty_print(db);
-                let space = collection
-                    .adt_def(db)
-                    .and_then(|adt| adt.pin(db))
-                    .map_or("contract state", |space| space.pretty());
                 let mut diag = primary_diag(
                     Severity::Error,
                     format!("`{ty_name}` is state-only"),
@@ -1655,10 +1651,21 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     span.resolve(db),
                     error_code,
                 );
-                diag.notes.push(if ty == collection {
-                    format!("`{ty_name}` is pinned to {space} by its `PlaceIndex` implementation")
-                } else {
-                    format!("`{ty_name}` holds `{collection_name}`, which is pinned to {space}")
+                diag.notes.push(match (collection.pin(db), ty == collection) {
+                    (Some(space), true) => format!(
+                        "`{ty_name}` is pinned to {} by its `PlaceIndex` implementation",
+                        space.pretty()
+                    ),
+                    (Some(space), false) => format!(
+                        "`{ty_name}` holds `{collection_name}`, which is pinned to {}",
+                        space.pretty()
+                    ),
+                    (None, true) => {
+                        format!("`{ty_name}` is pinned to a state space for some of its parameters")
+                    }
+                    (None, false) => format!(
+                        "`{ty_name}` holds `{collection_name}`, which is pinned to a state space for some of its parameters"
+                    ),
                 });
                 diag.notes.push(
                     "a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter".into(),

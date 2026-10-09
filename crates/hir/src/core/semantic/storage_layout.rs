@@ -588,7 +588,7 @@ impl<'db> FieldWalker<'db> {
             // rather than by the slots its private fields take. It takes whole
             // slots, at least one even without fields: its root number derives
             // its region, so siblings need distinct ones.
-            if let Some(space) = adt.pin(self.db) {
+            if let Some(space) = ty.pin(self.db) {
                 if !self.content_spaces.contains(&space) {
                     self.content_spaces.push(space);
                 }

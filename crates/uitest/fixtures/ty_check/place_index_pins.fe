@@ -56,3 +56,83 @@ impl PlaceIndex for Noisy {
         (root + key + ctx.address().inner, 0)
     }
 }
+
+// A pin belongs to the implementation that applies to each instance.
+trait Placement {
+    const SPACE: AddressSpace
+}
+
+struct InStorage {}
+
+impl Placement for InStorage {
+    const SPACE: AddressSpace = AddressSpace::Storage
+}
+
+struct InMemory {}
+
+impl Placement for InMemory {
+    const SPACE: AddressSpace = AddressSpace::Memory
+}
+
+struct Cell<P> {
+    base: u256,
+}
+
+impl<P: Placement> PlaceIndex for Cell<P> {
+    const SPACE: AddressSpace = P::SPACE
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> (u256, u256) {
+        (root + 1 + key % 4, 0)
+    }
+}
+
+// Rejected: `SPACE` is storage for `Cell<InStorage>`.
+fn make_stored_cell() {
+    let _cell: Cell<InStorage> = Cell { base: 0 }
+}
+
+// Accepted: `SPACE` is memory for `Cell<InMemory>`.
+fn make_memory_cell() -> Cell<InMemory> {
+    Cell { base: 0 }
+}
+
+// Rejected: some `Cell<P>` is pinned.
+fn make_any_cell<P: Placement>() {
+    let _cell: Cell<P> = Cell { base: 0 }
+}
+
+struct Split<P> {
+    base: u256,
+}
+
+impl PlaceIndex for Split<InStorage> {
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> (u256, u256) {
+        (root + 1 + key % 4, 0)
+    }
+}
+
+impl PlaceIndex for Split<InMemory> {
+    const SPACE: AddressSpace = AddressSpace::Memory
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> (u256, u256) {
+        (self.base + key * 32, 0)
+    }
+}
+
+// Accepted: the storage implementation pins only `Split<InStorage>`.
+fn make_memory_split() -> Split<InMemory> {
+    Split { base: 0 }
+}
+
+// Rejected.
+fn make_stored_split() {
+    let _split: Split<InStorage> = Split { base: 0 }
+}

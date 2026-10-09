@@ -435,7 +435,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .place_prefix_ty(db, place, len)
                 .map(|ty| self.instance.normalized_ty(db, ty))
         };
-        let pin = |ty: Option<TyId<'db>>| ty?.adt_def(db)?.pin(db);
+        let pin = |ty: Option<TyId<'db>>| ty?.pin(db);
         let mut moved = pin(ty_at(0));
         let mut lane = false;
         for (index, projection) in place.path.as_slice().iter().enumerate() {
