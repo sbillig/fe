@@ -212,17 +212,17 @@ pub struct StorageMap<K, V> {
 impl<K: StorageKey + Copy, V> PlaceIndex for StorageMap<K, V> {
     const SPACE: AddressSpace = AddressSpace::Storage
     type Key = K
-    type Output = V
+    type Entry = V
 
     #[inline(always)]
-    fn locate(self, _ base: u256, _ key: K, _ width: u256) -> (u256, u256) {
+    fn locate(self, _ root: u256, _ key: K) -> (u256, u256) {
         // keccak256(key ++ slot) - standard Solidity mapping layout
         // Reserve the entire preimage before encoding: key encoders may allocate.
         let key_len = K::encoded_len(key)
         let scratch = ptr::alloc_bytes(key_len + 32)
         let slot = unsafe {
             K::write_key(ptr: scratch, key)
-            mstore(addr: ptr::offset_bytes(scratch, key_len), value: base)
+            mstore(addr: ptr::offset_bytes(scratch, key_len), value: root)
             keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: key_len + 32))
         }
         (slot, 0)

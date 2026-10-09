@@ -57,6 +57,7 @@ pub mod provider;
 pub mod result_space;
 pub(crate) mod scratch;
 pub mod shape;
+pub(crate) mod sol_codec;
 pub(crate) mod subst;
 pub mod trait_def;
 pub mod trait_lower;
@@ -171,7 +172,7 @@ pub fn place_index_tys<'db>(
             .project_assoc_ty(db, IdentId::new(db, name.to_string()))?;
         Some(normalize::normalize_ty(db, projected, scope, assumptions))
     };
-    Some((assoc("Key")?, assoc("Output")?))
+    Some((assoc("Key")?, assoc("Entry")?))
 }
 
 #[salsa::tracked]

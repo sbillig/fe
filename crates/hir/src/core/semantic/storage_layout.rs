@@ -1080,6 +1080,26 @@ fn collect_field_plan<'db>(
     ))
 }
 
+/// The slots a value of `ty` takes in storage, as the layout places a
+/// contract field of its type, or `None` when `ty` has no storage layout.
+#[salsa::tracked]
+pub(crate) fn storage_slot_span<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<usize> {
+    let mut walker = FieldWalker {
+        db,
+        scope,
+        errors: Vec::new(),
+        content_spaces: Vec::new(),
+        expanding: Vec::new(),
+        memory_pointer: None,
+    };
+    let output = walker.walk_ty(ConcreteTypeView::identity(ty), &[], &[]);
+    walker.errors.is_empty().then_some(output.span)
+}
+
 /// How deep the search for a persistent collection under a transient one
 /// follows nested types: a collection's element type may grow without bound,
 /// as in `struct G<T> { m: StorageMap<u256, G<[T; 1]>> }`.

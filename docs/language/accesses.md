@@ -113,11 +113,24 @@ overlap. A `mut` access to a struct holding collections covers their
 entries. A collection's methods take `self` or `mut self` and declare no
 effects: the authority is the access to its place, as for any data.
 
+A library type becomes a collection by implementing `core::ops::PlaceIndex`:
+`SPACE` names where its entries live, `Key` and `Entry` the index and the
+element type, and `locate(root, key)` returns the entry's slot and bit
+offset for the collection rooted at slot `root`. `locate` declares no
+effects; the compiler calls it once when an access to `c[k]` opens and does
+the loads, stores and masking itself. It must keep every entry inside the
+collection's own region, hashing per entry or bounding the key, since the
+compiler trusts it to.
+
 A collection may pack small elements into lanes of shared slots, as a
-`SolArray` does for Solidity's packed array elements. A lane is read and
-written in place, but a `mut` binding, argument, provided effect or yield of
-one works on a memory copy that is stored back into the lane when the access
-ends.
+`SolArray` does for Solidity's packed array elements. Its `Lanes` codec
+(`core::ops::LaneCodec<Entry>`) packs an element coded in at most 128
+`BITS`, and `locate` can read `BITS` to step between elements. `SolArray`'s
+codec, `SolLanes`, uses an element's `SolPacked` encoding, and the compiler
+gives any other element `BITS` of 256 per slot its storage layout takes. A
+lane is read and written in place, but a `mut` binding, argument, provided
+effect or yield of one works on a memory copy that is stored back into the
+lane when the access ends.
 
 ```fe
 let x = mut balances[from]

@@ -10,7 +10,7 @@ error[8-0093]: const requirement is not satisfied
  20 │     clear_storage(mut words, 0)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
     │
-    ┌─ src/ops.fe:229:11
+    ┌─ src/ops.fe:238:11
     │
-229 │     where C::SPACE.starts_zeroed(), C::Output: Clearable
+238 │     where C::SPACE.starts_zeroed(), C::Entry: Clearable
     │           ------------------------ required by this predicate

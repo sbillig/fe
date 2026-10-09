@@ -244,11 +244,11 @@ pub struct TSlot<T> {
 impl<T> PlaceIndex for TSlot<T> {
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::TransientStorage
     type Key = ()
-    type Output = T
+    type Entry = T
 
     #[inline(always)]
-    fn locate(self, _ base: u256, _ key: (), _ width: u256) -> (u256, u256) {
-        (base, 0)
+    fn locate(self, _ root: u256, _ key: ()) -> (u256, u256) {
+        (root, 0)
     }
 }
 
