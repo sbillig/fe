@@ -10,7 +10,7 @@ fn view(_ outer: mut Outer, _ count: mut u256) -> mut Outer {
 }
 fn array(_ values: mut [Inner; 2]) -> mut [Inner; 2] { values }
 fn pair(_ values: mut (Inner, Inner)) -> mut (Inner, Inner) { values }
-fn shared(_ outer: ref Outer) -> ref Outer { outer }
+fn shared(_ outer: ref Outer) -> ref Outer { ref outer }
 fn fresh(_ count: mut u256) -> Outer {
     count += 1
     Outer { inner: Inner { value: 0 } }

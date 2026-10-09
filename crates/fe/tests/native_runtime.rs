@@ -433,36 +433,33 @@ fn native_runner_rejects_evm_attributes_and_trace_options() {
 }
 
 #[test]
-fn native_reference_fields_and_slots_preserve_referent_identity() {
+fn native_indexed_places_preserve_owner_identity() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("reference_identity.fe");
     fs::write(
         &source,
         r#"
-struct Handle { value: mut i32, calls: i32 }
-struct Slot { target: mut i32 }
+struct Handle { value: i32, calls: i32 }
+struct Slot { target: usize }
 fn step() uses (handle: mut Handle) {
     handle.value += 1
     handle.calls += 1
 }
-fn replace(slot: mut Slot, value: mut i32) { slot = Slot { target: value } }
-fn increment(slot: mut Slot) { slot.target += 1 }
+fn replace(slot: mut Slot, target: usize) { slot.target = target }
+fn increment(slot: Slot, handles: mut [Handle; 2]) { handles[slot.target].value += 1 }
 pub fn main() -> i32 {
-    let mut first: i32 = 20
-    let mut second: i32 = 40
-    let mut handle = Handle { value: mut first, calls: 0 }
-    with (handle) {
+    let mut handles = [Handle { value: 20, calls: 0 }, Handle { value: 40, calls: 0 }]
+    with (mut handles[0]) {
         step()
         step()
     }
-    core::assert(handle.calls == 2)
-    core::assert(handle.value == 22)
-    let mut slot = Slot { target: mut first }
-    increment(slot: mut slot)
-    replace(slot: mut slot, value: mut second)
-    increment(slot: mut slot)
-    core::assert(first == 23)
-    core::assert(second == 41)
+    core::assert(handles[0].calls == 2 && handles[0].value == 22)
+    let mut slot = Slot { target: 0 }
+    increment(slot, handles: mut handles)
+    replace(slot: mut slot, target: 1)
+    increment(slot, handles: mut handles)
+    core::assert(handles[0].value == 23)
+    core::assert(handles[1].value == 41)
     0
 }
 "#,
@@ -1159,12 +1156,12 @@ impl Frame {
 }
 fn execute(state: mut Frame) -> Frame {
     let mut vm = Frame::new()
-    vm.run(state)
+    vm.run(state: mut state)
     vm
 }
 fn finish(state: mut Frame) {
     let mut vm = Frame::new()
-    vm.run(state)
+    vm.run(state: mut state)
     vm.release()
 }
 pub fn main() -> i32 {
