@@ -49,9 +49,7 @@ pub struct StoragePackedArray<const BITS: u256> {
 
 /// The words of a packed array: word `w` of the array whose place starts at
 /// slot `s` is at `keccak256(s) + w`.
-struct PackedWords {
-    seed: u256,
-}
+struct PackedWords {}
 
 impl PlaceIndex for PackedWords {
     const SPACE: AddressSpace = AddressSpace::Storage

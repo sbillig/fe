@@ -3,7 +3,7 @@
 // as Solidity reserves a mapping's slot. A plain zero-sized type takes none.
 use core::effect_ref::AddressSpace
 use core::ops::PlaceIndex
-use std::evm::{Address, Evm, RawStorage, SolSlot, keccak_words}
+use std::evm::{Address, Evm, RawStorage, SolSlot, StorPtr, keccak_words}
 
 /// Words hashed with the map's number, like Solady's `LibMap`.
 struct Words {}
@@ -15,6 +15,19 @@ impl PlaceIndex for Words {
 
     fn locate(self, _ root: u256, _ w: u256) -> (u256, u256) {
         (keccak_words([w, root]), 0)
+    }
+}
+
+impl Words {
+    /// The words rooted at `slot`.
+    #[raw_place]
+    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+        let mut ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
+        unsafe {
+            with (ptr) {
+                core::effect_ref::target_mut(ptr)
+            }
+        }
     }
 }
 
@@ -95,4 +108,17 @@ fn pinned_types_take_their_own_slots() uses (evm: mut Evm) {
     assert!(entries.1 == 6)
     assert!(entries.2 == 8)
     assert!(entries.3 == 11)
+}
+
+// A fieldless collection placed at a raw slot: its place is the handle's
+// target, which takes nothing of the handle's own layout.
+#[test]
+fn raw_slot_fieldless_collection() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let words = unsafe { Words::at(77) }
+        words[3] = 12
+        assert(words[3] == 12)
+        assert(read_slot(keccak_words([3, 77])) == 12)
+        assert(read_slot(77) == 0)
+    }
 }

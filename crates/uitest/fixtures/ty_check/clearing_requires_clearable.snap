@@ -13,9 +13,9 @@ error[6-0003]: trait bound is not satisfied
     │                   `Book` doesn't implement `Clearable`
     │                   trait bound `StorageMap<u256, u256>: Clearable` is not satisfied
     │
-    ┌─ src/evm/storage_map.fe:267:18
+    ┌─ src/evm/storage_map.fe:264:18
     │
-267 │         where V: Clearable
+264 │         where V: Clearable
     │                  --------- required by this bound on `remove`
 
 error[6-0003]: trait bound is not satisfied
@@ -24,9 +24,9 @@ error[6-0003]: trait bound is not satisfied
  32 │             nested.remove(k)
     │                    ^^^^^^ `StorageMap<u256, u256>` doesn't implement `Clearable`
     │
-    ┌─ src/evm/storage_map.fe:267:18
+    ┌─ src/evm/storage_map.fe:264:18
     │
-267 │         where V: Clearable
+264 │         where V: Clearable
     │                  --------- required by this bound on `remove`
 
 error[6-0003]: trait bound is not satisfied
@@ -49,9 +49,9 @@ error[6-0003]: trait bound is not satisfied
  48 │     m.remove(k)
     │       ^^^^^^ `V` doesn't implement `Clearable`
     │
-    ┌─ src/evm/storage_map.fe:267:18
+    ┌─ src/evm/storage_map.fe:264:18
     │
-267 │         where V: Clearable
+264 │         where V: Clearable
     │                  --------- required by this bound on `remove`
 
 error[6-0028]: trait implemented by the compiler
