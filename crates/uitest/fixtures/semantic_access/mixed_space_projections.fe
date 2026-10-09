@@ -22,10 +22,19 @@ impl Guarded {
         mut self.value
     }
 
+    // Accepted: a transient place forwarded through a helper keeps its space.
+    fn locked_forwarded(mut self) -> mut bool @transient {
+        forward(mut self.locked[()])
+    }
+
     // Rejected: the yields lie in storage and transient storage.
     fn pick(mut self, _ c: bool) -> mut u256 {
         if c { mut self.value } else { mut self.hits[()] }
     }
+}
+
+fn forward(_ x: mut bool) -> mut bool {
+    mut x
 }
 
 msg M {

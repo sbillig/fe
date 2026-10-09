@@ -474,6 +474,12 @@ impl<'a, 'db> Analysis<'a, 'db> {
         }
     }
 
+    /// The space `region` lies in: its base's, unless a pinned type or an
+    /// entry along its path moved it.
+    pub fn region_space(&self, region: &AbsPlace) -> Option<ProviderAddressSpace> {
+        region.space.or_else(|| self.space(region.base))
+    }
+
     pub fn space(&self, base: Base) -> Option<ProviderAddressSpace> {
         match base {
             Base::Root(root) => Some(self.body.roots[root.index()].address_space),
@@ -1680,7 +1686,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 ) = resolved
                     .regions
                     .iter()
-                    .find_map(|region| self.space(region.base))
+                    .find_map(|region| self.region_space(region))
                 {
                     return Err(self.diag(
                         SemanticDiagnosticKind::MoveConflict,
@@ -1758,7 +1764,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     ) -> Result<(), Diag<'db>> {
         for region in regions {
             if let Some(space @ (ProviderAddressSpace::Calldata | ProviderAddressSpace::Code)) =
-                self.space(region.base)
+                self.region_space(region)
             {
                 return Err(self.diag(
                     SemanticDiagnosticKind::StorageViolation,
@@ -2069,7 +2075,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .collect();
             for (index, component) in regions.iter().enumerate() {
                 for region in component {
-                    let Some(space) = region.space.or_else(|| self.space(region.base)) else {
+                    let Some(space) = self.region_space(region) else {
                         continue;
                     };
                     match spaces[index] {
