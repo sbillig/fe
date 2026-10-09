@@ -1,0 +1,15 @@
+// Indexing `dep::Words` or `dep::Slots` calls its `locate`, which runs
+// unsafe code, and nothing trusts `dep`.
+#[test]
+fn untrusted_locate() {
+    let words = dep::Words { base: 0 }
+    assert!(words[1] == 0)
+}
+
+pub contract Store {
+    mut slots: dep::Slots,
+
+    init() uses (mut slots) {
+        slots[1] = 2
+    }
+}

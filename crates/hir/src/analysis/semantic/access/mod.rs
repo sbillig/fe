@@ -16,7 +16,7 @@ mod refine;
 mod space;
 mod trust;
 
-use std::{collections::VecDeque, fmt};
+use std::{collections::VecDeque, fmt, iter};
 
 use common::diagnostics::CompleteDiagnostic;
 use cranelift_entity::EntityRef;
@@ -36,15 +36,18 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            SemOrigin, SemanticInstance,
+            SemOrigin, SemanticInstance, SemanticInstanceKey, core_method_callee_key,
             diagnostics::{
                 BlockedSemanticBody, SemanticDiagnosticId, SemanticDiagnosticSpan,
                 SemanticNormalizationFailure,
             },
             get_or_build_semantic_instance, identity_semantic_instance_key,
-            normalized::normalize_semantic_body,
+            normalized::{
+                NDataPath, NDataProjection, NExpr, NPlace, NStatementKind, SemanticBodyAdmission,
+                normalize_semantic_body, semantic_body_admission,
+            },
         },
-        ty::{provider::ProviderAddressSpace, ty_check::BodyOwner},
+        ty::{provider::ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId},
     },
     hir_def::{ExprId, ItemKind, StmtId, TopLevelMod},
 };
@@ -275,7 +278,9 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
                         Some(call) => instance
                             .callees(db)
                             .iter()
-                            .map(|callee| (callee.key, call.clone()))
+                            .map(|callee| callee.key)
+                            .chain(entry_callees(db, instance).into_iter().map(|(key, _)| key))
+                            .map(|key| (key, call.clone()))
                             .collect(),
                         None => {
                             let at = |origin| SemanticDiagnosticSpan::Origin { owner, origin };
@@ -301,7 +306,10 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
                                         })
                                     })
                                 });
-                            calls.chain(loops).collect()
+                            let entries = entry_callees(db, instance)
+                                .into_iter()
+                                .map(|(key, origin)| (key, at(origin)));
+                            calls.chain(loops).chain(entries).collect()
                         }
                     };
                 pending.extend(
@@ -319,4 +327,81 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
         }
     }
     diags
+}
+
+/// The instances the compiler calls for the entries `instance` names, which
+/// no semantic call site records, each with the statement naming the entry:
+/// the collection's `PlaceIndex::locate` and, for a collection that packs its
+/// elements into lanes, its codec's `get` and `set`.
+fn entry_callees<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
+    let SemanticBodyAdmission::Ready(admitted) = semantic_body_admission(db, instance) else {
+        return Vec::new();
+    };
+    let body = admitted.body(db);
+    let scope = instance.key(db).owner(db).scope();
+    let assumptions = instance.assumptions(db);
+    let mut callees = Vec::new();
+    for statement in body.blocks.iter().flat_map(|block| &block.statements) {
+        // The entries of a path from a place or value of type `base`.
+        let mut visit = |base: Option<TyId<'db>>, path: &NDataPath| {
+            let Some(base) = base else {
+                return;
+            };
+            for (idx, projection) in path.iter().enumerate() {
+                let NDataProjection::Entry(_) = projection else {
+                    continue;
+                };
+                let Some(collection) = body.path_prefix_ty(db, base, path, idx) else {
+                    continue;
+                };
+                let collection = instance.normalized_ty(db, collection);
+                let locate = core_method_callee_key(
+                    db,
+                    scope,
+                    assumptions,
+                    &["ops", "PlaceIndex"],
+                    "locate",
+                    vec![collection],
+                );
+                let codec_args = instance
+                    .place_index_lanes(db, collection)
+                    .zip(body.path_prefix_ty(db, base, path, idx + 1))
+                    .map(|(lanes, element)| vec![lanes.codec, instance.normalized_ty(db, element)]);
+                let codec = codec_args.into_iter().flat_map(|args| {
+                    ["get", "set"].map(|name| {
+                        core_method_callee_key(
+                            db,
+                            scope,
+                            assumptions,
+                            &["ops", "LaneCodec"],
+                            name,
+                            args.clone(),
+                        )
+                    })
+                });
+                callees.extend(
+                    iter::once(locate)
+                        .chain(codec)
+                        .filter_map(Result::ok)
+                        .map(|key| (key, statement.origin)),
+                );
+            }
+        };
+        let mut visit_place = |place: &NPlace<'db>| {
+            visit(body.place_base_ty(db, place.base), &place.path);
+        };
+        match &statement.kind {
+            NStatementKind::Define {
+                expr: NExpr::ProjectValue { value, path },
+                ..
+            } => visit(body.value(value.value).map(|value| value.ty), &path.0),
+            NStatementKind::Define { expr, .. } => expr.for_each_place_operand(&mut visit_place),
+            NStatementKind::Store { destination, .. } => visit_place(destination),
+            NStatementKind::End { .. } => {}
+        }
+    }
+    callees
 }

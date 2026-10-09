@@ -3617,6 +3617,16 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
             "mid::via_dep(7)",
             "`mid` allows `dep` to use unsafe code but is not trusted itself",
         ),
+        (
+            "unsafe_trust_locate",
+            "words[1]",
+            "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
+        ),
+        (
+            "unsafe_trust_locate",
+            "slots[1] = 2",
+            "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
+        ),
     ] {
         let fixture_dir = fe_test_runner_fixture_dir(fixture);
         let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");

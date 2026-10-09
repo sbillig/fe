@@ -6,8 +6,8 @@ use hir::analysis::{
         EvalOutcome, FieldIndex, RuntimeSizeError, SConst, SLocalId, SStmtId, SemConstId,
         SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
         SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
-        SemanticLocalRole, VariantIndex, eval_const_ref, generated_callee_key,
-        get_or_build_semantic_instance,
+        SemanticLocalRole, VariantIndex, core_method_callee_key, eval_const_ref,
+        generated_callee_key, get_or_build_semantic_instance,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
             NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
@@ -5845,23 +5845,11 @@ impl<'db> RmirEmitter<'db> {
             .scope
             .or_else(|| scope_ty.as_scope(self.db))
             .expect("core trait resolution requires a scope");
-        let trait_def = resolve_core_trait(self.db, scope, trait_path)
-            .unwrap_or_else(|| panic!("core declares {trait_path:?}"));
-        let trait_inst = TraitInstId::new_simple(self.db, trait_def, args);
-        let func = trait_def
-            .method_defs(self.db)
-            .get(&IdentId::new(self.db, name.to_string()))
-            .copied()
-            .unwrap_or_else(|| panic!("{trait_path:?} declares {name}"));
-        let key = generated_callee_key(
-            self.db,
-            scope,
-            self.env.assumptions,
-            func,
-            Some(trait_inst),
-            &[],
-        )
-        .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
+        let key =
+            core_method_callee_key(self.db, scope, self.env.assumptions, trait_path, name, args)
+                .unwrap_or_else(|error| {
+                    panic!("failed to finalize generated call to `{name}`: {error:?}")
+                });
         get_or_build_semantic_instance(self.db, key)
     }
 

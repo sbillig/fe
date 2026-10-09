@@ -1,4 +1,6 @@
 use core::abi::{load_word, store_word}
+use core::effect_ref::AddressSpace
+use core::ops::PlaceIndex
 use core::ptr
 
 pub fn safe_sum(_ a: u256, _ b: u256) -> u256 {
@@ -10,5 +12,44 @@ pub fn round_trip(_ value: u256) -> u256 {
     unsafe {
         store_word(ptr: p, value)
         load_word(p)
+    }
+}
+
+/// Words of memory from `base`. Construction is safe; only indexing runs
+/// unsafe code, in `locate`, as for `Slots`.
+pub struct Words {
+    pub base: u256,
+}
+
+impl PlaceIndex for Words {
+    const SPACE: AddressSpace = AddressSpace::Memory
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> (u256, u256) {
+        let scratch = ptr::alloc_bytes(32)
+        let offset = unsafe {
+            store_word(ptr: scratch, value: key * 32)
+            load_word(scratch)
+        }
+        (self.base + offset, 0)
+    }
+}
+
+/// Words of storage after the collection's root.
+pub struct Slots {}
+
+impl PlaceIndex for Slots {
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ key: u256) -> (u256, u256) {
+        let scratch = ptr::alloc_bytes(32)
+        let offset = unsafe {
+            store_word(ptr: scratch, value: key)
+            load_word(scratch)
+        }
+        (root + 1 + offset, 0)
     }
 }
