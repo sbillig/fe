@@ -449,12 +449,13 @@ module.exports = grammar({
       optional(seq('=', choice($.uses_param_list, $.uses_param))),
     ),
 
-    // Associated result space: `space S`, or `space S = memory`
+    // Associated result space: `space S`, `space S = memory` or
+    // `space S = self[_]`
     trait_space_item: $ => seq(
       optional($.attribute_list),
       'space',
       field('name', $.identifier),
-      optional(seq('=', field('value', $.path))),
+      optional(seq('=', field('value', $.path), optional($.space_path))),
     ),
 
     trait_type_item: $ => seq(
@@ -649,12 +650,18 @@ module.exports = grammar({
       optional(field('space', $.space_annotation)),
     )),
 
-    // Result-space contract: @S, @B::S, @self, @target(p)
+    // Result-space contract: @S, @B::S, @self, @self.f[_], @target(p)
     space_annotation: $ => prec.right(seq(
       '@',
       $.path,
-      optional(seq('(', $.path, ')')),
+      optional(choice(seq('(', $.path, ')'), $.space_path)),
     )),
+
+    // The sub-place a result-space contract names: `.f`, `.0` and `[_]`
+    space_path: $ => prec.right(repeat1(choice(
+      seq('.', choice($.identifier, $.integer_literal)),
+      seq('[', '_', ']'),
+    ))),
 
     // Qualified path: <Type as Trait>::AssocType
     qualified_path_type: $ => prec.right(seq(

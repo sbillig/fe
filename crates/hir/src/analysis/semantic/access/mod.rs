@@ -13,6 +13,7 @@ mod control;
 mod domain;
 mod place;
 mod refine;
+mod space;
 
 use std::{collections::VecDeque, fmt};
 
@@ -23,7 +24,10 @@ use salsa::Update;
 pub use self::control::{
     ExecutableBlock, ExecutableControlFlow, semantic_executable_control_flow, semantic_may_return,
 };
-pub(crate) use self::refine::{CallSiteRefinements, provisional_call_site_provider_refinements};
+pub(crate) use self::{
+    refine::{CallSiteRefinements, provisional_call_site_provider_refinements},
+    space::PathSpace,
+};
 use crate::{
     analysis::{
         HirAnalysisDb,

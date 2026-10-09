@@ -461,8 +461,11 @@ pub enum SyntaxKind {
     PtrType,
     /// `ref T`, `mut T`, `own T`, `ref T @S`
     ModeType,
-    /// `@S`, `@p` or `@target(p)`: a result-space contract
+    /// `@S`, `@p`, `@p.f[_]` or `@target(p)`: a result-space contract
     SpaceAnnotation,
+    /// `.f`, `.0` and `[_]` after a result-space contract's root: the
+    /// sub-place whose space it names
+    SpacePath,
     /// `foo::Type<T, U + 2>`
     PathType,
     /// `Self`
@@ -810,6 +813,7 @@ impl SyntaxKind {
             SyntaxKind::PtrType => "pointer type",
             SyntaxKind::ModeType => "mode type",
             SyntaxKind::SpaceAnnotation => "result space",
+            SyntaxKind::SpacePath => "result space path",
             SyntaxKind::SelfType => "`Self` type",
             SyntaxKind::TupleType => "tuple type definition",
             SyntaxKind::NeverType => "never type",

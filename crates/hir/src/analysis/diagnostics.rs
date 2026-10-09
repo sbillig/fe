@@ -1681,6 +1681,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::InvalidResultSpacePath(span) => primary_diag(
+                Severity::Error,
+                "invalid result-space path",
+                "the steps after a parameter, an effect or `self` must name its fields, tuple components and `[_]` elements",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ModeNotType(span) => primary_diag(
                 Severity::Error,
                 "`ref` and `mut` are not types",

@@ -75,6 +75,30 @@ structurally disjoint, as in `(mut self.a, mut self.b)`. An optional shape,
 `match`, `let .. else` or `?`; its empty variant may only be returned before
 the `yield`.
 
+Each access a projection grants lies in one address space, its *result
+space*. The compiler infers it from the body, and a signature may declare it
+after a component or after the whole return: a space (`@memory`, `@storage`,
+`@transient`, `@calldata`, `@code`), a parameter's or effect's place
+(`@self`, `@total`), a sub-place of one (`@self.value`, `@self.pair.0`,
+`@self.cells[_]`), the resource a handle names (`@target(p)`), or an
+associated space (`@S`). A sub-place lies where its path leads: a step into a
+pinned type moves it into the pin's space, an entry into its collection's
+`SPACE`, and a packed field or entry is reached through a memory copy, so
+its grants lie in memory. Every yield must lie in the declared space, so
+`@self` on a struct holding a `TSlot` does not cover a yield of the `TSlot`'s
+value, while `@self.locked` does. An implementation gives its trait's
+`space S` the same way; `space S = self[_]` says its elements are its own
+parts, which is memory for packed elements.
+
+```fe
+fn value_mut(mut self) -> mut T @self.value { mut self.value }
+
+impl<T> Collection for Cells<T> {
+    space S = self[_]       // where its elements lie: memory for packed ones
+    ..
+}
+```
+
 A tuple holds accesses only as such a shape. Accesses the checker cannot see
 are disjoint form an *unsafe split*, an `unsafe` block whose tail is a tuple
 of them: one session whose reservations are all of theirs, and whose grants

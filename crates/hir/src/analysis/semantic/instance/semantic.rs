@@ -8,7 +8,7 @@ use crate::{
         semantic::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SemOrigin, SemanticBody,
             SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            access::{CallSiteRefinements, provisional_call_site_provider_refinements},
+            access::{CallSiteRefinements, PathSpace, provisional_call_site_provider_refinements},
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
                 SemanticDiagnosticLabel, SemanticDiagnosticSpan,
@@ -35,6 +35,7 @@ use crate::{
             },
             result_space::{
                 ResolvedSpace, SpaceContract, SpaceKey, declared_result_spaces, resolve_space_key,
+                space_path_steps,
             },
             subst::substitute_complete,
             trait_def::{MethodArgMapError, TraitInstId},
@@ -52,7 +53,7 @@ use crate::{
             ty_lower::{ParamSchemaId, SubstError},
         },
     },
-    hir_def::{CallableDef, ExprId, FuncParamMode, scope_graph::ScopeId},
+    hir_def::{CallableDef, ExprId, FuncParamMode, SpacePathId, scope_graph::ScopeId},
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
         ResolvedEffectBinding,
@@ -1267,7 +1268,7 @@ impl<'db> SemanticInstance<'db> {
                                 ..key
                             }))
                         }
-                        SpaceContract::Assoc(_) | SpaceContract::Domain(_) => None,
+                        SpaceContract::Assoc(_) | SpaceContract::Domain(..) => None,
                         contract => Some(contract),
                     })
                     .collect::<Vec<_>>()
@@ -1290,7 +1291,15 @@ impl<'db> SemanticInstance<'db> {
         let key = self.key(db);
         match contract {
             SpaceContract::Space(space) => Some(space),
-            SpaceContract::Param(param) => Some(self.param_space(db, param)),
+            SpaceContract::Param(param, steps) => {
+                let binding = key.typed_body(db).param_binding(param as usize)?;
+                self.sub_place_space(
+                    db,
+                    self.param_space(db, param),
+                    self.binding_ty(db, binding),
+                    steps,
+                )
+            }
             SpaceContract::Target(param) => {
                 let binding = key.typed_body(db).param_binding(param as usize)?;
                 provider_semantics(
@@ -1301,14 +1310,21 @@ impl<'db> SemanticInstance<'db> {
                 )
                 .address_space
             }
-            SpaceContract::Domain(effect) => self
-                .effect_bindings(db)
-                .into_iter()
-                .find(|binding| {
+            SpaceContract::Domain(effect, steps) => {
+                let binding = self.effect_bindings(db).into_iter().find(|binding| {
                     matches!(binding, LocalBinding::EffectParam { idx, .. } if *idx == effect as usize)
-                })
-                .and_then(|binding| resolved_provider_binding_for_instance_effect(db, self, binding))
-                .and_then(|provider| provider.semantics.address_space),
+                })?;
+                let provider = resolved_provider_binding_for_instance_effect(db, self, binding)?;
+                self.sub_place_space(
+                    db,
+                    provider.semantics.address_space?,
+                    provider
+                        .semantics
+                        .target_ty
+                        .unwrap_or_else(|| self.binding_ty(db, binding)),
+                    steps,
+                )
+            }
             SpaceContract::Assoc(space) => match resolve_space_key(
                 db,
                 SpaceKey {
@@ -1319,19 +1335,45 @@ impl<'db> SemanticInstance<'db> {
                 self.assumptions(db),
             )? {
                 ResolvedSpace::Space(space) => Some(space),
-                // The parameter holding the owner, if one alone does.
-                ResolvedSpace::Owner(owner) => {
+                // The parameter holding the owner, if one alone does: its
+                // place, or the sub-place the implementation names.
+                ResolvedSpace::Owner(owner, steps) => {
+                    let owner = self.normalized_ty(db, owner);
                     let typed_body = key.typed_body(db);
                     let mut params = (0..)
                         .map_while(|idx| Some((idx, typed_body.param_binding(idx)?)))
                         .filter(|(_, binding)| self.binding_ty(db, *binding) == owner);
                     match (params.next(), params.next()) {
-                        (Some((param, _)), None) => Some(self.param_space(db, param as u32)),
+                        (Some((param, _)), None) => self.sub_place_space(
+                            db,
+                            self.param_space(db, param as u32),
+                            owner,
+                            steps,
+                        ),
                         _ => None,
                     }
                 }
             },
         }
+    }
+
+    /// The space of the sub-place `steps` reaches from a place of type
+    /// `root` in `start`: a pinned type or an entry along it moves it, and a
+    /// lane's grants lie in memory.
+    fn sub_place_space(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        start: ProviderAddressSpace,
+        root: TyId<'db>,
+        steps: SpacePathId<'db>,
+    ) -> Option<ProviderAddressSpace> {
+        let scope = self.normalization_scope(db);
+        let root = self.normalized_ty(db, root.as_capability(db).map_or(root, |(_, inner)| inner));
+        let mut walk = PathSpace::new(db, root);
+        for step in space_path_steps(db, scope, self.assumptions(db), root, steps)? {
+            walk.step(db, self, scope, Some(start), step);
+        }
+        walk.grant_space(Some(start))
     }
 
     /// The bindings of the components of the rows the instance's effects

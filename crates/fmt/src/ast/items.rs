@@ -1204,7 +1204,15 @@ impl ToDoc for ast::TraitSpaceItem {
             .map_or_else(|| alloc.nil(), |n| alloc.text(ctx.token(&n)));
         let value = self.value().map_or_else(
             || alloc.nil(),
-            |value| alloc.text(" = ").append(value.to_doc(ctx)),
+            |value| {
+                let space_path = self
+                    .space_path()
+                    .map_or_else(|| alloc.nil(), |space_path| space_path.to_doc(ctx));
+                alloc
+                    .text(" = ")
+                    .append(value.to_doc(ctx))
+                    .append(space_path)
+            },
         );
 
         attrs_doc(self, ctx)
