@@ -191,7 +191,7 @@ impl<T> SolArray<T> {
 }
 
 impl<T> Collection for SolArray<T> {
-    space S = self
+    space S = self[_]
     type Cursor = u256
     type Item = T
 

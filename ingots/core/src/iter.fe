@@ -161,9 +161,10 @@ impl<T, const N: usize> [T; N] {
     }
 }
 
-// An array's elements are its own parts, wherever it lies.
+// An array's elements are its own parts, wherever it lies, unless they are
+// pinned elsewhere.
 impl<T, const N: usize> Collection for [T; N] {
-    space S = self
+    space S = self[_]
     type Cursor = usize
     type Item = T
 

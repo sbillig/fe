@@ -1342,7 +1342,13 @@ impl<'db> SemanticInstance<'db> {
                     let typed_body = key.typed_body(db);
                     let mut params = (0..)
                         .map_while(|idx| Some((idx, typed_body.param_binding(idx)?)))
-                        .filter(|(_, binding)| self.binding_ty(db, *binding) == owner);
+                        .filter(|(_, binding)| {
+                            let ty = self.binding_ty(db, *binding);
+                            self.normalized_ty(
+                                db,
+                                ty.as_capability(db).map_or(ty, |(_, inner)| inner),
+                            ) == owner
+                        });
                     match (params.next(), params.next()) {
                         (Some((param, _)), None) => self.sub_place_space(
                             db,
