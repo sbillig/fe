@@ -9,6 +9,10 @@ contract's code, numbered by their own counter.
 
 A storage collection, such as a `StorageMap`, `SolArray` or `TSlot`, is an
 owner at its slot, pinned to the space its `PlaceIndex` implementation names.
+It takes whole slots of its own, never sharing one with packed neighbors,
+and at least one even when it has no fields, since its slot number is what
+identifies its contents: a `StorageMap`'s slot is reserved and never
+written, as a Solidity mapping's is. A zero-sized type takes no slot.
 It keeps itself and its contents at that slot number in that space: a map's
 entry for `key` lies at `keccak256(key ++ slot)` in storage, and a `TSlot`
 and its value lie in transient storage at the slot's own number. A

@@ -132,7 +132,7 @@ impl<'db> AdtDef<'db> {
     }
 
     /// The state space this type is pinned to; see `adt_pin`.
-    pub(crate) fn pin(self, db: &'db dyn HirAnalysisDb) -> Option<ProviderAddressSpace> {
+    pub fn pin(self, db: &'db dyn HirAnalysisDb) -> Option<ProviderAddressSpace> {
         adt_pin(db, self)
     }
 

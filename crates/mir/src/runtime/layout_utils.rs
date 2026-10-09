@@ -263,7 +263,7 @@ impl<'db> RuntimeMemoryLayout<'db> {
                 RuntimeMemoryUnit::Byte => self.class_sizes_sum(&data.fields, visiting),
                 RuntimeMemoryUnit::Word => self
                     .storage_struct_layout(&data, visiting)
-                    .map(|layout| layout.slots),
+                    .map(|layout| layout.slots.max(u64::from(data.pinned))),
             },
             Layout::Array(data) => self
                 .class_size_inner(&data.elem, visiting)?
@@ -759,6 +759,7 @@ mod tests {
         let db = DriverDataBase::default();
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256)].into_boxed_slice(),
+            pinned: false,
         };
         let array_layout = ArrayLayout {
             elem: scalar(16),

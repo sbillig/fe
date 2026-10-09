@@ -585,15 +585,15 @@ impl<'db> FieldWalker<'db> {
             self.check_provider_target(ty);
             let output = self.walk_adt(views, adt, path, dimensions);
             // A pinned type is reported at its place, which is its identity,
-            // rather than by the slots its private fields take.
-            if let Some(space) = adt.pin(self.db)
-                && output.span != 0
-            {
+            // rather than by the slots its private fields take. It takes whole
+            // slots, at least one even without fields: its root number derives
+            // its region, so siblings need distinct ones.
+            if let Some(space) = adt.pin(self.db) {
                 if !self.content_spaces.contains(&space) {
                     self.content_spaces.push(space);
                 }
                 WalkOutput {
-                    span: output.span,
+                    span: output.span.max(1),
                     ..WalkOutput::leaf(
                         self.db,
                         ty,

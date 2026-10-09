@@ -544,6 +544,7 @@ impl<'db> TyId<'db> {
     /// This is a structural check (not based on byte-size calculation):
     /// - `()` and empty structs are zero-sized
     /// - tuples/structs/arrays are zero-sized iff all elements/fields are zero-sized
+    /// - a pinned type never is: its root number identifies its region
     // Borrow checking asks about the same types repeatedly.
     #[salsa::tracked]
     pub fn is_zero_sized(self, db: &'db dyn HirAnalysisDb) -> bool {
@@ -573,9 +574,11 @@ impl<'db> TyId<'db> {
             } else if let Some(adt_def) = ty.adt_def(db)
                 && matches!(adt_def.adt_ref(db), AdtRef::Struct(_))
             {
-                ty.field_types(db)
-                    .into_iter()
-                    .all(|field_ty| inner(db, field_ty, visiting))
+                adt_def.pin(db).is_none()
+                    && ty
+                        .field_types(db)
+                        .into_iter()
+                        .all(|field_ty| inner(db, field_ty, visiting))
             } else {
                 false
             };
