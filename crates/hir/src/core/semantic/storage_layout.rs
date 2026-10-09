@@ -1100,6 +1100,54 @@ pub(crate) fn storage_slot_span<'db>(
     walker.errors.is_empty().then_some(output.span)
 }
 
+/// Which fields of struct or tuple `ty` are lanes where a value of `ty` lies
+/// in storage or transient storage: packed scalars that share their word or
+/// lie above its low byte, as MIR's `storage_field_lane` decides. A retained
+/// grant to a lane is a memory copy.
+#[salsa::tracked(return_ref)]
+pub(crate) fn storage_field_lanes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Vec<bool> {
+    if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
+        return Vec::new();
+    }
+    let mut walker = FieldWalker {
+        db,
+        scope,
+        errors: Vec::new(),
+        content_spaces: Vec::new(),
+        expanding: Vec::new(),
+        memory_pointer: None,
+    };
+    let shapes: Vec<_> = ty
+        .field_types(db)
+        .into_iter()
+        .map(|field| {
+            let output = walker.walk_ty(ConcreteTypeView::identity(field), &[], &[]);
+            match output.packable_bytes {
+                Some(bytes) => StorageFieldShape::Scalar { bytes },
+                None => StorageFieldShape::Aggregate {
+                    slots: output.span as u64,
+                },
+            }
+        })
+        .collect();
+    let Ok(layout) = storage_fields_layout(shapes) else {
+        return Vec::new();
+    };
+    layout
+        .placements
+        .iter()
+        .map(|placement| {
+            placement
+                .lane
+                .is_some_and(|lane| placement.shared || lane.byte_offset != 0)
+        })
+        .collect()
+}
+
 /// How deep the search for a persistent collection under a transient one
 /// follows nested types: a collection's element type may grow without bound,
 /// as in `struct G<T> { m: StorageMap<u256, G<[T; 1]>> }`.

@@ -48,7 +48,7 @@ use crate::{
         },
     },
     hir_def::{CallableDef, FuncParamMode, scope_graph::ScopeId},
-    semantic::{EffectRequirementKey, ProviderSource},
+    semantic::{EffectRequirementKey, ProviderSource, storage_field_lanes},
 };
 
 type Diag<'db> = SemanticDiagnostic<'db>;
@@ -420,32 +420,70 @@ impl<'a, 'db> Analysis<'a, 'db> {
             .collect()
     }
 
-    /// The space the innermost pinned type or entry along `place` moves it
-    /// into: a pinned type's pin (`space(P.f) = pin(F)`), or an entry's
-    /// collection's `SPACE`.
-    fn path_space(&self, place: &NPlace<'db>) -> Option<ProviderAddressSpace> {
-        let path = place.path.as_slice();
-        (0..=path.len()).rev().find_map(|len| {
-            let ty = self.body.place_prefix_ty(self.db, place, len)?;
-            if matches!(path.get(len), Some(NDataProjection::Entry(_)))
-                && let Some(space) = self.instance.place_index_space(self.db, ty)
-            {
-                return Some(space);
+    /// Where the path of `place` takes it from `start`, the space of the
+    /// place the path is relative to: the space the innermost pinned type
+    /// (`space(P.f) = pin(F)`) or entry (its collection's `SPACE`) moves it
+    /// into, and whether it crosses a lane.
+    fn path_space(
+        &self,
+        place: &NPlace<'db>,
+        start: Option<ProviderAddressSpace>,
+    ) -> (Option<ProviderAddressSpace>, bool) {
+        let db = self.db;
+        let ty_at = |len| {
+            self.body
+                .place_prefix_ty(db, place, len)
+                .map(|ty| self.instance.normalized_ty(db, ty))
+        };
+        let pin = |ty: Option<TyId<'db>>| ty?.adt_def(db)?.pin(db);
+        let mut moved = pin(ty_at(0));
+        let mut lane = false;
+        for (index, projection) in place.path.as_slice().iter().enumerate() {
+            let Some(container) = ty_at(index) else {
+                break;
+            };
+            match projection {
+                NDataProjection::Entry(_) => {
+                    if let Some(space) = self.instance.place_index_space(db, container) {
+                        moved = Some(space);
+                    }
+                    lane |= self.instance.place_index_lanes(db, container).is_some();
+                }
+                NDataProjection::Field(field)
+                    if matches!(
+                        moved.or(start),
+                        Some(ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)
+                    ) =>
+                {
+                    lane |= storage_field_lanes(db, self.scope, container)
+                        .get(field.0 as usize)
+                        .copied()
+                        .unwrap_or(false);
+                }
+                _ => {}
             }
-            self.instance
-                .normalized_ty(self.db, ty)
-                .adt_def(self.db)
-                .and_then(|adt| adt.pin(self.db))
-        })
+            if let Some(space) = pin(ty_at(index + 1)) {
+                moved = Some(space);
+            }
+        }
+        (moved, lane)
     }
 
     pub fn resolve(&mut self, place: &NPlace<'db>) -> Resolved {
         let path = self.path(&place.path);
-        let space = self.path_space(place);
+        let rooted = |this: &Self, base: Base, path: Path| {
+            let (space, lane) = this.path_space(place, this.space(base));
+            AbsPlace {
+                base,
+                path,
+                space,
+                lane,
+            }
+        };
         let (regions, direct) = match place.base {
             NPlaceBase::Root(root) => {
                 let base = self.root_domain[root.index()].map_or(Base::Root(root), Base::Domain);
-                (vec![AbsPlace { base, path, space }], TokenSet::new())
+                (vec![rooted(self, base, path)], TokenSet::new())
             }
             NPlaceBase::CapabilityTarget { carrier } => {
                 let carrier_ty = self.body.values[carrier.index()].ty;
@@ -453,14 +491,17 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 let mut regions: Vec<AbsPlace> = direct
                     .iter()
                     .flat_map(|token| &self.tokens[*token as usize].regions)
-                    .map(|region| region.extended(&path, space))
+                    .map(|region| {
+                        let (space, lane) = self.path_space(place, self.grant_space(region));
+                        region.extended(&path, space, lane)
+                    })
                     .collect();
                 if regions.is_empty() || carrier_ty.as_ptr(self.db).is_some() {
                     let base = self
                         .dynamic_handle(carrier_ty)
                         .filter(|_| carrier_ty.as_ptr(self.db).is_none())
                         .map_or(Base::Raw, Base::Domain);
-                    regions = vec![AbsPlace { base, path, space }];
+                    regions = vec![rooted(self, base, path)];
                 }
                 regions.sort();
                 regions.dedup();
@@ -478,6 +519,16 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// entry along its path moved it.
     pub fn region_space(&self, region: &AbsPlace) -> Option<ProviderAddressSpace> {
         region.space.or_else(|| self.space(region.base))
+    }
+
+    /// The space a retained grant to `region` lies in: memory for a lane,
+    /// whose grant is a memory copy, else the region's own.
+    pub fn grant_space(&self, region: &AbsPlace) -> Option<ProviderAddressSpace> {
+        if region.lane {
+            Some(ProviderAddressSpace::Memory)
+        } else {
+            self.region_space(region)
+        }
     }
 
     pub fn space(&self, base: Base) -> Option<ProviderAddressSpace> {
@@ -2075,7 +2126,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .collect();
             for (index, component) in regions.iter().enumerate() {
                 for region in component {
-                    let Some(space) = self.region_space(region) else {
+                    let Some(space) = self.grant_space(region) else {
                         continue;
                     };
                     match spaces[index] {

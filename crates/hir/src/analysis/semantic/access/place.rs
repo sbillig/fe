@@ -96,6 +96,10 @@ pub(super) struct AbsPlace {
     /// into, as a `TSlot` and its value lie in transient storage whatever
     /// holds the `TSlot`. `None` keeps the base's.
     pub space: Option<ProviderAddressSpace>,
+    /// Whether the path crosses a lane, a packed field or entry of a state
+    /// word: a retained grant to the place is a memory copy, while accesses
+    /// still reserve the lane in its own space.
+    pub lane: bool,
 }
 
 impl AbsPlace {
@@ -104,18 +108,26 @@ impl AbsPlace {
             base,
             path: Path::new(),
             space: None,
+            lane: false,
         }
     }
 
     /// The place `suffix` reaches from this one, in `space` when a pinned
-    /// type or an entry along the suffix moves it there.
-    pub fn extended(&self, suffix: &[Step], space: Option<ProviderAddressSpace>) -> Self {
+    /// type or an entry along the suffix moves it there, and in a lane when
+    /// the suffix crosses one.
+    pub fn extended(
+        &self,
+        suffix: &[Step],
+        space: Option<ProviderAddressSpace>,
+        lane: bool,
+    ) -> Self {
         let mut path = self.path.clone();
         path.extend_from_slice(suffix);
         Self {
             base: self.base,
             path,
             space: space.or(self.space),
+            lane: self.lane || lane,
         }
     }
 }

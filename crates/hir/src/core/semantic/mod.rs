@@ -42,13 +42,13 @@ pub use reference::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, iter, ops::Range};
-pub(crate) use storage_layout::storage_slot_span;
 pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
     ValidatedFieldLayoutPlan,
 };
+pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{
     IndexedReference, ReferenceIndex, SignatureWithSpan, SourceLocation, SymbolKind, SymbolView,
     item_kind_to_url_suffix, qualify_path_with_ingot_name, scope_to_doc_path,
