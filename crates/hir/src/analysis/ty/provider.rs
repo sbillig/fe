@@ -683,7 +683,7 @@ pub fn place_index_lanes<'db>(
     (bits > 0 && bits <= 128 && bits % 8 == 0).then_some(PlaceIndexLanes { codec, bits })
 }
 
-fn effect_space_from_resolved_trait_const<'db>(
+pub(crate) fn effect_space_from_resolved_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     resolved: ResolvedImplInstance<'db>,

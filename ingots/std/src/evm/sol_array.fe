@@ -33,7 +33,6 @@ use super::sol_slot::{SolPacked, SolWord, data_slot}
 // Solidity refuses to `push` onto a storage array of 2**64 - 1 elements.
 const MAX_LEN: u256 = 0xffffffffffffffff
 
-#[storage_only]
 pub struct SolArray<T> {
     len: u256,
 }

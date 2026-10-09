@@ -43,14 +43,12 @@ const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ///     store.order_status.set(42, 1)
 /// }
 /// ```
-#[storage_only]
 pub struct StoragePackedArray<const BITS: u256> {
     words: PackedWords,
 }
 
 /// The words of a packed array: word `w` of the array whose place starts at
 /// slot `s` is at `keccak256(s) + w`.
-#[storage_only]
 struct PackedWords {
     seed: u256,
 }

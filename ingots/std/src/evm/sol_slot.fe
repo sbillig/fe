@@ -49,14 +49,12 @@ pub trait SolPacked {
     fn from_packed(_ bits: u256) -> Self
 }
 
-#[storage_only]
 pub struct SolSlot {
     payload: Payload,
 }
 
 /// The words of a slot's long `bytes` or `string` payload, from
 /// `keccak256(slot)` on; the slot itself holds the head.
-#[storage_only]
 struct Payload {
     head: u256,
 }

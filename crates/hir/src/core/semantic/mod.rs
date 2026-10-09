@@ -5469,10 +5469,10 @@ impl<'db> FieldView<'db> {
         // collection can.
         if let FieldParent::Contract(_) = self.parent
             && !self.parent.fields_list(db).data(db)[self.idx].is_mut
-            && let Some(collection) = ty.storage_collection(db)
+            && let Some(collection) = ty.pinned_part(db)
         {
             out.push(
-                TyLowerDiag::StorageOnlyValue {
+                TyLowerDiag::StateOnlyValue {
                     span: span.clone(),
                     ty,
                     collection,

@@ -92,9 +92,9 @@ pub(super) fn paths_overlap(lhs: &[Step], rhs: &[Step]) -> bool {
 pub(super) struct AbsPlace {
     pub base: Base,
     pub path: Path,
-    /// The space an entry along the path moved the place into: its
-    /// collection's contents' space, as a `TSlot`'s value lies in transient
-    /// storage whatever holds the `TSlot`. `None` keeps the base's.
+    /// The space a pinned type or an entry along the path moved the place
+    /// into, as a `TSlot` and its value lie in transient storage whatever
+    /// holds the `TSlot`. `None` keeps the base's.
     pub space: Option<ProviderAddressSpace>,
 }
 
@@ -107,8 +107,8 @@ impl AbsPlace {
         }
     }
 
-    /// The place `suffix` reaches from this one, in `space` when an entry
-    /// along the suffix moves it there.
+    /// The place `suffix` reaches from this one, in `space` when a pinned
+    /// type or an entry along the suffix moves it there.
     pub fn extended(&self, suffix: &[Step], space: Option<ProviderAddressSpace>) -> Self {
         let mut path = self.path.clone();
         path.extend_from_slice(suffix);

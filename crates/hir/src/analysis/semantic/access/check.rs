@@ -420,23 +420,28 @@ impl<'a, 'db> Analysis<'a, 'db> {
             .collect()
     }
 
-    /// The space the innermost entry along `place` lies in: its collection's
-    /// contents' space.
-    fn entry_space(&self, place: &NPlace<'db>) -> Option<ProviderAddressSpace> {
-        place
-            .path
-            .as_slice()
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, projection)| matches!(projection, NDataProjection::Entry(_)))
-            .and_then(|(index, _)| self.body.place_prefix_ty(self.db, place, index))
-            .and_then(|collection| self.instance.place_index_space(self.db, collection))
+    /// The space the innermost pinned type or entry along `place` moves it
+    /// into: a pinned type's pin (`space(P.f) = pin(F)`), or an entry's
+    /// collection's `SPACE`.
+    fn path_space(&self, place: &NPlace<'db>) -> Option<ProviderAddressSpace> {
+        let path = place.path.as_slice();
+        (0..=path.len()).rev().find_map(|len| {
+            let ty = self.body.place_prefix_ty(self.db, place, len)?;
+            if matches!(path.get(len), Some(NDataProjection::Entry(_)))
+                && let Some(space) = self.instance.place_index_space(self.db, ty)
+            {
+                return Some(space);
+            }
+            self.instance
+                .normalized_ty(self.db, ty)
+                .adt_def(self.db)
+                .and_then(|adt| adt.pin(self.db))
+        })
     }
 
     pub fn resolve(&mut self, place: &NPlace<'db>) -> Resolved {
         let path = self.path(&place.path);
-        let space = self.entry_space(place);
+        let space = self.path_space(place);
         let (regions, direct) = match place.base {
             NPlaceBase::Root(root) => {
                 let base = self.root_domain[root.index()].map_or(Base::Root(root), Base::Domain);

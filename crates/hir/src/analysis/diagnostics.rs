@@ -1636,7 +1636,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
-            Self::StorageOnlyValue {
+            Self::StateOnlyValue {
                 span,
                 ty,
                 collection,
@@ -1644,19 +1644,24 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             } => {
                 let ty_name = ty.pretty_print(db);
                 let collection_name = collection.pretty_print(db);
+                let space = collection
+                    .adt_def(db)
+                    .and_then(|adt| adt.pin(db))
+                    .map_or("contract state", |space| space.pretty());
                 let mut diag = primary_diag(
                     Severity::Error,
-                    format!("`{ty_name}` lives only in storage"),
-                    format!("a storage-only type cannot be {position}"),
+                    format!("`{ty_name}` is state-only"),
+                    format!("a state-only type cannot be {position}"),
                     span.resolve(db),
                     error_code,
                 );
-                if ty != collection {
-                    diag.notes
-                        .push(format!("`{ty_name}` holds `{collection_name}`, a storage collection"));
-                }
+                diag.notes.push(if ty == collection {
+                    format!("`{ty_name}` is pinned to {space} by its `PlaceIndex` implementation")
+                } else {
+                    format!("`{ty_name}` holds `{collection_name}`, which is pinned to {space}")
+                });
                 diag.notes.push(
-                    "a storage collection lives at its storage place; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter".into(),
+                    "a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter".into(),
                 );
                 diag
             }

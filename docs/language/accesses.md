@@ -125,10 +125,15 @@ balances.set(key: to, value: 0)     // rejected: `x` holds an entry of `balances
 x -= amount
 ```
 
-A type holding a collection is *storage-only* (`#[storage_only]`): never a
-value. It is not constructed, copied, moved out of storage or held in a
-memory aggregate; code reaches it through an access, a `mut` or view
-parameter, or an effect. A raw-slot constructor,
+A collection whose `PlaceIndex` implementation has `SPACE` storage or
+transient storage is *pinned* to that space; implementing the trait is the
+whole declaration, so a library collection is pinned the same way. A type
+holding a pinned type is *state-only*: never a value. It is not constructed,
+copied, moved out of storage or held in a memory aggregate; code reaches it
+through an access, a `mut` or view parameter, or an effect. A place's space
+follows its path: a field or element of a pinned type lies in the type's
+space, so a `TSlot` and its value lie in transient storage whatever holds
+the `TSlot`. A raw-slot constructor,
 `unsafe fn at(slot) -> mut Self uses (storage: mut RawStorage)`, places a
 collection at a runtime slot, and its caller vouches that nothing else uses
 that slot. A `with` block may install a provider naming storage only when its

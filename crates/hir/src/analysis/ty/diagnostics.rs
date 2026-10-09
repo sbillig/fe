@@ -75,9 +75,9 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
         mode: &'static str,
     },
-    /// A storage-only type, holding the storage collection `collection`, in a
+    /// A state-only type, holding the pinned type `collection`, in a
     /// position that would make it a value: `position`.
-    StorageOnlyValue {
+    StateOnlyValue {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
         collection: TyId<'db>,
@@ -289,7 +289,7 @@ impl TyLowerDiag<'_> {
             Self::ExpectedStarKind(_) => 0,
             Self::ModeNotType(_) => 58,
             Self::ViewTypeMode { .. } => 59,
-            Self::StorageOnlyValue { .. } => 61,
+            Self::StateOnlyValue { .. } => 61,
             Self::UnknownResultSpace(_) => 60,
             Self::InvalidTypeArgKind { .. } => 1,
             Self::RecursiveType { .. } => 2,

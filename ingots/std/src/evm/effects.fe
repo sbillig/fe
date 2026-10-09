@@ -237,7 +237,6 @@ impl<T> TStorPtr<T> {
 /// its value lives in transient storage at that slot's number. Storage and
 /// transient contract fields share one slot numbering, so the cell never
 /// overlaps other transient state. `slot[()]` is the value's place.
-#[storage_only]
 pub struct TSlot<T> {
     seed: u256,
 }

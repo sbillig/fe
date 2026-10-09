@@ -882,12 +882,6 @@ impl<'db> Struct<'db> {
         self.attributes(db).has_marker_attr(db, "view")
     }
 
-    /// A `#[storage_only]` type is a storage collection: an owner that lives
-    /// at its place in storage, never in memory, and is never copied or moved.
-    pub fn is_storage_only(self, db: &'db dyn HirDb) -> bool {
-        self.attributes(db).has_marker_attr(db, "storage_only")
-    }
-
     /// Returns the human readable string of the expected struct initializer.
     /// ## Example
     /// When `S` is a struct defined as below:
@@ -1073,12 +1067,6 @@ impl<'db> Enum<'db> {
     /// `own` parameter and no `mut` yield.
     pub fn is_view(self, db: &'db dyn HirDb) -> bool {
         self.attributes(db).has_marker_attr(db, "view")
-    }
-
-    /// A `#[storage_only]` type is a storage collection: an owner that lives
-    /// at its place in storage, never in memory, and is never copied or moved.
-    pub fn is_storage_only(self, db: &'db dyn HirDb) -> bool {
-        self.attributes(db).has_marker_attr(db, "storage_only")
     }
 }
 

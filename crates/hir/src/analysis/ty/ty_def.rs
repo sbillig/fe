@@ -103,12 +103,12 @@ impl<'db> TyId<'db> {
         })
     }
 
-    /// The storage collection this type is or holds in a field, or in a
-    /// tuple or array element. Such a type is storage-only: it exists only at
-    /// storage places, never as a value in memory. A pointer or handle does
-    /// not hold its target.
-    pub fn storage_collection(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
-        super::adt_def::ty_storage_collection(db, self)
+    /// The pinned type this type is or holds in a field, or in a tuple or
+    /// array element. Such a type is state-only: it exists only at places in
+    /// storage or transient storage, never as a value in memory. A pointer or
+    /// handle does not hold its target.
+    pub fn pinned_part(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
+        super::adt_def::ty_pinned_part(db, self)
     }
 
     /// Returns teh base type of this type.

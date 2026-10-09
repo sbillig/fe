@@ -203,7 +203,6 @@ impl StorageKey for bool {
 /// `map[key]` names that entry's place: `map[key].f += 1` reads and writes
 /// one field, and `let e = mut map[key]` binds the entry. Keys use the stable
 /// encoding `StorageKey` defines.
-#[storage_only]
 pub struct StorageMap<K, V> {
     /// The slot the map takes, as a Solidity mapping does: never written, its
     /// number seeds the entries' slots.

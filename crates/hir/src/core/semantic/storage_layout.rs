@@ -241,9 +241,10 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     /// The slot `#[slot(e)]` places the field at.
     explicit_slot: Option<U256>,
     slot_count: usize,
-    /// The spaces the field's slot numbers are taken in: its own, and those
-    /// of the collections in it, which keep their contents at their own
-    /// slot numbers there (a `TSlot`'s value in transient storage).
+    /// The spaces the field's slot numbers are taken in: its own, when a
+    /// part of it lies outside a pinned type, and those its pinned types are
+    /// pinned to, which keep their contents at their own slot numbers there
+    /// (a `TSlot`'s value in transient storage).
     spaces: Vec<ProviderAddressSpace>,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
@@ -444,7 +445,7 @@ struct FieldWalker<'db> {
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     errors: Vec<ContractLayoutError<'db>>,
-    /// The spaces the collections walked keep their contents in.
+    /// The spaces the pinned types walked are pinned to.
     content_spaces: Vec<ProviderAddressSpace>,
     /// The handles whose targets are being checked, outermost first, with
     /// the implementation that selects each target.
@@ -583,16 +584,12 @@ impl<'db> FieldWalker<'db> {
         } else if let Some(adt) = ty.adt_def(self.db) {
             self.check_provider_target(ty);
             let output = self.walk_adt(views, adt, path, dimensions);
-            // A storage collection is reported at its place, which is its
-            // identity, rather than by the slots its private fields take.
-            if adt.adt_ref(self.db).is_storage_only(self.db) && output.span != 0 {
-                if let Some(space) = place_index_space(
-                    self.db,
-                    self.scope,
-                    PredicateListId::empty_list(self.db),
-                    ty,
-                ) && !self.content_spaces.contains(&space)
-                {
+            // A pinned type is reported at its place, which is its identity,
+            // rather than by the slots its private fields take.
+            if let Some(space) = adt.pin(self.db)
+                && output.span != 0
+            {
+                if !self.content_spaces.contains(&space) {
                     self.content_spaces.push(space);
                 }
                 WalkOutput {
@@ -1046,13 +1043,22 @@ fn collect_field_plan<'db>(
     if !walker.errors.is_empty() {
         return Some((name, Err(walker.errors)));
     }
-    let mut spaces = vec![address_space];
-    spaces.extend(
-        walker
-            .content_spaces
-            .into_iter()
-            .filter(|space| *space != address_space),
-    );
+    // The field takes its numbers in its own space only when some part of
+    // it lies outside a pinned type: a `TSlot` field leaves its storage
+    // number free.
+    let mut spaces = Vec::new();
+    if output
+        .leaves
+        .iter()
+        .any(|leaf| leaf.kind != InlineLayoutLeafKind::Collection)
+    {
+        spaces.push(address_space);
+    }
+    for space in walker.content_spaces {
+        if !spaces.contains(&space) {
+            spaces.push(space);
+        }
+    }
     Some((
         name,
         Ok(ValidatedFieldLayoutPlan {

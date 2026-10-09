@@ -2,8 +2,8 @@
 //!
 //! A type is clearable when zeroing the slots and lanes of a stored value
 //! returns it to its zero value: scalars, raw pointers, and aggregates of
-//! clearable types. A storage collection is not, since its entries lie
-//! outside the slots its own place takes, so a value holding one has no
+//! clearable types. A pinned type (a collection) is not, since its entries
+//! lie outside the slots its own place takes, so a value holding one has no
 //! finite set of stores that clears it. No `impl` item implements the trait;
 //! the trait solver proves a goal through the components named here.
 
@@ -41,8 +41,8 @@ pub(crate) fn clearable_implementor<'db>(
     Some((implementor, components))
 }
 
-/// The types `ty` is clearable through, or `None` when it is not: a storage
-/// collection, a type the compiler does not decompose, or one still to be
+/// The types `ty` is clearable through, or `None` when it is not: a pinned
+/// type, a type the compiler does not decompose, or one still to be
 /// inferred.
 fn clearable_components<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Vec<TyId<'db>>> {
     let (base, args) = ty.decompose_ty_app(db);
@@ -56,7 +56,7 @@ fn clearable_components<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Optio
         TyData::TyBase(TyBase::Prim(PrimTy::View | PrimTy::BorrowMut | PrimTy::BorrowRef)) => None,
         TyData::TyBase(TyBase::Prim(_)) => Some(Vec::new()),
         TyData::TyBase(TyBase::Adt(adt)) => {
-            if adt.adt_ref(db).is_storage_only(db) || args.len() != adt.params(db).len() {
+            if adt.pin(db).is_some() || args.len() != adt.params(db).len() {
                 return None;
             }
             Some(
