@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 416
+assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/revert.fe
 ---
@@ -22,6 +22,14 @@ func private %alloc(v0.i256) -> @layout_0 {
         return v10;
 }
 
+func private %cast(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
 func private %standalone_revert__revert__fail__gcd5c_7ef9() {
     block0:
         v0.objref<@layout_0> = obj.alloc @layout_0;
@@ -40,7 +48,7 @@ func private %standalone_revert__revert__fail__gcd5c_7ef9() {
         v12.i256 = extract_value v3 2.i256;
         obj.store v11 v12;
         v13.i256 = call %impl_MemBuffer__ptr v0;
-        call %mstore v13 42.i256;
+        call %store_word v13 42.i256;
         jump block3;
 
     block2:
@@ -87,7 +95,7 @@ func private %standalone_revert__revert__fail__gcd5c_e19f() {
         v12.i256 = extract_value v3 2.i256;
         obj.store v11 v12;
         v13.i256 = call %impl_MemBuffer__ptr v0;
-        call %mstore v13 42.i256;
+        call %store_word v13 42.i256;
         jump block3;
 
     block2:
@@ -144,15 +152,6 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %mstore(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        mstore v0 v1 i256;
-        return;
-}
-
 func private %impl_MemBuffer__ptr(v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
@@ -181,6 +180,16 @@ func private %revert(v0.objref<@layout_1>) {
         v2.i256 = call %ptr__g79ff v0;
         v3.i256 = call %len v0;
         evm_revert v2 v3;
+}
+
+func private %store_word(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %cast v0;
+        mstore v4 v1 i256;
+        return;
 }
 
 

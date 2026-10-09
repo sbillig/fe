@@ -1,8 +1,8 @@
 /// Cryptographic primitives and EVM math builtins.
 ///
 /// Safe, typed wrappers around EVM precompiles and modular arithmetic opcodes.
-/// Raw memory and call operations should go through the effects system
-/// (RawMem, RawOps, Ctx traits) instead.
+/// Raw memory goes through `core::ptr` and `core::abi` under `unsafe`; calls
+/// go through the effects system (`Call`, `Ctx`).
 ///
 /// Fixed-output precompile wrappers assume the addressed precompile exists on
 /// the active fork and intentionally do not check returndata length on the hot
@@ -384,7 +384,7 @@ pub fn ec_mul(px: u256, py: u256, s: u256) -> Result<PrecompileError, (u256, u25
 /// Returns true if the pairing equation holds:
 /// `e(a1, b1) * e(a2, b2) * ... * e(aN, bN) == 1`
 ///
-/// Use effects (RawMem) to build the buffer, then pass it here.
+/// Build the buffer with `core::ptr::MemBuffer`, then pass it here.
 pub fn ec_pairing(_ data: MemSpan) -> Result<PrecompileError, bool> {
     if !valid_chunks(data, chunk_len: 192, allow_empty: true) {
         return Result::Err(PrecompileError::InvalidInputLength)

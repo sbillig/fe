@@ -1398,9 +1398,8 @@ fn empty_revert_intrinsic_has_no_synthetic_pointer_operand() {
         "empty_revert_intrinsic_has_no_synthetic_pointer_operand.fe",
         r#"
 use std::abi::bytes_from_words_prefix
-use std::evm::RawMem
 
-fn trigger() uses (mem: mut RawMem) {
+fn trigger() {
     let _ = bytes_from_words_prefix<33, 1>([0])
 }
 "#,

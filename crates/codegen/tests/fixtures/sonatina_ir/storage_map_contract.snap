@@ -29,7 +29,7 @@ func private %abi_encode(v0.i256) {
         v13.i256 = extract_value v4 2.i256;
         obj.store v12 v13;
         v14.i256 = call %impl_MemBuffer__ptr v1;
-        call %mstore v14 v0;
+        call %store_word v14 v0;
         jump block3;
 
     block2:
@@ -100,7 +100,15 @@ func private %capacity(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %cast(v0.i256) -> i256 {
+func private %cast__g5f1e(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__gf0ab(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -351,15 +359,6 @@ func private %manual_contract_runtime_root_BalanceMap() {
     block1:
         call %runtime;
         evm_stop;
-}
-
-func private %mstore(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        mstore v0 v1 i256;
-        return;
 }
 
 func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -> i256 {
@@ -705,7 +704,7 @@ func private %runtime() {
     block54:
         v105.*i8 = evm_malloc 0.i256;
         v106.i256 = ptr_to_int v105 i256;
-        v107.i256 = call %cast v106;
+        v107.i256 = call %cast__gf0ab v106;
         jump block56;
 
     block55:
@@ -782,6 +781,16 @@ func private %stor_ptr(v0.i256) -> @layout_3 {
     block1:
         v4.@layout_3 = insert_value undef.@layout_3 0.i256 v0;
         return v4;
+}
+
+func private %store_word(v0.i256, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %cast__g5f1e v0;
+        mstore v4 v1 i256;
+        return;
 }
 
 func private %transfer(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {

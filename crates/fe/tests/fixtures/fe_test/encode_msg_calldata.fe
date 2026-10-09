@@ -4,6 +4,7 @@
 /// by `encode_msg_calldata`.
 
 use core::ptr
+use core::abi::store_word
 use std::evm::{Ctx, Evm, RawOps, copy_returndata, decode_returndata, encode_msg_calldata}
 
 msg EchoMsg {
@@ -64,13 +65,11 @@ pub contract Echo uses (raw: mut RawOps) {
 
 /// Build a 64-byte `Bytes` payload. `data` points at the ABI tail: the
 /// length word followed by the packed content words.
-fn build_bytes() -> Bytes
-uses (mem: mut std::evm::RawMem)
-{
+fn build_bytes() -> Bytes {
     let data = ptr::alloc_bytes(96)
-    unsafe { mem.mstore(addr: data, value: 64) }
-    unsafe { mem.mstore(addr: ptr::offset_bytes(data, 32), value: 0x1234) }
-    unsafe { mem.mstore(addr: ptr::offset_bytes(data, 64), value: 0x5678) }
+    unsafe { store_word(ptr: data, value: 64) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data, 32), value: 0x1234) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data, 64), value: 0x5678) }
     unsafe { Bytes::from_abi_tail(data: data, len: 64, size: 96) }
 }
 
@@ -92,7 +91,7 @@ fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ct
 }
 
 #[test]
-fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, ctx: Ctx, mem: mut std::evm::RawMem) {
+fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, ctx: Ctx) {
     let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
     assert!(echo.inner != 0)
 

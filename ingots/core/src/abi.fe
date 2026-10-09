@@ -234,6 +234,11 @@ pub unsafe fn store_word(ptr: *u8, value: u256) {
     unsafe { *ptr::cast<u8, u256>(ptr) = value }
 }
 
+/// Reads the word at `ptr`, whose 32 bytes must lie in a live allocation.
+pub unsafe fn load_word(_ ptr: *u8) -> u256 {
+    unsafe { *ptr::cast<u8, u256>(ptr) }
+}
+
 pub fn decode_or_revert<A: Abi, T, D, I>(d: mut D, _ input: I) -> T
     where T: Decode<A>, D: AbiDecoder<A>, I: ByteInput
 {

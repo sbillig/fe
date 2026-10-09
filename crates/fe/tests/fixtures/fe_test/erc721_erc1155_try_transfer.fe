@@ -2,6 +2,7 @@
 /// transfer helpers and the `onERC721Received` receiver check.
 
 use core::ptr
+use core::abi::store_word
 use std::abi::Bytes4
 use std::evm::{RawOps, ReceiverCheck, TokenCall, bubble_last_revert, erc721, erc1155}
 
@@ -53,7 +54,7 @@ pub contract FalseNft {
     recv Erc721Msg {
         TransferFrom { from, to, tokenId } uses (raw: mut RawOps) {
             let data = ptr::MemBuffer::alloc(32)
-            unsafe { raw.mstore(addr: data.ptr(), value: 0) }
+            unsafe { store_word(ptr: data.ptr(), value: 0) }
             raw.return_data(data: data.span())
         }
     }
@@ -131,11 +132,11 @@ pub contract Receiver {
             let alloc = if reply.len < 32 { 32 } else { reply.len }
             let mut out = ptr::MemBuffer::alloc(alloc)
             if reply.len == REVERT {
-                unsafe { raw.mstore(addr: out.ptr(), value: 0xdeadbeefcafebabe << 192) }
+                unsafe { store_word(ptr: out.ptr(), value: 0xdeadbeefcafebabe << 192) }
                 unsafe { out.set_len(32) }
                 raw.revert(data: out.span())
             }
-            unsafe { raw.mstore(addr: out.ptr(), value: if expected { reply.word } else { 0 }) }
+            unsafe { store_word(ptr: out.ptr(), value: if expected { reply.word } else { 0 }) }
             unsafe { out.set_len(reply.len) }
             raw.return_data(data: out.span())
         }

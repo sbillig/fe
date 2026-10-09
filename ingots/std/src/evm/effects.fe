@@ -310,16 +310,6 @@ pub trait Ctx: EvmCapabilitySeal {
     fn gas(self) -> u256
 }
 
-/// Low-level raw memory operations.
-///
-/// Each access must lie in a live allocation: a word access covers 32 bytes
-/// at `addr`, a byte access one.
-pub trait RawMem: EvmCapabilitySeal {
-    unsafe fn mload(self, _: *u8) -> u256
-    unsafe fn mstore(mut self, addr: *u8, value: u256)
-    unsafe fn mstore8(mut self, addr: *u8, value: u8)
-}
-
 /// Low-level raw storage operations.
 ///
 /// A raw slot must not belong to anything the compiler allocated, such as a
@@ -335,7 +325,7 @@ pub trait RawStorage: EvmCapabilitySeal {
 }
 
 /// Access to low-level EVM op functions (excluding raw stack ops).
-pub trait RawOps: RawMem + RawStorage {
+pub trait RawOps: RawStorage {
     fn calldataload(self, _: u256) -> u256
     fn calldatasize(self) -> u256
     /// The caller must ensure that a valid `T` is encoded at `offset`.
@@ -1033,18 +1023,6 @@ impl Ctx for Evm {
     }
     fn gas(self) -> u256 {
         ops::gas()
-    }
-}
-
-impl RawMem for Evm {
-    unsafe fn mload(self, _ addr: *u8) -> u256 {
-        ops::mload(addr)
-    }
-    unsafe fn mstore(mut self, addr: *u8, value: u256) {
-        ops::mstore(addr: addr, value: value)
-    }
-    unsafe fn mstore8(mut self, addr: *u8, value: u8) {
-        ops::mstore8(addr, value)
     }
 }
 

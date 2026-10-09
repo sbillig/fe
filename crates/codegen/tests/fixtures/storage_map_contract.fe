@@ -1,9 +1,10 @@
 use core::ptr
-use std::evm::{Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
+use core::abi::store_word
+use std::evm::{Evm, RawOps, RawStorage, StorageMap, StorPtr}
 
 fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    unsafe { ops.mstore(addr: data.ptr(), value) }
+    unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 

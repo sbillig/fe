@@ -92,7 +92,7 @@ fn external_executions_access_persistent_state() {
             "std::evm::effects::Create::create_raw",
             Some(MemoryAccessKind::Write),
         ),
-        ("std::evm::effects::RawMem::mstore", None),
+        ("std::evm::effects::RawStorage::sstore", None),
     ] {
         let func = resolve_lib_func_path(&db, scope, path)
             .unwrap_or_else(|| panic!("failed to resolve {path}"));

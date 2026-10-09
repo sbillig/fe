@@ -2,7 +2,7 @@ use core::abi::{Abi, AbiDecoder, AbiSize, AbiSpan, ByteInput, Decode, Encode, st
 use core::ptr::{self, MemSpan}
 use core::num::IntDowncast
 use std::abi::{Sol, Bytes, DynString, DynArray}
-use std::evm::{Call, Evm, RawMem}
+use std::evm::{Call, Evm}
 
 fn input(_ size: u256) -> ref MemSpan {
     let p = ptr::alloc_bytes(96)
@@ -282,7 +282,7 @@ fn calldata_roundtrips_with_any_trailing_padding() uses (evm: mut Evm) {
                 let byte: u8 = if (index as u256) < len { (index * 37 % 128).downcast_unchecked() } else { 0xff }
                 // Explicit EVM stores avoid the current borrow checker's
                 // capability-write error for pointer assignments in this loop.
-                unsafe { evm.mstore8(addr: ptr::offset_bytes(data, 68 + index as u256), value: byte) }
+                unsafe { *ptr::offset_bytes(data, 68 + index as u256) = byte }
             }
             let padded_len = (len / 32 + (len % 32 != 0) as u256) * 32
             // Construct calldata manually and inspect raw returndata, so Fe's

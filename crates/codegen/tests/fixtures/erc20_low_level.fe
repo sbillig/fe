@@ -1,20 +1,21 @@
 use core::ptr
-use std::evm::{Address, Ctx, Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr, revert_empty}
+use core::abi::store_word
+use std::evm::{Address, Ctx, Evm, RawOps, RawStorage, StorageMap, StorPtr, revert_empty}
 
 // Helpers ---------------------------------------------------------------
 
 fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
     let data = ptr::MemBuffer::alloc(32)
-    unsafe { ops.mstore(addr: data.ptr(), value) }
+    unsafe { store_word(ptr: data.ptr(), value) }
     ops.return_data(data: data.span())
 }
 
 fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
     let data = ptr::MemBuffer::alloc(96)
-    unsafe { ops.mstore(addr: data.ptr(), value: 32) } // offset to data
-    unsafe { ops.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: len) } // string length
-    unsafe { ops.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: word) }
+    unsafe { store_word(ptr: data.ptr(), value: 32) } // offset to data
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: len) } // string length
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: word) }
     ops.return_data(data: data.span())
 }
 
