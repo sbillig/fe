@@ -1472,14 +1472,14 @@ impl<'db> SemanticInstance<'db> {
     }
 
     /// The address space the elements of `ty` live in when its elements are
-    /// places (`core::ops::PlaceIndex`), in this instance.
+    /// places (`core::ops::StateIndex`), in this instance.
     #[salsa::tracked]
-    pub fn place_index_space(
+    pub fn state_index_space(
         self,
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
     ) -> Option<ProviderAddressSpace> {
-        crate::analysis::ty::provider::place_index_space(
+        crate::analysis::ty::provider::state_index_space(
             db,
             self.normalization_scope(db),
             self.assumptions(db),
@@ -1488,14 +1488,14 @@ impl<'db> SemanticInstance<'db> {
     }
 
     /// How `ty` packs its elements into lanes when its elements are places
-    /// (`core::ops::PlaceIndex`), in this instance.
+    /// (`core::ops::StateIndex`), in this instance.
     #[salsa::tracked]
-    pub fn place_index_lanes(
+    pub fn state_index_lanes(
         self,
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
-    ) -> Option<crate::analysis::ty::provider::PlaceIndexLanes<'db>> {
-        crate::analysis::ty::provider::place_index_lanes(
+    ) -> Option<crate::analysis::ty::provider::StateIndexLanes<'db>> {
+        crate::analysis::ty::provider::state_index_lanes(
             db,
             self.normalization_scope(db),
             self.assumptions(db),
@@ -1504,14 +1504,14 @@ impl<'db> SemanticInstance<'db> {
     }
 
     /// The key and element types of `ty` when its elements are places
-    /// (`core::ops::PlaceIndex`), in this instance.
+    /// (`core::ops::StateIndex`), in this instance.
     #[salsa::tracked]
-    pub fn place_index_tys(
+    pub fn state_index_tys(
         self,
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
     ) -> Option<(TyId<'db>, TyId<'db>)> {
-        crate::analysis::ty::place_index_tys(
+        crate::analysis::ty::state_index_tys(
             db,
             self.normalization_scope(db),
             ty,

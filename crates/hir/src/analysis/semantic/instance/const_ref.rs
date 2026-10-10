@@ -450,7 +450,7 @@ pub fn generated_callee_key<'db>(
 
 /// The instance a compiler-generated call of core trait `trait_path`'s
 /// method `name`, on trait arguments `args`, reaches: e.g. the
-/// `PlaceIndex::locate` an entry `c[k]` calls.
+/// `StateIndex::locate` an entry `c[k]` calls.
 pub fn core_method_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,

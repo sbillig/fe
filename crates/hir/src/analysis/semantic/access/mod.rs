@@ -43,11 +43,11 @@ use crate::{
             },
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalized::{
-                NDataPath, NDataProjection, NExpr, NPlace, NStatementKind, SemanticBodyAdmission,
+                NDataProjection, NPlace, NStatementKind, SemanticBodyAdmission,
                 normalize_semantic_body, semantic_body_admission,
             },
         },
-        ty::{provider::ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId},
+        ty::{provider::ProviderAddressSpace, ty_check::BodyOwner},
     },
     hir_def::{ExprId, ItemKind, StmtId, TopLevelMod},
 };
@@ -329,9 +329,10 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
     diags
 }
 
-/// The instances the compiler calls for the entries `instance` names, which
-/// no semantic call site records, each with the statement naming the entry:
-/// the collection's `PlaceIndex::locate` and, for a collection that packs its
+/// The instances the compiler calls for the entries of the places `instance`
+/// names, which no semantic call site records, each with the statement naming
+/// the entry:
+/// the collection's `StateIndex::locate` and, for a collection that packs its
 /// elements into lanes, its codec's `get` and `set`.
 fn entry_callees<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -345,16 +346,12 @@ fn entry_callees<'db>(
     let assumptions = instance.assumptions(db);
     let mut callees = Vec::new();
     for statement in body.blocks.iter().flat_map(|block| &block.statements) {
-        // The entries of a path from a place or value of type `base`.
-        let mut visit = |base: Option<TyId<'db>>, path: &NDataPath| {
-            let Some(base) = base else {
-                return;
-            };
-            for (idx, projection) in path.iter().enumerate() {
+        let mut visit = |place: &NPlace<'db>| {
+            for (idx, projection) in place.path.iter().enumerate() {
                 let NDataProjection::Entry(_) = projection else {
                     continue;
                 };
-                let Some(collection) = body.path_prefix_ty(db, base, path, idx) else {
+                let Some(collection) = body.place_prefix_ty(db, place, idx) else {
                     continue;
                 };
                 let collection = instance.normalized_ty(db, collection);
@@ -362,13 +359,13 @@ fn entry_callees<'db>(
                     db,
                     scope,
                     assumptions,
-                    &["ops", "PlaceIndex"],
+                    &["ops", "StateIndex"],
                     "locate",
                     vec![collection],
                 );
                 let codec_args = instance
-                    .place_index_lanes(db, collection)
-                    .zip(body.path_prefix_ty(db, base, path, idx + 1))
+                    .state_index_lanes(db, collection)
+                    .zip(body.place_prefix_ty(db, place, idx + 1))
                     .map(|(lanes, element)| vec![lanes.codec, instance.normalized_ty(db, element)]);
                 let codec = codec_args.into_iter().flat_map(|args| {
                     ["get", "set"].map(|name| {
@@ -390,16 +387,9 @@ fn entry_callees<'db>(
                 );
             }
         };
-        let mut visit_place = |place: &NPlace<'db>| {
-            visit(body.place_base_ty(db, place.base), &place.path);
-        };
         match &statement.kind {
-            NStatementKind::Define {
-                expr: NExpr::ProjectValue { value, path },
-                ..
-            } => visit(body.value(value.value).map(|value| value.ty), &path.0),
-            NStatementKind::Define { expr, .. } => expr.for_each_place_operand(&mut visit_place),
-            NStatementKind::Store { destination, .. } => visit_place(destination),
+            NStatementKind::Define { expr, .. } => expr.for_each_place_operand(&mut visit),
+            NStatementKind::Store { destination, .. } => visit(destination),
             NStatementKind::End { .. } => {}
         }
     }

@@ -95,19 +95,8 @@ impl<'db> NormalizedBody<'db> {
         place: &NPlace<'db>,
         len: usize,
     ) -> Option<TyId<'db>> {
-        self.path_prefix_ty(db, self.place_base_ty(db, place.base)?, &place.path, len)
-    }
-
-    /// The type the first `len` steps of `path` take a `base_ty` place or
-    /// value to.
-    pub fn path_prefix_ty(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        base_ty: TyId<'db>,
-        path: &NDataPath,
-        len: usize,
-    ) -> Option<TyId<'db>> {
-        let prefix = NDataPath::new(path.iter().take(len).copied().collect::<Vec<_>>());
+        let base_ty = self.place_base_ty(db, place.base)?;
+        let prefix = NDataPath::new(place.path.iter().take(len).copied().collect::<Vec<_>>());
         super::verify::project_path_ty(db, self.owner, &self.values, base_ty, &prefix).ok()
     }
 
@@ -335,7 +324,7 @@ pub enum NDataProjection {
     },
     Index(NIndex),
     /// The element at key `value` of a collection whose elements are places
-    /// (`core::ops::PlaceIndex`), at a slot the collection computes.
+    /// (`core::ops::StateIndex`), at a slot the collection computes.
     Entry(NValueId),
 }
 

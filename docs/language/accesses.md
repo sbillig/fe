@@ -130,21 +130,36 @@ result, no `own` parameter or owned result, no `Copy`, and no field of that
 type. A span such as `buffer.span()` is a `ref` projection, so it keeps the
 buffer reserved until its last use.
 
+## Indexing
+
+`c[k]` has one syntax and two kinds of implementation. Indexing a fixed array
+`[T; N]` is built in. A collection whose elements live in storage or
+transient storage implements `core::ops::StateIndex` (below): it only says
+where an entry lies, and the compiler opens the entry's place, so its users
+need no raw storage authority. Any other collection implements
+`core::ops::Index` and `IndexMut`, whose `index` and `index_mut` are
+projections: their bodies may check bounds, compute an element or write one
+back, and an element's access reserves the whole collection until its last
+use. A memory owner such as `MemArray` yields an element through its pointer
+in an `unsafe` block; growing it takes `mut self`, so it cannot reallocate
+under an open element access.
+
 ## Storage collections
 
 A storage collection, such as a `StorageMap`, `StoragePackedArray` or
 `TSlot`, is an owner at its storage place: the contract layout gives it a
 slot, and its entries lie at slots derived from that one (a map's at
 `keccak(key, slot)`). `m[k]` names an entry's place with no call
-(`core::ops::PlaceIndex`), so `store.days[k].steps += 1` reads and writes one
+(`core::ops::StateIndex`), so `store.days[k].steps += 1` reads and writes one
 slot. The access checker sees an entry as the collection's place indexed by a
 key: entries at distinct literal keys are disjoint, and any other two
 overlap. A `mut` access to a struct holding collections covers their
 entries. A collection's methods take `self` or `mut self` and declare no
 effects: the authority is the access to its place, as for any data.
 
-A library type becomes a collection by implementing `core::ops::PlaceIndex`:
-`SPACE` names where its entries live, `Key` and `Entry` the index and the
+A library type becomes a collection by implementing `core::ops::StateIndex`:
+`SPACE`, a `core::effect_ref::StateSpace`, names the state space its entries
+live in, `Key` and `Entry` the index and the
 element type, and `locate(root, key)` returns the entry's slot and bit
 offset for the collection rooted at slot `root`. `locate` declares no
 effects; the compiler calls it once when an access to `c[k]` opens and does
@@ -168,9 +183,9 @@ balances.set(key: to, value: 0)     // rejected: `x` holds an entry of `balances
 x -= amount
 ```
 
-A collection whose `PlaceIndex` implementation has `SPACE` storage or
-transient storage is *pinned* to that space; implementing the trait is the
-whole declaration, so a library collection is pinned the same way. A type
+A `StateIndex` collection is *pinned* to its `SPACE`; implementing the
+trait is the whole declaration, so a library collection is pinned the same
+way. A type
 holding a pinned type is *state-only*: never a value. It is not constructed,
 copied, moved out of storage or held in a memory aggregate; code reaches it
 through an access, a `mut` or view parameter, or an effect. A place's space

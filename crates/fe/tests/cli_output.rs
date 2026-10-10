@@ -3619,12 +3619,12 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
         ),
         (
             "unsafe_trust_locate",
-            "words[1]",
+            "words[0]",
             "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
         ),
         (
             "unsafe_trust_locate",
-            "slots[1] = 2",
+            "flags[1] = first == 0",
             "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
         ),
     ] {

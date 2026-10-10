@@ -1,5 +1,5 @@
 use core::effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut}
-use core::ops::{PlaceIndex, clear_storage}
+use core::ops::{StateIndex, clear_storage}
 use core::marker::Clearable
 use core::{ptr, size_of}
 use core::abi::{
@@ -240,8 +240,8 @@ impl<T> TStorPtr<T> {
 /// place.
 pub struct TSlot<T> {}
 
-impl<T> PlaceIndex for TSlot<T> {
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::TransientStorage
+impl<T> StateIndex for TSlot<T> {
+    const SPACE: core::effect_ref::StateSpace = core::effect_ref::StateSpace::TransientStorage
     type Key = ()
     type Entry = T
 

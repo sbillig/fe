@@ -39,10 +39,9 @@ pub struct AdtDef<'db> {
     pub fields: Vec<AdtField<'db>>,
 }
 
-/// Where a type is pinned: to the state space its `core::ops::PlaceIndex`
-/// implementation names as `SPACE`. Implementing the trait with storage or
-/// transient storage is the pinning declaration; an implementation with
-/// `SPACE = memory` leaves the type an ordinary value.
+/// Where a type is pinned: to the state space its `core::ops::StateIndex`
+/// implementation names as `SPACE`. Implementing the trait is the pinning
+/// declaration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum Pin {
     /// No implementation pins the type, or any instance of it.
@@ -53,7 +52,7 @@ pub enum Pin {
     Undecided,
 }
 
-/// The pin of `ty`, from each `PlaceIndex` implementation that applies to
+/// The pin of `ty`, from each `StateIndex` implementation that applies to
 /// some instance of it: its `SPACE`, as a constant when it does not depend
 /// on the implementation's parameters, else at the instance `ty` selects.
 /// The implementations agree on a pin, or the pin is undecided.
@@ -69,11 +68,11 @@ pub(crate) fn ty_pin<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Pin {
         ty
     };
     let scope = adt.scope(db);
-    let Some(place_index) = resolve_core_trait(db, scope, &["ops", "PlaceIndex"]) else {
+    let Some(state_index) = resolve_core_trait(db, scope, &["ops", "StateIndex"]) else {
         return Pin::Unpinned;
     };
-    let goal = TraitInstId::new_simple(db, place_index, vec![ty]);
-    let mut pins = impls_for_trait_def(db, adt.ingot(db), place_index)
+    let goal = TraitInstId::new_simple(db, state_index, vec![ty]);
+    let mut pins = impls_for_trait_def(db, adt.ingot(db), state_index)
         .iter()
         .filter(|implementor| {
             let mut table = UnificationTable::new(db);
@@ -83,15 +82,9 @@ pub(crate) fn ty_pin<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Pin {
         })
         .map(|implementor| {
             let space = |resolved| effect_space_from_resolved_trait_const(db, scope, resolved);
-            match space(ResolvedImplInstance::identity(db, *implementor))
+            space(ResolvedImplInstance::identity(db, *implementor))
                 .or_else(|| instantiate_selected_impl(db, *implementor, goal).and_then(space))
-            {
-                Some(space @ (ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)) => {
-                    Pin::Pinned(space)
-                }
-                Some(_) => Pin::Unpinned,
-                None => Pin::Undecided,
-            }
+                .map_or(Pin::Undecided, Pin::Pinned)
         });
     let Some(first) = pins.next() else {
         return Pin::Unpinned;

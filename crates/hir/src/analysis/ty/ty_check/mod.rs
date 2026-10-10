@@ -4219,7 +4219,7 @@ impl<'db> TypedBody<'db> {
     }
 
     /// Whether the index expression `expr` names an entry of a collection
-    /// whose elements are places (`core::ops::PlaceIndex`), a path step.
+    /// whose elements are places (`core::ops::StateIndex`), a path step.
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains(&expr)
     }

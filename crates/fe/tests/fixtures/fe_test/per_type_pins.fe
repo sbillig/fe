@@ -1,25 +1,24 @@
 // A pin belongs to the implementation that applies to each instance: here
 // `SPACE` comes from a type parameter, so `Cell<InStorage>` is pinned to
-// storage and takes a slot of its own in the contract layout, while
-// `Cell<InMemory>` would be an ordinary value.
-use core::effect_ref::AddressSpace
-use core::ops::PlaceIndex
+// storage and takes a slot of its own in the contract layout.
+use core::effect_ref::StateSpace
+use core::ops::StateIndex
 use std::evm::{Evm, RawStorage, SolSlot, keccak_words}
 
 trait Placement {
-    const SPACE: AddressSpace
+    const SPACE: StateSpace
 }
 
 struct InStorage {}
 
 impl Placement for InStorage {
-    const SPACE: AddressSpace = AddressSpace::Storage
+    const SPACE: StateSpace = StateSpace::Storage
 }
 
 struct Cell<P> {}
 
-impl<P: Placement> PlaceIndex for Cell<P> {
-    const SPACE: AddressSpace = P::SPACE
+impl<P: Placement> StateIndex for Cell<P> {
+    const SPACE: StateSpace = P::SPACE
     type Key = u256
     type Entry = u256
 

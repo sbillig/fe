@@ -112,7 +112,7 @@ impl<'db> TyId<'db> {
         super::adt_def::ty_pinned_part(db, self)
     }
 
-    /// The state space this type is pinned to, when its `PlaceIndex`
+    /// The state space this type is pinned to, when its `StateIndex`
     /// implementation decides one; see `adt_def::Pin`.
     pub fn pin(self, db: &'db dyn HirAnalysisDb) -> Option<ProviderAddressSpace> {
         match super::adt_def::ty_pin(db, self) {

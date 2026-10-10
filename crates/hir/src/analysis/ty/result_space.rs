@@ -27,8 +27,8 @@ use crate::{
             binder::Binder,
             fold::{TyFoldable, TyFolder},
             normalize::normalize_ty,
-            place_index_tys,
             provider::ProviderAddressSpace,
+            state_index_tys,
             trait_def::{ImplementorOrigin, TraitInstId, resolve_trait_impl_instance},
             trait_resolution::{
                 PredicateListId, Selection, TraitSolveCx, constraint::resolve_assoc_item_path,
@@ -104,7 +104,7 @@ pub enum PlaceStep {
     Field(usize),
     /// An array element.
     Index,
-    /// An entry of a `PlaceIndex` collection.
+    /// An entry of a `StateIndex` collection.
     Entry,
     /// A field of an enum variant's payload.
     Variant,
@@ -145,7 +145,7 @@ pub fn space_path_steps<'db>(
                 }
                 SpaceStep::Element => (
                     PlaceStep::Entry,
-                    place_index_tys(db, scope, ty, assumptions)?.1,
+                    state_index_tys(db, scope, ty, assumptions)?.1,
                 ),
             };
             let next = normalize(next);

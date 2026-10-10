@@ -45,10 +45,10 @@ impl PathSpace {
     ) {
         match step {
             PlaceStep::Entry => {
-                if let Some(space) = instance.place_index_space(db, container) {
+                if let Some(space) = instance.state_index_space(db, container) {
                     self.moved = Some(space);
                 }
-                self.lane |= instance.place_index_lanes(db, container).is_some();
+                self.lane |= instance.state_index_lanes(db, container).is_some();
             }
             PlaceStep::Field(field)
                 if matches!(

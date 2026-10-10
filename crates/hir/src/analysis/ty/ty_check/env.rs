@@ -119,7 +119,7 @@ pub(crate) struct TyCheckEnv<'db> {
     /// open.
     matched_places: FxHashSet<ExprId>,
     /// Index expressions naming an entry of a collection whose elements are
-    /// places (`core::ops::PlaceIndex`).
+    /// places (`core::ops::StateIndex`).
     place_entries: FxHashSet<ExprId>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
     unsafe_splits: FxHashSet<ExprId>,

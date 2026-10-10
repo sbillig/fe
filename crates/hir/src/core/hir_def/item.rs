@@ -1324,7 +1324,7 @@ pub struct SpacePathId<'db> {
 pub enum SpaceStep<'db> {
     /// `.f` or `.0`: a field or tuple component.
     Field(FieldIndex<'db>),
-    /// `[_]`: any element of an array or a `PlaceIndex` collection.
+    /// `[_]`: any element of an array or a `StateIndex` collection.
     Element,
 }
 

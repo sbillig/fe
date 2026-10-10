@@ -1653,7 +1653,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 );
                 diag.notes.push(match (collection.pin(db), ty == collection) {
                     (Some(space), true) => format!(
-                        "`{ty_name}` is pinned to {} by its `PlaceIndex` implementation",
+                        "`{ty_name}` is pinned to {} by its `StateIndex` implementation",
                         space.pretty()
                     ),
                     (Some(space), false) => format!(

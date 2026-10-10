@@ -505,7 +505,7 @@ pub enum Layout<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct StructLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
-    /// The layout of a pinned type (a `PlaceIndex` implementor with a state
+    /// The layout of a pinned type (a `StateIndex` implementor with a state
     /// `SPACE`): its root number identifies its region, so it takes at least
     /// one storage slot and is never zero-sized, even without fields.
     pub pinned: bool,

@@ -19,10 +19,10 @@
 //! let first = owners[0]
 //! ```
 use core::abi::{AbiSize, DynArray, Encode, store_word}
-use core::effect_ref::AddressSpace
+use core::effect_ref::StateSpace
 use core::iter::{Bidirectional, Collection, CollectionMut}
 use core::marker::Clearable
-use core::ops::{LaneCodec, PlaceIndex, clear_storage}
+use core::ops::{LaneCodec, StateIndex, clear_storage}
 use core::option::Option
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
@@ -56,8 +56,8 @@ impl<T: SolPacked> LaneCodec<T> for SolLanes {
     }
 }
 
-impl<T> PlaceIndex for SolArray<T> {
-    const SPACE: AddressSpace = AddressSpace::Storage
+impl<T> StateIndex for SolArray<T> {
+    const SPACE: StateSpace = StateSpace::Storage
     type Key = u256
     type Entry = T
     type Lanes = SolLanes

@@ -1,5 +1,5 @@
-use core::effect_ref::AddressSpace
-use core::ops::PlaceIndex
+use core::effect_ref::StateSpace
+use core::ops::StateIndex
 use core::option::Option
 
 use super::effects::{RawStorage, StorPtr}
@@ -51,8 +51,8 @@ pub struct StoragePackedArray<const BITS: u256> {
 /// slot `s` is at `keccak256(s) + w`.
 struct PackedWords {}
 
-impl PlaceIndex for PackedWords {
-    const SPACE: AddressSpace = AddressSpace::Storage
+impl StateIndex for PackedWords {
+    const SPACE: StateSpace = StateSpace::Storage
     type Key = u256
     type Entry = u256
 

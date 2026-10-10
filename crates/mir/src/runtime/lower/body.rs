@@ -453,7 +453,7 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) terminated_blocks: Vec<bool>,
 }
 
-/// An element a collection packs into a lane (`PlaceIndex::Lanes`): the
+/// An element a collection packs into a lane (`StateIndex::Lanes`): the
 /// word at `slot` holds it `offset` bytes above its low end, encoded by
 /// `codec`.
 #[derive(Clone)]
@@ -5391,7 +5391,7 @@ impl<'db> RmirEmitter<'db> {
 
     /// The element at `key` of the collection at `collection`, of type
     /// `collection_ty`: at the slot and bit offset the collection's
-    /// `PlaceIndex::locate` computes from the collection's own slot, in the
+    /// `StateIndex::locate` computes from the collection's own slot, in the
     /// space the collection keeps its elements in. An element the collection
     /// packs into a lane is that lane; any other is a reference at its slot.
     fn lower_entry(
@@ -5405,10 +5405,10 @@ impl<'db> RmirEmitter<'db> {
         let owner = self.semantic_body.owner();
         let space = provider_address_space_to_runtime(
             owner
-                .place_index_space(self.db, collection_ty)
+                .state_index_space(self.db, collection_ty)
                 .expect("a collection whose elements are places declares their space"),
         );
-        let lanes = owner.place_index_lanes(self.db, collection_ty);
+        let lanes = owner.state_index_lanes(self.db, collection_ty);
         let word_ty = TyId::u256(self.db);
         let word = word_class();
         let receiver_class = self.place_addr_class(&collection);
@@ -5417,7 +5417,7 @@ impl<'db> RmirEmitter<'db> {
         let base = self.coerce_value(bb, receiver, &word);
         let key = self.read_normalized_value(bb, key);
         let locate = self.resolve_core_method(
-            &["ops", "PlaceIndex"],
+            &["ops", "StateIndex"],
             "locate",
             vec![collection_ty],
             collection_ty,
@@ -5468,7 +5468,7 @@ impl<'db> RmirEmitter<'db> {
                 .place_prefix_ty(self.db, place, prefix.len())?;
         self.semantic_body
             .owner()
-            .place_index_lanes(self.db, collection_ty)?;
+            .state_index_lanes(self.db, collection_ty)?;
         let collection = self.try_lower_place(
             bb,
             &NPlace {
