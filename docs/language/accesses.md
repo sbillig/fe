@@ -52,7 +52,11 @@ A pattern matched against a place opens each marked binding's access on that
 binding's own part of the place, and nothing else: in
 `match p { Pair { ref a, mut b, .. } => … }`, `p.a` is held for reading and
 `p.b` for writing, and `p.c` stays free. `mut x` needs a mutable place or
-access behind it, and `ref` or `mut` on an owned value is an error.
+access behind it, and `ref` or `mut` on an owned value is an error. Markers
+go on the names only: `match ref x`, `if let Some(v) = mut o` and
+`let (a, b) = mut t` are errors, fixed by marking each name
+(`match x { V(ref v) => … }`). A marker on the scrutinee would hold all of
+it, or make plain names write through.
 
 A plain name takes its value as `let x = e` does: a copy of a `Copy` value,
 and otherwise a move where one is possible. A move out of an owned place
@@ -96,12 +100,15 @@ A projection's result binds like a place. A plain name takes a value: a
 `ref` result of any other type is an error whose fix is `let v = ref xs[i]`,
 which keeps the access; `(i, ref x)` and `for ref x in xs` do the same for a
 component and an element. Whether a type is `Copy` is decided by the
-body's declared bounds, never by an instance. Two kinds of result bind
-their access under a plain name: a `mut` result (`let x = xs.at_mut(0)`),
-since a copy would discard the writes the call asks for, and a `#[view]`
-result (`let s = buf.span()`), which has no value to copy; `let t = s`
-reborrows a view access the same way. `var x = xs.at_mut(0)` copies the
-element and warns, since writes to `x` reach nothing.
+body's declared bounds, never by an instance. A `mut` result bound whole by
+`let` stays an access (`let x = xs.at_mut(0)`), since a copy would discard
+the writes the call asks for; `var x = xs.at_mut(0)` copies the element and
+warns, since writes to `x` reach nothing. The components of a `mut` result
+take values as a place's do, so `Some(mut v)` writes through and a plain
+`Some(v)` is an immutable copy. A type with no value reading binds its read
+access under a plain name: a `#[view]` result (`let s = buf.span()`), and a
+state-only one (`let m = store.balances`); `let t = s` reborrows the access
+the same way.
 
 Copying a result ends the projection's session at the binding, so its slide
 runs there rather than at the binding's last use.
@@ -232,7 +239,8 @@ trait is the whole declaration, so a library collection is pinned the same
 way. A type
 holding a pinned type is *state-only*: never a value. It is not constructed,
 copied, moved out of storage or held in a memory aggregate; code reaches it
-through an access, a `mut` or view parameter, or an effect. A place's space
+through an access, a `mut` or view parameter, or an effect, and a plain
+binding of one (`let m = store.balances`) is its read access. A place's space
 follows its path: a field or element of a pinned type lies in the type's
 space, so a `TSlot` and its value lie in transient storage whatever holds
 the `TSlot`. A raw-slot constructor,

@@ -13,8 +13,8 @@ use crate::analysis::{
         ProviderAddressSpace,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
-            TyDiagCollection, TyLowerDiag,
+            FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
+            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -3856,6 +3856,57 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::InitializerMarker {
+                primary,
+                marker,
+                position,
+                names,
+            } => {
+                let marker = if *marker { "mut" } else { "ref" };
+                let (message, note) = match position {
+                    MarkerPosition::Scrutinee | MarkerPosition::Initializer => {
+                        let whole = if *position == MarkerPosition::Scrutinee {
+                            "the scrutinee"
+                        } else {
+                            "a destructured initializer"
+                        };
+                        (
+                            format!("`{marker}` goes on the bound names, not on {whole}"),
+                            if marker == "mut" {
+                                "a `mut` there would make plain names write through; a plain name binds a value"
+                            } else {
+                                "a `ref` there would hold all of it, not just the components the names bind"
+                            },
+                        )
+                    }
+                    MarkerPosition::LoopBase => (
+                        format!("`{marker}` goes on the loop's item, not on its base"),
+                        if marker == "mut" {
+                            "the item pattern chooses the traversal: `for mut x in xs` writes each element"
+                        } else {
+                            "the item pattern chooses the traversal: `for ref x in xs` reads each element in place"
+                        },
+                    ),
+                };
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("remove `{marker}` here"),
+                    span: primary.resolve(db),
+                }];
+                sub_diagnostics.extend(names.iter().map(|(name, span)| SubDiagnostic {
+                    style: LabelStyle::Secondary,
+                    message: format!("write `{marker} {}`", name.data(db)),
+                    span: span.resolve(db),
+                }));
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message,
+                    sub_diagnostics,
+                    notes: vec![note.to_string()],
+                    error_code,
+                }
+            }
+
             Self::MutAccessCopied { primary, ty } => CompleteDiagnostic {
                 severity: Severity::Warning,
                 message: "`var` copies a `mut` access".to_string(),
@@ -4001,10 +4052,35 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                if let Some((name, span)) = binding {
+                if let Some((name, span, fix)) = binding {
+                    let name = name.data(db);
+                    let message = match fix {
+                        MutabilityFix::Var => format!("write `var {name}` for a mutable value"),
+                        MutabilityFix::MutComponent => {
+                            format!("write `mut {name}` to write through to its place")
+                        }
+                        MutabilityFix::ReadAccess => {
+                            format!("`{name}` is a read access; bind it with `mut` to write through it")
+                        }
+                        MutabilityFix::OwnParam => {
+                            format!("write `var {name}` to make this owned parameter mutable")
+                        }
+                        MutabilityFix::ViewParam => format!(
+                            "a view parameter is read-only; write `{name}: mut …` for a mutable borrow"
+                        ),
+                        MutabilityFix::ViewSelf => {
+                            "write `mut self` for a mutable borrow".to_string()
+                        }
+                        MutabilityFix::OwnSelf => {
+                            "write `var own self` for a mutable owned receiver".to_string()
+                        }
+                        MutabilityFix::Effect => {
+                            format!("write `mut {name}` in `uses` to write it")
+                        }
+                    };
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("try changing to `mut {}`", name.data(db)),
+                        message,
                         span: span.resolve(db),
                     });
                 }
@@ -5052,8 +5128,8 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             BodyDiag::MixedLoopBases { primary } => primary_diag(
                 severity,
-                "a two-base loop's bases are both viewed or both `mut`",
-                "one base is `mut` and the other is not",
+                "a two-base loop binds both items `mut` or neither",
+                "one item is `mut` and the other is not",
                 primary.resolve(db),
                 error_code,
             ),

@@ -113,10 +113,10 @@ fn every_exit_ends_the_session() {
 #[test]
 fn optional_projection_slides_only_when_present() {
     var cell = Cell { v: 1 }
-    if let Option::Some(x) = cell.entry(true) {
+    if let Option::Some(mut x) = cell.entry(true) {
         x += 2
     }
-    if let Option::Some(x) = cell.entry(false) {
+    if let Option::Some(mut x) = cell.entry(false) {
         x += 100
     }
     assert!(cell.v == 3)
@@ -125,13 +125,13 @@ fn optional_projection_slides_only_when_present() {
 #[test]
 fn empty_variant_finishes_the_ramp_sessions() {
     var cell = Cell { v: 1 }
-    if let Option::Some(x) = cell.maybe_via(true) {
+    if let Option::Some(mut x) = cell.maybe_via(true) {
         x += 1
     }
     assert!(cell.v == 14)
 
     var other = Cell { v: 1 }
-    if let Option::Some(x) = other.maybe_via(false) {
+    if let Option::Some(mut x) = other.maybe_via(false) {
         x += 100
     }
     assert!(other.v == 6)

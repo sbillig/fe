@@ -54,6 +54,10 @@ use crate::{
 };
 
 type Diag<'db> = SemanticDiagnostic<'db>;
+
+/// The fix for a plain binding that moves a value out of an access it could
+/// use in place.
+const IN_PLACE_FIX: &str = "; bind it with `mut` or `ref` to use it in place";
 pub(super) type TokenId = u32;
 type TokenSet = SmallVec<TokenId, 4>;
 
@@ -1518,11 +1522,22 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .moved
                 .retain(|(key, _)| !matches!(key, MoveKey::Access(token) if ended.contains(token)));
             return match hole {
-                Some((token, hole)) => self.report(Err(self.moved_diag(
-                    "this access ends while its referent is moved out",
-                    self.tokens[token as usize].origin,
-                    &hole,
-                ))),
+                Some((token, hole)) => {
+                    let mut diag = self.moved_diag(
+                        "this access ends while its referent is moved out",
+                        self.tokens[token as usize].origin,
+                        &hole,
+                    );
+                    // A binding that moved out of the access can use it in
+                    // place instead.
+                    if let Some(moved_at) = self.moved_at.get(&hole)
+                        && self.binds_by_value(*moved_at)
+                        && let Some(label) = diag.secondaries.last_mut()
+                    {
+                        label.message.push_str(IN_PLACE_FIX);
+                    }
+                    self.report(Err(diag))
+                }
                 None => Ok(()),
             };
         }
@@ -2064,10 +2079,22 @@ impl<'a, 'db> Analysis<'a, 'db> {
             .iter()
             .find(|(key, _)| matches!(key, MoveKey::Param(_)))
         {
+            let origin = self
+                .moved_at
+                .get(moved)
+                .copied()
+                .unwrap_or(terminator.origin);
+            let fix = if self.binds_by_value(origin) {
+                IN_PLACE_FIX
+            } else {
+                ""
+            };
             return Err(self.diag(
                 SemanticDiagnosticKind::MoveConflict,
-                self.moved_at.get(moved).copied().unwrap_or(terminator.origin),
-                "a `mut` parameter moved out of here must be reinitialized before the function returns".into(),
+                origin,
+                format!(
+                    "a `mut` parameter moved out of here must be reinitialized before the function returns{fix}"
+                ),
             ));
         }
         Ok(())

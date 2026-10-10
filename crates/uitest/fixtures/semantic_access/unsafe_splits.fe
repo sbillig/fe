@@ -41,6 +41,6 @@ fn two_blocks() uses (storage: mut RawStorage) {
 
 // Rejected: one component of a split granted twice.
 fn duplicated(_ xs: mut MemArray<u256>) -> (mut u256, mut u256) {
-    let (a, b) = xs.pair_mut(0, 1)
+    let (mut a, mut b) = xs.pair_mut(0, 1)
     (a, a)
 }

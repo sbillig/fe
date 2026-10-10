@@ -2434,7 +2434,7 @@ pub contract C {
 #[test]
 fn in_memory() {
     var counter = Counter { value: 1 }
-    if let Option::Some(value) = counter.maybe(true) {
+    if let Option::Some(mut value) = counter.maybe(true) {
         value += 1
     }
     assert(counter.value == 2)
@@ -2567,7 +2567,7 @@ pub contract C {
             x = 42
         }
         Lane uses (mut s) {
-            if let Option::Some(x) = s.lane(true) {
+            if let Option::Some(mut x) = s.lane(true) {
                 x += 1
             }
         }

@@ -174,7 +174,7 @@ impl<T> MemArray<T> {
         if i == j {
             return
         }
-        let (a, b) = self.pair_mut(i, j)
+        let (mut a, mut b) = self.pair_mut(i, j)
         let tmp = a
         a = b
         b = tmp
