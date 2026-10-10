@@ -57,7 +57,7 @@ pub contract FalseToken {
 pub contract MalformedToken {
     recv TokenMsg {
         Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
-            let mut data = ptr::MemBuffer::alloc(32)
+            var data = ptr::MemBuffer::alloc(32)
             unsafe { store_word(ptr: data.ptr(), value: 0xaabbccdd << 224) }
             unsafe { data.set_len(4) }
             raw.return_data(data: data.span())
@@ -208,7 +208,7 @@ fn test_bubbled_revert_data_survives_verbatim() uses (evm: mut Evm) {
     let data = ptr::MemBuffer::alloc(36)
     unsafe { store_word(ptr: data.ptr(), value: 1 << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: token.inner) }
-    let mut output = ptr::MemBuffer::empty()
+    var output = ptr::MemBuffer::empty()
     let outcome = evm.raw_call(
         addr: caller,
         gas: 300000,

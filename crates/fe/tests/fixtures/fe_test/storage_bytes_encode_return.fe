@@ -60,7 +60,7 @@ uses (evm: mut Evm)
 {
     let ptr = ptr::alloc_bytes(4)
     unsafe { store_word(ptr: ptr, value: (0x02 as u256) << 224) }
-    let mut ret = ptr::MemBuffer::empty()
+    var ret = ptr::MemBuffer::empty()
     let outcome = unsafe {
         evm.raw_call(
             addr: addr,

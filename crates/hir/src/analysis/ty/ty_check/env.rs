@@ -1445,6 +1445,7 @@ impl<'db> TyCheckEnv<'db> {
             implicit_moves,
             place_entries: self.place_entries,
             unsafe_splits: self.unsafe_splits,
+            matched_places: self.matched_places,
             covered_providers: self.covered_providers,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,

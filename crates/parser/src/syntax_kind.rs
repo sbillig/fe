@@ -227,6 +227,9 @@ pub enum SyntaxKind {
     /// `let`
     #[token("let")]
     LetKw,
+    /// `var`
+    #[token("var")]
+    VarKw,
     /// `mut`
     #[token("mut")]
     MutKw,
@@ -691,6 +694,7 @@ impl SyntaxKind {
             SyntaxKind::ImplKw => "`impl`",
             SyntaxKind::TypeKw => "`type`",
             SyntaxKind::LetKw => "`let`",
+            SyntaxKind::VarKw => "`var`",
             SyntaxKind::MutKw => "`mut`",
             SyntaxKind::RefKw => "`ref`",
             SyntaxKind::OwnKw => "`own`",
@@ -923,6 +927,7 @@ impl SyntaxKind {
                 | SyntaxKind::ImplKw
                 | SyntaxKind::TypeKw
                 | SyntaxKind::LetKw
+                | SyntaxKind::VarKw
                 | SyntaxKind::MutKw
                 | SyntaxKind::RefKw
                 | SyntaxKind::OwnKw

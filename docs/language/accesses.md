@@ -30,16 +30,49 @@ let x = ref first(xs)
 xs[1] = 5        // rejected: `x` views `xs` in place
 ```
 
-## Access bindings
+## Bindings
 
-`let h = mut p.x` and `let r = ref p.x` bind an access to a place. It is
-open from the binding to its last use, and while it is open no other access
-may overlap it unless both read: `p.x` cannot be read while `h` is open, nor
-written while `r` is. Pattern bindings follow the same rule: a `mut` binding
-in `match p` opens a `mut` access to its part of `p`.
+`let` binds an immutable value, and `var` a mutable one; neither is ever an
+access. `let h = mut p.x` and `let r = ref p.x` bind an access to a place,
+with the marker on the initializer. An access is open from the binding to
+its last use, and while it is open no other access may overlap it unless
+both read: `p.x` cannot be read while `h` is open, nor written while `r` is.
+`let mut x = …` is not Fe: write `var x = …` for a mutable value, or
+`let x = mut p` for a mutable access.
 
-An access cannot be stored in a field, in storage, passed as `own` or
-returned from an ordinary function. `ref` and `mut` do not appear in types.
+```fe
+var total = 0          // a mutable value
+let h = mut p.x        // a mutable access to `p.x`
+let r = ref p.y        // a read access to `p.y`
+```
+
+In a pattern, a binding's marker sits on its name: `x` takes a value,
+`var x` a mutable value, `ref x` a read access and `mut x` a mutable access.
+A pattern matched against a place opens each marked binding's access on that
+binding's own part of the place, and nothing else: in
+`match p { Pair { ref a, mut b, .. } => … }`, `p.a` is held for reading and
+`p.b` for writing, and `p.c` stays free. `mut x` needs a mutable place or
+access behind it, and `ref` or `mut` on an owned value is an error.
+
+A plain name takes its value as `let x = e` does: a copy of a `Copy` value,
+and otherwise a move where one is possible. A move out of an owned place
+leaves it partially moved; a move through a `mut` access leaves a hole that
+must be restored through that access before it closes:
+
+```fe
+fn take(_ x: mut Option<MemBuffer>) -> Option<MemBuffer> {
+    let v = x                 // moves out, leaving a hole in `x`
+    x = Option::None          // restores it
+    v
+}
+```
+
+A value reached through a view or a `ref` access, or in storage, cannot
+move; bind it `ref` to read it in place.
+
+An owned parameter is immutable unless declared `var x: own T`. An access
+cannot be stored in a field, in storage, passed as `own` or returned from an
+ordinary function. `ref` and `mut` do not appear in types.
 
 ## Projections
 
@@ -50,17 +83,27 @@ component, is a projection: it grants its caller an access.
 fn first(mut self) -> mut T { mut self.items[0] }
 
 fn entry(mut self, _ key: u256) -> mut u256 {
-    let mut tmp = self.get(key)
+    var tmp = self.get(key)
     yield mut tmp
     self.set(key, tmp)
 }
 ```
 
-A plain `let` of a `ref` result whose type is `Copy` binds a copy and ends
-the access at once: `let v = xs[i]` is an owned value, and `xs` may change
-while `v` lives. `let v = ref xs[i]` keeps the access instead. A `mut`
-result, or a result whose type is not `Copy`, binds the access; `let mut`
-binds a mutable copy of any `Copy` result.
+A projection's result binds like a place. A plain name takes a value: a
+`ref` result of a `Copy` type is copied, and the access ends at once, so
+`let v = xs[i]` is an owned value and `xs` may change while `v` lives. A
+`ref` result of any other type is an error whose fix is `let v = ref xs[i]`,
+which keeps the access; `(i, ref x)` and `for ref x in xs` do the same for a
+component and an element. Whether a type is `Copy` is decided by the
+body's declared bounds, never by an instance. Two kinds of result bind
+their access under a plain name: a `mut` result (`let x = xs.at_mut(0)`),
+since a copy would discard the writes the call asks for, and a `#[view]`
+result (`let s = buf.span()`), which has no value to copy; `let t = s`
+reborrows a view access the same way. `var x = xs.at_mut(0)` copies the
+element and warns, since writes to `x` reach nothing.
+
+Copying a result ends the projection's session at the binding, so its slide
+runs there rather than at the binding's last use.
 
 A projection yields once on each path that completes, implicitly at its
 tail or with `yield`. The code after a `yield`, its *slide*, runs when the

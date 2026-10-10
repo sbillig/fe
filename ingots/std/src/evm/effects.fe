@@ -152,7 +152,7 @@ impl<T> StorPtr<T> {
 
     /// Writes the pointed-at value.
     pub fn write(self, _ value: own T) {
-        let mut ptr = self
+        var ptr = self
         // The pointer's creator vouched for its slot.
         unsafe {
             with (ptr) {
@@ -221,7 +221,7 @@ impl<T> TStorPtr<T> {
 
     /// Writes the pointed-at transient value.
     pub fn write(self, _ value: own T) {
-        let mut ptr = self
+        var ptr = self
         // The pointer's creator vouched for its slot.
         unsafe {
             with (ptr) {
@@ -659,7 +659,7 @@ pub trait Call: EvmCapabilitySeal {
         args: MemSpan,
     ) -> Result<super::calls::InsufficientGas, RawCallOutcome> {
         let input = MemBuffer::from_span(args)
-        let mut output = MemBuffer::empty()
+        var output = MemBuffer::empty()
         if !super::calls::has_min_gas(ops::gas(), minimum, reserved) {
             return Result::Err(super::calls::InsufficientGas {})
         }
@@ -726,7 +726,7 @@ pub trait Call: EvmCapabilitySeal {
     ///
     /// The returned owner contains the complete success or revert payload.
     fn try_call_raw(mut self, addr: own Address, gas: u256, value: u256, args: MemSpan) -> CallOutcome {
-        let mut ret = MemBuffer::empty()
+        var ret = MemBuffer::empty()
         let raw = self.raw_call(addr, gas, value, args, ret: mut ret)
         copy_call_outcome(raw)
     }
@@ -744,7 +744,7 @@ pub trait Call: EvmCapabilitySeal {
     where M: MsgVariant<Sol> + Encode<Sol>
     {
         let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        let mut ret = MemBuffer::empty()
+        var ret = MemBuffer::empty()
         let raw = self.raw_call(addr, gas, value, args: args.span(), ret: mut ret)
         copy_call_outcome(raw)
     }
@@ -754,7 +754,7 @@ pub trait Call: EvmCapabilitySeal {
     where M: MsgVariant<Sol> + Encode<Sol>
     {
         let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        let mut ret = MemBuffer::empty()
+        var ret = MemBuffer::empty()
         let raw = self.raw_staticcall(addr, gas, args: args.span(), ret: mut ret)
         copy_call_outcome(raw)
     }
@@ -763,7 +763,7 @@ pub trait Call: EvmCapabilitySeal {
     /// `addr.call{value: value}("")`), without copying returndata or
     /// bubbling failure.
     fn send_value(mut self, addr: own Address, gas: u256, value: u256) -> RawCallOutcome {
-        let mut ret = MemBuffer::empty()
+        var ret = MemBuffer::empty()
         self.raw_call(addr, gas, value, args: MemSpan::empty(), ret: mut ret)
     }
 
@@ -806,7 +806,7 @@ pub trait Call: EvmCapabilitySeal {
     where M: MsgVariant<Sol> + Encode<Sol>
     {
         let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        let mut ret = MemBuffer::empty()
+        var ret = MemBuffer::empty()
         let raw = self.raw_delegatecall(addr, gas, args: args.span(), ret: mut ret)
         copy_call_outcome(raw)
     }
@@ -1361,7 +1361,7 @@ impl ContractHost for Evm {
             self.abort()
         }
         let args_len = code_size - args_offset
-        let mut args = MemBuffer::alloc(args_len)
+        var args = MemBuffer::alloc(args_len)
         self.codecopy(
             dest: mut args,
             dest_offset: 0,
@@ -1374,7 +1374,7 @@ impl ContractHost for Evm {
     fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
-        let mut buffer = MemBuffer::alloc(len)
+        var buffer = MemBuffer::alloc(len)
         self.codecopy(
             dest: mut buffer,
             dest_offset: 0,

@@ -1,6 +1,6 @@
 // A plain `let` of a read projection copies a `Copy` referent and keeps no
-// access; an explicit `ref`, a non-`Copy` referent and a `mut` projection
-// bind an access open until the binding's last use.
+// access; an explicit `ref` and a `mut` projection bind an access open until
+// the binding's last use.
 use core::ptr::{MemArray, MemBuffer}
 
 struct Cell {
@@ -38,9 +38,9 @@ fn explicit_ref(cell: mut Cell) -> u256 {
     word
 }
 
-// Rejected: a `MemBuffer` is not `Copy`, so the binding is the access.
+// Rejected: a `MemBuffer` is not `Copy`, so it is bound `ref`, the access.
 fn non_copy(buffers: mut MemArray<MemBuffer>) -> u256 {
-    let buffer = buffers[0]
+    let buffer = ref buffers[0]
     buffers.set(0, MemBuffer::empty())
     buffer.len()
 }

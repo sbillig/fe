@@ -19,7 +19,7 @@ impl Cell {
 
 #[test]
 fn index_binding_copies_the_element() {
-    let mut words = MemArray<u256>::new_zeroed(2)
+    var words = MemArray<u256>::new_zeroed(2)
     words.set(0, 7)
     let word = words[0]
     words.set(0, 5)
@@ -29,7 +29,7 @@ fn index_binding_copies_the_element() {
 
 #[test]
 fn projection_binding_copies_an_aggregate() {
-    let mut pairs = MemArray<(u256, u256)>::new_zeroed(1)
+    var pairs = MemArray<(u256, u256)>::new_zeroed(1)
     pairs.set(0, (1, 2))
     let pair = pairs[0]
     pairs.set(0, (3, 4))
@@ -39,7 +39,7 @@ fn projection_binding_copies_an_aggregate() {
 
 #[test]
 fn method_projection_binding_copies() {
-    let mut cell = Cell { word: 1 }
+    var cell = Cell { word: 1 }
     let word = cell.get()
     cell.word = 2
     assert!(word == 1)
@@ -47,7 +47,7 @@ fn method_projection_binding_copies() {
 
 #[test]
 fn mut_projection_binding_stays_an_access() {
-    let mut cell = Cell { word: 1 }
+    var cell = Cell { word: 1 }
     let word = cell.get_mut()
     word = 3
     assert!(cell.word == 3)
@@ -55,7 +55,7 @@ fn mut_projection_binding_stays_an_access() {
 
 #[test]
 fn explicit_ref_binding_stays_an_access() {
-    let mut cell = Cell { word: 1 }
+    var cell = Cell { word: 1 }
     let word = ref cell.get()
     assert!(word == 1)
     cell.word = 2

@@ -102,7 +102,7 @@ pub contract DepositContract uses (ctx: Ctx, log: mut Log) {
             // guarantees no information is lost.
             let amount_gwei: u64 = deposit_amount.downcast_truncate()
 
-            let mut node: u256 = compute_deposit_data_root(
+            var node: u256 = compute_deposit_data_root(
                 pubkey,
                 withdrawal_credentials,
                 signature,
@@ -127,7 +127,7 @@ pub contract DepositContract uses (ctx: Ctx, log: mut Log) {
             assert!(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
             store.deposit_count += 1
 
-            let mut size: u256 = store.deposit_count
+            var size: u256 = store.deposit_count
             for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                 if size & 1 == 1 {
                     store.branch[height] = node
@@ -142,8 +142,8 @@ pub contract DepositContract uses (ctx: Ctx, log: mut Log) {
         }
 
         GetDepositRoot -> u256 uses (store) {
-            let mut node: u256 = 0
-            let mut size: u256 = store.deposit_count
+            var node: u256 = 0
+            var size: u256 = store.deposit_count
             for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                 if size & 1 == 1 {
                     node = ssz::hash_pair(left: store.branch[height], right: node)
@@ -192,8 +192,8 @@ pub fn compute_deposit_data_root(
 // check `GetDepositCount` results without depending on exact byte layout.
 fn le_bytes_to_u64(_ b: Bytes) -> u64 {
     assert!(b.len() == 8)
-    let mut v: u256 = 0
-    let mut i: u256 = 0
+    var v: u256 = 0
+    var i: u256 = 0
     while i < 8 {
         v |= (b.byte_at(i) as u256) << (i * 8)
         i += 1

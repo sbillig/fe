@@ -78,7 +78,7 @@ pub fn hash_pair(left: u256, right: u256) -> u256 {
 ///
 /// Equivalent reference form (slower):
 /// ```ignore
-/// let mut chunk: u256 = 0
+/// var chunk: u256 = 0
 /// for i in 0..8 { chunk |= ((value >> (i*8)) & 0xff) << (256 - (i+1)*8 ... )) }
 /// ```
 ///
@@ -90,7 +90,7 @@ pub fn hash_pair(left: u256, right: u256) -> u256 {
 #[arithmetic(unchecked)]
 #[inline(always)]
 pub fn u64_chunk(_ value: u64) -> u256 {
-    let mut v = value as u256
+    var v = value as u256
     // Swap adjacent byte pairs:  AB CD EF GH  →  BA DC FE HG
     v = ((v & 0x00ff00ff00ff00ff) << 8) | ((v >> 8) & 0x00ff00ff00ff00ff)
     // Swap adjacent 16-bit halves: BA DC FE HG  →  DC BA HG FE

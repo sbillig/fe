@@ -21,7 +21,7 @@
 /// let salt = keccak_packed((token0, token1))
 /// let digest = keccak_packed((0x19 as u8, 0x01 as u8, domain_separator, struct_hash))
 ///
-/// let mut p = Packed::new()
+/// var p = Packed::new()
 /// for item in items {
 ///     p.u256(item)
 /// }
@@ -103,7 +103,7 @@ pub(ingot) unsafe fn write_word_prefix(_ dest: *u8, _ value: u256, _ width: u256
 #[inline(always)]
 pub fn encode_packed<T: EncodePacked>(_ value: own T) -> Packed {
     let width = value.packed_width()
-    let mut buffer = ptr::MemBuffer::with_capacity(width + 32)
+    var buffer = ptr::MemBuffer::with_capacity(width + 32)
     let written = unsafe { value.write_packed(buffer.ptr()) }
     unsafe { buffer.set_len(written) }
     Packed { buffer }
@@ -227,7 +227,7 @@ impl Packed {
     pub fn bytes<const N: usize>(mut self, _ value: [u8; N]) {
         self.reserve(N as u256)
         let len = self.buffer.len()
-        let mut i: usize = 0
+        var i: usize = 0
         while i < N {
             unsafe { *ptr::offset_bytes(self.buffer.ptr(), len + (i as u256)) = value[i] }
             i += 1
@@ -307,7 +307,7 @@ impl Packed {
         if len + 32 <= self.buffer.capacity() {
             unsafe { store_word(ptr: cursor, value: value << ((32 - width) * 8)) }
         } else {
-            let mut i: u256 = 0
+            var i: u256 = 0
             while i < width {
                 let b: u8 = (value >> ((width - 1 - i) * 8)).downcast_truncate()
                 unsafe { *ptr::offset_bytes(cursor, i) = b }
@@ -345,7 +345,7 @@ impl Packed {
 impl EncodePacked for u8 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 1 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.u8(self)
         p
     }
@@ -358,7 +358,7 @@ impl EncodePacked for u8 {
 impl EncodePacked for u16 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 2 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.u16(self)
         p
     }
@@ -371,7 +371,7 @@ impl EncodePacked for u16 {
 impl EncodePacked for u32 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 4 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.u32(self)
         p
     }
@@ -384,7 +384,7 @@ impl EncodePacked for u32 {
 impl EncodePacked for u64 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 8 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.u64(self)
         p
     }
@@ -397,7 +397,7 @@ impl EncodePacked for u64 {
 impl EncodePacked for u128 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 16 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.u128(self)
         p
     }
@@ -410,7 +410,7 @@ impl EncodePacked for u128 {
 impl EncodePacked for u256 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 32 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.u256(self)
         p
     }
@@ -427,7 +427,7 @@ impl EncodePacked for u256 {
 impl EncodePacked for i8 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 1 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         let bits: u8 = self.downcast_truncate()
         p.u8(bits)
         p
@@ -442,7 +442,7 @@ impl EncodePacked for i8 {
 impl EncodePacked for i16 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 2 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         let bits: u16 = self.downcast_truncate()
         p.u16(bits)
         p
@@ -457,7 +457,7 @@ impl EncodePacked for i16 {
 impl EncodePacked for i32 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 4 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         let bits: u32 = self.downcast_truncate()
         p.u32(bits)
         p
@@ -472,7 +472,7 @@ impl EncodePacked for i32 {
 impl EncodePacked for i64 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 8 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         let bits: u64 = self.downcast_truncate()
         p.u64(bits)
         p
@@ -487,7 +487,7 @@ impl EncodePacked for i64 {
 impl EncodePacked for i128 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 16 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         let bits: u128 = self.downcast_truncate()
         p.u128(bits)
         p
@@ -502,7 +502,7 @@ impl EncodePacked for i128 {
 impl EncodePacked for i256 {
     #[inline(always)]
     fn packed_width(self) -> u256 { 32 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         let bits: u256 = self.downcast_truncate()
         p.u256(bits)
         p
@@ -517,7 +517,7 @@ impl EncodePacked for i256 {
 impl EncodePacked for bool {
     #[inline(always)]
     fn packed_width(self) -> u256 { 1 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.bool_(self)
         p
     }
@@ -530,7 +530,7 @@ impl EncodePacked for bool {
 impl EncodePacked for Address {
     #[inline(always)]
     fn packed_width(self) -> u256 { 20 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.address(self)
         p
     }
@@ -548,7 +548,7 @@ impl EncodePacked for Address {
 impl<const N: usize> EncodePacked for String<N> {
     #[inline(always)]
     fn packed_width(self) -> u256 { self.len() as u256 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.string(self)
         p
     }
@@ -561,13 +561,13 @@ impl<const N: usize> EncodePacked for String<N> {
 impl<const N: usize> EncodePacked for [u8; N] {
     #[inline(always)]
     fn packed_width(self) -> u256 { N as u256 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.bytes(self)
         p
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut i: usize = 0
+        var i: usize = 0
         while i < N {
             *ptr::offset_bytes(dest, i as u256) = self[i]
             i += 1
@@ -581,7 +581,7 @@ impl<const N: usize> EncodePacked for [u8; N] {
 impl<const N: usize> EncodePacked for FixedBytes<N> {
     #[inline(always)]
     fn packed_width(self) -> u256 { N as u256 }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.fixed_bytes(self)
         p
     }
@@ -600,7 +600,7 @@ impl<const N: usize> EncodePacked for FixedBytes<N> {
 impl EncodePacked for Bytes {
     #[inline(always)]
     fn packed_width(self) -> u256 { self.len() }
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         let source = self.payload_span()
         p.append_raw(source: source.ptr(), len: source.len())
         p
@@ -633,7 +633,7 @@ impl<T0> EncodePacked for (T0,)
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written
     }
@@ -652,7 +652,7 @@ impl<T0, T1> EncodePacked for (T0, T1)
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written
@@ -673,7 +673,7 @@ impl<T0, T1, T2> EncodePacked for (T0, T1, T2)
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -697,7 +697,7 @@ impl<T0, T1, T2, T3> EncodePacked for (T0, T1, T2, T3)
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -724,7 +724,7 @@ impl<T0, T1, T2, T3, T4> EncodePacked for (T0, T1, T2, T3, T4)
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -753,7 +753,7 @@ impl<T0, T1, T2, T3, T4, T5> EncodePacked for (T0, T1, T2, T3, T4, T5)
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -785,7 +785,7 @@ impl<T0, T1, T2, T3, T4, T5, T6> EncodePacked for (T0, T1, T2, T3, T4, T5, T6)
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -819,7 +819,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7> EncodePacked for (T0, T1, T2, T3, T4, T5, T
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -857,7 +857,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> EncodePacked
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -898,7 +898,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> EncodePacked
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -941,7 +941,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> EncodePacked
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -986,7 +986,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> EncodePacked
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -1035,7 +1035,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> EncodePacked
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -1086,7 +1086,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> EncodePacked
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -1139,7 +1139,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> EncodePack
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))
@@ -1195,7 +1195,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> Encod
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8) -> u256 {
-        let mut written: u256 = 0
+        var written: u256 = 0
         written += self.0.write_packed(ptr::offset_bytes(dest, written))
         written += self.1.write_packed(ptr::offset_bytes(dest, written))
         written += self.2.write_packed(ptr::offset_bytes(dest, written))

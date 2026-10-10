@@ -38,7 +38,7 @@ fn runtime_digests_match_folded_and_memory_hashes() {
 
 #[test]
 fn hashes_read_the_words_at_the_call() {
-    let mut words: [u256; 2] = [1, 0]
+    var words: [u256; 2] = [1, 0]
     let first = keccak_words(words)
     words[1] = 1
     assert!(keccak_words(words) != first)

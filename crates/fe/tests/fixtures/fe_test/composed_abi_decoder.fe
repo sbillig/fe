@@ -45,7 +45,7 @@ fn check_pair(_ a: u256, _ b: u256, _ valid: bool) uses (evm: mut Evm) {
     unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: a) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: b) }
-    let mut ret = MemBuffer::alloc(64)
+    var ret = MemBuffer::alloc(64)
     let outcome = evm
         .raw_call(
             addr: receiver,

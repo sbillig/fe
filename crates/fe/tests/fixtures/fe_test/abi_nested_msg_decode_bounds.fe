@@ -61,7 +61,7 @@ fn test_nested_msg_decode_truncated_inner_head_reverts() uses (evm: mut Evm) {
     unsafe { store_word(ptr: ptr::offset_bytes(ptr, 4), value: 32) }
     unsafe { store_word(ptr: ptr::offset_bytes(ptr, 36), value: 0) }
 
-    let mut ret = ptr::MemBuffer::empty()
+    var ret = ptr::MemBuffer::empty()
     let outcome = unsafe {
         evm.raw_call(
             addr: receiver,

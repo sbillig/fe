@@ -128,7 +128,7 @@ pub trait Eq<T = Self> {
 // Aggregate comparisons use element Eq implementations and short-circuit.
 impl<T: Eq, const N: usize> Eq for [T; N] {
     fn eq(self, _ other: [T; N]) -> bool {
-        let mut i: usize = 0
+        var i: usize = 0
         while i < N {
             if !(self[i] == other[i]) {
                 return false

@@ -39,7 +39,7 @@ pub fn bytes_from_words<const N: usize>(_ words: [u256; N]) -> Bytes {
     let size: u256 = 32 + len
     let data = ptr::alloc_bytes(size)
     unsafe { store_word(ptr: data, value: len) }
-    let mut i: usize = 0
+    var i: usize = 0
     while i < N {
         unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i]) }
         i += 1
@@ -68,7 +68,7 @@ pub fn bytes_from_words_prefix<const LEN: usize, const N: usize>(_ words: [u256;
     let size: u256 = 32 + payload
     let data = ptr::alloc_bytes(size)
     unsafe { store_word(ptr: data, value: len) }
-    let mut i: usize = 0
+    var i: usize = 0
     while i < payload_words {
         unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i]) }
         i += 1

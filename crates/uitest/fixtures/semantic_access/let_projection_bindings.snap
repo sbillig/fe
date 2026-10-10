@@ -15,8 +15,8 @@ error[16-0001]: access conflict in `fn explicit_ref`
 error[16-0001]: access conflict in `fn non_copy`
    ┌─ let_projection_bindings.fe:44:5
    │
-43 │     let buffer = buffers[0]
-   │                  ---------- projection opened here
+43 │     let buffer = ref buffers[0]
+   │                      ---------- projection opened here
 44 │     buffers.set(0, MemBuffer::empty())
    │     ^^^^^^^ cannot mutably access this place while a `ref` projection of it is open
 

@@ -126,13 +126,13 @@ fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops
 
 #[contract_init(Erc20Contract)]
 fn init() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20> = unsafe { evm.stor_ptr(0) }
+    var erc20: StorPtr<Erc20> = unsafe { evm.stor_ptr(0) }
     with (erc20, Ctx = evm, RawOps = evm) {
         do_init()
     }
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    let mut dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len)
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -144,7 +144,7 @@ fn init() uses (evm: mut Evm) {
 
 #[contract_runtime(Erc20Contract)]
 fn runtime() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20> = unsafe { evm.stor_ptr(0) }
+    var erc20: StorPtr<Erc20> = unsafe { evm.stor_ptr(0) }
     let selector = evm.calldataload(0) >> 224
     with (erc20, Ctx = evm, RawOps = evm) {
         match selector {

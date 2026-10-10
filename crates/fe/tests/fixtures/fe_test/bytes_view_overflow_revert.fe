@@ -23,12 +23,12 @@ fn call_words<const N: usize>(_ addr: Address, words: [u256; N]) -> Outcome uses
     let len = 4 + (N as u256) * 32
     let data = MemBuffer::alloc(len + 32)
     unsafe { store_word(ptr: data.ptr(), value: 1 << 224) }
-    let mut i: usize = 0
+    var i: usize = 0
     while i < N {
         unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4 + (i as u256) * 32), value: words[i]) }
         i += 1
     }
-    let mut ret = MemBuffer::alloc(64)
+    var ret = MemBuffer::alloc(64)
     let outcome = unsafe {
         evm.raw_call(
             addr: addr,

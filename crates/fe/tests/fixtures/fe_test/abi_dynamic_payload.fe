@@ -216,7 +216,7 @@ fn test_bytes_word_at_masks_partial_words() uses (evm: mut Evm) {
 
 #[test]
 fn test_memory_prefix_zero_pads_short_spans() {
-    let mut backing = ptr::MemArray<u8>::new_zeroed(33)
+    var backing = ptr::MemArray<u8>::new_zeroed(33)
     backing[0] = 0x44
     backing[1] = 0xff
 
@@ -232,7 +232,7 @@ fn test_memory_prefix_zero_pads_short_spans() {
 
 #[test]
 fn test_owned_bytes_and_views_expose_explicit_spans() {
-    let mut source = ptr::MemArray<u8>::new_zeroed(3)
+    var source = ptr::MemArray<u8>::new_zeroed(3)
     source[0] = 0x11
     source[1] = 0x22
     source[2] = 0x33

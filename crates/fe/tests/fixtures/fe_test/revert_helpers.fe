@@ -89,7 +89,7 @@ msg ForwarderMsg {
 pub contract Forwarder uses (call: mut Call) {
     recv ForwarderMsg {
         Forward { target, data } uses (mut call) {
-            let mut ret = ptr::MemBuffer::empty()
+            var ret = ptr::MemBuffer::empty()
             let outcome = call
                 .raw_call(
                     addr: target,
@@ -427,7 +427,7 @@ uses (evm: mut Evm)
 where M: MsgVariant<Sol> + Encode<Sol>
 {
     let data = std::evm::encode_msg_calldata(message)
-    let mut ret = ptr::MemBuffer::empty()
+    var ret = ptr::MemBuffer::empty()
     evm.raw_call(
         addr: mock,
         gas: 1000000,

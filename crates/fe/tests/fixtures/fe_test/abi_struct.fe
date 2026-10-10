@@ -130,8 +130,8 @@ pub contract C {
             key
         }
         Hops { first, hops } -> u256 {
-            let mut sum = first.fee.val as u256
-            let mut i: u256 = 0
+            var sum = first.fee.val as u256
+            var i: u256 = 0
             while i < hops.len() {
                 let hop = hops.get(i)
                 sum += hop.key.fee.val as u256 + hop.data.len()
@@ -190,7 +190,7 @@ fn struct_messages_round_trip() uses (evm: mut Evm) {
 
 #[test]
 fn mem_vec_holds_static_structs() {
-    let mut keys = MemVec<Key>::zeroed(3)
+    var keys = MemVec<Key>::zeroed(3)
     keys.set(index: 1, value: key(500))
     keys.set(index: 2, value: key(3000))
     assert(keys.get(0).fee.val == 0)
@@ -292,7 +292,7 @@ fn zero_length_array_decoding_does_not_read_elements() {
     let decoded2 = <[Address; 0] as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, 0)
     assert(encode_abi_payload(decoded).len() == 0)
     assert(encode_abi_payload(decoded2).len() == 0)
-    let mut decoder = sol::SolDecoder::with_base(0)
+    var decoder = sol::SolDecoder::with_base(0)
     let decoded3 = <[Address; 0] as Decode<Sol>>::decode_payload(mut decoder, encoded.span())
     assert(encode_abi_payload(decoded3).len() == 0)
     let units = MemVec<()>::zeroed(1)
@@ -362,7 +362,7 @@ fn abi_struct_copy_array_field_round_trips() {
     assert(encoded.len() == 2 * 96)
     let decoded = <Route as Decode<Sol>>::decode_from(encoded.span(), 0)
     assert(decoded.keys[1].fee.val == 2)
-    let mut routes = MemVec<[Key; 2]>::zeroed(1)
+    var routes = MemVec<[Key; 2]>::zeroed(1)
     routes.set(index: 0, value: [key(3), key(4)])
     assert(routes.get(0)[1].fee.val == 4)
 }

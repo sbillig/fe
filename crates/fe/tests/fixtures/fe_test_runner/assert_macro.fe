@@ -39,7 +39,7 @@ fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
     let ptr = ptr::alloc_bytes(4)
     unsafe { store_word(ptr: ptr, value: selector_word) }
 
-    let mut output = ptr::MemBuffer::empty()
+    var output = ptr::MemBuffer::empty()
     let outcome = unsafe {
         evm.raw_call(
             addr: addr,

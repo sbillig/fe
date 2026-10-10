@@ -104,7 +104,7 @@ pub contract C uses (storage: mut RawStorage) {
             for counter in mut counters {
                 counter += 10
             }
-            let mut sum: u256 = 0
+            var sum: u256 = 0
             for counter in counters {
                 sum += counter as u256
             }

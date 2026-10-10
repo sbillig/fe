@@ -159,8 +159,8 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
     },
 
-    /// Non-`self` parameters cannot use the `mut x: T` prefix form unless the type is `own`.
-    InvalidMutParamPrefixWithoutOwnType {
+    /// `var` on a parameter that is not `own`.
+    VarParamNotOwned {
         span: DynLazySpan<'db>,
     },
 
@@ -310,7 +310,7 @@ impl TyLowerDiag<'_> {
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
             Self::RefSelfType { .. } => 14,
-            Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
+            Self::VarParamNotOwned { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalAssertionFailed { .. } => 36,
@@ -632,10 +632,36 @@ pub enum BodyDiag<'db> {
         suggestion: Option<String>,
     },
 
-    /// `let mut` local bindings bind owned values, not accesses.
-    MutableBindingCannotBeCapability {
+    /// A plain binding of a projection's read result that is neither `Copy`
+    /// nor a `#[view]` type: it has no value reading, so it needs `ref`.
+    RefBindingRequired {
         primary: DynLazySpan<'db>,
         ty: TyId<'db>,
+    },
+
+    /// A `ref` or `mut` binding of an owned value, which has no access to
+    /// hold. `marker` is `true` for `mut`.
+    MarkedBindingWithoutAccess {
+        primary: DynLazySpan<'db>,
+        marker: bool,
+    },
+
+    /// `var x` copying a projection's `mut` result: writes to the copy do not
+    /// reach the place.
+    MutAccessCopied {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// `var x = ref p` or `var x = mut p`: `var` binds a value, never an
+    /// access.
+    VarOfAccess {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// `mut x` on a read component, which has no mutable place behind it.
+    MutBindingOfRead {
+        primary: DynLazySpan<'db>,
     },
 
     /// `ref p`, `mut p`, or a tuple or sum yield shape used as a value.
@@ -1150,9 +1176,13 @@ impl<'db> BodyDiag<'db> {
             Self::MixedLoopBases { .. } => 114,
             Self::TupleOfAccesses { .. } => 115,
             Self::UnsafeSplitOperand { .. } => 118,
+            Self::RefBindingRequired { .. } => 119,
+            Self::MarkedBindingWithoutAccess { .. } => 120,
+            Self::MutAccessCopied { .. } => 121,
+            Self::VarOfAccess { .. } => 122,
+            Self::MutBindingOfRead { .. } => 123,
             Self::ContractFieldNotInUses { .. } => 116,
             Self::AccessChoiceNeedsProjection { .. } => 117,
-            Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::ArrayIndexOutOfBounds { .. } => 84,
             Self::NonAssignableExpr(..) => 17,

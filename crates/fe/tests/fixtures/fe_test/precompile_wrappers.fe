@@ -82,7 +82,7 @@ fn expect_pair(_ result: Result<PrecompileError, (u256, u256)>) -> (u256, u256) 
 fn zero_memory(_ base: *u8, len: u256)
 uses (evm: mut Evm)
 {
-    let mut offset: u256 = 0
+    var offset: u256 = 0
     while offset < len {
         unsafe { store_word(ptr: ptr::offset_bytes(base, offset), value: 0) }
         offset += 32
@@ -90,8 +90,8 @@ uses (evm: mut Evm)
 }
 
 fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
-    match ref result {
-        Result::Ok(recovered) => match recovered {
+    match result {
+        Result::Ok(ref recovered) => match recovered {
             Option::Some(addr) => addr,
             Option::None => {
                 assert(false)
@@ -106,8 +106,8 @@ fn expect_recovery(_ result: Result<PrecompileError, Option<u256>>) -> u256 {
 }
 
 fn expect_no_recovery(_ result: Result<PrecompileError, Option<u256>>) {
-    match ref result {
-        Result::Ok(recovered) => match recovered {
+    match result {
+        Result::Ok(ref recovered) => match recovered {
             Option::Some(_) => assert(false),
             Option::None => (),
         },
@@ -230,7 +230,7 @@ uses (evm: Evm)
 {
     let ptr = ptr::alloc_bytes(64)
     unsafe { ptr::zero_bytes(ptr, 64) }
-    let mut ret = MemBuffer::with_capacity(32)
+    var ret = MemBuffer::with_capacity(32)
     let outcome = evm.raw_staticcall(
         addr: Address { inner: 4 },
         gas: 1000000,

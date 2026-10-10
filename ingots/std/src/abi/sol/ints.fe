@@ -1644,7 +1644,7 @@ impl<T: SolWordRepr + SolInt> EncodePacked for T {
         T::BITS / 8
     }
 
-    fn pack_into(own self, mut _ p: own Packed) -> Packed {
+    fn pack_into(own self, var _ p: own Packed) -> Packed {
         p.append_word(value: self.canonical_word(), width: T::BITS / 8)
         p
     }

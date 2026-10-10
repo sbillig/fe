@@ -93,7 +93,7 @@ impl<T> SolArray<T> {
     /// contract field, uses `slot` or the elements' slots.
     #[raw_place]
     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
-        let mut ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
+        var ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
         unsafe {
             with (ptr) {
                 core::effect_ref::target_mut(ptr)
@@ -158,7 +158,7 @@ impl<T> SolArray<T> {
         where T: Clearable
     {
         let len = self.len
-        let mut i: u256 = 0
+        var i: u256 = 0
         while i < len {
             clear_storage(mut self, i)
             i += 1
@@ -180,7 +180,7 @@ impl<T> SolArray<T> {
         let size = 32 + len * 32
         let data = ptr::alloc_bytes(size)
         unsafe { store_word(ptr: data, value: len) }
-        let mut i: u256 = 0
+        var i: u256 = 0
         while i < len {
             let value = self[i]
             unsafe { value.encode(ptr::offset_bytes(data, 32 + i * 32)) }

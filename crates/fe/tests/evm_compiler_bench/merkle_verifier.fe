@@ -23,7 +23,7 @@ fn hash_pair(a: u256, b: u256) -> u256 {
 pub contract MerkleVerifier {
     recv MerkleMsg {
         Verify { proof, root, leaf } -> bool {
-            let mut computed = leaf.val
+            var computed = leaf.val
             for i in 0..proof.len() as usize {
                 let sibling = proof.get(i as u256).val
                 computed = if computed < sibling {

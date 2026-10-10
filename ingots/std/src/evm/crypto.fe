@@ -75,7 +75,7 @@ fn staticcall_memory(
     args: MemSpan,
     ret_len: u256,
 ) -> Result<PrecompileError, MemBuffer> {
-    let mut out = MemBuffer::with_capacity(ret_len)
+    var out = MemBuffer::with_capacity(ret_len)
     let ok: u256 = unsafe {
         ops::staticcall_precompile(
             gas: ops::gas(),

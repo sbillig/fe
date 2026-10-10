@@ -656,6 +656,9 @@ impl ToDoc for ast::FuncParam {
         if self.mut_token().is_some() {
             doc = doc.append(alloc.text("mut "));
         }
+        if self.var_token().is_some() {
+            doc = doc.append(alloc.text("var "));
+        }
         if self.ref_token().is_some() {
             doc = doc.append(alloc.text("ref "));
         }

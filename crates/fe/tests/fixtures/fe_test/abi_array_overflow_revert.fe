@@ -26,7 +26,7 @@ uses (evm: mut Evm)
     unsafe { store_word(ptr: data.ptr(), value: (0x11223344 as u256) << 224) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 4), value: offset) }
     unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 36), value: length) }
-    let mut ret = MemBuffer::empty()
+    var ret = MemBuffer::empty()
     let outcome = evm
         .raw_call(
             addr: receiver,
@@ -68,7 +68,7 @@ fn overflowing_dynamic_element_tail_reverts_empty() uses (evm: mut Evm) {
             value: !(0 as u256) - 31,
         )
     }
-    let mut ret = MemBuffer::empty()
+    var ret = MemBuffer::empty()
     let outcome = evm
         .raw_call(
             addr: receiver,

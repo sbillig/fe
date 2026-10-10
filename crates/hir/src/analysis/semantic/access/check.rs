@@ -49,7 +49,7 @@ use crate::{
             ty_is_snapshot,
         },
     },
-    hir_def::{CallableDef, FuncParamMode, scope_graph::ScopeId},
+    hir_def::{CallableDef, FuncParamMode, Partial, Stmt, scope_graph::ScopeId},
     semantic::{EffectRequirementKey, ProviderSource},
 };
 
@@ -1472,6 +1472,20 @@ impl<'a, 'db> Analysis<'a, 'db> {
         SemanticDiagnostic::new(self.instance, kind, message, self.span(origin))
     }
 
+    /// Whether `origin` is a pattern binding or a `let` initializer: a value
+    /// bound by name.
+    fn binds_by_value(&self, origin: SemOrigin<'db>) -> bool {
+        match origin {
+            SemOrigin::Pat(_) => true,
+            SemOrigin::Expr(expr) => self.body.template_owner.body(self.db).is_some_and(|body| {
+                body.stmts(self.db).values().any(|stmt| {
+                    matches!(stmt, Partial::Present(Stmt::Let(_, _, Some(init), _)) if *init == expr)
+                })
+            }),
+            _ => false,
+        }
+    }
+
     fn span(&self, origin: SemOrigin<'db>) -> SemanticDiagnosticSpan<'db> {
         SemanticDiagnosticSpan::OriginWithTemplateFallback {
             owner: self.instance.key(self.db).owner(self.db),
@@ -1757,11 +1771,18 @@ impl<'a, 'db> Analysis<'a, 'db> {
             } else {
                 SemanticDiagnosticKind::AccessConflict
             };
+            // A plain binding takes a value: one that cannot move needs
+            // `ref` to be read in place.
+            let fix = if kind == MemoryAccessKind::Move && self.binds_by_value(origin) {
+                "; bind it with `ref` to read it in place"
+            } else {
+                ""
+            };
             return Err(self.diag(
                 diag_kind,
                 origin,
                 format!(
-                    "cannot {} a place reached through a `ref` access",
+                    "cannot {} a place reached through a `ref` access{fix}",
                     verb(kind)
                 ),
             ));

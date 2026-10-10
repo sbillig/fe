@@ -22,7 +22,7 @@ impl Words {
     /// The words rooted at `slot`.
     #[raw_place]
     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
-        let mut ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
+        var ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
         unsafe {
             with (ptr) {
                 core::effect_ref::target_mut(ptr)

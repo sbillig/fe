@@ -121,7 +121,7 @@ uses (call: Call)
     }
     unsafe { ptr::copy(offset(args.ptr(), 0x64), signature) }
 
-    let mut ret = MemBuffer::with_capacity(32)
+    var ret = MemBuffer::with_capacity(32)
     let outcome = call.raw_staticcall(addr: signer, gas: ops::gas(), args: args.span(), ret: mut ret)
     unsafe {
         outcome.success()

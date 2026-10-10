@@ -49,7 +49,7 @@ pub contract NoFallback {
 fn raw_call(addr: Address, gas: u256, value: u256, args_offset: *u8, args_len: u256) -> bool
 uses (evm: mut Evm)
 {
-    let mut ret = ptr::MemBuffer::empty()
+    var ret = ptr::MemBuffer::empty()
     unsafe {
         evm.raw_call(
             addr: addr,

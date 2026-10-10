@@ -144,8 +144,8 @@ error[16-0001]: access conflict in `fn case38_owner_access`
 error[16-0001]: access conflict in `fn Case32StoragePlacement::__init__`
     ┌─ acceptance.fe:600:9
     │
-599 │         let x = first_item(items)
-    │                            ----- access opened here
+599 │         let x = ref first_item(items)
+    │                                ----- access opened here
 600 │         ping()
     │         ^^^^^^ this call may write storage while a `ref` access of it is open
 

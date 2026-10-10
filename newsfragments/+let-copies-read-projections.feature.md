@@ -1,1 +1,0 @@
-A plain `let` of a read projection whose result is `Copy`, such as `let v = xs[i]` or `let v = c.at(cursor)`, binds a copy and ends the projection's access at once, as `let v = store.value` does for a field. Code may then change `xs` while `v` lives. `let v = ref xs[i]` keeps the read access; a `mut` projection, and a result that is not `Copy`, still bind the access.

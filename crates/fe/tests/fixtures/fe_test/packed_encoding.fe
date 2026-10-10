@@ -15,7 +15,7 @@ use std::abi::{Bytes4, FixedBytes, bytes_from_words_prefix}
 // and the terminal ownership transfer keeps the exact payload.
 #[test]
 fn test_builder_view_and_owned_buffer() {
-    let mut p = Packed::with_capacity(bytes: 4)
+    var p = Packed::with_capacity(bytes: 4)
     assert!(p.span().is_empty())
     p.u32(0xa9059cbb)
     assert!(p.span().len() == 4)
@@ -25,7 +25,7 @@ fn test_builder_view_and_owned_buffer() {
     let expected = encode_packed((0xa9059cbb as u32, 0x1234 as u256, 7 as u256))
     assert!(p.span().len() == 68)
     assert!(crypto::keccak256(p.span()) == expected.keccak256())
-    let mut buffer = p.into_buffer()
+    var buffer = p.into_buffer()
     assert!(buffer.len() == 68)
     assert!(buffer.span().byte_at(34) == 0x12)
     assert!(buffer.span().byte_at(35) == 0x34)
@@ -90,7 +90,7 @@ fn test_mixed_widths_tuple() {
 // terminals.
 #[test]
 fn test_builder_matches_tuple_api() {
-    let mut p = Packed::new()
+    var p = Packed::new()
     p.u8(0xab)
     p.u16(0x1234)
     p.u32(0xdeadbeef)
@@ -182,7 +182,7 @@ fn test_string_effective_bytes() {
     assert!(keccak_packed(("Uniswap V2",)) == UNISWAP_V2_DIGEST)
     assert!(keccak_packed(("Uniswap V2",)) == core::keccak("Uniswap V2"))
 
-    let mut p = Packed::new()
+    var p = Packed::new()
     let name: String<10> = "Uniswap V2"
     p.string(name)
     assert!(p.len() == 10)
@@ -228,9 +228,9 @@ const GROWTH_DIGEST: u256 = 0x275968f225ff5beab3eb38415d20f03a79a91f856ebde75ca5
 // hashes identically to an exactly-sized run; nothing traps.
 #[test]
 fn test_growth_matches_exact_capacity() {
-    let mut grown = Packed::new()
-    let mut exact = Packed::with_capacity(bytes: 640)
-    let mut i: u256 = 0
+    var grown = Packed::new()
+    var exact = Packed::with_capacity(bytes: 640)
+    var i: u256 = 0
     while i < 20 {
         grown.u256(i)
         exact.u256(i)
@@ -249,7 +249,7 @@ const TINY_DIGEST: u256 = 0x5ed6f5078aed9ab97fe2101f196724b85518d27fbeef8c8256e8
 // fits below the limit) and repeated doubling on growth.
 #[test]
 fn test_tiny_capacity_byte_writes() {
-    let mut p = Packed::with_capacity(bytes: 3)
+    var p = Packed::with_capacity(bytes: 3)
     let arr: [u8; 3] = [0x01, 0x02, 0x03]
     p.bytes(arr)
     p.u8(0xff)
@@ -265,7 +265,7 @@ const SHA256_ABC: u256 = 0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410f
 
 #[test]
 fn test_sha256_terminal() {
-    let mut p = Packed::new()
+    var p = Packed::new()
     let abc: [u8; 3] = [0x61, 0x62, 0x63]
     p.bytes(abc)
     assert!(p.sha256() == SHA256_ABC)
@@ -275,7 +275,7 @@ fn test_sha256_terminal() {
 // length word, raw bytes, zeroed padding.
 #[test]
 fn test_as_bytes_roundtrip() {
-    let mut p = Packed::new()
+    var p = Packed::new()
     p.address(Address { inner: 0x1111111111111111111111111111111111111111 })
     p.address(Address { inner: 0x2222222222222222222222222222222222222222 })
     let b = p.as_bytes()

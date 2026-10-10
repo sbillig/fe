@@ -2348,17 +2348,17 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
-            Self::InvalidMutParamPrefixWithoutOwnType { span } => CompleteDiagnostic {
+            Self::VarParamNotOwned { span } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "invalid `mut` parameter syntax".to_string(),
+                message: "`var` makes an owned parameter mutable".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "`mut x: T` is only allowed when `T` is `own ...`".to_string(),
+                    message: "`var x: T` is only allowed when `T` is `own ...`".to_string(),
                     span: span.resolve(db),
                 }],
                 notes: vec![
-                    "use `x: mut T` for mutable borrow parameters".to_string(),
-                    "or use `mut x: own T` for mutable owned parameters".to_string(),
+                    "use `x: mut T` for a mutable borrow, or `var x: own T` for a mutable owned parameter"
+                        .to_string(),
                 ],
                 error_code,
             },
@@ -3772,6 +3772,91 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::RefBindingRequired { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "a read access needs a `ref` binding".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "this binds a read access of `{}`, which is not `Copy`",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "mark the binding `ref` to hold the access, as `let x = ref …`, `(i, ref x)` or `for ref x in …`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::MarkedBindingWithoutAccess { primary, marker } => {
+                let (marker, fix) = if *marker {
+                    ("mut", "write `var` for a mutable value")
+                } else {
+                    ("ref", "remove `ref`: an owned value is bound by value")
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("a `{marker}` binding needs a place or an access"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: "this binds an owned value".to_string(),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![fix.to_string()],
+                    error_code,
+                }
+            }
+
+            Self::VarOfAccess { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "`var` binds a value, not an access".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this binds a value, but its initializer names an access".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "remove `ref` or `mut` from the initializer to copy its value, or bind the access with `let`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::MutBindingOfRead { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "a `mut` binding needs a mutable place or access".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this binds part of a read access".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "write `var` for a mutable copy, or use the `mut` projection to write through"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::MutAccessCopied { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Warning,
+                message: "`var` copies a `mut` access".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "this binds a copy of the `{}`, so writes to it do not reach its place",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "bind it with `let` to write through the access, or call the read projection to copy"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::TupleOfAccesses { primary } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "a tuple does not hold accesses".to_string(),
@@ -3865,23 +3950,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
-
-            Self::MutableBindingCannotBeCapability { primary, ty } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "invalid mutable local binding".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "`let mut` binds an owned value, but this is an access to `{}`",
-                        ty.pretty_print(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![
-                    "remove `mut`: writes through a `mut` access already reach its place".to_string(),
-                ],
-                error_code,
-            },
 
             Self::ArrayRepeatRequiresCopy { primary, ty } => CompleteDiagnostic {
                 severity: Severity::Error,

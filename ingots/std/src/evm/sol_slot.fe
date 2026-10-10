@@ -18,7 +18,7 @@
 //!
 //! ```fe
 //! let slot = unsafe { SolSlot::at(0) }
-//! let mut word = slot.load()
+//! var word = slot.load()
 //! let owner: Address = word.get(offset: 0)
 //! word.set(offset: 20, value: false)
 //! slot.store(word)
@@ -76,7 +76,7 @@ impl SolSlot {
     /// contract field, uses `slot` or the slots its payload derives.
     #[raw_place]
     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
-        let mut ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
+        var ptr: StorPtr<Self> = unsafe { storage.stor_ptr(slot) }
         unsafe {
             with (ptr) {
                 core::effect_ref::target_mut(ptr)
@@ -99,7 +99,7 @@ impl SolSlot {
             let _ = field_shift(offset, bits: T::BITS)
             self.payload.head = value.to_packed()
         } else {
-            let mut word = SolWord { word: self.payload.head }
+            var word = SolWord { word: self.payload.head }
             word.set(offset, value)
             self.payload.head = word.word
         }
@@ -191,7 +191,7 @@ impl SolSlot {
                     store_word(ptr: ptr::offset_bytes(data, 32), value: leading_bytes(head, count: len))
                 }
             } else {
-                let mut i: u256 = 0
+                var i: u256 = 0
                 while i < word_count(len) {
                     let word = leading_bytes(self.payload[i], count: len - i * 32)
                     store_word(ptr: ptr::offset_bytes(data, 32 + i * 32), value: word)
@@ -207,19 +207,19 @@ impl SolSlot {
         let old_len = stored_len(old)
         let old_words = if old & 1 == 0 { 0 } else { word_count(old_len) }
         let len = payload.len()
-        let mut words: u256 = 0
+        var words: u256 = 0
         if len < 32 {
             self.payload.head = payload_word(payload, 0) | (len * 2)
         } else {
             self.payload.head = len * 2 + 1
             words = word_count(len)
-            let mut i: u256 = 0
+            var i: u256 = 0
             while i < words {
                 self.payload[i] = payload_word(payload, i * 32)
                 i += 1
             }
         }
-        let mut i = words
+        var i = words
         while i < old_words {
             self.payload[i] = 0
             i += 1

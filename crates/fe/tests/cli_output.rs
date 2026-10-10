@@ -403,7 +403,7 @@ pub contract Test {
 
     recv Msg {
         Check { key, next, initialized } uses (store) {
-            let mut cursor = key
+            var cursor = key
             while cursor > next {
                 assert!(!with (store.map) {
                     nested(cursor)
@@ -1275,7 +1275,7 @@ fn test_cli_build_ingot_contract_uses_effectful_library_helper() {
     .expect("write fe.toml");
     fs::write(
         src_dir.join("lib.fe"),
-        "pub use libmod::{self, *}\n\npub msg AMsg {\n    #[selector = sol(\"foo()\")]\n    Foo -> u256,\n}\n\npub contract A {\n    recv AMsg {\n        Foo -> u256 {\n            let mut value: u256 = 1\n            with (value) { needs_effect() }\n        }\n    }\n}\n",
+        "pub use libmod::{self, *}\n\npub msg AMsg {\n    #[selector = sol(\"foo()\")]\n    Foo -> u256,\n}\n\npub contract A {\n    recv AMsg {\n        Foo -> u256 {\n            var value: u256 = 1\n            with (value) { needs_effect() }\n        }\n    }\n}\n",
     )
     .expect("write lib.fe");
     fs::write(

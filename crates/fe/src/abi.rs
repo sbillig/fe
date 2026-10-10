@@ -1634,7 +1634,7 @@ pub contract Probe {
     recv ProbeMsg {
         Probe { target } -> bool uses (call: Call) {
             let args = MemBuffer::alloc(0)
-            let mut ret = MemBuffer::with_capacity(64)
+            var ret = MemBuffer::with_capacity(64)
             call.raw_staticcall(addr: target, gas: 30000, args: args.span(), ret: mut ret).success()
         }
     }
