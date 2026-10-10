@@ -173,15 +173,15 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_effect_place_preserves_its_reference_field_layout() {
+fn native_effect_place_preserves_its_aggregate_layout() {
     let ir = with_top_mod_for_source(
         "native_effect_place_layout.fe",
         r#"
-struct Handle { value: mut i32, calls: i32 }
+struct Cell { value: i32 }
+struct Handle { value: Cell, calls: i32 }
 fn step() uses (handle: mut Handle) { handle.calls += 1 }
 pub fn main() -> i32 {
-    var value: i32 = 20
-    var handle = Handle { value: mut value, calls: 0 }
+    var handle = Handle { value: Cell { value: 20 }, calls: 0 }
     with (handle) {
         step()
         step()
@@ -191,7 +191,7 @@ pub fn main() -> i32 {
 "#,
         |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
     )
-    .expect("effect place must retain the actual layout of its reference field");
+    .expect("effect place must retain its owned aggregate layout");
     let roots = ir
         .lines()
         .filter(|line| line.contains(" = obj.alloc "))
