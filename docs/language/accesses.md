@@ -214,7 +214,8 @@ pub struct MemBuffer {
 Initializing or writing an `unsafe` field takes an `unsafe` block or an
 `unsafe fn` body: a literal that sets it, an assignment to it, or a `mut`
 access to it, whether written `mut buf.len`, taken by a `mut self` method,
-bound `mut` in a pattern, or opened by a `for mut` loop or a match. Reading
+bound `mut` in a pattern, opened by a `for mut` loop or a match, or provided
+by `with (buf.len)` to a call that uses it as a `mut` effect. Reading
 one is safe, so an `unsafe` field may be `pub`: readable anywhere, writable
 only in `unsafe` code. Moving or assigning a whole value is safe, since each
 value carries its own invariant. The block is where the code vouches that the

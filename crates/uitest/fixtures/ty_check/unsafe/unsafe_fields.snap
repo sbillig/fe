@@ -53,33 +53,57 @@ error[8-0126]: writing an `unsafe` field requires an `unsafe` block
    = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
 
 error[8-0126]: writing an `unsafe` field requires an `unsafe` block
-   ┌─ unsafe_fields.fe:56:26
+   ┌─ unsafe_fields.fe:56:13
    │
-56 │             for mut x in self.items {
+56 │             self.len.bump()
+   │             ^^^^^^^^ `len` is an `unsafe` field
+   │
+   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
+
+error[8-0126]: writing an `unsafe` field requires an `unsafe` block
+   ┌─ unsafe_fields.fe:57:19
+   │
+57 │             with (self.len) { count() }
+   │                   ^^^^^^^^ `len` is an `unsafe` field
+   │
+   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
+
+error[8-0126]: writing an `unsafe` field requires an `unsafe` block
+   ┌─ unsafe_fields.fe:88:13
+   │
+88 │             self.items[0] = 0
+   │             ^^^^^^^^^^ `items` is an `unsafe` field
+   │
+   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
+
+error[8-0126]: writing an `unsafe` field requires an `unsafe` block
+   ┌─ unsafe_fields.fe:89:26
+   │
+89 │             for mut x in self.items {
    │                          ^^^^^^^^^^ `items` is an `unsafe` field
    │
    = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
 
 error[8-0126]: writing an `unsafe` field requires an `unsafe` block
-   ┌─ unsafe_fields.fe:59:19
+   ┌─ unsafe_fields.fe:92:19
    │
-59 │             match self.opt {
+92 │             match self.opt {
    │                   ^^^^^^^^ `opt` is an `unsafe` field
    │
    = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
 
 error[8-0126]: initializing an `unsafe` field requires an `unsafe` block
-   ┌─ unsafe_fields.fe:77:22
-   │
-77 │         Shape::Run { start: 1, len: 2 }
-   │                      ^^^^^^^^ `start` is an `unsafe` field
-   │
-   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
+    ┌─ unsafe_fields.fe:110:22
+    │
+110 │         Shape::Run { start: 1, len: 2 }
+    │                      ^^^^^^^^ `start` is an `unsafe` field
+    │
+    = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
 
 error[8-0126]: writing an `unsafe` field requires an `unsafe` block
-   ┌─ unsafe_fields.fe:87:5
-   │
-87 │     b.len = 2
-   │     ^^^^^ `len` is an `unsafe` field
-   │
-   = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise
+    ┌─ unsafe_fields.fe:120:5
+    │
+120 │     b.len = 2
+    │     ^^^^^ `len` is an `unsafe` field
+    │
+    = its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise

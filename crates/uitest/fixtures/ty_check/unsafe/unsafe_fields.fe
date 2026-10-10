@@ -48,11 +48,44 @@ mod buf {
             let Buf { mut len, tag, .. } = self
             len = tag
         }
+
+        // Rejected: a `mut self` method on `len`, and a `with` provider
+        // through `len` that a `mut` effect writes. Accepted: a provider
+        // only read, and one written in an `unsafe` block.
+        pub fn poke(mut self) -> u256 {
+            self.len.bump()
+            with (self.len) { count() }
+            let n = with (self.cap) { peek() }
+            with (self.cap) {
+                unsafe { count() }
+            }
+            n
+        }
+    }
+
+    trait Bump {
+        fn bump(mut self)
+    }
+
+    impl Bump for u256 {
+        fn bump(mut self) {
+            self += 1
+        }
+    }
+
+    fn count() uses (x: mut u256) {
+        x += 1
+    }
+
+    fn peek() -> u256 uses (x: u256) {
+        x
     }
 
     impl Holder {
-        // Rejected: a loop and a match that open the fields mutably.
+        // Rejected: an element write, and a loop and a match that open the
+        // fields mutably.
         pub fn bump(mut self) {
+            self.items[0] = 0
             for mut x in self.items {
                 x += 1
             }

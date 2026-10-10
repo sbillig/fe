@@ -235,9 +235,10 @@ impl<'db> UnsafeChecker<'db, '_> {
     }
 
     /// Reports a call, method call or operator whose callee is an
-    /// `unsafe fn`. A trait method call resolves to the trait's declaration,
-    /// whose unsafety every implementation shares.
-    fn check_call_target(&mut self, expr: ExprId) {
+    /// `unsafe fn`, and a `with` provider through an `unsafe` field that one
+    /// of its `mut` effects writes. A trait method call resolves to the
+    /// trait's declaration, whose unsafety every implementation shares.
+    fn check_call(&mut self, expr: ExprId) {
         if let Some(callable) = self.typed_body.callable_expr(expr)
             && let callee @ CallableDef::Func(func) = callable.callable_def()
             && func.is_unsafe(self.db)
@@ -249,6 +250,14 @@ impl<'db> UnsafeChecker<'db, '_> {
                 }
                 .into(),
             );
+        }
+        let typed_body = self.typed_body;
+        for arg in typed_body.call_effect_args(expr).into_iter().flatten() {
+            if arg.required_mut
+                && let Some(source) = arg.with_source
+            {
+                self.check_place_write(source);
+            }
         }
     }
 
@@ -406,7 +415,7 @@ impl<'db> UnsafeChecker<'db, '_> {
                         self.report_deref(expr);
                     }
                 }
-                self.check_call_target(expr);
+                self.check_call(expr);
             }
 
             Expr::Field(inner, field) => {
@@ -423,12 +432,12 @@ impl<'db> UnsafeChecker<'db, '_> {
                 self.check_place_write(*lhs);
                 self.check_expr(*lhs);
                 self.check_expr(*rhs);
-                self.check_call_target(expr);
+                self.check_call(expr);
             }
             Expr::Bin(lhs, rhs, _) => {
                 self.check_expr(*lhs);
                 self.check_expr(*rhs);
-                self.check_call_target(expr);
+                self.check_call(expr);
             }
 
             Expr::Cast(inner, _) | Expr::ArrayRep(inner, _) | Expr::Try(inner) => {
@@ -438,7 +447,7 @@ impl<'db> UnsafeChecker<'db, '_> {
             Expr::Call(callee, args) => {
                 self.check_expr(*callee);
                 args.iter().for_each(|arg| self.check_expr(arg.expr));
-                self.check_call_target(expr);
+                self.check_call(expr);
             }
             Expr::MethodCall(receiver, _, _, args) => {
                 if self.takes_mut_receiver(expr) {
@@ -446,7 +455,7 @@ impl<'db> UnsafeChecker<'db, '_> {
                 }
                 self.check_expr(*receiver);
                 args.iter().for_each(|arg| self.check_expr(arg.expr));
-                self.check_call_target(expr);
+                self.check_call(expr);
             }
             Expr::Assert(args) => args.iter().for_each(|arg| self.check_expr(arg.expr)),
 
