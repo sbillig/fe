@@ -6,13 +6,13 @@ expression: report
 bytecode size
 path         fe-O2        sol     sol-IR   fe vs sol-IR
 -----------------------------------------------------------
-init          2537       4819       3082  -545 (-17.7%)
-runtime       2429       4445       2844  -415 (-14.6%)
+init          2404       4819       3082  -678 (-22.0%)
+runtime       2328       4445       2844  -516 (-18.1%)
 
 deployment gas
-path        fe-O2        sol     sol-IR    fe vs sol-IR
------------------------------------------------------------
-deploy    1281341    1738847    1379411  -98070 (-7.1%)
+path        fe-O2        sol     sol-IR     fe vs sol-IR
+------------------------------------------------------------
+deploy    1256894    1738847    1379411  -122517 (-8.9%)
 
 call gas
 path                            fe-O2        sol     sol-IR    fe vs sol-IR
@@ -20,15 +20,15 @@ path                            fe-O2        sol     sol-IR    fe vs sol-IR
 supportsInterface(erc165)       21600      21603      21600      +0 (+0.0%)
 supportsInterface(deposit)      21600      21641      21600      +0 (+0.0%)
 supportsInterface(unknown)      21600      21641      21600      +0 (+0.0%)
-get_deposit_root(empty)        104036     117558     109178   -5142 (-4.7%)
-get_deposit_count(empty)        23733      24510      24099    -366 (-1.5%)
-deposit#0                       79639      84626      81089   -1450 (-1.8%)
-get_deposit_root(after#0)      104037     117570     109174   -5137 (-4.7%)
-get_deposit_count(after#0)      23733      24510      24099    -366 (-1.5%)
-deposit#1                       65038      70411      66629   -1591 (-2.4%)
-get_deposit_root(after#1)      104037     117570     109174   -5137 (-4.7%)
-get_deposit_count(after#1)      23733      24510      24099    -366 (-1.5%)
-deposit#2                       45427      50414      46877   -1450 (-3.1%)
-get_deposit_root(after#2)      104038     117582     109170   -5132 (-4.7%)
-get_deposit_count(after#2)      23733      24510      24099    -366 (-1.5%)
-TOTAL                          765984     838656     792487  -26503 (-3.3%)
+get_deposit_root(empty)        102673     117558     109178   -6505 (-6.0%)
+get_deposit_count(empty)        23752      24510      24099    -347 (-1.4%)
+deposit#0                       79657      84626      81089   -1432 (-1.8%)
+get_deposit_root(after#0)      102674     117570     109174   -6500 (-6.0%)
+get_deposit_count(after#0)      23752      24510      24099    -347 (-1.4%)
+deposit#1                       65013      70411      66629   -1616 (-2.4%)
+get_deposit_root(after#1)      102674     117570     109174   -6500 (-6.0%)
+get_deposit_count(after#1)      23752      24510      24099    -347 (-1.4%)
+deposit#2                       45445      50414      46877   -1432 (-3.1%)
+get_deposit_root(after#2)      102675     117582     109170   -6495 (-5.9%)
+get_deposit_count(after#2)      23752      24510      24099    -347 (-1.4%)
+TOTAL                          760619     838656     792487  -31868 (-4.0%)
