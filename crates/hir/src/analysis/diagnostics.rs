@@ -2397,15 +2397,32 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::InvalidMutSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
+            Self::MixedMutSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "invalid mixed receiver syntax".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "`mut self: ...` is only allowed as `mut self: own X` where `X` is not bare `Self`".to_string(),
+                    message: "`mut self: ...` cannot be used with an explicit `self` type"
+                        .to_string(),
                     span: span.resolve(db),
                 }],
-                notes: vec!["for a mutable owned receiver, use shorthand receiver syntax: `mut own self`".to_string()],
+                notes: vec![
+                    "use shorthand receiver syntax instead: `mut self`".to_string(),
+                    "or move the mode into the type and remove the prefix: `self: mut ...`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::InvalidVarSelfWithExplicitType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mixed receiver syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`var self: own Self` is written with the shorthand".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec!["use shorthand receiver syntax instead: `var own self`".to_string()],
                 error_code,
             },
 

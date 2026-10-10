@@ -170,7 +170,11 @@ pub enum TyLowerDiag<'db> {
     MixedOwnSelfPrefixWithExplicitType {
         span: DynLazySpan<'db>,
     },
-    InvalidMutSelfPrefixWithExplicitType {
+    MixedMutSelfPrefixWithExplicitType {
+        span: DynLazySpan<'db>,
+    },
+    /// `var self: own Self`, which the shorthand `var own self` writes.
+    InvalidVarSelfWithExplicitType {
         span: DynLazySpan<'db>,
     },
 
@@ -331,7 +335,8 @@ impl TyLowerDiag<'_> {
             Self::TypeLoweringCycle(_) => 38,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
-            Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,
+            Self::InvalidVarSelfWithExplicitType { .. } => 30,
+            Self::MixedMutSelfPrefixWithExplicitType { .. } => 68,
             Self::TooManyGenericArgs { .. } => 16,
             Self::StringTooLarge { .. } => 33,
             Self::DuplicateFieldName(..) => 17,

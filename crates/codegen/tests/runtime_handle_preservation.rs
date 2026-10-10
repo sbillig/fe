@@ -822,7 +822,7 @@ fn read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted() {
 }
 
 impl Pair {
-    fn sum(mut own self) -> u256 {
+    fn sum(var own self) -> u256 {
         self.left + self.right
     }
 }
@@ -962,7 +962,7 @@ fn mutating_mut_own_aggregate_receiver_stays_rooted() {
 }
 
 impl Pair {
-    fn bump(mut own self) -> Pair {
+    fn bump(var own self) -> Pair {
         self.left += 1
         self
     }

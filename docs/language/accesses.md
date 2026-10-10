@@ -70,7 +70,8 @@ fn take(_ x: mut Option<MemBuffer>) -> Option<MemBuffer> {
 A value reached through a view or a `ref` access, or in storage, cannot
 move; bind it `ref` to read it in place.
 
-An owned parameter is immutable unless declared `var x: own T`. An access
+An owned parameter is immutable unless declared `var x: own T`, and an owned
+receiver unless declared `var own self`. An access
 cannot be stored in a field, in storage, passed as `own` or returned from an
 ordinary function. `ref` and `mut` do not appear in types.
 

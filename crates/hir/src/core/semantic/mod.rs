@@ -1095,9 +1095,17 @@ impl<'db> FuncParamView<'db> {
                 ];
             }
 
-            if param.is_mut && !allows_mut_self_prefix_with_explicit_ty(db, hir_ty) {
+            // `mut self: own T`, which the parser reports, is taken as `var`.
+            let is_own = matches!(hir_ty.data(db), TypeKind::Mode(TypeMode::Own, _));
+            if param.has_mut_prefix && !is_own {
                 let span = self.span().mut_kw().into();
-                return vec![TyLowerDiag::InvalidMutSelfPrefixWithExplicitType { span }.into()];
+                return vec![TyLowerDiag::MixedMutSelfPrefixWithExplicitType { span }.into()];
+            }
+
+            if !param.has_mut_prefix && param.is_mut && is_own && !names_self_with_args(db, hir_ty)
+            {
+                let span = self.span().var_kw().into();
+                return vec![TyLowerDiag::InvalidVarSelfWithExplicitType { span }.into()];
             }
 
             if matches!(hir_ty.data(db), TypeKind::Mode(TypeMode::Ref, _)) {
@@ -1106,7 +1114,7 @@ impl<'db> FuncParamView<'db> {
             }
         }
 
-        if !self.is_self_param(db)
+        if !param.has_mut_prefix
             && param.is_mut
             && !matches!(hir_ty.data(db), TypeKind::Mode(TypeMode::Own, _))
         {
@@ -1199,7 +1207,9 @@ impl<'db> FuncParamView<'db> {
     }
 }
 
-fn allows_mut_self_prefix_with_explicit_ty<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
+/// Whether the owned receiver type `hir_ty` names more than bare `Self`, which
+/// only the typed form can spell.
+fn names_self_with_args<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
     if let TypeKind::Mode(TypeMode::Own, inner) = hir_ty.data(db)
         && let Some(inner) = inner.to_opt()
     {
