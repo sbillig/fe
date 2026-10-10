@@ -3856,6 +3856,28 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::UnsafeFieldRequiresUnsafe {
+                primary,
+                name,
+                write,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "{} an `unsafe` field requires an `unsafe` block",
+                    if *write { "writing" } else { "initializing" }
+                ),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`{}` is an `unsafe` field", name.data(db)),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "its type's safe methods trust its value; in an `unsafe` block, the code vouches that the new value keeps that promise"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::VarOfNoValue { primary, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: format!("`{}` has no value for `var` to hold", ty.pretty_print(db)),

@@ -5327,6 +5327,12 @@ impl<'db> FieldView<'db> {
         list.data(db)[self.idx].name.to_opt()
     }
 
+    /// Whether this is an `unsafe` field, whose value its type's safe
+    /// methods trust.
+    pub fn is_unsafe(self, db: &'db dyn HirDb) -> bool {
+        self.parent.fields_list(db).data(db)[self.idx].is_unsafe
+    }
+
     /// The argument of a contract field's `#[slot(e)]`.
     pub fn slot(self, db: &'db dyn HirDb) -> Option<Body<'db>> {
         self.parent.fields_list(db).data(db)[self.idx].slot

@@ -198,6 +198,40 @@ two spans cannot exchange the owners they point into. A projection that
 yields a `mut` view must hold something mutably, a `mut` parameter or
 effect.
 
+## Unsafe fields
+
+A field marked `unsafe` holds a value its type's safe methods trust, such as
+an owner's pointer and length:
+
+```fe
+pub struct MemBuffer {
+    unsafe ptr: *u8,
+    unsafe len: u256,
+    unsafe capacity: u256,
+}
+```
+
+Initializing or writing an `unsafe` field takes an `unsafe` block or an
+`unsafe fn` body: a literal that sets it, an assignment to it, or a `mut`
+access to it, whether written `mut buf.len`, taken by a `mut self` method,
+bound `mut` in a pattern, or opened by a `for mut` loop or a match. Reading
+one is safe, so an `unsafe` field may be `pub`: readable anywhere, writable
+only in `unsafe` code. Moving or assigning a whole value is safe, since each
+value carries its own invariant. The block is where the code vouches that the
+new value keeps the type's promise:
+
+```fe
+pub fn truncate(mut self, _ len: u256) {
+    if len > self.len {
+        index_out_of_bounds()
+    }
+    // Shrinking keeps every byte of the extent initialized.
+    unsafe { self.len = len }
+}
+```
+
+Only struct and enum variant fields can be `unsafe`.
+
 ## Indexing
 
 `c[k]` has one syntax and two kinds of implementation. Indexing a fixed array

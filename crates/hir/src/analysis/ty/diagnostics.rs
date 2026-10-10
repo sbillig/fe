@@ -1037,6 +1037,13 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         callee: CallableDef<'db>,
     },
+    /// Initializing (`write` false) or writing an `unsafe` field outside an
+    /// unsafe context.
+    UnsafeFieldRequiresUnsafe {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        write: bool,
+    },
     UnsafeProviderRequiresUnsafe {
         primary: DynLazySpan<'db>,
     },
@@ -1238,6 +1245,7 @@ impl<'db> BodyDiag<'db> {
             Self::MutBindingOfRead { .. } => 123,
             Self::InitializerMarker { .. } => 124,
             Self::VarOfNoValue { .. } => 125,
+            Self::UnsafeFieldRequiresUnsafe { .. } => 126,
             Self::ContractFieldNotInUses { .. } => 116,
             Self::AccessChoiceNeedsProjection { .. } => 117,
             Self::ArrayRepeatRequiresCopy { .. } => 71,

@@ -245,6 +245,7 @@ module.exports = grammar({
 
     record_field_def: $ => seq(
       optional($.visibility),
+      optional('unsafe'),
       optional('mut'),
       field('name', $.identifier),
       ':',

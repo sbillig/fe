@@ -32,8 +32,8 @@ extern {
 
 /// A dynamically sized array in linear memory.
 pub struct MemArray<T> {
-    ptr: *T,
-    len: u256,
+    unsafe ptr: *T,
+    unsafe len: u256,
 }
 
 /// A view over typed values in linear memory.
@@ -45,8 +45,8 @@ pub struct MemArray<T> {
 /// that the entire range is valid linear memory for that session.
 #[view]
 pub struct MemSlice<T> {
-    ptr: *T,
-    len: u256,
+    unsafe ptr: *T,
+    unsafe len: u256,
 }
 
 /// A byte view over linear memory.
@@ -57,9 +57,9 @@ pub type MemSpan = MemSlice<u8>
 /// `len` is the logical extent and `capacity` is the full writable allocation.
 /// Neither can exceed the original allocation.
 pub struct MemBuffer {
-    ptr: *u8,
-    len: u256,
-    capacity: u256,
+    unsafe ptr: *u8,
+    unsafe len: u256,
+    unsafe capacity: u256,
 }
 
 /// A fixed-size owned allocation in linear memory.
@@ -67,7 +67,7 @@ pub struct MemBuffer {
 /// Keeping the size in the type lets the backend see constant, nonescaping
 /// allocations and place them in its transient static arena.
 pub struct FixedMemBuffer<const N: usize> {
-    ptr: *u8,
+    unsafe ptr: *u8,
 }
 
 impl<T> Copy for *T {}
@@ -109,9 +109,12 @@ impl<T> MemArray<T> {
     }
 
     pub fn into_bytes(own self) -> MemArray<u8> {
-        MemArray {
-            ptr: cast<T, u8>(self.ptr),
-            len: self.byte_len(),
+        // The same allocation, counted in bytes.
+        unsafe {
+            MemArray {
+                ptr: cast<T, u8>(self.ptr),
+                len: self.byte_len(),
+            }
         }
     }
 
@@ -129,10 +132,13 @@ impl<T> MemArray<T> {
 
     pub fn into_buffer(own self) -> MemBuffer {
         let len = self.byte_len()
-        MemBuffer {
-            ptr: cast<T, u8>(self.ptr),
-            len,
-            capacity: len,
+        // The array's initialized bytes fill its allocation.
+        unsafe {
+            MemBuffer {
+                ptr: cast<T, u8>(self.ptr),
+                len,
+                capacity: len,
+            }
         }
     }
 
@@ -288,10 +294,13 @@ impl<T> MemSlice<T> {
         if mid > self.len {
             index_out_of_bounds()
         }
-        let head = Self { ptr: self.ptr, len: mid }
-        let tail = Self {
-            ptr: offset_bytes(self.ptr, mid * size_of<T>()),
-            len: self.len - mid,
+        // Both halves lie within this slice's range.
+        let head = unsafe { Self { ptr: self.ptr, len: mid } }
+        let tail = unsafe {
+            Self {
+                ptr: offset_bytes(self.ptr, mid * size_of<T>()),
+                len: self.len - mid,
+            }
         }
         (ref head, ref tail)
     }
@@ -310,10 +319,14 @@ impl<T> MemSlice<T> {
         if mid > self.len {
             return Option::None
         }
-        var head = Self { ptr: self.ptr, len: mid }
-        var tail = Self {
-            ptr: offset_bytes(self.ptr, mid * size_of<T>()),
-            len: self.len - mid,
+        // Both halves lie within this slice's range and do not overlap, so
+        // their `mut` grants are disjoint.
+        var head = unsafe { Self { ptr: self.ptr, len: mid } }
+        var tail = unsafe {
+            Self {
+                ptr: offset_bytes(self.ptr, mid * size_of<T>()),
+                len: self.len - mid,
+            }
         }
         Option::Some((mut head, mut tail))
     }
@@ -357,10 +370,13 @@ impl MemBuffer {
     }
 
     pub fn with_capacity(_ capacity: u256) -> Self {
-        Self {
-            ptr: alloc_raw(capacity),
-            len: 0,
-            capacity,
+        // A fresh allocation of `capacity` bytes, none yet in the extent.
+        unsafe {
+            Self {
+                ptr: alloc_raw(capacity),
+                len: 0,
+                capacity,
+            }
         }
     }
 
@@ -438,16 +454,22 @@ impl MemBuffer {
         }
 
         let replacement = alloc_raw(capacity)
-        unsafe { copy(dest: replacement, source: self.span()) }
-        self.ptr = replacement
-        self.capacity = capacity
+        // The replacement holds every initialized byte, in `capacity` bytes.
+        unsafe {
+            copy(dest: replacement, source: self.span())
+            self.ptr = replacement
+            self.capacity = capacity
+        }
     }
 
     /// Append bytes, growing the allocation when necessary.
     pub fn extend_from(mut self, _ source: MemSpan) {
         self.reserve(source.len())
-        unsafe { copy(dest: offset_bytes(self.ptr, self.len), source) }
-        self.len += source.len()
+        // `reserve` made room, and the copy initializes the added bytes.
+        unsafe {
+            copy(dest: offset_bytes(self.ptr, self.len), source)
+            self.len += source.len()
+        }
     }
 
     /// Copy bytes into an allocation subrange and extend the logical extent.
@@ -469,7 +491,8 @@ impl MemBuffer {
         }
         let end = dest_offset + source.len()
         if end > self.len {
-            self.len = end
+            // Every byte up to `end` was zeroed or copied, within the capacity.
+            unsafe { self.len = end }
         }
     }
 
@@ -487,7 +510,8 @@ impl MemBuffer {
         if len > self.len {
             index_out_of_bounds()
         }
-        self.len = len
+        // Shrinking keeps every byte of the extent initialized.
+        unsafe { self.len = len }
     }
 
     pub fn is_empty(self) -> bool {
@@ -535,10 +559,13 @@ impl<const N: usize> FixedMemBuffer<N> {
     }
 
     pub fn into_buffer(own self) -> MemBuffer {
-        MemBuffer {
-            ptr: self.ptr,
-            len: N as u256,
-            capacity: N as u256,
+        // The fixed allocation holds `N` initialized bytes.
+        unsafe {
+            MemBuffer {
+                ptr: self.ptr,
+                len: N as u256,
+                capacity: N as u256,
+            }
         }
     }
 }
