@@ -168,7 +168,7 @@ raw-slot collections, whose `at` constructors are raw places, are held at
 once this way, and `MemArray::pair_mut` is one inside a library function:
 
 ```fe
-let (a, b) = unsafe { (SolArray<u256>::at(x), SolArray<u256>::at(y)) }
+let (mut a, mut b) = unsafe { (SolArray<u256>::at(x), SolArray<u256>::at(y)) }
 a.push(1)                           // all storage stays reserved until both end
 b.push(2)
 ```
@@ -176,10 +176,27 @@ b.push(2)
 ## Views
 
 A type marked `#[view]`, such as `MemSlice`, describes memory its owner
-holds. It is only ever seen through a view: no `mut` binding, parameter or
-result, no `own` parameter or owned result, no `Copy`, and no field of that
-type. A span such as `buffer.span()` is a `ref` projection, so it keeps the
-buffer reserved until its last use.
+holds. It has no value: no `own` parameter or owned result, no `Copy`, no
+field of that type, and nothing for `var` to hold; a plain binding of one is
+its read access. A span such as `buffer.span()` is a `ref` projection, so it
+keeps the buffer reserved until its last use.
+
+A view may also be accessed mutably. `buffer.span_mut()` holds the buffer
+mutably until the span's last use, and writes through the span reach the
+buffer:
+
+```fe
+let s = buffer.span_mut()
+s[0] = 10
+let (mut head, mut tail) = s.split_at_mut(4)
+for mut b in tail { b = 0 }
+```
+
+A view never leaves a hole: a move out of a `mut` access of one is rejected,
+including inside generic code such as a `swap<T>` called with two spans, so
+two spans cannot exchange the owners they point into. A projection that
+yields a `mut` view must hold something mutably, a `mut` parameter or
+effect.
 
 ## Indexing
 

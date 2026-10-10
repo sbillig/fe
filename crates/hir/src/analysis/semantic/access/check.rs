@@ -930,7 +930,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             reservations.push(id);
         }
         let mut held = Held::new();
-        for (component, (path, mode)) in access_components(shape).into_iter().enumerate() {
+        for (component, (path, mode, _)) in access_components(shape).into_iter().enumerate() {
             let mut grant = self.new_token(TokenKind::Grant, mode, origin);
             grant.regions.push(AbsPlace::new(Base::Grant {
                 session: result,
@@ -1398,7 +1398,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
     }
 
     /// `mut` yields of session-owned places with no slide after them: writes
-    /// through them are discarded when the session finishes.
+    /// through them are discarded when the session finishes. A view
+    /// descriptor is exempt, since its writes reach its owner.
     fn discarded_writes(&self) -> Vec<Diag<'db>> {
         let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
             return Vec::new();
@@ -1418,9 +1419,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
             })
             .filter(|(value, _)| {
                 let held = &self.values[value.value.index()];
-                components.iter().any(|(path, kind)| {
+                components.iter().any(|(path, kind, ty)| {
                     let mut tokens = held.iter().filter(|(_, rest)| rest == path).peekable();
                     *kind == BorrowKind::Mut
+                        && !ty.is_view(self.db)
                         && tokens.peek().is_some()
                         && tokens.all(|(token, _)| {
                             self.tokens[*token as usize]
@@ -1752,6 +1754,18 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         SemanticDiagnosticKind::MoveConflict,
                         origin,
                         "cannot move out of an element at a dynamic index".into(),
+                    ));
+                }
+                // A view's descriptor stays tied to the session that
+                // reserves its owner, so it never leaves a hole.
+                if place.ty.is_view(self.db) {
+                    return Err(self.diag(
+                        SemanticDiagnosticKind::MoveConflict,
+                        origin,
+                        format!(
+                            "cannot move out of `{}`, a `#[view]` value, which never leaves a hole",
+                            place.ty.pretty_print(self.db)
+                        ),
                     ));
                 }
                 if let Some(
@@ -2116,7 +2130,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             return Ok(());
         };
         let held = &self.values[value.value.index()];
-        for (path, mode) in access_components(shape) {
+        for (path, mode, _) in access_components(shape) {
             let own: TokenSet = held
                 .iter()
                 .filter(|(_, rest)| *rest == path)
@@ -2158,7 +2172,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             let held = &self.values[value.value.index()];
             let regions: Vec<Vec<AbsPlace>> = components
                 .iter()
-                .map(|(path, _)| {
+                .map(|(path, _, _)| {
                     held.iter()
                         .filter(|(_, rest)| rest == path)
                         .flat_map(|(token, _)| self.tokens[*token as usize].regions.clone())
@@ -2266,12 +2280,17 @@ fn reaches_owner<'db>(
     reaches
 }
 
-/// The access components of a shape, by their path in its carrier.
-fn access_components(shape: &Shape<'_>) -> Vec<(Path, BorrowKind)> {
-    fn walk(shape: &Shape<'_>, path: &mut Path, out: &mut Vec<(Path, BorrowKind)>) {
+/// The access components of a shape, by their path in its carrier, with
+/// their mode and type.
+fn access_components<'db>(shape: &Shape<'db>) -> Vec<(Path, BorrowKind, TyId<'db>)> {
+    fn walk<'db>(
+        shape: &Shape<'db>,
+        path: &mut Path,
+        out: &mut Vec<(Path, BorrowKind, TyId<'db>)>,
+    ) {
         match shape {
             Shape::Owned(_) => {}
-            Shape::Access(kind, _) => out.push((path.clone(), *kind)),
+            Shape::Access(kind, ty) => out.push((path.clone(), *kind, *ty)),
             Shape::Tuple(elems) => {
                 for (field, elem) in elems.iter().enumerate() {
                     path.push(Step::Field(field as u16));

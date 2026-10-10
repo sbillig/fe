@@ -702,6 +702,13 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// `var x` binding a type with no value reading (`#[view]` or
+    /// state-only), which has no value to hold.
+    VarOfNoValue {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
     /// `ref p` or `mut p` as the scrutinee or initializer of a pattern with
     /// components, or as a loop's base: the marker belongs on the plain
     /// `names` the pattern binds. `marker` is `true` for `mut`.
@@ -1230,6 +1237,7 @@ impl<'db> BodyDiag<'db> {
             Self::VarOfAccess { .. } => 122,
             Self::MutBindingOfRead { .. } => 123,
             Self::InitializerMarker { .. } => 124,
+            Self::VarOfNoValue { .. } => 125,
             Self::ContractFieldNotInUses { .. } => 116,
             Self::AccessChoiceNeedsProjection { .. } => 117,
             Self::ArrayRepeatRequiresCopy { .. } => 71,

@@ -405,8 +405,6 @@ impl<'db> TyChecker<'db> {
         if !prop.is_mut {
             self.report_cannot_borrow_mut(base, mut_pat.span(self.body()).into());
         }
-        let ty = prop.ty.fold_with(self.db, &mut self.table);
-        self.check_view_mut_access(ty, base.span(self.body()).into());
         self.consume_access(base);
         let prop = ExprProp {
             is_mut: true,

@@ -264,6 +264,13 @@ impl<T> Collection for MemSlice<T> {
     }
 }
 
+impl<T> CollectionMut for MemSlice<T> {
+    #[inline(always)]
+    fn at_mut(mut self, _ c: usize) -> mut T {
+        mut self[c]
+    }
+}
+
 impl<T> Bidirectional for MemSlice<T> {
     #[inline(always)]
     fn last(self) -> Option<usize> {

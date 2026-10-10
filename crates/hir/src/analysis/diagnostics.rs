@@ -3856,6 +3856,22 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::VarOfNoValue { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!("`{}` has no value for `var` to hold", ty.pretty_print(db)),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`var` binds a value, and a `#[view]` or state-only type has none"
+                        .to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "bind it with `let` for its access, or `let x = mut …` to write through it"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::InitializerMarker {
                 primary,
                 marker,

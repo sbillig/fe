@@ -3053,17 +3053,6 @@ impl<'db> TyChecker<'db> {
         prop
     }
 
-    /// A `#[view]` type is never accessed by `mut`.
-    pub(super) fn check_view_mut_access(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) {
-        if ty.is_view(self.db) {
-            self.push_diag(TyDiagCollection::from(TyLowerDiag::ViewTypeMode {
-                span,
-                ty,
-                mode: "accessed by `mut`",
-            }));
-        }
-    }
-
     /// The first binding in `pat` marked `marker`.
     pub(super) fn first_marked_binding(&self, pat: PatId, marker: BindingMarker) -> Option<PatId> {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
@@ -3294,9 +3283,6 @@ impl<'db> TyChecker<'db> {
                     }
                     return;
                 };
-                if access == BorrowKind::Mut {
-                    self.check_view_mut_access(ty, pat.span(self.body()).into());
-                }
                 self.env.set_pat_binding_mode(
                     pat,
                     PatBindingMode::Access {
@@ -3345,6 +3331,13 @@ impl<'db> TyChecker<'db> {
         let primary = || pat.span(self.body()).into();
         match (binding, marker) {
             (_, BindingMarker::Ref) => Some(BorrowKind::Ref),
+            (_, BindingMarker::Var) if !ty.has_value_reading(self.db) => {
+                self.push_diag(BodyDiag::VarOfNoValue {
+                    primary: primary(),
+                    ty,
+                });
+                Some(BorrowKind::Ref)
+            }
             (AccessBinding::Place, BindingMarker::Mut) => Some(BorrowKind::Mut),
             (AccessBinding::Place, BindingMarker::Plain) if !ty.has_value_reading(self.db) => {
                 Some(BorrowKind::Ref)
