@@ -13,9 +13,17 @@ error[8-0018]: left-hand side of assignment is immutable
    │             ^^^^^^^^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
-   ┌─ state_only_bindings.fe:51:5
+   ┌─ state_only_bindings.fe:59:5
    │
-50 │     let (_, map) = ledger.tagged()
+58 │     let (_, map) = ledger.tagged()
    │             --- `map` is a read access; bind it with `mut` to write through it
-51 │     map[key] = 1
+59 │     map[key] = 1
    │     ^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ state_only_bindings.fe:71:9
+   │
+70 │     if let Option::Some(map) = ledger.maybe(true) {
+   │                         --- `map` is a read access; bind it with `mut` to write through it
+71 │         map[key] = 1
+   │         ^^^^^^^^ immutable assignment

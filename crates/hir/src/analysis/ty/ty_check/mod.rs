@@ -6421,7 +6421,8 @@ impl<'db> TyCheckerFinalizer<'db> {
 
     /// A call constructing a state-only value, or instantiating its callee
     /// so that a state-only value would pass through an `own` parameter or
-    /// an owned return.
+    /// an owned return. A variant constructor at a projection's yield site
+    /// builds the sum shape it yields, not a value.
     fn check_state_only_call(
         &mut self,
         callable: &Callable<'db>,
@@ -6430,6 +6431,9 @@ impl<'db> TyCheckerFinalizer<'db> {
     ) {
         let db = self.db;
         if let CallableDef::VariantCtor(_) = callable.callable_def {
+            if matches!(self.body.yield_shape(expr), Some(Shape::Sum { .. })) {
+                return;
+            }
             let ty = self.body.expr_prop(db, expr).ty;
             return self.check_state_only_value(ty, span, "constructed as a value");
         }

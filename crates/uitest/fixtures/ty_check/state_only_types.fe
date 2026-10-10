@@ -63,5 +63,8 @@ pub contract C {
         identity(ledger.balances)
         // Rejected: a memory literal of a storage-only type.
         total(Ledger { balances: ledger.balances, total: 0 })
+        // Rejected: an `Option` holding a map is a value outside a
+        // projection's yield site.
+        let wrapped = Option::Some(ledger.balances)
     }
 }

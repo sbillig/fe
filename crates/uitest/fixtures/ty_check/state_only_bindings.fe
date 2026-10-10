@@ -43,6 +43,14 @@ impl Ledger {
     fn tagged(mut self) -> (u256, mut StorageMap<u256, u256>) {
         (0, mut self.balances)
     }
+
+    fn maybe(mut self, _ on: bool) -> Option<mut StorageMap<u256, u256>> {
+        if on {
+            Option::Some(mut self.balances)
+        } else {
+            Option::None
+        }
+    }
 }
 
 // S-68. Rejected: a plain component of a `mut` grant is still a read access.
@@ -55,4 +63,11 @@ fn plain_grant_component(_ ledger: mut Ledger, _ key: u256) {
 fn marked_grant_component(_ ledger: mut Ledger, _ key: u256) {
     let (_, mut map) = ledger.tagged()
     map[key] = 1
+}
+
+// S-68. Rejected: the same for a sum shape's payload.
+fn plain_sum_component(_ ledger: mut Ledger, _ key: u256) {
+    if let Option::Some(map) = ledger.maybe(true) {
+        map[key] = 1
+    }
 }

@@ -58,6 +58,24 @@ error[3-0061]: `Ledger` is state-only
    = `Ledger` holds `StorageMap<u256, u256>`, which is pinned to storage
    = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
+error[3-0061]: `Option<StorageMap<u256, u256>>` is state-only
+   ┌─ state_only_types.fe:68:13
+   │
+68 │         let wrapped = Option::Some(ledger.balances)
+   │             ^^^^^^^ a state-only type cannot be bound by value
+   │
+   = `Option<StorageMap<u256, u256>>` holds `StorageMap<u256, u256>`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[3-0061]: `Option<StorageMap<u256, u256>>` is state-only
+   ┌─ state_only_types.fe:68:23
+   │
+68 │         let wrapped = Option::Some(ledger.balances)
+   │                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `Option<StorageMap<u256, u256>>` holds `StorageMap<u256, u256>`, which is pinned to storage
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ state_only_types.fe:55:9
    │
