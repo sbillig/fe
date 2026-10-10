@@ -59,7 +59,9 @@ go on the names only: `match ref x`, `if let Some(v) = mut o` and
 it, or make plain names write through.
 
 A plain name takes its value as `let x = e` does: a copy of a `Copy` value,
-and otherwise a move where one is possible. A move out of an owned place
+and otherwise a move where one is possible. A pattern on a place moves only
+what its names take, so `match s.status { Status::A => …, _ => … }` leaves
+`s.status` whole however often it is matched. A move out of an owned place
 leaves it partially moved; a move through a `mut` access leaves a hole that
 must be restored through that access before it closes:
 
@@ -71,8 +73,10 @@ fn take(_ x: mut Option<MemBuffer>) -> Option<MemBuffer> {
 }
 ```
 
-A value reached through a view or a `ref` access, or in storage, cannot
-move; bind it `ref` to read it in place.
+A value reached through a view or a `ref` access, through an effect, or in
+storage, cannot move; bind it `ref` to read it in place. An effect lends its
+place: a non-`Copy` value under it is read in place or passed on to a callee's
+effects, never taken.
 
 An owned parameter is immutable unless declared `var x: own T`, and an owned
 receiver unless declared `var own self`. An access

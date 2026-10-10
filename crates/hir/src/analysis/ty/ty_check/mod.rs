@@ -1283,6 +1283,7 @@ fn typed_body_for_bodyless_func<'db>(
         place_entries: FxHashSet::default(),
         unsafe_splits: FxHashSet::default(),
         matched_places: FxHashSet::default(),
+        inspected_places: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
@@ -2997,9 +2998,11 @@ impl<'db> TyChecker<'db> {
     /// A pattern matched against a place binds its components there: a `mut`
     /// binding opens a `mut` access on its component's path and a `ref`
     /// binding a read access, and the other bindings take their component's
-    /// value, or a read access to a component with no value reading. Index
-    /// syntax `t[i]` selects `index_mut` for a `mut` binding and is
-    /// destructured as that projection's result.
+    /// value, or a read access to a component with no value reading. A
+    /// non-`Copy` place is matched there even without markers, so a pattern
+    /// moves only what its names bind; its tests read the place's value
+    /// (`is_inspected_place`). Index syntax `t[i]` selects `index_mut` for a
+    /// `mut` binding and is destructured as that projection's result.
     fn open_matched_place(
         &mut self,
         scrutinee: ExprId,
@@ -3015,11 +3018,11 @@ impl<'db> TyChecker<'db> {
                 .find_map(|pat| this.first_marked_binding(*pat, marker))
         };
         let mut_pat = marked(self, BindingMarker::Mut);
-        let read_in_place = !prop
-            .ty
-            .fold_with(self.db, &mut self.table)
-            .has_value_reading(self.db);
-        if (mut_pat.is_none() && !read_in_place && marked(self, BindingMarker::Ref).is_none())
+        let ty = prop.ty.fold_with(self.db, &mut self.table);
+        let inspected = mut_pat.is_none()
+            && marked(self, BindingMarker::Ref).is_none()
+            && ty.has_value_reading(self.db);
+        if inspected && (ty.has_invalid(self.db) || self.ty_is_copy(ty))
             || !self.env.is_place_expr(scrutinee)
         {
             return prop;
@@ -3049,7 +3052,8 @@ impl<'db> TyChecker<'db> {
             shape: Some(Shape::Access(kind, prop.ty)),
             ..prop
         };
-        self.env.open_matched_place(scrutinee, prop.clone());
+        self.env
+            .open_matched_place(scrutinee, prop.clone(), inspected);
         prop
     }
 
@@ -3853,9 +3857,11 @@ mod typed_body_tables {
         /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
         /// of accesses, granted by one session.
         pub(super) unsafe_splits: FxHashSet<ExprId>,
-        /// The places a pattern with `ref` or `mut` bindings is matched
-        /// against, which bind each component where it lies.
+        /// The places a pattern is matched against, which bind each
+        /// component where it lies.
         pub(super) matched_places: FxHashSet<ExprId>,
+        /// The matched places whose patterns have no `ref` or `mut` binding.
+        pub(super) inspected_places: FxHashSet<ExprId>,
         /// `with` values whose resources the function's own authority covers.
         pub(super) covered_providers: FxHashSet<ExprId>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
@@ -4517,10 +4523,16 @@ impl<'db> TypedBody<'db> {
         self.tables.place_entries.contains(&expr)
     }
 
-    /// Whether `expr` is a place a pattern with `ref` or `mut` bindings is
-    /// matched against: its bindings take their components where they lie.
+    /// Whether `expr` is a place a pattern is matched against: its bindings
+    /// take their components where they lie.
     pub fn is_matched_place(&self, expr: ExprId) -> bool {
         self.tables.matched_places.contains(&expr)
+    }
+
+    /// Whether the matched place `expr` has no `ref` or `mut` binding, so
+    /// its tests read its value rather than open an access to it.
+    pub fn is_inspected_place(&self, expr: ExprId) -> bool {
+        self.tables.inspected_places.contains(&expr)
     }
 
     /// Whether the tuple `expr` is an unsafe split: one session granting
@@ -5884,6 +5896,7 @@ impl<'db> TypedBody<'db> {
             place_entries: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             matched_places: FxHashSet::default(),
+            inspected_places: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),

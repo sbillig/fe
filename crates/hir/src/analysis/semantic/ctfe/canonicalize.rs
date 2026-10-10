@@ -267,7 +267,9 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
                         | SExpr::Cast { value, .. }
                         | SExpr::ArrayRepeat { value, .. }
                         | SExpr::ExtractEnumField { value, .. } => vec![value.value],
-                        SExpr::ReadPlace { place } => vec![place.local],
+                        SExpr::ReadPlace { place } | SExpr::InspectPlace { place } => {
+                            vec![place.local]
+                        }
                         SExpr::Field { base, .. } | SExpr::Index { base, .. } => vec![base.value],
                         SExpr::AggregateMake { fields, .. } | SExpr::EnumMake { fields, .. } => {
                             fields.iter().map(|field| field.value).collect()

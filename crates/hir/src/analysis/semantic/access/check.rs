@@ -1728,6 +1728,22 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NPlaceBase::Root(_) => None,
             NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
         };
+        if kind == MemoryAccessKind::Move
+            && let Some(space @ (ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)) =
+                resolved
+                    .regions
+                    .iter()
+                    .find_map(|region| self.region_space(region))
+        {
+            return Err(self.diag(
+                SemanticDiagnosticKind::MoveConflict,
+                origin,
+                format!(
+                    "cannot move out of {}, which never holds a hole",
+                    space.pretty()
+                ),
+            ));
+        }
         if let Some(key) = key {
             let found = state.moved.iter().find(|(moved, moved_path)| {
                 *moved == key
@@ -1765,22 +1781,6 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         format!(
                             "cannot move out of `{}`, a `#[view]` value, which never leaves a hole",
                             place.ty.pretty_print(self.db)
-                        ),
-                    ));
-                }
-                if let Some(
-                    space @ (ProviderAddressSpace::Storage | ProviderAddressSpace::Transient),
-                ) = resolved
-                    .regions
-                    .iter()
-                    .find_map(|region| self.region_space(region))
-                {
-                    return Err(self.diag(
-                        SemanticDiagnosticKind::MoveConflict,
-                        origin,
-                        format!(
-                            "cannot move out of {}, which never holds a hole",
-                            space.pretty()
                         ),
                     ));
                 }
@@ -1823,10 +1823,15 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .iter()
                 .any(|region| region.base != Base::Raw)
         {
+            let fix = if self.binds_by_value(origin) {
+                "; bind it with `ref` to read it in place"
+            } else {
+                ""
+            };
             return Err(self.diag(
                 SemanticDiagnosticKind::MoveConflict,
                 origin,
-                "cannot move out of a place reached through an access".into(),
+                format!("cannot move out of a place reached through an access{fix}"),
             ));
         }
         if writes {

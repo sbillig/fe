@@ -213,20 +213,24 @@ impl<'db> TyChecker<'db> {
         TyId::unit(self.db)
     }
 
-    /// What a `let` of the place `expr` binds through: its components, for
-    /// `ref` and `mut` bindings, or a read access for a lone binding of a
-    /// type with no value reading (`#[view]` or state-only). Otherwise its
-    /// bindings take the place's value.
+    /// What a `let` of the place `expr` binds through: a lone name takes the
+    /// place's value, or a read access to a type with no value reading
+    /// (`#[view]` or state-only); a pattern binds the place's components.
     fn open_let_place(&mut self, pat: PatId, expr: ExprId, prop: ExprProp<'db>) -> ExprProp<'db> {
-        let reborrows = matches!(
-            pat.data(self.db, self.body()),
-            Partial::Present(Pat::Path(_, BindingMarker::Plain))
-        ) && matches!(self.env.pat_binding(pat), Some(LocalBinding::Local { .. }))
-            && !prop
-                .ty
-                .fold_with(self.db, &mut self.table)
-                .has_value_reading(self.db);
-        if !reborrows {
+        let Partial::Present(Pat::Path(_, marker)) = pat.data(self.db, self.body()) else {
+            return self.open_matched_place(expr, prop, [pat]);
+        };
+        let lone_name = matches!(marker, BindingMarker::Plain | BindingMarker::Var)
+            && matches!(self.env.pat_binding(pat), Some(LocalBinding::Local { .. }));
+        let reads_value = prop
+            .ty
+            .fold_with(self.db, &mut self.table)
+            .has_value_reading(self.db);
+        if lone_name && reads_value {
+            return prop;
+        }
+        // A `var` of a type with no value reading is reported at its binding.
+        if !lone_name || *marker == BindingMarker::Var {
             return self.open_matched_place(expr, prop, [pat]);
         }
         let prop = ExprProp {

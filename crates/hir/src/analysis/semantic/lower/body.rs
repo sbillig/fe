@@ -616,6 +616,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 place: self.lower_place(expr),
                 ty: self.expr_ty(expr),
                 provider: self.typed_body.expr_prop(self.db, expr).borrow_provider,
+                inspected: self.typed_body.is_inspected_place(expr),
             };
         }
         if matches!(
