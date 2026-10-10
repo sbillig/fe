@@ -170,6 +170,7 @@ struct TokenDocBuilder<'a> {
     doc: Doc<'a>,
     pending_newlines: usize,
     needs_space: bool,
+    needs_line_break: bool,
     is_start: bool,
 }
 
@@ -182,6 +183,7 @@ impl<'a> TokenDocBuilder<'a> {
             doc: alloc.nil(),
             pending_newlines: 0,
             needs_space: false,
+            needs_line_break: false,
             is_start: true,
         }
     }
@@ -198,7 +200,7 @@ impl<'a> TokenDocBuilder<'a> {
     fn push_piece(&mut self, piece: TokenPiece<'a>) {
         let alloc = &self.ctx.alloc;
 
-        if self.pending_newlines > 0 {
+        if self.pending_newlines > 0 || self.needs_line_break {
             let doc = hardlines(alloc, self.pending_newlines).append(piece.doc);
             self.append(if piece.nest {
                 doc.nest(self.indent)
@@ -214,6 +216,7 @@ impl<'a> TokenDocBuilder<'a> {
         }
 
         self.needs_space = piece.space_after;
+        self.needs_line_break = false;
         self.is_start = false;
     }
 
@@ -227,6 +230,7 @@ impl<'a> TokenDocBuilder<'a> {
             space_after: !is_line_comment,
             nest: true,
         });
+        self.needs_line_break = is_line_comment;
     }
 
     fn finish(self) -> Doc<'a> {

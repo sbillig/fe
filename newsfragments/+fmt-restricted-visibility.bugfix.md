@@ -1,0 +1,1 @@
+Preserve `pub(ingot)` and `pub(super)` visibility when formatting items, fields, and declarations in extern blocks. Preserve path names and line breaks when a line comment precedes a nested syntax node.

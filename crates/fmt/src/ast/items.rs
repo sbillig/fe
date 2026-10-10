@@ -30,6 +30,14 @@ fn token_piece_basic<'a>(
     let text = alloc.text(token.text().to_string());
     Some(match token.kind() {
         FnKw => TokenPiece::new(alloc.nil()),
+        PubKw
+            if token.parent().is_some_and(|node| {
+                node.children()
+                    .any(|child| ast::VisRestriction::can_cast(child.kind()))
+            }) =>
+        {
+            TokenPiece::new(text)
+        }
         PubKw | UnsafeKw | MutKw | StructKw | ContractKw | EnumKw | TraitKw | MsgKw | ModKw
         | UseKw | ConstKw | StaticAssertKw | TypeKw | ExternKw => {
             TokenPiece::new(text).space_after()
@@ -71,6 +79,7 @@ fn token_doc_item_node_piece<'a>(
 
     first_some!(
         piece!(ast::AttrList),
+        piece!(ast::VisRestriction, space_after),
         piece!(ast::FuncSignature),
         piece!(ast::FuncParamList),
         piece!(ast::GenericParamList),
@@ -122,14 +131,33 @@ fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
     let alloc = &ctx.alloc;
-    let mut doc = alloc.nil();
-    if node.pub_kw().is_some() {
-        doc = doc.append(alloc.text("pub "));
-    }
+    let mut doc = visibility_doc(node.pub_kw().is_some(), node.vis_restriction(), ctx);
     if node.unsafe_kw().is_some() {
         doc = doc.append(alloc.text("unsafe "));
     }
     doc
+}
+
+fn visibility_doc<'a>(
+    is_public: bool,
+    restriction: Option<ast::VisRestriction>,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    if !is_public {
+        return alloc.nil();
+    }
+    let mut doc = alloc.text("pub");
+    if let Some(restriction) = restriction {
+        doc = doc.append("(").append(restriction.to_doc(ctx));
+    }
+    doc.append(" ")
+}
+
+impl ToDoc for ast::VisRestriction {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        token_doc(ctx, self.syntax(), 0, |_| None, |_| None)
+    }
 }
 
 /// Helper to build generics document.
@@ -785,9 +813,11 @@ impl ToDoc for ast::RecordFieldDef {
 
         let mut doc = attrs;
 
-        if self.pub_kw().is_some() {
-            doc = doc.append(alloc.text("pub "));
-        }
+        doc = doc.append(visibility_doc(
+            self.pub_kw().is_some(),
+            self.vis_restriction(),
+            ctx,
+        ));
 
         if self.unsafe_kw().is_some() {
             doc = doc.append(alloc.text("unsafe "));

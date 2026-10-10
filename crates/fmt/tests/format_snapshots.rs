@@ -18,6 +18,50 @@ fn format_snap(fixture: Fixture<&str>) {
 }
 
 #[test]
+fn restricted_visibility_survives_formatting() {
+    let restrictions = |source: &str| {
+        let (green, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{errors:?}\n{source}");
+        SyntaxNode::new_root(green)
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::VisRestriction)
+            .map(|node| {
+                node.descendants_with_tokens()
+                    .filter_map(|element| element.into_token())
+                    .filter(|token| {
+                        !matches!(token.kind(), SyntaxKind::WhiteSpace | SyntaxKind::Newline)
+                    })
+                    .map(|token| token.text().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    for source in [
+        "extern { pub(ingot) unsafe fn copy_mem(_ dest: *u8, _ source: *u8, _ len: u256) }",
+        "pub(super) fn helper() {}",
+        "pub(ingot) struct Record { pub(super) value: u256 }",
+        "pub(ingot) struct Record { pub(super) unsafe value: u256 }",
+        "pub(ingot) const VALUE: u256 = 1",
+        "pub(super) type Word = u256",
+        "pub(ingot) mod hidden { pub(super) use foo::bar }",
+        "pub(ingot) trait Model { fn value(self) -> u256 }",
+        "pub(ingot) fn helper() { // preserve visibility with a comment\n }",
+        "struct Record { pub(super) value: // preserve field visibility\n u256 }",
+    ] {
+        let formatted = format_str(source, &Config::default()).expect("format should succeed");
+        assert_eq!(
+            restrictions(source),
+            restrictions(&formatted),
+            "{formatted}"
+        );
+        assert_eq!(
+            formatted,
+            format_str(&formatted, &Config::default()).expect("reformat should succeed"),
+        );
+    }
+}
+
+#[test]
 fn ambiguous_binary_operators_break_after_the_operator() {
     let source = r#"
 fn calculate() {
