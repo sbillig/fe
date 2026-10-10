@@ -1,5 +1,6 @@
 // A state-only type has no value reading, so a plain name binds its read
-// access, wherever the binding stands; `mut` binds the mutable one.
+// access, wherever the binding stands and whatever the grant's mode; `mut`
+// binds the mutable one.
 use std::evm::StorageMap
 
 enum Choice<T> {
@@ -32,4 +33,26 @@ impl Choice<StorageMap<u256, u256>> {
             map[key] = 1
         }
     }
+}
+
+struct Ledger {
+    balances: StorageMap<u256, u256>,
+}
+
+impl Ledger {
+    fn tagged(mut self) -> (u256, mut StorageMap<u256, u256>) {
+        (0, mut self.balances)
+    }
+}
+
+// S-68. Rejected: a plain component of a `mut` grant is still a read access.
+fn plain_grant_component(_ ledger: mut Ledger, _ key: u256) {
+    let (_, map) = ledger.tagged()
+    map[key] = 1
+}
+
+// S-68. Accepted: `mut map` takes the grant's mutable access.
+fn marked_grant_component(_ ledger: mut Ledger, _ key: u256) {
+    let (_, mut map) = ledger.tagged()
+    map[key] = 1
 }

@@ -3329,8 +3329,9 @@ impl<'db> TyChecker<'db> {
     /// `ref x` is a read access and `mut x` a `mut` access, never a copy;
     /// `var x` is a mutable value. A plain name takes a value as `let x = e`
     /// does, except that a type with no value reading (`#[view]` or
-    /// state-only) binds the access, and a `let` binding a `mut` result
-    /// whole keeps it. A value of a read result is a copy, so a non-`Copy`
+    /// state-only) binds a read access, whatever the grant's mode, and a
+    /// `let` binding a `mut` result whole keeps it. A value of a read result
+    /// is a copy, so a non-`Copy`
     /// one needs `ref`; one of a `mut` result may move, as through any `mut`
     /// access.
     fn binding_access_kind(
@@ -3363,7 +3364,7 @@ impl<'db> TyChecker<'db> {
             (AccessBinding::LetResult, BindingMarker::Plain) if kind == BorrowKind::Mut => {
                 Some(kind)
             }
-            (_, BindingMarker::Plain) if !ty.has_value_reading(self.db) => Some(kind),
+            (_, BindingMarker::Plain) if !ty.has_value_reading(self.db) => Some(BorrowKind::Ref),
             (_, BindingMarker::Var) if self.ty_is_copy(ty) => {
                 if kind == BorrowKind::Mut {
                     self.push_diag(BodyDiag::MutAccessCopied {

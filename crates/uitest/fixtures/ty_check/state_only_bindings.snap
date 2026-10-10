@@ -5,9 +5,17 @@ expression: diags
 input_file: fixtures/ty_check/state_only_bindings.fe
 ---
 error[8-0018]: left-hand side of assignment is immutable
-   ┌─ state_only_bindings.fe:25:13
+   ┌─ state_only_bindings.fe:26:13
    │
-24 │         if let Choice::Primary(map) = self {
+25 │         if let Choice::Primary(map) = self {
    │                                --- `map` is a read access; bind it with `mut` to write through it
-25 │             map[key] = 1
+26 │             map[key] = 1
    │             ^^^^^^^^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ state_only_bindings.fe:51:5
+   │
+50 │     let (_, map) = ledger.tagged()
+   │             --- `map` is a read access; bind it with `mut` to write through it
+51 │     map[key] = 1
+   │     ^^^^^^^^ immutable assignment
