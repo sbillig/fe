@@ -909,7 +909,7 @@ fn or_zero(_ value: Option<u64>) -> u64 {
     }
 }
 pub fn main() -> i32 {
-    let mut slot = Slot { value: Option::Some(40) }
+    var slot = Slot { value: Option::Some(40) }
     let before = slot.value()
     slot.value = Option::None
     let total = or_zero(before) + or_zero(slot.value()) + 2
