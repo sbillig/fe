@@ -110,7 +110,10 @@ not conflict with an operation on the map's entries.
 - `Domain(d)`: a resource domain: a contract field, an effect parameter, a
   root provider, or a dynamic domain for a handle of unknown provenance.
   Distinct contract fields are disjoint; other domains of one address space
-  may alias, since a caller may supply overlapping providers.
+  may alias, since a caller may supply overlapping providers. A place that
+  holds nothing conflicts with nothing: a zero-sized type, or the provider of
+  a sealed std EVM capability (`Ctx`, `Log`, `Call`, …), which only the
+  zero-sized `Evm` implements, even as a generic helper's effect.
 - `Grant { session, component }`: what a session granted. Places derived from
   one grant overlap; sibling components of a split are disjoint. A grant lies
   in the address space its projection's result-space contract exports.

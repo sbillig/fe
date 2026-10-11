@@ -39,7 +39,10 @@ use crate::{
             },
         },
         ty::{
-            corelib::{MemoryAccessKind, effect_key_state_access, external_call_state_access},
+            corelib::{
+                MemoryAccessKind, effect_key_state_access, external_call_state_access,
+                is_sealed_evm_capability,
+            },
             provider::{ProviderAddressSpace, provider_semantics},
             result_space::PlaceStep,
             shape::Shape,
@@ -291,6 +294,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
         self.instance.param_space(self.db, param)
     }
 
+    /// Whether a place of `ty` holds nothing: a zero-sized type, or a sealed
+    /// std EVM capability, whose only implementor is zero-sized.
+    fn holds_nothing(&self, ty: TyId<'db>) -> bool {
+        ty.is_zero_sized(self.db)
+            || is_sealed_evm_capability(self.db, self.scope, self.assumptions, ty)
+    }
+
     /// The domain a handle of `ty` names when its provider is unknown.
     fn dynamic_handle(&mut self, ty: TyId<'db>) -> Option<u32> {
         matches!(
@@ -320,7 +330,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 };
                 let mut input = self.new_token(TokenKind::Input, mode, origin);
                 input.regions.push(AbsPlace::new(Base::Param(param)));
-                input.zero_sized = target.is_zero_sized(self.db);
+                input.zero_sized = self.holds_nothing(target);
                 self.token(value_id, Site::Open, input)
             } else {
                 // An effect handle names its provider's domain.
@@ -866,7 +876,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     ) -> Held {
         let resolved = self.resolve(place);
         let mut access = self.new_token(TokenKind::Access, mode, origin);
-        access.zero_sized = place.ty.is_zero_sized(self.db);
+        access.zero_sized = self.holds_nothing(place.ty);
         let id = self.token(result, Site::Open, access);
         let token = &mut self.tokens[id as usize];
         token.regions = resolved.regions;
@@ -1016,8 +1026,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
             });
         }
         let (regions, parents) = match &effect.arg {
-            // A zero-sized place holds nothing.
-            NEffectArgValue::Place(place) if place.ty.is_zero_sized(self.db) => return None,
+            // A place that holds nothing has no footprint.
+            NEffectArgValue::Place(place) if self.holds_nothing(place.ty) => return None,
             NEffectArgValue::Place(place) => {
                 let resolved = self.resolve(place);
                 (resolved.regions, resolved.direct)
@@ -1837,7 +1847,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         if writes {
             self.check_writable(&resolved.regions, origin)?;
         }
-        if place.ty.is_zero_sized(self.db) {
+        if self.holds_nothing(place.ty) {
             return Ok(());
         }
         let mode = if writes {
