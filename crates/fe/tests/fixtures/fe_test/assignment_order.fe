@@ -47,6 +47,23 @@ fn value_first() {
     assert(a[0] == 5 && a[2] == 8)
 }
 
+fn index_of(_ x: mut u256) -> usize {
+    x = 0
+    1
+}
+
+// The value is read before the target's index, which writes it, runs.
+#[test]
+fn value_read_before_target_index() {
+    var a: [u256; 2] = [0, 0]
+    var x: u256 = 5
+    a[index_of(mut x)] = x
+    assert(a[1] == 5)
+    x = 5
+    a[index_of(mut x)] += x
+    assert(a[1] == 10)
+}
+
 msg Msg {
     #[selector = 1]
     Run -> u256,

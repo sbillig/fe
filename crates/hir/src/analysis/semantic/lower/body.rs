@@ -545,6 +545,49 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         SOperand::expr(self.lower_expr(expr), expr)
     }
 
+    /// Lowers an operand that other operands follow (`take_operand`).
+    fn take_expr_operand(&mut self, expr: ExprId) -> SOperand {
+        let value = self.lower_expr(expr);
+        SOperand::expr(self.take_operand(expr, value), expr)
+    }
+
+    /// Lowers operands evaluated left to right, taking each but the last.
+    fn lower_expr_operands(&mut self, exprs: &[ExprId]) -> Vec<SOperand> {
+        let Some((&last, init)) = exprs.split_last() else {
+            return Vec::new();
+        };
+        let mut operands: Vec<_> = init
+            .iter()
+            .map(|&expr| self.take_expr_operand(expr))
+            .collect();
+        operands.push(self.lower_expr_operand(last));
+        operands
+    }
+
+    /// Takes a variable's value where it appears as an operand, not where
+    /// the operation consuming it runs, after the operands that follow it,
+    /// which may write or move it. An immutable `Copy` variable reads the
+    /// same anywhere.
+    fn take_operand(&mut self, expr: ExprId, value: SValueId) -> SValueId {
+        let local = &self.locals[value.index()];
+        if local.source.is_none()
+            || !matches!(
+                local.role,
+                SemanticLocalRole::DirectValue { .. } | SemanticLocalRole::PlaceBoundValue { .. }
+            )
+            || local.mutability == Mutability::Immutable
+                && ty_is_copy(self.db, self.body.scope(), local.ty, self.assumptions)
+        {
+            return value;
+        }
+        let ty = local.ty;
+        self.emit_expr_with_origin(
+            SemOrigin::Expr(expr),
+            ty,
+            SExpr::UseValue(SOperand::expr(value, expr)),
+        )
+    }
+
     pub(super) fn push_synthetic_stmt(&mut self, kind: SStmtKind<'db>) {
         self.push_stmt(SemOrigin::Synthetic, kind);
     }
@@ -903,10 +946,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Expr::Path(_) => self.lower_path_expr(expr),
             Expr::Try(inner) => self.lower_try(expr, *inner, ty),
             Expr::Tuple(elems) | Expr::Array(elems) => {
-                let fields = elems
-                    .iter()
-                    .map(|expr| self.lower_expr_operand(*expr))
-                    .collect();
+                let fields = self.lower_expr_operands(elems).into_boxed_slice();
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
             // A closure is the aggregate of its captures, each copied or
@@ -967,7 +1007,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if let Some(place) = self.try_lower_place(expr) {
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
-                let base = self.lower_expr_operand(*base);
+                let base = self.take_expr_operand(*base);
                 let index = self.lower_expr_operand(*index);
                 self.emit_expr_with_origin(origin, ty, SExpr::Index { base, index })
             }
@@ -990,7 +1030,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Bin(lhs, rhs, BinOp::Arith(ArithBinOp::Range)) => {
                 let ty = self.expr_ty(expr);
-                let lhs = self.lower_expr_operand(*lhs);
+                let lhs = self.take_expr_operand(*lhs);
                 let rhs = self.lower_expr_operand(*rhs);
                 let unit = SOperand::synthetic(self.unit_value());
                 let fields = ty
@@ -1020,7 +1060,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if matches!(op, BinOp::Logical(_)) {
                     return self.lower_logical_expr(expr);
                 }
-                let lhs = self.lower_expr_operand(*lhs);
+                let lhs = self.take_expr_operand(*lhs);
                 let rhs = self.lower_expr_operand(*rhs);
                 self.emit_expr_with_origin(origin, ty, SExpr::Binary { op: *op, lhs, rhs })
             }
@@ -1039,7 +1079,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             // is reached through.
             Expr::Assign(dst, src) => {
                 self.prepare_place_root(*dst);
-                let src = self.lower_expr_operand(*src);
+                let src = self.take_expr_operand(*src);
                 if self.typed_body.semantic_expr_lowering(*dst).is_some() {
                     let dst = SPlace::new(self.lower_access(*dst));
                     self.push_stmt(origin, SStmtKind::Store { dst, src });
@@ -1054,7 +1094,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
                 self.prepare_place_root(*dst);
-                let rhs = self.lower_expr_operand(*src);
+                let rhs = self.take_expr_operand(*src);
                 let dst_place = self.lower_place(*dst);
                 let lhs = if dst_place.path.is_empty() {
                     self.lower_expr_operand(*dst)
@@ -1389,6 +1429,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         fields: &[HirField<'db>],
     ) -> SValueId {
         let ty = self.expr_ty(expr);
+        let exprs: Vec<_> = fields.iter().map(|field| field.expr).collect();
+        let operands = self.lower_expr_operands(&exprs);
         match self
             .typed_body
             .record_init_lowering(expr)
@@ -1396,14 +1438,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         {
             RecordInitLowering::EnumVariant(variant) => {
                 let mut values = vec![None; fields.len()];
-                for field in fields {
+                for (field, operand) in fields.iter().zip(operands) {
                     let Some(label) = field.label_eagerly(self.db, self.body) else {
                         panic!("record variant init field label missing")
                     };
                     let idx = RecordLike::from_variant(variant)
                         .record_field_idx(self.db, label)
                         .expect("record variant field should resolve");
-                    values[idx] = Some(self.lower_expr_operand(field.expr));
+                    values[idx] = Some(operand);
                 }
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
@@ -1420,14 +1462,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             RecordInitLowering::Struct => {
                 let mut values = vec![None; fields.len()];
-                for field in fields {
+                for (field, operand) in fields.iter().zip(operands) {
                     let Some(label) = field.label_eagerly(self.db, self.body) else {
                         panic!("record init field label missing")
                     };
                     let idx = RecordLike::Type(ty)
                         .record_field_idx(self.db, label)
                         .expect("record field should resolve");
-                    values[idx] = Some(self.lower_expr_operand(field.expr));
+                    values[idx] = Some(operand);
                 }
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
@@ -1527,7 +1569,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let offset = usize::from(receiver.is_some());
         let mut values = Vec::with_capacity(args.len() + offset);
         for (index, &arg) in args.iter().enumerate() {
-            let value = self.lower_callable_argument(arg, callable, index + offset);
+            let value = self.lower_callable_argument(arg, callable, index + offset, false);
             values.push(SOperand::expr(value, arg));
         }
         if let Some((receiver, prepared)) = receiver {
@@ -1576,19 +1618,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// handle) or a `Copy` value an ordinary function may take by value:
     /// loading a non-`Copy` place would move it, and a projection's result
     /// over a `Copy` aggregate is the caller's place. (Either way the call
-    /// reads the place for its duration.) Call normalization views local
-    /// roots directly; an effect binding is viewed here when its template
-    /// type is not a parameter, so every instance lowers it alike.
+    /// reads the place for its duration.) A variable's value is taken where
+    /// it appears, before the arguments after it: a mutable local is viewed
+    /// here unless it is a receiver, which opens right before the call. Call
+    /// normalization views other local roots directly; an effect binding is
+    /// viewed here when its template type is not a parameter, so every
+    /// instance lowers it alike.
     fn lower_callable_argument(
         &mut self,
         expr: ExprId,
         callable: &Callable<'db>,
         param: usize,
+        receiver: bool,
     ) -> SValueId {
         let ty = self.expr_ty(expr);
         let mode = callable.callable_def().param_mode(self.db, param);
         if mode == FuncParamMode::Own {
-            return self.lower_expr(expr);
+            let value = self.lower_expr(expr);
+            return self.take_operand(expr, value);
         }
         // A closure literal passed to a `mut` parameter is a temporary.
         if mode == FuncParamMode::Mut
@@ -1612,16 +1659,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             return self.binding_locals[&binding];
         }
         let scope = self.body.scope();
-        if mode == FuncParamMode::View
+        let in_place = mode == FuncParamMode::View
             && self.typed_body.expr_prop(self.db, expr).shape.is_none()
             && !ty_is_snapshot(self.db, scope, ty, self.assumptions)
             && (!ty_is_copy(self.db, scope, ty, self.assumptions)
                 || matches!(
                     callable.callable_def(),
                     CallableDef::Func(func) if func.is_projection(self.db)
-                ))
+                ));
+        if in_place
             && let Some(place) = self.try_lower_place(expr)
             && (!place.path.is_empty()
+                || !receiver && self.locals[place.local.index()].mutability == Mutability::Mutable
                 || !ty.is_zero_sized(self.db)
                     && infer_body(self.db, self.template_owner)
                         .1
@@ -1635,7 +1684,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         {
             return self.emit_borrow(expr, place, BorrowKind::Ref, ty);
         }
-        self.lower_source(expr)
+        let value = self.lower_source(expr);
+        if in_place {
+            value
+        } else {
+            self.take_operand(expr, value)
+        }
     }
 
     /// Resolves a receiver before the call's arguments: a temporary is
@@ -1679,7 +1733,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             return Receiver::Place(None);
         }
         if mode != FuncParamMode::Mut {
-            return Receiver::Value(self.lower_callable_argument(receiver, callable, 0));
+            return Receiver::Value(self.lower_callable_argument(receiver, callable, 0, true));
         }
         let place = self.try_lower_place(receiver).unwrap_or_else(|| {
             let ty = normalize_ty(
@@ -1747,7 +1801,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Receiver::Place(None)
                 if callable.callable_def().param_mode(self.db, 0) != FuncParamMode::Mut =>
             {
-                self.lower_callable_argument(receiver, callable, 0)
+                self.lower_callable_argument(receiver, callable, 0, true)
             }
             Receiver::Chain(root, prepared) => {
                 let Some(SemanticExprLowering::Call { callable: inner }) =

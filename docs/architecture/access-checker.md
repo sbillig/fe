@@ -68,7 +68,12 @@ receiver of the innermost projection call on a place's path before the
 arguments. An assignment follows the same order: its target's root is
 resolved first, the same way, then the value is evaluated, then the target's
 sessions open. An operator's left operand is not a receiver: both operands
-are ordinary arguments, evaluated left to right.
+are ordinary arguments, evaluated left to right. A variable operand that
+other operands follow (a call's argument, an aggregate's field, an
+operator's left operand, an assignment's value) is taken where it appears
+(`take_operand`): copied if `Copy`, moved if owned, and a view argument of
+a mutable local opens there, so the later operands' writes follow it and
+their uses of a moved variable are uses after a move.
 
 A view argument's transport follows its type (`ty_is_snapshot`): a snapshot,
 meaning a scalar or handle (a primitive, a raw pointer, an effect handle or

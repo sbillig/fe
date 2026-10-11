@@ -20,11 +20,12 @@ func private %f() -> i256 {
         v1.constref<@layout_0> = const.ref $const_region_0;
         v2.constref<@layout_1> = const.ref $const_region_1;
         v3.constref<@layout_1> = const.ref $const_region_1;
-        v4.objref<@layout_1> = obj.alloc @layout_1;
-        obj.init.const v4 v3;
-        v5.@layout_1 = obj.load v4;
-        v6.i256 = call %match_newtype_nested v5;
-        return v6;
+        v4.constref<@layout_1> = const.ref $const_region_1;
+        v5.objref<@layout_1> = obj.alloc @layout_1;
+        obj.init.const v5 v4;
+        v6.@layout_1 = obj.load v5;
+        v7.i256 = call %match_newtype_nested v6;
+        return v7;
 }
 
 func private %main_root() {
