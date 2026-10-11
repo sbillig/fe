@@ -2871,9 +2871,9 @@ func private %eq(v0.@layout_0, v1.@layout_0) -> i1 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v1 0.i256;
-        v6.i256 = extract_value v0 0.i256;
-        v7.i1 = eq v6 v4;
+        v4.i256 = extract_value v0 0.i256;
+        v6.i256 = extract_value v1 0.i256;
+        v7.i1 = eq v4 v6;
         return v7;
 }
 
@@ -3522,9 +3522,9 @@ func inline(always) private %read_word(v0.objref<@layout_3>, v1.objref<@layout_4
         jump block1;
 
     block1:
-        v5.objref<i256> = obj.proj v0 0.i256;
-        v6.i256 = obj.load v5;
-        (v7.i256, v8.i1) = uaddo v6 32.i256;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        (v7.i256, v8.i1) = uaddo v5 32.i256;
         br v8 block6 block7;
 
     block2:
@@ -3563,14 +3563,14 @@ func private %require(v0.i256, v1.i256) {
         jump block1;
 
     block1:
-        v4.@layout_0 = call %caller;
-        v7.@layout_9 = insert_value undef.@layout_9 0.i256 v1;
-        v9.@layout_9 = insert_value v7 1.i256 v4;
-        v11.@layout_3 = call %locate__g7bf9 v0 v0 v9;
-        v12.i256 = extract_value v11 0.i256;
-        v13.i256 = evm_sload v12;
-        v14.i1 = ne v13 0.i256;
-        v15.i1 = eq v14 1.i1;
+        v3.@layout_0 = call %caller;
+        v6.@layout_9 = insert_value undef.@layout_9 0.i256 v1;
+        v8.@layout_9 = insert_value v6 1.i256 v3;
+        v10.@layout_3 = call %locate__g7bf9 v0 v0 v8;
+        v11.i256 = extract_value v10 0.i256;
+        v12.i256 = evm_sload v11;
+        v13.i1 = ne v12 0.i256;
+        v15.i1 = eq v13 1.i1;
         br v15 block2 block3;
 
     block2:
@@ -4616,8 +4616,8 @@ func inline(always) private %impl_trait_CallData__word_at(v0.@layout_0, v1.i256)
         jump block1;
 
     block1:
-        v5.i256 = extract_value v0 0.i256;
-        v6.i256 = add v5 v1;
+        v4.i256 = extract_value v0 0.i256;
+        v6.i256 = add v4 v1;
         v7.i256 = evm_calldata_load v6;
         return v7;
 }

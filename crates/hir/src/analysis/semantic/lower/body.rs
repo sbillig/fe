@@ -221,8 +221,8 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) loop_stack: Vec<LoopScope>,
     /// Loop bases, evaluated once before the method chain that drives them.
     loop_bases: FxHashMap<ExprId, SValueId>,
-    /// Receivers of projection calls in an assignment target, prepared
-    /// before the assigned value (`prepare_target`).
+    /// Receivers of projection calls in an assignment target or a receiver,
+    /// prepared before the value or the arguments (`prepare_place_root`).
     prepared_receivers: FxHashMap<ExprId, Receiver<'db>>,
     /// How many yield sites enclose the expression being lowered.
     pub(super) yield_depth: u32,
@@ -1011,9 +1011,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     .collect();
                 self.emit_expr_with_origin(origin, ty, SExpr::AggregateMake { ty, fields })
             }
+            // An operator's operands are ordinary arguments, evaluated left
+            // to right.
             Expr::Bin(lhs, rhs, op) => {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
-                    return self.lower_call_like_expr(expr, ty, Some(*lhs), &[*rhs]);
+                    return self.lower_call_like_expr(expr, ty, None, &[*lhs, *rhs]);
                 }
                 if matches!(op, BinOp::Logical(_)) {
                     return self.lower_logical_expr(expr);
@@ -1036,7 +1038,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             // target's sessions open, so the value may read what the target
             // is reached through.
             Expr::Assign(dst, src) => {
-                self.prepare_target(*dst);
+                self.prepare_place_root(*dst);
                 let src = self.lower_expr_operand(*src);
                 if self.typed_body.semantic_expr_lowering(*dst).is_some() {
                     let dst = SPlace::new(self.lower_access(*dst));
@@ -1051,7 +1053,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
-                self.prepare_target(*dst);
+                self.prepare_place_root(*dst);
                 let rhs = self.lower_expr_operand(*src);
                 let dst_place = self.lower_place(*dst);
                 let lhs = if dst_place.path.is_empty() {
@@ -1639,9 +1641,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// Resolves a receiver before the call's arguments: a temporary is
     /// evaluated now, into a local for a `mut` receiver, while a place rooted
     /// at a binding is lowered whole after them, so the arguments may read
-    /// and write it and the call sees what they wrote. A projection chain's
-    /// root is prepared the same way, and its sessions open after the
-    /// arguments.
+    /// and write it and the call sees what they wrote. The root of a
+    /// projection chain, or of a place in a projection's grant, is prepared
+    /// the same way, and the chain's sessions open after the arguments.
     fn prepare_receiver(&mut self, receiver: ExprId, callable: &Callable<'db>) -> Receiver<'db> {
         if let Some(&base) = self.loop_bases.get(&receiver) {
             return Receiver::Value(base);
@@ -1673,7 +1675,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         {
             return Receiver::Value(self.binding_locals[&binding]);
         }
-        if self.typed_body.expr_place(receiver).is_some() {
+        if self.typed_body.expr_place(receiver).is_some() || self.prepare_place_root(receiver) {
             return Receiver::Place(None);
         }
         if mode != FuncParamMode::Mut {
@@ -1691,27 +1693,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         Receiver::Place(Some(place))
     }
 
-    /// Resolves the root of an assignment target before the assigned value:
-    /// the innermost projection call on the target's path has its receiver
-    /// prepared now, hoisting a temporary root, and opens its session when
-    /// the target is lowered after the value.
-    fn prepare_target(&mut self, target: ExprId) {
-        let lowering = self.typed_body.semantic_expr_lowering(target);
-        match (target.data(self.db, self.body), lowering) {
+    /// Resolves the root of a place in a projection's grant, an assignment
+    /// target or a receiver, before the value or the arguments: the innermost
+    /// projection call on the place's path of fields and builtin indexes has
+    /// its receiver prepared now, hoisting a temporary root, and opens its
+    /// session when the place is lowered after them. Returns whether the
+    /// path has a projection call.
+    fn prepare_place_root(&mut self, place: ExprId) -> bool {
+        let lowering = self.typed_body.semantic_expr_lowering(place);
+        match (place.data(self.db, self.body), lowering) {
             (Partial::Present(Expr::Field(base, _)), _)
             | (Partial::Present(Expr::Bin(base, _, BinOp::Index)), None) => {
-                self.prepare_target(*base)
+                self.prepare_place_root(*base)
             }
             (
                 Partial::Present(
                     Expr::MethodCall(receiver, ..) | Expr::Bin(receiver, _, BinOp::Index),
                 ),
                 Some(SemanticExprLowering::Call { callable }),
-            ) => {
+            ) if self.typed_body.expr_prop(self.db, place).shape.is_some() => {
                 let prepared = self.prepare_receiver(*receiver, callable);
-                self.prepared_receivers.insert(target, prepared);
+                self.prepared_receivers.insert(place, prepared);
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 

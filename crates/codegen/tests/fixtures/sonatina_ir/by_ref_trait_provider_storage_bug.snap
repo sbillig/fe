@@ -695,10 +695,10 @@ func private %sum(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.i256 = add v0 1.i256;
-        v4.i256 = evm_sload v3;
-        v5.i256 = evm_sload v0;
-        (v6.i256, v7.i1) = uaddo v5 v4;
+        v2.i256 = evm_sload v0;
+        v4.i256 = add v0 1.i256;
+        v5.i256 = evm_sload v4;
+        (v6.i256, v7.i1) = uaddo v2 v5;
         br v7 block2 block3;
 
     block2:

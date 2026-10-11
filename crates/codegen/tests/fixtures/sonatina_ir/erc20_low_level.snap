@@ -387,9 +387,9 @@ func private %eq(v0.@layout_1, v1.@layout_1) -> i1 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v1 0.i256;
-        v6.i256 = extract_value v0 0.i256;
-        v7.i1 = eq v6 v4;
+        v4.i256 = extract_value v0 0.i256;
+        v6.i256 = extract_value v1 0.i256;
+        v7.i1 = eq v4 v6;
         return v7;
 }
 
@@ -735,8 +735,8 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         v23.i256 = call %impl_MemBuffer__ptr v0;
         v24.i256 = call %impl_MemBuffer__len v0;
         v25.i256 = add v23 v24;
-        v26.i256 = call %impl_MemBuffer__len v0;
-        (v28.i256, v29.i1) = usubo v1 v26;
+        v27.i256 = call %impl_MemBuffer__len v0;
+        (v28.i256, v29.i1) = usubo v1 v27;
         br v29 block10 block12;
 
     block7:
@@ -1036,11 +1036,11 @@ func private %set_owner_once(v0.i256, v1.@layout_1) -> i1 {
         jump block1;
 
     block1:
-        v2.@layout_1 = call %zero;
-        v5.i256 = add v0 3.i256;
-        v7.i256 = evm_sload v5;
-        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
-        v10.i1 = call %ne v9 v2;
+        v4.i256 = add v0 3.i256;
+        v6.i256 = evm_sload v4;
+        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v6;
+        v9.@layout_1 = call %zero;
+        v10.i1 = call %ne v8 v9;
         br v10 block2 block3;
 
     block2:

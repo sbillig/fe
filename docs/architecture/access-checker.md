@@ -59,14 +59,16 @@ For a call `r.m(args)` the elaboration order is fixed: the receiver's root is
 resolved first (a temporary is evaluated, and hoisted into a local for a
 `mut` receiver), the arguments are evaluated, the receiver chain's
 projection sessions open innermost first, and the receiver's access opens
-last with its mode. A receiver place rooted at a binding is lowered whole
-after the arguments, index operands included (`Receiver::Place(None)`), so
-the arguments may read and write it and the call sees what they wrote; an
-argument that moves it leaves the receiver's access a use after a move. An
-assignment follows the same order: its target's root is resolved first
-(`prepare_target` prepares the receiver of the innermost projection call on
-the target's path), then the value is evaluated, then the target's sessions
-open.
+last with its mode. A receiver place rooted at a binding, or in a
+projection's grant, is lowered whole after the arguments, index operands
+included (`Receiver::Place(None)`), so the arguments may read and write it
+and the call sees what they wrote; an argument that moves it leaves the
+receiver's access a use after a move. `prepare_place_root` prepares the
+receiver of the innermost projection call on a place's path before the
+arguments. An assignment follows the same order: its target's root is
+resolved first, the same way, then the value is evaluated, then the target's
+sessions open. An operator's left operand is not a receiver: both operands
+are ordinary arguments, evaluated left to right.
 
 A view argument's transport follows its type (`ty_is_snapshot`): a snapshot,
 meaning a scalar or handle (a primitive, a raw pointer, an effect handle or

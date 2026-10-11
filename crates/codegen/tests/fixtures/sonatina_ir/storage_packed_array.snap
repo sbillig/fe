@@ -829,9 +829,9 @@ func inline(always) private %set(v0.i256, v1.i256, v2.i256) {
         v10.i256 = evm_udiv v1 32.i256;
         v12.@layout_6 = call %locate v0 v0 v10;
         v14.i256 = extract_value v12 0.i256;
-        v16.i256 = xor -1.i256 v9;
-        v17.i256 = evm_sload v14;
-        v18.i256 = and v17 v16;
+        v15.i256 = evm_sload v14;
+        v17.i256 = xor -1.i256 v9;
+        v18.i256 = and v15 v17;
         v20.i256 = and v2 255.i256;
         v21.i256 = shl v7 v20;
         v22.i256 = or v18 v21;

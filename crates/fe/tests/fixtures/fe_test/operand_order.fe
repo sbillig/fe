@@ -1,0 +1,24 @@
+// An operator's operands are evaluated left to right, as a call's arguments
+// are: the right operand's writes come after the left operand is read.
+use core::ptr::MemArray
+
+struct Tally { total: u256 }
+
+fn reset(_ t: mut Tally) -> u256 {
+    t.total = 0
+    7
+}
+
+fn clear(_ a: mut MemArray<u256>) -> u256 {
+    a[0] = 0
+    7
+}
+
+#[test]
+fn operator_operands_left_to_right() {
+    var t = Tally { total: 5 }
+    assert(t.total + reset(mut t) == 12)
+    var a: MemArray<u256> = MemArray::new_zeroed(1)
+    a[0] = 5
+    assert(a[0] + clear(mut a) == 12)
+}

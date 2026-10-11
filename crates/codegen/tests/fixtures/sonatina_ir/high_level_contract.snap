@@ -915,9 +915,9 @@ func inline(always) private %read_word(v0.objref<@layout_2>, v1.objref<@layout_3
         jump block1;
 
     block1:
-        v5.objref<i256> = obj.proj v0 0.i256;
-        v6.i256 = obj.load v5;
-        (v7.i256, v8.i1) = uaddo v6 32.i256;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        (v7.i256, v8.i1) = uaddo v5 32.i256;
         br v8 block6 block7;
 
     block2:
@@ -1236,8 +1236,8 @@ func inline(always) private %impl_trait_CallData__word_at(v0.@layout_4, v1.i256)
         jump block1;
 
     block1:
-        v5.i256 = extract_value v0 0.i256;
-        v6.i256 = add v5 v1;
+        v4.i256 = extract_value v0 0.i256;
+        v6.i256 = add v4 v1;
         v7.i256 = evm_calldata_load v6;
         return v7;
 }
