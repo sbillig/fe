@@ -320,8 +320,8 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         v23.i256 = call %impl_MemBuffer__ptr v0;
         v24.i256 = call %impl_MemBuffer__len v0;
         v25.i256 = add v23 v24;
-        v27.i256 = call %impl_MemBuffer__len v0;
-        (v28.i256, v29.i1) = usubo v1 v27;
+        v26.i256 = call %impl_MemBuffer__len v0;
+        (v28.i256, v29.i1) = usubo v1 v26;
         br v29 block10 block12;
 
     block7:

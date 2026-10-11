@@ -30,9 +30,9 @@ func private %sum(v0.@layout_0) -> i256 {
         jump block1;
 
     block1:
-        v3.i256 = extract_value v0 0.i256;
-        v5.i256 = extract_value v0 1.i256;
-        (v6.i256, v7.i1) = uaddo v3 v5;
+        v3.i256 = extract_value v0 1.i256;
+        v5.i256 = extract_value v0 0.i256;
+        (v6.i256, v7.i1) = uaddo v5 v3;
         br v7 block2 block3;
 
     block2:

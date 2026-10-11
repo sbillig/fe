@@ -424,10 +424,10 @@ func inline(always) private %decode_runtime_args(v0.objref<@layout_6>) {
         jump block1;
 
     block1:
-        v2.@layout_4 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 0.i256;
-        call %decode_from_prechecked_head v2 4.i256 v4;
+        v1.@layout_4 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 0.i256;
+        call %decode_from_prechecked_head v1 4.i256 v3;
         return;
 }
 
@@ -710,9 +710,9 @@ func inline(always) private %read_word(v0.objref<@layout_2>, v1.objref<@layout_3
         jump block1;
 
     block1:
-        v4.objref<i256> = obj.proj v0 0.i256;
-        v5.i256 = obj.load v4;
-        (v7.i256, v8.i1) = uaddo v5 32.i256;
+        v5.objref<i256> = obj.proj v0 0.i256;
+        v6.i256 = obj.load v5;
+        (v7.i256, v8.i1) = uaddo v6 32.i256;
         br v8 block6 block7;
 
     block2:

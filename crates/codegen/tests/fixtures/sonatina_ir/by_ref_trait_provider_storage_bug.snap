@@ -278,10 +278,10 @@ func inline(always) private %decode_runtime_args(v0.objref<@layout_4>) {
         jump block1;
 
     block1:
-        v2.@layout_2 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 0.i256;
-        call %decode_from_prechecked_head v2 4.i256 v4;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 0.i256;
+        call %decode_from_prechecked_head v1 4.i256 v3;
         return;
 }
 
@@ -695,10 +695,10 @@ func private %sum(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v2.i256 = evm_sload v0;
-        v4.i256 = add v0 1.i256;
-        v5.i256 = evm_sload v4;
-        (v6.i256, v7.i1) = uaddo v2 v5;
+        v3.i256 = add v0 1.i256;
+        v4.i256 = evm_sload v3;
+        v5.i256 = evm_sload v0;
+        (v6.i256, v7.i1) = uaddo v5 v4;
         br v7 block2 block3;
 
     block2:

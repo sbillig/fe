@@ -244,22 +244,15 @@ struct SmirLowerInputs<'a, 'db> {
     binding_role_mode: BindingRoleMode,
 }
 
-/// A call's receiver between the resolution of its root place, before the
-/// call's arguments, and the opening of its accesses, after them.
+/// A call's receiver between the resolution of its root, before the call's
+/// arguments, and the opening of its accesses, after them.
 pub(super) enum Receiver<'db> {
-    /// An owned receiver or an access carrier, evaluated already.
+    /// A temporary, a loop base or an access carrier, evaluated already.
     Value(SValueId),
-    /// An access binding's carrier, its referent guarded until the call.
-    Carrier {
-        value: SValueId,
-        guard: Option<SStmtId>,
-    },
-    /// A place whose `mut` access opens after the arguments, guarded until
+    /// A receiver opened after the arguments: a `mut` receiver's place in a
+    /// temporary, or `None` for a place rooted at a binding, lowered whole
     /// then.
-    Place {
-        place: SPlace<'db>,
-        guard: Option<SStmtId>,
-    },
+    Place(Option<SPlace<'db>>),
     /// A projection call in the receiver chain, by its own receiver: its
     /// session opens after the arguments of the call it is the receiver of.
     Chain(ExprId, Box<Receiver<'db>>),
@@ -1536,7 +1529,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             values.push(SOperand::expr(value, arg));
         }
         if let Some((receiver, prepared)) = receiver {
-            let value = self.open_receiver(receiver, prepared);
+            let value = self.open_receiver(receiver, prepared, callable);
             values.insert(0, SOperand::expr(value, receiver));
         }
 
@@ -1643,23 +1636,20 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.lower_source(expr)
     }
 
-    /// Resolves a receiver before the call's arguments. A projection chain's
-    /// sessions open after them. An owned receiver is an ordinary first
-    /// argument. An access binding is passed by its carrier, and a view
-    /// receiver's access opens now; either excludes the arguments writing
-    /// the receiver, the binding's by a `ref` guard of its referent until
-    /// the call. A `mut` receiver's place is guarded the same way until its
-    /// own access opens after the arguments; a temporary root is hoisted
-    /// into a local.
+    /// Resolves a receiver before the call's arguments: a temporary is
+    /// evaluated now, into a local for a `mut` receiver, while a place rooted
+    /// at a binding is lowered whole after them, so the arguments may read
+    /// and write it and the call sees what they wrote. A projection chain's
+    /// root is prepared the same way, and its sessions open after the
+    /// arguments.
     fn prepare_receiver(&mut self, receiver: ExprId, callable: &Callable<'db>) -> Receiver<'db> {
         if let Some(&base) = self.loop_bases.get(&receiver) {
             return Receiver::Value(base);
         }
         let mode = callable.callable_def().param_mode(self.db, 0);
-        if mode == FuncParamMode::Own {
-            return Receiver::Value(self.lower_expr(receiver));
-        }
-        if self.typed_body.expr_prop(self.db, receiver).shape.is_some() {
+        if mode != FuncParamMode::Own
+            && self.typed_body.expr_prop(self.db, receiver).shape.is_some()
+        {
             if let Some(SemanticExprLowering::Call { callable: inner }) =
                 self.typed_body.semantic_expr_lowering(receiver)
                 && let Partial::Present(
@@ -1671,45 +1661,34 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             return Receiver::Value(self.lower_access(receiver));
         }
-        let ty = normalize_ty(
-            self.db,
-            self.expr_ty(receiver),
-            self.body.scope(),
-            self.assumptions,
-        );
-        if matches!(
-            receiver.data(self.db, self.body),
-            Partial::Present(Expr::Path(_))
-        ) && let Some(binding) = self.typed_body.expr_binding(receiver)
+        // An access binding is passed by its carrier.
+        if mode != FuncParamMode::Own
+            && matches!(
+                receiver.data(self.db, self.body),
+                Partial::Present(Expr::Path(_))
+            )
+            && let Some(binding) = self.typed_body.expr_binding(receiver)
             && !self.capture_places.contains_key(&binding)
-            && let Some(access) = self.typed_body.binding_access(binding)
+            && self.typed_body.binding_access(binding).is_some()
         {
-            // Only a `mut` access lets the arguments write its referent.
-            let guard = access
-                .is_mut()
-                .then(|| self.try_lower_place(receiver))
-                .flatten()
-                .and_then(|place| {
-                    let guard = self.emit_borrow(receiver, place, BorrowKind::Ref, ty);
-                    self.last_stmt_id(guard)
-                });
-            return Receiver::Carrier {
-                value: self.binding_locals[&binding],
-                guard,
-            };
+            return Receiver::Value(self.binding_locals[&binding]);
         }
-        if mode == FuncParamMode::View {
+        if self.typed_body.expr_place(receiver).is_some() {
+            return Receiver::Place(None);
+        }
+        if mode != FuncParamMode::Mut {
             return Receiver::Value(self.lower_callable_argument(receiver, callable, 0));
         }
-        if let Some(place) = self.try_lower_place(receiver) {
-            let guard = self.emit_borrow(receiver, place.clone(), BorrowKind::Ref, ty);
-            let guard = self.last_stmt_id(guard);
-            return Receiver::Place { place, guard };
-        }
-        Receiver::Place {
-            place: SPlace::new(self.hoist_temporary(receiver, ty)),
-            guard: None,
-        }
+        let place = self.try_lower_place(receiver).unwrap_or_else(|| {
+            let ty = normalize_ty(
+                self.db,
+                self.expr_ty(receiver),
+                self.body.scope(),
+                self.assumptions,
+            );
+            SPlace::new(self.hoist_temporary(receiver, ty))
+        });
+        Receiver::Place(Some(place))
     }
 
     /// Resolves the root of an assignment target before the assigned value:
@@ -1751,15 +1730,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// Opens a prepared receiver's accesses: its chain's projection sessions
-    /// innermost first, then a `mut` receiver's access.
-    fn open_receiver(&mut self, receiver: ExprId, prepared: Receiver<'db>) -> SValueId {
+    /// innermost first, then the receiver's access with its mode.
+    fn open_receiver(
+        &mut self,
+        receiver: ExprId,
+        prepared: Receiver<'db>,
+        callable: &Callable<'db>,
+    ) -> SValueId {
         match prepared {
             Receiver::Value(value) => value,
-            Receiver::Carrier { value, guard } => {
-                if let Some(guard) = guard {
-                    self.push_synthetic_stmt(SStmtKind::End { access: guard });
-                }
-                value
+            Receiver::Place(None)
+                if callable.callable_def().param_mode(self.db, 0) != FuncParamMode::Mut =>
+            {
+                self.lower_callable_argument(receiver, callable, 0)
             }
             Receiver::Chain(root, prepared) => {
                 let Some(SemanticExprLowering::Call { callable: inner }) =
@@ -1782,10 +1765,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     .carrier_ty(self.db);
                 self.lower_callable_expr(receiver, ty, Some((root, *prepared)), &args, inner)
             }
-            Receiver::Place { place, guard } => {
-                if let Some(guard) = guard {
-                    self.push_synthetic_stmt(SStmtKind::End { access: guard });
-                }
+            Receiver::Place(place) => {
+                let place = place.unwrap_or_else(|| self.lower_place(receiver));
                 let ty = normalize_ty(
                     self.db,
                     self.expr_ty(receiver),
@@ -1813,15 +1794,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 provider: self.typed_body.expr_prop(self.db, expr).borrow_provider,
             },
         )
-    }
-
-    /// The statement that defined `value`, if it was emitted.
-    fn last_stmt_id(&self, value: SValueId) -> Option<SStmtId> {
-        self.blocks[self.current.index()]
-            .stmts
-            .last()
-            .filter(|stmt| matches!(stmt.kind, SStmtKind::Assign { dst, .. } if dst == value))
-            .map(|stmt| stmt.id)
     }
 
     fn lower_const_intrinsic(

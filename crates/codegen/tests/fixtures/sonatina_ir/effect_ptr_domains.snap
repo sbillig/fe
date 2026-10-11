@@ -26,8 +26,8 @@ func private %bump__g6a4b(v0.i256) {
         jump block1;
 
     block1:
-        v2.i256 = evm_sload v0;
-        (v4.i256, v5.i1) = uaddo v2 1.i256;
+        v3.i256 = evm_sload v0;
+        (v4.i256, v5.i1) = uaddo v3 1.i256;
         br v5 block2 block3;
 
     block2:
@@ -37,9 +37,9 @@ func private %bump__g6a4b(v0.i256) {
 
     block3:
         evm_sstore v0 v4;
-        v12.i256 = add v0 1.i256;
-        v13.i256 = evm_sload v12;
-        (v15.i256, v16.i1) = uaddo v13 2.i256;
+        v13.i256 = add v0 1.i256;
+        v14.i256 = evm_sload v13;
+        (v15.i256, v16.i1) = uaddo v14 2.i256;
         br v16 block2 block4;
 
     block4:
@@ -53,8 +53,8 @@ func private %bump__g80ba(v0.i256) {
         jump block1;
 
     block1:
-        v2.i256 = mload v0 i256;
-        (v4.i256, v5.i1) = uaddo v2 1.i256;
+        v3.i256 = mload v0 i256;
+        (v4.i256, v5.i1) = uaddo v3 1.i256;
         br v5 block2 block3;
 
     block2:
@@ -64,9 +64,9 @@ func private %bump__g80ba(v0.i256) {
 
     block3:
         mstore v0 v4 i256;
-        v13.i256 = add v0 32.i256;
-        v14.i256 = mload v13 i256;
-        (v16.i256, v17.i1) = uaddo v14 2.i256;
+        v14.i256 = add v0 32.i256;
+        v15.i256 = mload v14 i256;
+        (v16.i256, v17.i1) = uaddo v15 2.i256;
         br v17 block2 block4;
 
     block4:
@@ -80,9 +80,9 @@ func private %bump__gb2d8(v0.objref<@layout_0>) {
         jump block1;
 
     block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        (v6.i256, v7.i1) = uaddo v4 1.i256;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        (v6.i256, v7.i1) = uaddo v5 1.i256;
         br v7 block2 block3;
 
     block2:
@@ -93,9 +93,9 @@ func private %bump__gb2d8(v0.objref<@layout_0>) {
     block3:
         v13.objref<i256> = obj.proj v0 0.i256;
         obj.store v13 v6;
-        v14.objref<i256> = obj.proj v0 1.i256;
-        v15.i256 = obj.load v14;
-        (v17.i256, v18.i1) = uaddo v15 2.i256;
+        v15.objref<i256> = obj.proj v0 1.i256;
+        v16.i256 = obj.load v15;
+        (v17.i256, v18.i1) = uaddo v16 2.i256;
         br v18 block2 block4;
 
     block4:

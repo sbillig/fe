@@ -551,10 +551,10 @@ func inline(always) private %decode_runtime_args__g48a0(v0.objref<@layout_5>) {
         jump block1;
 
     block1:
-        v2.@layout_2 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 0.i256;
-        call %decode_from_prechecked_head__gebe5 v2 4.i256 v4;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 0.i256;
+        call %decode_from_prechecked_head__gebe5 v1 4.i256 v3;
         return;
 }
 
@@ -563,10 +563,10 @@ func inline(always) private %decode_runtime_args__g490a(v0.objref<@layout_5>) {
         jump block1;
 
     block1:
-        v2.@layout_2 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 0.i256;
-        call %decode_from_prechecked_head__gb38b v2 4.i256 v4;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 0.i256;
+        call %decode_from_prechecked_head__gb38b v1 4.i256 v3;
         return;
 }
 
@@ -575,11 +575,11 @@ func inline(always) private %decode_runtime_args__g7f87(v0.objref<@layout_5>) ->
         jump block1;
 
     block1:
-        v2.@layout_2 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 32.i256;
-        v7.@layout_3 = call %decode_from_prechecked_head__gaa67 v2 4.i256 v4;
-        return v7;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 32.i256;
+        v6.@layout_3 = call %decode_from_prechecked_head__gaa67 v1 4.i256 v3;
+        return v6;
 }
 
 func private %decode_u64_word(v0.i256) -> i64 {
@@ -1176,8 +1176,8 @@ func inline(always) private %word_at(v0.@layout_2, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 0.i256;
-        v6.i256 = add v4 v1;
+        v5.i256 = extract_value v0 0.i256;
+        v6.i256 = add v5 v1;
         v7.i256 = evm_calldata_load v6;
         return v7;
 }

@@ -298,10 +298,10 @@ func inline(always) private %decode_runtime_args(v0.objref<@layout_4>) {
         jump block1;
 
     block1:
-        v2.@layout_2 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 0.i256;
-        call %decode_from_prechecked_head v2 4.i256 v4;
+        v1.@layout_2 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 0.i256;
+        call %decode_from_prechecked_head v1 4.i256 v3;
         return;
 }
 

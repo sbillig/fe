@@ -116,11 +116,11 @@ func private %impl_Point__area(v0.objref<@layout_2>) -> i256 {
         jump block1;
 
     block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
+        v3.objref<i256> = obj.proj v0 1.i256;
         v4.i256 = obj.load v3;
-        v6.objref<i256> = obj.proj v0 1.i256;
+        v6.objref<i256> = obj.proj v0 0.i256;
         v7.i256 = obj.load v6;
-        (v8.i256, v9.i1) = umulo v4 v7;
+        (v8.i256, v9.i1) = umulo v7 v4;
         br v9 block2 block3;
 
     block2:
@@ -250,9 +250,9 @@ func private %dispatch() {
         v41.objref<i256> = obj.proj v1 0.i256;
         v42.i256 = extract_value v40 0.i256;
         obj.store v41 v42;
-        v43.objref<i256> = obj.proj v1 0.i256;
-        v44.i256 = obj.load v43;
-        (v46.i256, v47.i1) = uaddo v44 3.i256;
+        v44.objref<i256> = obj.proj v1 0.i256;
+        v45.i256 = obj.load v44;
+        (v46.i256, v47.i1) = uaddo v45 3.i256;
         br v47 block12 block15;
 
     block6:
@@ -293,9 +293,9 @@ func private %dispatch() {
     block13:
         v27.objref<i256> = obj.proj v0 0.i256;
         obj.store v27 v23;
-        v28.objref<i256> = obj.proj v0 1.i256;
-        v29.i256 = obj.load v28;
-        (v31.i256, v32.i1) = uaddo v29 2.i256;
+        v29.objref<i256> = obj.proj v0 1.i256;
+        v30.i256 = obj.load v29;
+        (v31.i256, v32.i1) = uaddo v30 2.i256;
         br v32 block12 block14;
 
     block14:
@@ -438,8 +438,8 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         v23.i256 = call %impl_MemBuffer__ptr v0;
         v24.i256 = call %impl_MemBuffer__len v0;
         v25.i256 = add v23 v24;
-        v27.i256 = call %impl_MemBuffer__len v0;
-        (v28.i256, v29.i1) = usubo v1 v27;
+        v26.i256 = call %impl_MemBuffer__len v0;
+        (v28.i256, v29.i1) = usubo v1 v26;
         br v29 block10 block12;
 
     block7:

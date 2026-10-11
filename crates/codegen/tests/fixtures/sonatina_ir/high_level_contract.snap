@@ -605,10 +605,10 @@ func inline(always) private %decode_runtime_args__gf173(v0.objref<@layout_6>) {
         jump block1;
 
     block1:
-        v2.@layout_4 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 0.i256;
-        call %decode_from_prechecked_head__g5ec4 v2 4.i256 v4;
+        v1.@layout_4 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 0.i256;
+        call %decode_from_prechecked_head__g5ec4 v1 4.i256 v3;
         return;
 }
 
@@ -617,10 +617,10 @@ func inline(always) private %decode_runtime_args__g235a(v0.objref<@layout_6>) {
         jump block1;
 
     block1:
-        v2.@layout_4 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 0.i256;
-        call %decode_from_prechecked_head__gf38d v2 4.i256 v4;
+        v1.@layout_4 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 0.i256;
+        call %decode_from_prechecked_head__gf38d v1 4.i256 v3;
         return;
 }
 
@@ -629,11 +629,11 @@ func inline(always) private %decode_runtime_args__g9e33(v0.objref<@layout_6>) ->
         jump block1;
 
     block1:
-        v2.@layout_4 = call %input;
-        v4.i256 = call %impl_trait_CallData__len v2;
-        call %validate_runtime_head v4 4.i256 32.i256;
-        v7.@layout_4 = call %decode_from_prechecked_head__gc4b9 v2 4.i256 v4;
-        return v7;
+        v1.@layout_4 = call %input;
+        v3.i256 = call %impl_trait_CallData__len v1;
+        call %validate_runtime_head v3 4.i256 32.i256;
+        v6.@layout_4 = call %decode_from_prechecked_head__gc4b9 v1 4.i256 v3;
+        return v6;
 }
 
 func private %decoder_new() -> @layout_2 {
@@ -915,9 +915,9 @@ func inline(always) private %read_word(v0.objref<@layout_2>, v1.objref<@layout_3
         jump block1;
 
     block1:
-        v4.objref<i256> = obj.proj v0 0.i256;
-        v5.i256 = obj.load v4;
-        (v7.i256, v8.i1) = uaddo v5 32.i256;
+        v5.objref<i256> = obj.proj v0 0.i256;
+        v6.i256 = obj.load v5;
+        (v7.i256, v8.i1) = uaddo v6 32.i256;
         br v8 block6 block7;
 
     block2:
@@ -1236,8 +1236,8 @@ func inline(always) private %impl_trait_CallData__word_at(v0.@layout_4, v1.i256)
         jump block1;
 
     block1:
-        v4.i256 = extract_value v0 0.i256;
-        v6.i256 = add v4 v1;
+        v5.i256 = extract_value v0 0.i256;
+        v6.i256 = add v5 v1;
         v7.i256 = evm_calldata_load v6;
         return v7;
 }
