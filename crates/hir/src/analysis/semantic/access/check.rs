@@ -49,7 +49,7 @@ use crate::{
             ty_is_snapshot,
         },
     },
-    hir_def::{CallableDef, FuncParamMode, Partial, Stmt, scope_graph::ScopeId},
+    hir_def::{BinOp, CallableDef, Expr, FuncParamMode, Partial, Stmt, scope_graph::ScopeId},
     semantic::{EffectRequirementKey, ProviderSource},
 };
 
@@ -1478,6 +1478,30 @@ impl<'a, 'db> Analysis<'a, 'db> {
         SemanticDiagnostic::new(self.instance, kind, message, self.span(origin))
     }
 
+    /// The mode a method call or an overloaded index takes `origin` in, if
+    /// `origin` is its receiver.
+    fn receiver_mode(&self, origin: SemOrigin<'db>) -> Option<FuncParamMode> {
+        let SemOrigin::Expr(expr) = origin else {
+            return None;
+        };
+        let body = self.body.template_owner.body(self.db)?;
+        let (call, _) = body.exprs(self.db).iter().find(|(_, data)| {
+            matches!(
+                data,
+                Partial::Present(
+                    Expr::MethodCall(receiver, ..) | Expr::Bin(receiver, _, BinOp::Index)
+                ) if *receiver == expr
+            )
+        })?;
+        let callable = self
+            .instance
+            .key(self.db)
+            .typed_body(self.db)
+            .callable_expr(call)?
+            .callable_def();
+        Some(callable.param_mode(self.db, 0))
+    }
+
     /// Whether `origin` is a pattern binding or a `let` initializer: a value
     /// bound by name.
     fn binds_by_value(&self, origin: SemOrigin<'db>) -> bool {
@@ -1931,8 +1955,32 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     },
                     space.pretty()
                 ),
+                // A `mut` receiver is held for reading until its own access
+                // opens after the arguments.
+                None if kind == MemoryAccessKind::Read
+                    && self.receiver_mode(origin) == Some(FuncParamMode::Mut) =>
+                {
+                    format!("cannot {} this place", verb(MemoryAccessKind::MutAccess))
+                }
                 None => format!("cannot {} this place", verb(kind)),
             };
+            // A call holds its receiver for reading from before its
+            // arguments until the call.
+            if data.kind == TokenKind::Access
+                && data.mode == BorrowKind::Ref
+                && self.receiver_mode(data.origin).is_some()
+            {
+                let mut diag = self.diag(
+                    SemanticDiagnosticKind::AccessConflict,
+                    origin,
+                    format!("{action} while it is the receiver of a call"),
+                );
+                diag.push_secondary(
+                    "held from here until the call".into(),
+                    self.span(data.origin),
+                );
+                return Err(diag);
+            }
             let mut diag = self.diag(
                 SemanticDiagnosticKind::AccessConflict,
                 origin,

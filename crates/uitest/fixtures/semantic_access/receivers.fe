@@ -53,3 +53,24 @@ fn argument_moves_receiver() {
     var holder = make()
     holder.set(holder.take())
 }
+
+// Accepted: an argument reads a receiver reached through a `mut` parameter or
+// a `mut` access.
+fn argument_reads_access_receiver(_ holder: mut Holder) {
+    holder.set(holder.len())
+    let alias = mut holder
+    alias.set(alias.len())
+}
+
+// Rejected: an argument writes a receiver reached through a `mut` parameter,
+// as for an owned one.
+fn argument_writes_param_receiver(_ holder: mut Holder) {
+    holder.set(reset(mut holder))
+}
+
+// Rejected: likewise through a `mut` access.
+fn argument_writes_access_receiver() {
+    var holder = make()
+    let alias = mut holder
+    alias.set(reset(mut alias))
+}

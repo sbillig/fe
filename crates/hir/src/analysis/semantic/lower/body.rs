@@ -221,6 +221,9 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) loop_stack: Vec<LoopScope>,
     /// Loop bases, evaluated once before the method chain that drives them.
     loop_bases: FxHashMap<ExprId, SValueId>,
+    /// Receivers of projection calls in an assignment target, prepared
+    /// before the assigned value (`prepare_target`).
+    prepared_receivers: FxHashMap<ExprId, Receiver<'db>>,
     /// How many yield sites enclose the expression being lowered.
     pub(super) yield_depth: u32,
     /// The slide of the `yield` statement being lowered.
@@ -246,6 +249,11 @@ struct SmirLowerInputs<'a, 'db> {
 pub(super) enum Receiver<'db> {
     /// An owned receiver or an access carrier, evaluated already.
     Value(SValueId),
+    /// An access binding's carrier, its referent guarded until the call.
+    Carrier {
+        value: SValueId,
+        guard: Option<SStmtId>,
+    },
     /// A place whose `mut` access opens after the arguments, guarded until
     /// then.
     Place {
@@ -314,6 +322,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             next_stmt_id: 0,
             loop_stack: Vec::new(),
             loop_bases: FxHashMap::default(),
+            prepared_receivers: FxHashMap::default(),
             yield_depth: 0,
             slide: None,
             unsafe_splits: Vec::new(),
@@ -1030,9 +1039,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 unreachable!("unsupported macro calls must be rejected before semantic lowering")
             }
             Expr::MethodCall(receiver, _, _, args) => self.lower_call(expr, Some(*receiver), args),
-            // The value is evaluated before the target's sessions open, so it
-            // may read what the target is reached through.
+            // The target's root is resolved first, then the value, then the
+            // target's sessions open, so the value may read what the target
+            // is reached through.
             Expr::Assign(dst, src) => {
+                self.prepare_target(*dst);
                 let src = self.lower_expr_operand(*src);
                 if self.typed_body.semantic_expr_lowering(*dst).is_some() {
                     let dst = SPlace::new(self.lower_access(*dst));
@@ -1047,6 +1058,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
+                self.prepare_target(*dst);
                 let rhs = self.lower_expr_operand(*src);
                 let dst_place = self.lower_place(*dst);
                 let lhs = if dst_place.path.is_empty() {
@@ -1462,8 +1474,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             });
         match lowering {
             SemanticExprLowering::Call { callable } => {
-                let receiver =
-                    receiver.map(|receiver| (receiver, self.prepare_receiver(receiver, callable)));
+                let receiver = receiver.map(|receiver| {
+                    let prepared = self
+                        .prepared_receivers
+                        .remove(&expr)
+                        .unwrap_or_else(|| self.prepare_receiver(receiver, callable));
+                    (receiver, prepared)
+                });
                 self.lower_callable_expr(expr, ty, receiver, args, callable)
             }
             SemanticExprLowering::CodeRegionIntrinsic {
@@ -1628,10 +1645,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     /// Resolves a receiver before the call's arguments. A projection chain's
     /// sessions open after them. An owned receiver is an ordinary first
-    /// argument, and a view receiver's access opens now, which excludes the
-    /// same argument writes as opening it later would. A `mut` receiver's
-    /// place is guarded by a `ref` access until its own access opens after
-    /// the arguments; a temporary root is hoisted into a local.
+    /// argument. An access binding is passed by its carrier, and a view
+    /// receiver's access opens now; either excludes the arguments writing
+    /// the receiver, the binding's by a `ref` guard of its referent until
+    /// the call. A `mut` receiver's place is guarded the same way until its
+    /// own access opens after the arguments; a temporary root is hoisted
+    /// into a local.
     fn prepare_receiver(&mut self, receiver: ExprId, callable: &Callable<'db>) -> Receiver<'db> {
         if let Some(&base) = self.loop_bases.get(&receiver) {
             return Receiver::Value(base);
@@ -1652,9 +1671,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             return Receiver::Value(self.lower_access(receiver));
         }
-        if mode == FuncParamMode::View {
-            return Receiver::Value(self.lower_callable_argument(receiver, callable, 0));
-        }
         let ty = normalize_ty(
             self.db,
             self.expr_ty(receiver),
@@ -1666,9 +1682,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Partial::Present(Expr::Path(_))
         ) && let Some(binding) = self.typed_body.expr_binding(receiver)
             && !self.capture_places.contains_key(&binding)
-            && self.typed_body.binding_access(binding).is_some()
+            && let Some(access) = self.typed_body.binding_access(binding)
         {
-            return Receiver::Value(self.binding_locals[&binding]);
+            // Only a `mut` access lets the arguments write its referent.
+            let guard = access
+                .is_mut()
+                .then(|| self.try_lower_place(receiver))
+                .flatten()
+                .and_then(|place| {
+                    let guard = self.emit_borrow(receiver, place, BorrowKind::Ref, ty);
+                    self.last_stmt_id(guard)
+                });
+            return Receiver::Carrier {
+                value: self.binding_locals[&binding],
+                guard,
+            };
+        }
+        if mode == FuncParamMode::View {
+            return Receiver::Value(self.lower_callable_argument(receiver, callable, 0));
         }
         if let Some(place) = self.try_lower_place(receiver) {
             let guard = self.emit_borrow(receiver, place.clone(), BorrowKind::Ref, ty);
@@ -1678,6 +1709,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         Receiver::Place {
             place: SPlace::new(self.hoist_temporary(receiver, ty)),
             guard: None,
+        }
+    }
+
+    /// Resolves the root of an assignment target before the assigned value:
+    /// the innermost projection call on the target's path has its receiver
+    /// prepared now, hoisting a temporary root, and opens its session when
+    /// the target is lowered after the value.
+    fn prepare_target(&mut self, target: ExprId) {
+        let lowering = self.typed_body.semantic_expr_lowering(target);
+        match (target.data(self.db, self.body), lowering) {
+            (Partial::Present(Expr::Field(base, _)), _)
+            | (Partial::Present(Expr::Bin(base, _, BinOp::Index)), None) => {
+                self.prepare_target(*base)
+            }
+            (
+                Partial::Present(
+                    Expr::MethodCall(receiver, ..) | Expr::Bin(receiver, _, BinOp::Index),
+                ),
+                Some(SemanticExprLowering::Call { callable }),
+            ) => {
+                let prepared = self.prepare_receiver(*receiver, callable);
+                self.prepared_receivers.insert(target, prepared);
+            }
+            _ => {}
         }
     }
 
@@ -1700,6 +1755,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     fn open_receiver(&mut self, receiver: ExprId, prepared: Receiver<'db>) -> SValueId {
         match prepared {
             Receiver::Value(value) => value,
+            Receiver::Carrier { value, guard } => {
+                if let Some(guard) = guard {
+                    self.push_synthetic_stmt(SStmtKind::End { access: guard });
+                }
+                value
+            }
             Receiver::Chain(root, prepared) => {
                 let Some(SemanticExprLowering::Call { callable: inner }) =
                     self.typed_body.semantic_expr_lowering(receiver)

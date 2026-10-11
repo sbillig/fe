@@ -995,11 +995,11 @@ func inline(always) private %decode_runtime_args__gadcc(v0.objref<@layout_7>) ->
         jump block1;
 
     block1:
-        v1.@layout_0 = call %input;
-        v3.i256 = call %impl_trait_CallData__len v1;
-        call %validate_runtime_head v3 4.i256 96.i256;
-        v6.@layout_5 = call %decode_from_prechecked_head__gdea7 v1 4.i256 v3;
-        return v6;
+        v2.@layout_0 = call %input;
+        v4.i256 = call %impl_trait_CallData__len v2;
+        call %validate_runtime_head v4 4.i256 96.i256;
+        v7.@layout_5 = call %decode_from_prechecked_head__gdea7 v2 4.i256 v4;
+        return v7;
 }
 
 func inline(always) private %decode_runtime_args__gbdfb(v0.objref<@layout_7>) -> @layout_1 {
@@ -1007,11 +1007,11 @@ func inline(always) private %decode_runtime_args__gbdfb(v0.objref<@layout_7>) ->
         jump block1;
 
     block1:
-        v1.@layout_0 = call %input;
-        v3.i256 = call %impl_trait_CallData__len v1;
-        call %validate_runtime_head v3 4.i256 64.i256;
-        v6.@layout_1 = call %decode_from_prechecked_head__g71a6 v1 4.i256 v3;
-        return v6;
+        v2.@layout_0 = call %input;
+        v4.i256 = call %impl_trait_CallData__len v2;
+        call %validate_runtime_head v4 4.i256 64.i256;
+        v7.@layout_1 = call %decode_from_prechecked_head__g71a6 v2 4.i256 v4;
+        return v7;
 }
 
 func private %decoder_new() -> @layout_1 {

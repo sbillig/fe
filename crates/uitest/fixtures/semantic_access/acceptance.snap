@@ -97,9 +97,9 @@ error[16-0001]: access conflict in `fn Case33CopyArraySpace::__init__`
     ┌─ acceptance.fe:432:9
     │
 431 │         let x = ref cells.at(0)
-    │                     ----- access opened here
+    │                     ----- held from here until the call
 432 │         ping()
-    │         ^^^^^^ this call may write storage while a `ref` access of it is open
+    │         ^^^^^^ this call may write storage while it is the receiver of a call
 
 error[16-0001]: access conflict in `fn Case33CopyArrayMutSpace::__init__`
     ┌─ acceptance.fe:442:9

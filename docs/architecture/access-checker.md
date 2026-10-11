@@ -58,9 +58,13 @@ flowchart TD
 For a call `r.m(args)` the elaboration order is fixed: the receiver's root
 place is resolved first (a temporary is hoisted into a local), the arguments
 are evaluated, the receiver chain's projection sessions open innermost first,
-and the receiver's access opens last. A `mut` receiver's place is guarded by a
+and the receiver's access opens last. A `mut` receiver's place, or the
+referent of a `mut` access binding passed as the receiver, is guarded by a
 `ref` access while the arguments run, so they may read the receiver but
-neither write nor move it.
+neither write nor move it. An assignment follows the same order: its
+target's root is resolved first (`prepare_target` prepares the receiver of
+the innermost projection call on the target's path), then the value is
+evaluated, then the target's sessions open.
 
 A view argument's transport follows its type (`ty_is_snapshot`): a snapshot,
 meaning a scalar or handle (a primitive, a raw pointer, an effect handle or

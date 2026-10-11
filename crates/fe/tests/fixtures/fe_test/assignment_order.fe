@@ -1,7 +1,9 @@
-// An assignment evaluates its value before the target's sessions open: the
-// value may read what the target is reached through, and a compound
-// assignment opens one session on its target after the value is read.
+// An assignment resolves its target's root, then evaluates its value, then
+// opens the target's sessions: the value may read what the target is reached
+// through, and a compound assignment opens one session on its target after the
+// value is read.
 use core::ops::{Index, IndexMut}
+use core::ptr::MemBuffer
 use std::evm::{Evm, StorageMap}
 
 struct Cells { cells: [u256; 2] }
@@ -50,4 +52,23 @@ fn map_value_first() uses (evm: mut Evm) {
     let c = evm.create2<C>(value: 0, args: (), salt: 1)
     let v: u256 = evm.call(addr: c, gas: 300000, value: 0, message: Msg::Run {})
     assert(v == 905)
+}
+
+fn make() -> MemBuffer uses (log: mut u256) {
+    log = log * 10 + 1
+    MemBuffer::alloc(1)
+}
+
+fn seven() -> u8 uses (log: mut u256) {
+    log = log * 10 + 2
+    7
+}
+
+#[test]
+fn temporary_root_first() {
+    var log: u256 = 0
+    with (log) {
+        make()[0] = seven()
+    }
+    assert(log == 12)
 }
