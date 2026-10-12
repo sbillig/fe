@@ -15,7 +15,7 @@
 //! if operators.add(operator) { /* newly added */ }
 //! let n = operators.len()
 //! ```
-use core::abi::{AbiSize, DynArray, Encode, store_word}
+use core::abi::{AbiFrame, AbiSize, DynArray, Encode, store_word}
 use core::iter::{Bidirectional, Collection}
 use core::option::Option
 use core::ptr
@@ -102,11 +102,15 @@ impl<T: SolPacked> SolEnumerableSet<T> {
         let len = self.len()
         let size = 32 + len * 32
         let data = ptr::alloc_bytes(size)
-        unsafe { store_word(ptr: data, value: len) }
+        unsafe {
+            ptr::zero_bytes(data, size)
+            store_word(ptr: data, value: len)
+        }
         var i: u256 = 0
         while i < len {
             let value = self.get(i)
-            unsafe { value.encode(ptr::offset_bytes(data, 32 + i * 32)) }
+            // The element's zeroed word, which only this encoding writes.
+            value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32 + i * 32), len: 32) })
             i += 1
         }
         unsafe { DynArray::from_abi_tail(data, len, size) }

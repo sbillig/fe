@@ -5,6 +5,7 @@ use core::{ptr, size_of}
 use core::abi::{
     Abi,
     AbiDecoder,
+    AbiFrame,
     AbiSize,
     AbiSpan,
     ByteInput,
@@ -13,7 +14,6 @@ use core::abi::{
     encode_alloc,
     encode_return_alloc,
     encode_single_root_alloc,
-    store_word,
 }
 use core::contracts::ContractHost
 use core::error::ErrorVariant
@@ -96,8 +96,8 @@ impl<A: Abi> Decode<A> for Address {
 }
 
 impl<A: Abi> Encode<A> for Address {
-    unsafe fn encode(own self, _ ptr: *u8) {
-        store_word(ptr: ptr, value: self.inner)
+    fn encode(own self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.inner)
     }
 }
 
@@ -1411,10 +1411,11 @@ impl ContractHost for Evm {
         where T: Encode<A> + AbiSize
     {
         if !T::IS_DYNAMIC {
+            // Each fresh buffer is zeroed, and only the encoding writes it.
             if T::HEAD_SIZE <= 32 {
                 let out = ptr::FixedMemBuffer<32>::alloc()
                 unsafe {
-                    value.encode(out.ptr())
+                    value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
                         data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE),
                     )
@@ -1422,14 +1423,14 @@ impl ContractHost for Evm {
             } else if T::HEAD_SIZE <= 64 {
                 let out = ptr::FixedMemBuffer<64>::alloc()
                 unsafe {
-                    value.encode(out.ptr())
+                    value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
                         data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE),
                     )
                 }
             } else {
                 let out = MemBuffer::alloc(T::HEAD_SIZE)
-                unsafe { value.encode(out.ptr()) }
+                value.encode(unsafe { AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE) })
                 self.return_data(data: out.span())
             }
         } else {
