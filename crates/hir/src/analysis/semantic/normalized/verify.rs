@@ -930,7 +930,7 @@ fn verify_mutation<'db>(
             .value(carrier)
             .and_then(|value| value.ty.as_capability(db))
             .map(|(kind, _)| kind),
-        NPlaceBase::Root(_) => None,
+        NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
     };
     let mutable = match place.base {
         NPlaceBase::Root(root) => {
@@ -943,11 +943,10 @@ fn verify_mutation<'db>(
                     && matches!(root.kind, NRootKind::LocalSlot { .. }))
         }
         NPlaceBase::CapabilityTarget { carrier } => {
-            body.value(carrier)
-                .is_some_and(|value| value.ty.as_ptr(db).is_some())
-                || capability == Some(CapabilityKind::Mut)
+            capability == Some(CapabilityKind::Mut)
                 || carrier_has_mutable_view_authority(db, body, carrier)
         }
+        NPlaceBase::Deref { .. } => true,
     };
     if mutable {
         Ok(())
@@ -1011,7 +1010,7 @@ fn value_has_mutable_view_origin<'db>(
         NExpr::Load { place, .. } | NExpr::Borrow { place, .. } | NExpr::MakeView { place, .. } => {
             match place.base {
                 NPlaceBase::CapabilityTarget { carrier } => Some(carrier),
-                NPlaceBase::Root(_) => None,
+                NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
             }
         }
         NExpr::CodeRegionRef { .. }

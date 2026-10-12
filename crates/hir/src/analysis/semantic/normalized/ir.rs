@@ -77,14 +77,12 @@ impl<'db> NormalizedBody<'db> {
     pub fn place_base_ty(&self, db: &'db dyn HirAnalysisDb, base: NPlaceBase) -> Option<TyId<'db>> {
         match base {
             NPlaceBase::Root(root) => Some(self.root(root)?.ty),
-            NPlaceBase::CapabilityTarget { carrier } => {
-                self.value(carrier)?.ty.as_ptr(db).or_else(|| {
-                    self.value(carrier)?
-                        .ty
-                        .as_capability(db)
-                        .map(|(_, target)| target)
-                })
-            }
+            NPlaceBase::CapabilityTarget { carrier } => self
+                .value(carrier)?
+                .ty
+                .as_capability(db)
+                .map(|(_, target)| target),
+            NPlaceBase::Deref { pointer } => self.value(pointer)?.ty.as_ptr(db),
         }
     }
 
@@ -108,6 +106,7 @@ impl<'db> NormalizedBody<'db> {
     ) -> impl Iterator<Item = NValueId> + 'a {
         let base = match place.base {
             NPlaceBase::CapabilityTarget { carrier } => Some(carrier),
+            NPlaceBase::Deref { pointer } => Some(pointer),
             NPlaceBase::Root(root) => self.root(root).and_then(|root| match root.kind {
                 NRootKind::CapabilityRepresentation { carrier }
                 | NRootKind::Temporary { value: carrier } => Some(carrier),
@@ -263,7 +262,14 @@ pub struct NPlace<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NPlaceBase {
     Root(NRootId),
-    CapabilityTarget { carrier: NValueId },
+    /// The target of a capability value: a place the carrier reaches.
+    CapabilityTarget {
+        carrier: NValueId,
+    },
+    /// The pointee of a raw pointer value.
+    Deref {
+        pointer: NValueId,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]

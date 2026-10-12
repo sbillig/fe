@@ -925,6 +925,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         }
         let local = match place.base {
             NPlaceBase::CapabilityTarget { carrier } => self.env.value_local(carrier)?,
+            NPlaceBase::Deref { .. } => return None,
             NPlaceBase::Root(root) => match &self.env.body().normalized.root(root)?.kind {
                 NRootKind::LocalSlot { .. }
                 | NRootKind::Temporary { .. }

@@ -529,29 +529,19 @@ fn builtin_result_class<'db>(
         }
         RuntimeBuiltin::Malloc { size } => {
             verify_word_value(body, *size)?;
-            Ok(Some(RuntimeClass::opaque_raw_addr(
-                AddressSpaceKind::Memory,
-            )))
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::NativePtrIsNull { ptr } => {
-            if !matches!(
-                runtime_value_class(body, *ptr)?,
-                RuntimeClass::RawAddr { .. }
-            ) {
-                return Err(VerifyError::InvalidExprClass(*ptr));
-            }
+            verify_word_value(body, *ptr)?;
             Ok(Some(RuntimeClass::Scalar(ScalarClass {
                 repr: ScalarRepr::Bool,
                 role: ScalarRole::Plain,
             })))
         }
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
-            let class = runtime_value_class(body, *ptr)?.clone();
-            let RuntimeClass::RawAddr { .. } = class else {
-                return Err(VerifyError::InvalidExprClass(*ptr));
-            };
+            verify_word_value(body, *ptr)?;
             verify_word_value(body, *offset)?;
-            Ok(Some(class))
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Call {
             gas,

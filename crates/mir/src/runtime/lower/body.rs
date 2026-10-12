@@ -98,7 +98,7 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
+        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env, pointee_place_in_env,
         provider_address_space_to_runtime, provider_class_for_target_in_env, runtime_array_len,
         runtime_effect_handle_info, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
@@ -1752,7 +1752,7 @@ impl<'db> RmirEmitter<'db> {
         let len = self.alloc_u256_const(bb, bytes.len());
         let payload_size = 32 + bytes.len().next_multiple_of(32);
         let size = self.alloc_u256_const(bb, payload_size);
-        let (raw_ptr, ptr) = self.malloc_bytes(bb, size);
+        let ptr = self.malloc_bytes(bb, size);
 
         let layout = self.layout_for_ty(ty);
         let dst = self.alloc_runtime_temp(
@@ -1760,7 +1760,7 @@ impl<'db> RmirEmitter<'db> {
             RuntimeCarrier::Value(RuntimeClass::AggregateValue { layout }),
         );
         let ctor_elems = aggregate_ctor_elems_for_layout(self.db, layout, 3);
-        self.lower_aggregate_values(bb, dst, layout, &ctor_elems, &[raw_ptr, len, size]);
+        self.lower_aggregate_values(bb, dst, layout, &ctor_elems, &[ptr, len, size]);
         self.push_ignored_builtin(
             bb,
             crate::runtime::RuntimeBuiltin::Mstore {
@@ -1808,37 +1808,19 @@ impl<'db> RmirEmitter<'db> {
         dst
     }
 
-    fn malloc_bytes(&mut self, bb: RBlockId, size: RLocalId) -> (RLocalId, RLocalId) {
-        let ptr_ty = TyId::ptr_to(self.db, TyId::u8(self.db));
-        let ptr_class = self
-            .top_level_class_for_ty(ptr_ty, AddressSpaceKind::Memory)
-            .expect("u8 pointer should have a runtime class");
-        let RuntimeClass::RawAddr { .. } = ptr_class.clone() else {
-            panic!("u8 pointer should lower as a raw memory address");
-        };
-        let raw_ptr = self.alloc_runtime_temp(ptr_ty, RuntimeCarrier::Value(ptr_class));
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: raw_ptr,
-                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::Malloc { size }),
-            },
-        );
+    fn malloc_bytes(&mut self, bb: RBlockId, size: RLocalId) -> RLocalId {
         let ptr = self.alloc_runtime_temp(
-            TyId::u256(self.db),
-            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+            TyId::ptr_to(self.db, TyId::u8(self.db)),
+            RuntimeCarrier::Value(word_class()),
         );
         self.push_stmt(
             bb,
             RStmt::Assign {
                 dst: ptr,
-                expr: RExpr::Cast {
-                    value: raw_ptr,
-                    to: word_scalar_class(),
-                },
+                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::Malloc { size }),
             },
         );
-        (raw_ptr, ptr)
+        ptr
     }
 
     fn lower_assert_terminator(
@@ -1853,7 +1835,7 @@ impl<'db> RmirEmitter<'db> {
         };
         let payload_len = self.alloc_u256_const(bb, payload.len());
         let allocated_len = self.alloc_u256_const(bb, payload.len().next_multiple_of(32));
-        let (_, ptr) = self.malloc_bytes(bb, allocated_len);
+        let ptr = self.malloc_bytes(bb, allocated_len);
 
         for (idx, chunk) in payload.chunks(32).enumerate() {
             let addr = if idx == 0 {
@@ -2499,6 +2481,7 @@ impl<'db> RmirEmitter<'db> {
                     &place.path.iter().copied().collect::<Vec<_>>(),
                 );
             }
+            NPlaceBase::Deref { .. } => return false,
             NPlaceBase::Root(root_id) => match self.semantic_body.normalized.root(root_id) {
                 Some(root) => match &root.kind {
                     NRootKind::LocalSlot { .. }
@@ -3914,18 +3897,12 @@ impl<'db> RmirEmitter<'db> {
             }
             RuntimeBuiltinFuncKind::PtrOffsetBytes => {
                 let [ptr, offset] = args else { return None };
-                let RuntimeClass::RawAddr { space, pointee } = self.value_class(*ptr)? else {
-                    return None;
-                };
                 builtin(
                     crate::runtime::RuntimeBuiltin::PtrOffsetBytes {
                         ptr: *ptr,
                         offset: *offset,
                     },
-                    Some(RuntimeClass::RawAddr {
-                        space: *space,
-                        pointee: *pointee,
-                    }),
+                    Some(word.clone()),
                 )
             }
             RuntimeBuiltinFuncKind::PtrEq => {
@@ -5109,7 +5086,7 @@ impl<'db> RmirEmitter<'db> {
                         RuntimeArgSource::PlaceAddress(place, _)
                         | RuntimeArgSource::PlaceValue(place, _)
                         | RuntimeArgSource::ValueExtract { place, .. } => {
-                            matches!(place.base, NPlaceBase::CapabilityTarget { carrier } if carrier == value)
+                            matches!(place.base, NPlaceBase::CapabilityTarget { carrier } | NPlaceBase::Deref { pointer: carrier } if carrier == value)
                                 || matches!(place.base, NPlaceBase::Root(root) if self.semantic_body.root_local(root) == Some(local))
                                 || place.path.iter().any(|projection| matches!(projection,
                                     NDataProjection::Index(NIndex::Value(index)) if *index == value))
@@ -5307,6 +5284,25 @@ impl<'db> RmirEmitter<'db> {
                     .unwrap_or_else(|| self.runtime_value(local));
                 self.runtime_place_from_addr_value(value)
                     .or_else(|| self.try_semantic_place(bb, local))?
+            }
+            // A pointer is an address word; deref is its conversion to the
+            // pointee's address.
+            NPlaceBase::Deref { pointer } => {
+                let (space, class) = pointee_place_in_env(
+                    self.db,
+                    self.env,
+                    self.semantic_body.normalized.value(pointer)?.ty,
+                )?;
+                let word = self.read_normalized_value(bb, pointer);
+                let addr = self.coerce_value(
+                    bb,
+                    word,
+                    &RuntimeClass::raw_addr(self.db, space, class.clone()),
+                );
+                RuntimePlace {
+                    root: PlaceRoot::Ptr { addr, space, class },
+                    path: Box::default(),
+                }
             }
             NPlaceBase::Root(root) => match &self.semantic_body.normalized.root(root)?.kind {
                 NRootKind::LocalSlot { .. }
@@ -6201,6 +6197,10 @@ impl<'db> RmirEmitter<'db> {
                         self.semantic_body.value_local(carrier)
                     )
                 }
+                NPlaceBase::Deref { pointer } => format!(
+                    "deref pointer={pointer:?} source={:?}",
+                    self.semantic_body.value_local(pointer)
+                ),
                 NPlaceBase::Root(root) => format!(
                     "root={root:?} data={:?} source={:?}",
                     self.semantic_body.normalized.root(root),

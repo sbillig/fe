@@ -1438,8 +1438,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 .as_ptr(self.db)
                 .ok_or(NormalizeError::InvalidProjection)?;
             NPlace {
-                base: NPlaceBase::CapabilityTarget {
-                    carrier: value.value,
+                base: NPlaceBase::Deref {
+                    pointer: value.value,
                 },
                 path: NDataPath::empty(),
                 ty,
@@ -1505,12 +1505,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         source_local: SLocalId,
         place: NPlace<'db>,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
-        let target = place
-            .ty
-            .as_ptr(self.db)
+        let pointer_target = place.ty.as_ptr(self.db);
+        let target = pointer_target
             .or_else(|| place.ty.as_capability(self.db).map(|(_, target)| target))
             .ok_or(NormalizeError::InvalidProjection)?;
-        let carrier = self.emit_define(
+        let value = self.emit_define(
             block,
             None,
             origin,
@@ -1522,7 +1521,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             },
         )?;
         Ok(NPlace {
-            base: NPlaceBase::CapabilityTarget { carrier },
+            base: if pointer_target.is_some() {
+                NPlaceBase::Deref { pointer: value }
+            } else {
+                NPlaceBase::CapabilityTarget { carrier: value }
+            },
             path: NDataPath::empty(),
             ty: target,
             origin,
@@ -2054,6 +2057,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 .filter(|backing| backing.value == carrier)
                 .cloned()
                 .collect(),
+            // A pointee lies outside the pointer value's layout.
+            NPlaceBase::Deref { .. } => Vec::new(),
             NPlaceBase::Root(root) => match self.root_sources[root.index()].source_local {
                 Some(local) => self.normalize_layout_backings(value, local, block, origin)?,
                 None => Vec::new(),
@@ -2332,12 +2337,12 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             NPlaceBase::CapabilityTarget { carrier } => self
                 .values
                 .get(carrier.index())
-                .and_then(|value| {
-                    value
-                        .ty
-                        .as_ptr(self.db)
-                        .or_else(|| value.ty.as_capability(self.db).map(|(_, target)| target))
-                })
+                .and_then(|value| value.ty.as_capability(self.db).map(|(_, target)| target))
+                .ok_or(NormalizeError::InvalidProjection),
+            NPlaceBase::Deref { pointer } => self
+                .values
+                .get(pointer.index())
+                .and_then(|value| value.ty.as_ptr(self.db))
                 .ok_or(NormalizeError::InvalidProjection),
         }
     }
@@ -2426,7 +2431,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             {
                 ReadMode::Copy
             }
-            NPlaceBase::CapabilityTarget { .. } => {
+            NPlaceBase::CapabilityTarget { .. } | NPlaceBase::Deref { .. } => {
                 if self.origin_is_implicit_move(origin) {
                     if self.ty_is_copy_or_direct_carrier(ty) {
                         ReadMode::Copy

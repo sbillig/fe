@@ -51,6 +51,7 @@ pub(super) fn resolved_effect_arg_address_space<'db>(
             NPlaceBase::CapabilityTarget { carrier } => {
                 local_provider_address_space(db, body, body.value_local(carrier)?)
             }
+            NPlaceBase::Deref { .. } => Some(ProviderAddressSpace::Memory),
         },
     });
     address_space_from_provider(provider.unwrap_or_else(|| {

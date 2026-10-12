@@ -67,7 +67,7 @@ use super::{
     },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
+        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env, pointee_place_in_env,
         provider_address_space_to_runtime, provider_class_for_target_in_env, runtime_array_len,
         runtime_interface_ty_in_env, runtime_repr_ty_in_env, runtime_zero_sized_transport_ty,
         runtime_zero_sized_ty, scalar_class_for_ty_in_env, stored_class_for_ty_in_env,
@@ -435,8 +435,9 @@ fn runtime_expr_source_locals(body: &RuntimeSemanticBody<'_>, expr: &NExpr<'_>) 
                     push_unique(&mut sources, local);
                 }
             }
-            NPlaceBase::CapabilityTarget { carrier } => {
-                if let Some(local) = body.value_local(carrier) {
+            NPlaceBase::CapabilityTarget { carrier: value }
+            | NPlaceBase::Deref { pointer: value } => {
+                if let Some(local) = body.value_local(value) {
                     push_unique(&mut sources, local);
                 }
             }
@@ -903,6 +904,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     .then(|| self.body.value_local(carrier))
                     .flatten()
             }
+            NPlaceBase::Deref { .. } => None,
         };
         if let Some(local) = local {
             let carrier = carriers.get(local.index())?;
@@ -987,7 +989,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         let root_class =
             normalized_place_root_transport_class_in_context(self, place.base, carriers)?;
         let (root_space, force_raw) = match place.base {
-            NPlaceBase::CapabilityTarget { .. } => (
+            NPlaceBase::CapabilityTarget { .. } | NPlaceBase::Deref { .. } => (
                 root_class
                     .address_space()
                     .unwrap_or(AddressSpaceKind::Memory),
@@ -1267,13 +1269,6 @@ fn build_local_static_facts<'db>(
             CompiledMaterializationPlan::Erased
         } else {
             match interface {
-                SemanticLocalKind::DirectValue
-                    if runtime_repr_ty_in_env(db, type_env, local_data.ty)
-                        .as_ptr(db)
-                        .is_some() =>
-                {
-                    CompiledMaterializationPlan::SemanticValue
-                }
                 SemanticLocalKind::DirectValue => top_level_class_for_ty_in_env(
                     db,
                     type_env,
@@ -1314,6 +1309,7 @@ fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLoc
     let place_uses_local = |place: &NPlace<'_>| match place.base {
         NPlaceBase::Root(root) => body.root_local(root) == Some(local),
         NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier) == Some(local),
+        NPlaceBase::Deref { .. } => false,
     };
     let mutable_place_uses_local = |place: &NPlace<'_>| {
         place_uses_local(place)
@@ -1322,7 +1318,7 @@ fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLoc
                     .normalized
                     .root(root)
                     .is_some_and(|root| matches!(root.mutability, Mutability::Mutable)),
-                NPlaceBase::CapabilityTarget { .. } => true,
+                NPlaceBase::CapabilityTarget { .. } | NPlaceBase::Deref { .. } => true,
             }
     };
     body.normalized.blocks.iter().any(|block| {
@@ -1574,9 +1570,10 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                                 RuntimeClass::opaque_raw_addr(address_space_from_provider(provider))
                             }),
                         },
-                        NPlaceBase::CapabilityTarget { .. } => provider.map(|provider| {
-                            RuntimeClass::opaque_raw_addr(address_space_from_provider(provider))
-                        }),
+                        NPlaceBase::CapabilityTarget { .. } | NPlaceBase::Deref { .. } => provider
+                            .map(|provider| {
+                                RuntimeClass::opaque_raw_addr(address_space_from_provider(provider))
+                            }),
                     }
                 };
                 ExprStaticFacts::Borrow { provider_fallback }
@@ -2601,6 +2598,14 @@ fn normalized_place_root_transport_class_in_context<'db>(
         NPlaceBase::CapabilityTarget { carrier } => {
             normalized_value_runtime_class(env, carrier, carriers)
         }
+        NPlaceBase::Deref { pointer } => {
+            let (space, class) = pointee_place_in_env(
+                env.db,
+                env.type_env(),
+                env.body.normalized.value(pointer)?.ty,
+            )?;
+            Some(RuntimeClass::raw_addr(env.db, space, class))
+        }
         NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
             NRootKind::LocalSlot { .. } | NRootKind::Temporary { .. } => {
                 let local = env.body.root_local(root)?;
@@ -2673,6 +2678,12 @@ fn normalized_place_root_class_in_context<'db>(
                 target_ty,
             )
         }
+        NPlaceBase::Deref { pointer } => pointee_place_in_env(
+            env.db,
+            env.type_env(),
+            env.body.normalized.value(pointer)?.ty,
+        )
+        .map(|(_, class)| class),
         NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
             NRootKind::LocalSlot { .. }
             | NRootKind::Temporary { .. }

@@ -451,9 +451,7 @@ impl<'db> RawTransportTracer<'_, 'db> {
                         return;
                     }
                     NExpr::Borrow { place, .. }
-                        if is_borrow
-                            && matches!(place.base, NPlaceBase::CapabilityTarget { carrier }
-                                if self.body.values[carrier.index()].ty.as_ptr(self.db).is_some()) =>
+                        if is_borrow && matches!(place.base, NPlaceBase::Deref { .. }) =>
                     {
                         return self.record(projection, Some(AddressSpaceKind::Memory));
                     }

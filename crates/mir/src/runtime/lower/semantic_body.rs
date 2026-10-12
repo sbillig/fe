@@ -241,7 +241,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                     }
                     NStatementKind::End { .. } => {}
                     NStatementKind::Store { destination, .. } => {
-                        if self.place_source(db, destination) == Some(local) {
+                        if self.place_source(destination) == Some(local) {
                             // Whole-local assignments update its value binding.
                             // They need physical storage only when another use
                             // requires an address, including across loop iterations.
@@ -277,19 +277,19 @@ impl<'db> RuntimeSemanticBody<'db> {
     ) {
         match expr {
             NExpr::Load { place, .. } => {
-                if self.place_source(db, place) == Some(local) {
+                if self.place_source(place) == Some(local) {
                     demand.read_by_place = true;
                 }
             }
             NExpr::Borrow { place, kind, .. } => {
-                if self.place_source(db, place) == Some(local) {
+                if self.place_source(place) == Some(local) {
                     demand.borrowed_or_addr_taken = true;
                     demand.mut_borrowed_or_addr_taken =
                         matches!(kind, hir::analysis::ty::ty_def::BorrowKind::Mut);
                 }
             }
             NExpr::MakeView { place, .. } => {
-                if self.place_source(db, place) == Some(local) {
+                if self.place_source(place) == Some(local) {
                     // Read-only views may carry an immutable value directly.
                     // Other writes, borrows, or address consumers still demand storage.
                     demand.read_by_place = true;
@@ -309,7 +309,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                         || matches!(
                             self.normalized.defining_expr(arg.value),
                             Some((_, NExpr::MakeView { place, .. }))
-                                if self.place_source(db, place) == Some(local)
+                                if self.place_source(place) == Some(local)
                         ))
                         && params_needing_place(db, get_or_build_semantic_instance(db, callee.key))
                             .get(index)
@@ -319,7 +319,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                 for arg in effect_args {
                     match &arg.arg {
                         NEffectArgValue::Place(place)
-                            if self.place_source(db, place) == Some(local) =>
+                            if self.place_source(place) == Some(local) =>
                         {
                             demand.passed_by_place = true;
                             demand.mut_borrowed_or_addr_taken |= arg.required_mut;
@@ -359,19 +359,14 @@ impl<'db> RuntimeSemanticBody<'db> {
         }
     }
 
-    fn place_source(&self, db: &'db dyn HirAnalysisDb, place: &NPlace<'db>) -> Option<SLocalId> {
+    fn place_source(&self, place: &NPlace<'db>) -> Option<SLocalId> {
         match place.base {
             NPlaceBase::Root(root) => self.root_local(root),
-            NPlaceBase::CapabilityTarget { carrier } => {
-                // Accessing a raw pointee does not take the address of the
-                // pointer value. Its own binding needs storage only for uses
-                // of a Root place, such as borrowing or replacing that binding.
-                if self.normalized.value(carrier)?.ty.as_ptr(db).is_some() {
-                    None
-                } else {
-                    self.value_local(carrier)
-                }
-            }
+            NPlaceBase::CapabilityTarget { carrier } => self.value_local(carrier),
+            // Accessing a pointee does not take the address of the pointer
+            // value. Its own binding needs storage only for uses of a Root
+            // place, such as borrowing or replacing that binding.
+            NPlaceBase::Deref { .. } => None,
         }
     }
 }

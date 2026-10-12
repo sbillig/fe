@@ -151,8 +151,10 @@ impl<'db> NStatementKind<'db> {
         for access in &accesses {
             let path = match access.target {
                 AccessTarget::Place(place) => {
-                    if let NPlaceBase::CapabilityTarget { carrier } = place.base {
-                        address_values.push(carrier);
+                    if let NPlaceBase::CapabilityTarget { carrier: value }
+                    | NPlaceBase::Deref { pointer: value } = place.base
+                    {
+                        address_values.push(value);
                     }
                     Some(&place.path)
                 }

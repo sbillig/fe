@@ -12,7 +12,10 @@ use common::layout::StorageLane;
 use common::origin::OriginExportKey;
 use driver::DriverDataBase;
 use hir::{
-    analysis::{semantic::FieldIndex, ty::ty_check::BodyOwner},
+    analysis::{
+        semantic::FieldIndex,
+        ty::{ty_check::BodyOwner, ty_def::TyId},
+    },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
@@ -316,17 +319,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn lower_signature(&mut self, function: RuntimeFunction<'db>) -> Result<Signature, LowerError> {
         let instance = function.instance(self.db);
-        let signature = instance.interface_signature(self.db);
-        let mut args = signature
-            .params
-            .iter()
-            .map(|param| self.ty_for_signature_class(instance, &param.class))
-            .collect::<Result<Vec<_>, _>>()?;
-        let ret = signature
-            .ret
-            .as_ref()
-            .map(|class| self.ty_for_signature_class(instance, class))
-            .transpose()?;
+        let (mut args, ret) = self.signature_tys(instance)?;
         let symbol = self.function_symbol(instance);
         if self.is_native_target()
             && function.linkage(self.db) == RuntimeLinkage::External
@@ -685,21 +678,46 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         name
     }
 
-    // Runtime raw addresses use word values internally. Host calls instead pass
-    // machine pointers directly, without the native i256 indirect-value ABI.
-    fn ty_for_signature_class(
+    /// The parameter and return types of `instance`. Pointers are address
+    /// words; host calls instead pass a declared pointer as a machine pointer,
+    /// without the native i256 indirect-value ABI.
+    fn signature_tys(
         &mut self,
         instance: RuntimeInstance<'db>,
-        class: &RuntimeClass<'db>,
-    ) -> Result<Type, LowerError> {
-        if self.is_native_target()
-            && instance.is_external_declaration(self.db)
-            && matches!(class, RuntimeClass::RawAddr { .. })
-        {
-            Ok(self.builder.ptr_type(Type::I8))
+    ) -> Result<(Vec<Type>, Option<Type>), LowerError> {
+        let signature = instance.interface_signature(self.db);
+        let host = if self.is_native_target() && instance.is_external_declaration(self.db) {
+            instance
+                .key(self.db)
+                .semantic(self.db)
+                .and_then(|semantic| match semantic.key(self.db).owner(self.db) {
+                    BodyOwner::Func(func) => Some(func),
+                    _ => None,
+                })
         } else {
-            self.ty_for_class(class)
+            None
+        };
+        let db = self.db;
+        let declared_pointer = |ty: Option<TyId<'db>>| ty.is_some_and(|ty| ty.as_ptr(db).is_some());
+        let mut params = Vec::with_capacity(signature.params.len());
+        for (idx, param) in signature.params.iter().enumerate() {
+            let declared = host
+                .and_then(|func| func.arg_ty(db, idx))
+                .map(|ty| ty.instantiate_identity());
+            params.push(if declared_pointer(declared) {
+                self.builder.ptr_type(Type::I8)
+            } else {
+                self.ty_for_class(&param.class)?
+            });
         }
+        let ret = match &signature.ret {
+            Some(_) if declared_pointer(host.map(|func| func.return_ty(db))) => {
+                Some(self.builder.ptr_type(Type::I8))
+            }
+            Some(class) => Some(self.ty_for_class(class)?),
+            None => None,
+        };
+        Ok((params, ret))
     }
 
     fn ty_for_class(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError> {
@@ -1393,13 +1411,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         args: &[RLocalId],
     ) -> Result<SmallVec<[ValueId; 8]>, LowerError> {
         let Some(&pack_ty) = self.module.argument_packs.get(&callee) else {
-            let signature = callee.interface_signature(self.module.db);
+            let (params, _) = self.module.signature_tys(callee)?;
             return args
                 .iter()
-                .zip(&signature.params)
-                .map(|(arg, param)| {
+                .zip(params)
+                .map(|(arg, ty)| {
                     let value = self.local_value(*arg)?;
-                    let ty = self.module.ty_for_signature_class(callee, &param.class)?;
                     self.coerce_value_to_ty(value, ty)
                 })
                 .collect();
@@ -1763,9 +1780,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             RExpr::Call { callee, args } => {
                 let callee_ref = self.module.func_ref(*callee)?;
                 let args = self.lower_call_args(*callee, args)?;
-                let ret = callee.interface_signature(self.module.db).ret;
-                if let Some(class) = ret {
-                    let ret_ty = self.module.ty_for_signature_class(*callee, &class)?;
+                let (_, ret) = self.module.signature_tys(*callee)?;
+                if let Some(ret_ty) = ret {
                     let value = self
                         .fb
                         .insert_inst(Call::new(self.module.inst_set(), callee_ref, args), ret_ty);

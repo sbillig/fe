@@ -503,10 +503,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         region.extended(&path, moved, lane)
                     })
                     .collect();
-                if regions.is_empty() || carrier_ty.as_ptr(self.db).is_some() {
+                if regions.is_empty() {
                     let base = self
                         .dynamic_handle(carrier_ty)
-                        .filter(|_| carrier_ty.as_ptr(self.db).is_none())
                         .map_or(Base::Raw, Base::Domain);
                     regions = vec![rooted(self, base, path)];
                 }
@@ -514,6 +513,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 regions.dedup();
                 (regions, direct)
             }
+            // A pointer holds no access: its pointee is raw memory.
+            NPlaceBase::Deref { .. } => (vec![rooted(self, Base::Raw, path)], TokenSet::new()),
         };
         Resolved {
             regions,
@@ -770,6 +771,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         .into_iter()
                         .map(|token| (token, Path::new()))
                         .collect(),
+                    NPlaceBase::Deref { .. } => Held::new(),
                     NPlaceBase::Root(_)
                         if ty_is_snapshot(self.db, self.scope, place.ty, self.assumptions) =>
                     {
@@ -1585,6 +1587,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 let key = match destination.base {
                     NPlaceBase::Root(root) => Some(MoveKey::Root(root.index() as u32)),
                     NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
+                    NPlaceBase::Deref { .. } => None,
                 };
                 if let Some(key) = key
                     && !path.contains(&Step::Index(None))
@@ -1737,7 +1740,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NPlaceBase::Root(root) if self.root_domain[root.index()].is_none() => {
                 Some(MoveKey::Root(root.index() as u32))
             }
-            NPlaceBase::Root(_) => None,
+            NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
             NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
         };
         if kind == MemoryAccessKind::Move
