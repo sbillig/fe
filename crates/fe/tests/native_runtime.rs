@@ -1335,3 +1335,18 @@ fn native_returned_reference_projections_mutate_the_original_at_o1() {
         .unwrap();
     assert!(result.status.success(), "{result:?}");
 }
+
+#[test]
+fn native_owned_effect_provider_preserves_buffer_storage_and_identity() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/owned_effect_provider.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("owned_effect_provider"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

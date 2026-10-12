@@ -1,0 +1,20 @@
+use std::native::ByteBuffer
+
+struct Handle { value: ByteBuffer, calls: i32 }
+
+fn step() uses (handle: mut Handle) {
+    handle.calls += 1
+    handle.value.set_byte(index: 0, value: handle.calls.downcast_unchecked())
+}
+
+pub fn main() -> i32 {
+    var handle = Handle { value: ByteBuffer::new(), calls: 0 }
+    core::assert(handle.value.try_resize(1))
+    with (handle) {
+        step()
+        step()
+    }
+    core::assert(handle.calls == 2 && handle.value.byte_at(0) == 2)
+    handle.value.release()
+    0
+}
