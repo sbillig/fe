@@ -614,7 +614,7 @@ impl<'db> FieldWalker<'db> {
         {
             WalkOutput::empty()
         } else {
-            if ty.as_ptr(self.db).is_some() {
+            if matches!(ty.as_ptr(self.db), Some((_, ProviderAddressSpace::Memory))) {
                 self.memory_pointer.get_or_insert(ty);
             }
             WalkOutput::leaf(self.db, ty, path, dimensions, InlineLayoutLeafKind::Field)

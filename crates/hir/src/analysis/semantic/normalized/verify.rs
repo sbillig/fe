@@ -367,9 +367,12 @@ fn verify_expr<'db>(
         }
         NExpr::PointerCast { value, to } => {
             let from = operand_ty(body, *value)?;
-            let valid = (from.as_ptr(db).is_some()
-                && (to.as_ptr(db).is_some() || to.is_integral(db)))
-                || (from.is_integral(db) && to.as_ptr(db).is_some());
+            let valid = match (from.as_ptr(db), to.as_ptr(db)) {
+                (Some((_, from_space)), Some((_, to_space))) => from_space == to_space,
+                (Some(_), None) => to.is_integral(db),
+                (None, Some(_)) => from.is_integral(db),
+                (None, None) => false,
+            };
             (valid && *to == result_ty)
                 .then_some(())
                 .ok_or(NormalizedBodyVerifyError::ExpressionType)

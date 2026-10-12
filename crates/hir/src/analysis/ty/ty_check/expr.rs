@@ -845,7 +845,7 @@ impl<'db> TyChecker<'db> {
         }
 
         if *op == UnOp::Deref {
-            if let Some(pointee) = prop.ty.as_ptr(self.db) {
+            if let Some((pointee, _)) = prop.ty.as_ptr(self.db) {
                 return ExprProp::new(pointee, true);
             }
 
@@ -1059,6 +1059,10 @@ impl<'db> TyChecker<'db> {
             || self.is_single_field_struct_with_invisible_field(to)
         {
             Some("cast is not allowed because the struct field is not `pub`".to_string())
+        } else if from.as_ptr(self.db).is_some() && to.as_ptr(self.db).is_some() {
+            Some("a pointer cannot change its address space".to_string())
+        } else if from.as_ptr(self.db).is_some() || to.as_ptr(self.db).is_some() {
+            Some("a pointer converts only to and from its `u256` address".to_string())
         } else {
             None
         };
@@ -1115,7 +1119,8 @@ impl<'db> TyChecker<'db> {
             return true;
         }
 
-        if self.is_pointer_cast(from_leaf, to_leaf) {
+        if self.is_pointer_cast(from_leaf, to_leaf) || self.is_pointer_word_cast(from_leaf, to_leaf)
+        {
             return true;
         }
 
@@ -1127,8 +1132,18 @@ impl<'db> TyChecker<'db> {
             || (self.is_plain_u256(from) && to.is_string(self.db))
     }
 
+    /// A cast between pointers into one space.
     fn is_pointer_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
-        from.as_ptr(self.db).is_some() && to.as_ptr(self.db).is_some()
+        matches!(
+            (from.as_ptr(self.db), to.as_ptr(self.db)),
+            (Some((_, from)), Some((_, to))) if from == to
+        )
+    }
+
+    /// A pointer is its address word.
+    fn is_pointer_word_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
+        (from.as_ptr(self.db).is_some() && self.is_plain_u256(to))
+            || (self.is_plain_u256(from) && to.as_ptr(self.db).is_some())
     }
 
     fn is_plain_u256(&self, ty: TyId<'db>) -> bool {

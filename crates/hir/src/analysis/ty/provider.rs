@@ -124,7 +124,7 @@ pub enum ProviderLayoutResolution<'db> {
 }
 
 fn can_select_effect_handle_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    ty.as_ptr(db).is_some()
+    matches!(ty.as_ptr(db), Some((_, ProviderAddressSpace::Memory)))
         || matches!(
             ty.base_ty(db).data(db),
             TyData::TyParam(_)
@@ -512,7 +512,9 @@ fn validate_effect_handle_raw<'db>(
     raw_ty: TyId<'db>,
     space: ProviderAddressSpace,
 ) -> Result<(), ProviderLayoutFailure> {
-    let raw_pointee = raw_ty.as_ptr(db);
+    let raw_pointee = raw_ty
+        .as_ptr(db)
+        .and_then(|(target, space)| (space == ProviderAddressSpace::Memory).then_some(target));
     if raw_ty != TyId::u256(db) && raw_pointee.is_none() {
         return Err(ProviderLayoutFailure::UnsupportedRaw);
     }
@@ -563,7 +565,7 @@ pub(crate) fn effect_handle_impl_raw_failure<'db>(
     if raw_ty.has_invalid(db) || raw_ty.has_var(db) {
         return None;
     }
-    if raw_ty.as_ptr(db).is_some() {
+    if matches!(raw_ty.as_ptr(db), Some((_, ProviderAddressSpace::Memory))) {
         None
     } else if raw_ty == TyId::u256(db) {
         Some((raw_ty, ProviderLayoutFailure::UntrustedRaw))

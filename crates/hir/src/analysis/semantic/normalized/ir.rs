@@ -82,7 +82,7 @@ impl<'db> NormalizedBody<'db> {
                 .ty
                 .as_capability(db)
                 .map(|(_, target)| target),
-            NPlaceBase::Deref { pointer } => self.value(pointer)?.ty.as_ptr(db),
+            NPlaceBase::Deref { pointer } => Some(self.value(pointer)?.ty.as_ptr(db)?.0),
         }
     }
 
@@ -737,11 +737,14 @@ pub fn literal_allocation<'db>(
         return None;
     }
     let pointer_ty = *ty.field_types(db).first()?;
+    let (target_ty, ProviderAddressSpace::Memory) = pointer_ty.as_ptr(db)? else {
+        return None;
+    };
     Some((
         FieldIndex(0),
         OpaqueHandleContract {
             handle_ty: pointer_ty,
-            target_ty: pointer_ty.as_ptr(db)?,
+            target_ty,
             address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
         },
     ))

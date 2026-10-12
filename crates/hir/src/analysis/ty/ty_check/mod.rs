@@ -1738,6 +1738,27 @@ impl<'db> TyChecker<'db> {
             self.env.scope(),
             self.env.assumptions(),
         );
+        // A place under a dereference lies in its pointer's space.
+        let mut ty = binding_ty;
+        let mut deref_space = None;
+        for projection in &place.projections {
+            if matches!(projection, PlaceProjection::Deref { .. }) {
+                deref_space = ty
+                    .as_capability(self.db)
+                    .map_or(ty, |(_, inner)| inner)
+                    .as_ptr(self.db)
+                    .map(|(_, space)| space);
+            }
+            ty = normalize_ty(
+                self.db,
+                projection.result_ty(),
+                self.env.scope(),
+                self.env.assumptions(),
+            );
+        }
+        if deref_space.is_some() {
+            return deref_space;
+        }
         if self.env.binding_access(&binding).is_some() {
             return self.concrete_borrow_provider_for_binding(binding);
         }

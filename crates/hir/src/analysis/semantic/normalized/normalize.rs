@@ -1433,7 +1433,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 SOperand::inherited(raw.local),
                 Some(ReadMode::Copy),
             )?;
-            let ty = self.values[value.value.index()]
+            let (ty, _) = self.values[value.value.index()]
                 .ty
                 .as_ptr(self.db)
                 .ok_or(NormalizeError::InvalidProjection)?;
@@ -1505,7 +1505,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         source_local: SLocalId,
         place: NPlace<'db>,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
-        let pointer_target = place.ty.as_ptr(self.db);
+        let pointer_target = place.ty.as_ptr(self.db).map(|(target, _)| target);
         let target = pointer_target
             .or_else(|| place.ty.as_capability(self.db).map(|(_, target)| target))
             .ok_or(NormalizeError::InvalidProjection)?;
@@ -2343,6 +2343,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 .values
                 .get(pointer.index())
                 .and_then(|value| value.ty.as_ptr(self.db))
+                .map(|(target, _)| target)
                 .ok_or(NormalizeError::InvalidProjection),
         }
     }

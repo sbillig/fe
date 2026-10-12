@@ -5,11 +5,13 @@ use hir::analysis::{
     semantic::{
         ExecutableBlock, SLocalId, SemanticInstance, get_or_build_semantic_instance,
         normalized::{
-            NExpr, NPlaceBase, NValueDefinition, NValueId, NormalizedBody, normalize_semantic_body,
+            NExpr, NPlace, NPlaceBase, NValueDefinition, NValueId, NormalizedBody,
+            normalize_semantic_body,
         },
         semantic_executable_control_flow, semantic_may_return,
     },
     ty::{
+        ProviderAddressSpace,
         ty_check::{ReturnProjectionStep, ReturnProvenance},
         ty_def::TyId,
     },
@@ -450,8 +452,20 @@ impl<'db> RawTransportTracer<'_, 'db> {
                         }
                         return;
                     }
-                    NExpr::Borrow { place, .. }
-                        if is_borrow && matches!(place.base, NPlaceBase::Deref { .. }) =>
+                    // A memory pointee is reached by its raw address; a state
+                    // pointee by its space's provider reference.
+                    NExpr::Borrow {
+                        place:
+                            NPlace {
+                                base: NPlaceBase::Deref { pointer },
+                                ..
+                            },
+                        ..
+                    } if is_borrow
+                        && matches!(
+                            self.body.values[pointer.index()].ty.as_ptr(self.db),
+                            Some((_, ProviderAddressSpace::Memory))
+                        ) =>
                     {
                         return self.record(projection, Some(AddressSpaceKind::Memory));
                     }

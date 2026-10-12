@@ -14,7 +14,7 @@ use driver::DriverDataBase;
 use hir::{
     analysis::{
         semantic::FieldIndex,
-        ty::{ty_check::BodyOwner, ty_def::TyId},
+        ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId},
     },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
@@ -698,7 +698,9 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             None
         };
         let db = self.db;
-        let declared_pointer = |ty: Option<TyId<'db>>| ty.is_some_and(|ty| ty.as_ptr(db).is_some());
+        let declared_pointer = |ty: Option<TyId<'db>>| {
+            ty.is_some_and(|ty| matches!(ty.as_ptr(db), Some((_, ProviderAddressSpace::Memory))))
+        };
         let mut params = Vec::with_capacity(signature.params.len());
         for (idx, param) in signature.params.iter().enumerate() {
             let declared = host

@@ -67,7 +67,7 @@ use super::{
     },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env, pointee_place_in_env,
+        RuntimeTypeEnv, deref_transport_class_in_env, effect_handle_transport_class_for_ty_in_env,
         provider_address_space_to_runtime, provider_class_for_target_in_env, runtime_array_len,
         runtime_interface_ty_in_env, runtime_repr_ty_in_env, runtime_zero_sized_transport_ty,
         runtime_zero_sized_ty, scalar_class_for_ty_in_env, stored_class_for_ty_in_env,
@@ -2598,14 +2598,11 @@ fn normalized_place_root_transport_class_in_context<'db>(
         NPlaceBase::CapabilityTarget { carrier } => {
             normalized_value_runtime_class(env, carrier, carriers)
         }
-        NPlaceBase::Deref { pointer } => {
-            let (space, class) = pointee_place_in_env(
-                env.db,
-                env.type_env(),
-                env.body.normalized.value(pointer)?.ty,
-            )?;
-            Some(RuntimeClass::raw_addr(env.db, space, class))
-        }
+        NPlaceBase::Deref { pointer } => deref_transport_class_in_env(
+            env.db,
+            env.type_env(),
+            env.body.normalized.value(pointer)?.ty,
+        ),
         NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
             NRootKind::LocalSlot { .. } | NRootKind::Temporary { .. } => {
                 let local = env.body.root_local(root)?;
@@ -2678,12 +2675,12 @@ fn normalized_place_root_class_in_context<'db>(
                 target_ty,
             )
         }
-        NPlaceBase::Deref { pointer } => pointee_place_in_env(
+        NPlaceBase::Deref { pointer } => deref_transport_class_in_env(
             env.db,
             env.type_env(),
             env.body.normalized.value(pointer)?.ty,
-        )
-        .map(|(_, class)| class),
+        )?
+        .deref_target(env.db),
         NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
             NRootKind::LocalSlot { .. }
             | NRootKind::Temporary { .. }

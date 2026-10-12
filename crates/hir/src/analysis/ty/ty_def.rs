@@ -97,7 +97,7 @@ impl<'db> TyId<'db> {
         let holds_args = match self.base_ty(db).data(db) {
             TyData::TyBase(TyBase::Adt(_)) => true,
             TyData::TyBase(TyBase::Prim(prim)) => {
-                matches!(prim, PrimTy::Tuple(_) | PrimTy::Array | PrimTy::Ptr)
+                matches!(prim, PrimTy::Tuple(_) | PrimTy::Array | PrimTy::Ptr(_))
             }
             _ => false,
         };
@@ -345,18 +345,32 @@ impl<'db> TyId<'db> {
         (*base, args)
     }
 
-    pub(super) fn ptr(db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr)))
+    pub(super) fn ptr(db: &'db dyn HirAnalysisDb, space: ProviderAddressSpace) -> TyId<'db> {
+        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr(space))))
     }
 
+    /// A memory pointer, `*inner`.
     pub fn ptr_to(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
-        Self::app(db, Self::ptr(db), inner)
+        Self::ptr_in(db, ProviderAddressSpace::Memory, inner)
     }
 
-    pub fn as_ptr(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+    /// A pointer to `inner` in `space`.
+    pub fn ptr_in(
+        db: &'db dyn HirAnalysisDb,
+        space: ProviderAddressSpace,
+        inner: TyId<'db>,
+    ) -> TyId<'db> {
+        Self::app(db, Self::ptr(db, space), inner)
+    }
+
+    /// A pointer's target and the space it points into.
+    pub fn as_ptr(self, db: &'db dyn HirAnalysisDb) -> Option<(TyId<'db>, ProviderAddressSpace)> {
         let (base, args) = self.decompose_ty_app(db);
         let inner = args.first().copied()?;
-        matches!(base.data(db), TyData::TyBase(TyBase::Prim(PrimTy::Ptr))).then_some(inner)
+        match base.data(db) {
+            TyData::TyBase(TyBase::Prim(PrimTy::Ptr(space))) => Some((inner, *space)),
+            _ => None,
+        }
     }
 
     pub fn borrow_mut_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
@@ -1907,7 +1921,11 @@ impl<'db> TyBase<'db> {
                 PrimTy::String => "String",
                 PrimTy::Array => "[]",
                 PrimTy::Tuple(_) => "()",
-                PrimTy::Ptr => "*",
+                PrimTy::Ptr(ProviderAddressSpace::Memory) => "*",
+                PrimTy::Ptr(ProviderAddressSpace::Storage) => "StorPtr",
+                PrimTy::Ptr(ProviderAddressSpace::Transient) => "TStorPtr",
+                PrimTy::Ptr(ProviderAddressSpace::Calldata) => "CalldataPtr",
+                PrimTy::Ptr(ProviderAddressSpace::Code) => "CodePtr",
                 PrimTy::View => "View",
                 PrimTy::BorrowMut => "BorrowMut",
                 PrimTy::BorrowRef => "BorrowRef",
@@ -1998,7 +2016,9 @@ pub enum PrimTy {
     String,
     Array,
     Tuple(usize),
-    Ptr,
+    /// A raw pointer into an address space: `*T` in memory, or `StorPtr<T>`,
+    /// `TStorPtr<T>` and `CalldataPtr<T>`.
+    Ptr(ProviderAddressSpace),
     View,
     BorrowMut,
     BorrowRef,
@@ -2132,7 +2152,7 @@ impl HasKind for PrimTy {
         match self {
             Self::Array => (0..2).fold(Kind::Star, |acc, _| Kind::abs(Kind::Star, acc)),
             Self::Tuple(n) => (0..*n).fold(Kind::Star, |acc, _| Kind::abs(Kind::Star, acc)),
-            Self::Ptr => Kind::abs(Kind::Star, Kind::Star),
+            Self::Ptr(_) => Kind::abs(Kind::Star, Kind::Star),
             Self::String => Kind::abs(Kind::Star, Kind::Star),
             Self::View | Self::BorrowMut | Self::BorrowRef => Kind::abs(Kind::Star, Kind::Star),
             _ => Kind::Star,

@@ -63,7 +63,7 @@ impl<'db> OpaqueHandleContract<'db> {
         assumptions: PredicateListId<'db>,
         ty: TyId<'db>,
     ) -> Result<Option<Self>, UnresolvedCapability<'db>> {
-        if let Some(target_ty) = ty.as_ptr(db) {
+        if let Some((target_ty, ProviderAddressSpace::Memory)) = ty.as_ptr(db) {
             return Ok(Some(Self {
                 handle_ty: ty,
                 target_ty,

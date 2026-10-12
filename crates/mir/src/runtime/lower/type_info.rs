@@ -485,7 +485,7 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
                 signed: false,
             },
             // A pointer is the address word.
-            PrimTy::U256 | PrimTy::Usize | PrimTy::Ptr => ScalarRepr::Int {
+            PrimTy::U256 | PrimTy::Usize | PrimTy::Ptr(_) => ScalarRepr::Int {
                 bits: 256,
                 signed: false,
             },
@@ -637,18 +637,23 @@ fn canonical_pointee_scope<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<Sco
         .find_map(|arg| canonical_pointee_scope(db, *arg))
 }
 
-/// The address space and stored class of the place a pointer of type
-/// `pointer_ty` addresses.
-pub(crate) fn pointee_place_in_env<'db>(
+/// The transport a pointer of type `pointer_ty` converts to when
+/// dereferenced: a raw memory address, or a state space's provider reference,
+/// as for a `StateIndex` entry.
+pub(crate) fn deref_transport_class_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     pointer_ty: TyId<'db>,
-) -> Option<(AddressSpaceKind, RuntimeClass<'db>)> {
-    let target = runtime_repr_ty_in_env(db, env, pointer_ty).as_ptr(db)?;
-    Some((
-        AddressSpaceKind::Memory,
-        stored_class_for_ty_in_env(db, env, target),
-    ))
+) -> Option<RuntimeClass<'db>> {
+    let (target, space) = runtime_repr_ty_in_env(db, env, pointer_ty).as_ptr(db)?;
+    Some(match provider_address_space_to_runtime(space) {
+        AddressSpaceKind::Memory => RuntimeClass::raw_addr(
+            db,
+            AddressSpaceKind::Memory,
+            stored_class_for_ty_in_env(db, env, target),
+        ),
+        space => provider_class_for_target_in_env(db, env, Some(target), space),
+    })
 }
 
 #[salsa::tracked]
@@ -904,19 +909,31 @@ mod tests {
         let word = stored_class_for_ty_in_env(&db, env, TyId::u256(&db));
         let word_ptr_ty = TyId::ptr_to(&db, TyId::u256(&db));
         let word_ptr_ptr_ty = TyId::ptr_to(&db, word_ptr_ty);
+        let slot_ty = TyId::ptr_in(&db, ProviderAddressSpace::Storage, TyId::u256(&db));
 
+        for ty in [word_ptr_ty, word_ptr_ptr_ty, slot_ty] {
+            assert_eq!(
+                top_level_class_for_ty_in_env(&db, env, ty, AddressSpaceKind::Memory),
+                Some(word.clone())
+            );
+        }
+        let memory = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, word.clone());
         assert_eq!(
-            top_level_class_for_ty_in_env(&db, env, word_ptr_ty, AddressSpaceKind::Memory),
-            Some(word.clone())
+            deref_transport_class_in_env(&db, env, word_ptr_ty),
+            Some(memory.clone())
         );
-        assert_eq!(stored_class_for_ty_in_env(&db, env, word_ptr_ptr_ty), word);
         assert_eq!(
-            pointee_place_in_env(&db, env, word_ptr_ty),
-            Some((AddressSpaceKind::Memory, word.clone()))
+            deref_transport_class_in_env(&db, env, word_ptr_ptr_ty),
+            Some(memory)
         );
         assert_eq!(
-            pointee_place_in_env(&db, env, word_ptr_ptr_ty),
-            Some((AddressSpaceKind::Memory, word))
+            deref_transport_class_in_env(&db, env, slot_ty),
+            Some(provider_class_for_target_in_env(
+                &db,
+                env,
+                Some(TyId::u256(&db)),
+                AddressSpaceKind::Storage,
+            ))
         );
     }
 
@@ -1051,8 +1068,9 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
     fn recursive_pointer_fields_are_words() {
         with_source(|db, top_mod| {
             let (ptr_ty, env) = param(db, top_mod, "first", 0);
-            let (space, node) = pointee_place_in_env(db, env, ptr_ty).expect("pointer parameter");
-            assert_eq!(space, AddressSpaceKind::Memory);
+            let node = deref_transport_class_in_env(db, env, ptr_ty)
+                .and_then(|transport| transport.deref_target(db))
+                .expect("pointer parameter");
             let word = stored_class_for_ty_in_env(db, env, TyId::u256(db));
             assert_eq!(struct_fields(db, &node), vec![word.clone(), word]);
         });
@@ -1063,7 +1081,7 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
         with_source(|db, top_mod| {
             let (pair_ty, _) = param(db, top_mod, "first", 2);
             let (ptr_ty, _) = param(db, top_mod, "first", 0);
-            let node_ty = ptr_ty.as_ptr(db).unwrap();
+            let (node_ty, _) = ptr_ty.as_ptr(db).unwrap();
             assert_eq!(canonical_pointee_scope(db, pair_ty), node_ty.as_scope(db));
             let (words_ty, _) = param(db, top_mod, "second", 2);
             assert_eq!(canonical_pointee_scope(db, words_ty), None);

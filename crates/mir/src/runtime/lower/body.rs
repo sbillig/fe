@@ -98,7 +98,7 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env, pointee_place_in_env,
+        RuntimeTypeEnv, deref_transport_class_in_env, effect_handle_transport_class_for_ty_in_env,
         provider_address_space_to_runtime, provider_class_for_target_in_env, runtime_array_len,
         runtime_effect_handle_info, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
@@ -5286,23 +5286,16 @@ impl<'db> RmirEmitter<'db> {
                     .or_else(|| self.try_semantic_place(bb, local))?
             }
             // A pointer is an address word; deref is its conversion to the
-            // pointee's address.
+            // pointee's transport.
             NPlaceBase::Deref { pointer } => {
-                let (space, class) = pointee_place_in_env(
+                let transport = deref_transport_class_in_env(
                     self.db,
                     self.env,
                     self.semantic_body.normalized.value(pointer)?.ty,
                 )?;
                 let word = self.read_normalized_value(bb, pointer);
-                let addr = self.coerce_value(
-                    bb,
-                    word,
-                    &RuntimeClass::raw_addr(self.db, space, class.clone()),
-                );
-                RuntimePlace {
-                    root: PlaceRoot::Ptr { addr, space, class },
-                    path: Box::default(),
-                }
+                let addr = self.coerce_value(bb, word, &transport);
+                self.runtime_place_from_addr_value(addr)?
             }
             NPlaceBase::Root(root) => match &self.semantic_body.normalized.root(root)?.kind {
                 NRootKind::LocalSlot { .. }

@@ -513,8 +513,15 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 regions.dedup();
                 (regions, direct)
             }
-            // A pointer holds no access: its pointee is raw memory.
-            NPlaceBase::Deref { .. } => (vec![rooted(self, Base::Raw, path)], TokenSet::new()),
+            // A pointer holds no access. A memory pointee is raw memory; a
+            // state pointee may be any place of its space.
+            NPlaceBase::Deref { pointer } => {
+                let base = match self.body.values[pointer.index()].ty.as_ptr(self.db) {
+                    Some((_, ProviderAddressSpace::Memory)) | None => Base::Raw,
+                    Some((_, space)) => Base::Domain(self.domains.dynamic(Some(space))),
+                };
+                (vec![rooted(self, base, path)], TokenSet::new())
+            }
         };
         Resolved {
             regions,

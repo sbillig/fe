@@ -25,6 +25,7 @@ pub mod reference;
 mod storage_layout;
 pub mod symbol;
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::closure::closure_effect_requirements;
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
 use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLowerDiag};
@@ -111,7 +112,7 @@ use crate::analysis::ty::{
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
-use common::ingot::Ingot;
+use common::ingot::{Ingot, IngotKind};
 use indexmap::IndexSet;
 use salsa::Update;
 // Re-export from crate root for backwards compatibility
@@ -125,6 +126,30 @@ pub(crate) fn lower_type_alias_body<'db>(
 ) -> TyAlias<'db> {
     let hir_ty_opt = alias.type_ref(db).to_opt();
     lower_type_alias_from_hir(db, alias, hir_ty_opt)
+}
+
+/// The space a core alias's `#[pointer(space)]` retargets its `*T` into.
+pub(crate) fn type_alias_pointer_space<'db>(
+    db: &'db dyn HirAnalysisDb,
+    alias: TypeAlias<'db>,
+) -> Option<ProviderAddressSpace> {
+    if alias.top_mod(db).ingot(db).kind(db) != IngotKind::Core {
+        return None;
+    }
+    let [arg] = alias
+        .attributes(db)
+        .get_attr(db, "pointer")?
+        .args
+        .as_slice()
+    else {
+        return None;
+    };
+    match arg.key_str(db)? {
+        "storage" => Some(ProviderAddressSpace::Storage),
+        "transient" => Some(ProviderAddressSpace::Transient),
+        "calldata" => Some(ProviderAddressSpace::Calldata),
+        _ => None,
+    }
 }
 
 pub(crate) fn lower_type_alias_body_deferred<'db>(
@@ -2228,8 +2253,7 @@ fn contract_provider_bindings_canonical<'db>(
                 // Immutable contract fields (i.e. code-backed) are writable during `init`.
                 // They are materialized into memory during initialization and later embedded into code.
                 is_mut: field.is_mut
-                    || (is_init_site
-                        && field.address_space == crate::analysis::ty::ProviderAddressSpace::Code),
+                    || (is_init_site && field.address_space == ProviderAddressSpace::Code),
                 source: ProviderSource::ContractField { field: field.field },
                 semantics: ProviderSemantics {
                     provider_ty,
@@ -2243,9 +2267,8 @@ fn contract_provider_bindings_canonical<'db>(
                         crate::analysis::ty::ProviderKind::RawAddress
                     },
                     address_space: Some(field.address_space).map(|space| {
-                        if is_init_site && space == crate::analysis::ty::ProviderAddressSpace::Code
-                        {
-                            crate::analysis::ty::ProviderAddressSpace::Memory
+                        if is_init_site && space == ProviderAddressSpace::Code {
+                            ProviderAddressSpace::Memory
                         } else {
                             space
                         }
@@ -2473,7 +2496,6 @@ fn resolve_sol_abi_ty<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Option<TyId<'db>> {
     use crate::analysis::name_resolution::{PathRes, resolve_path};
-    use common::ingot::IngotKind;
 
     let ingot = scope.ingot(db);
     let std_root = if ingot.kind(db) == IngotKind::Std {
@@ -3873,7 +3895,7 @@ fn collect_direct_adts<'db>(
         }
         fn visit_app(&mut self, abs: TyId<'db>, arg: TyId<'db>) {
             let is_indirect = match abs.data(self.db) {
-                TyData::TyBase(TyBase::Prim(PrimTy::Ptr)) => true,
+                TyData::TyBase(TyBase::Prim(PrimTy::Ptr(_))) => true,
                 // Future: handle Ref when introduced.
                 _ => false,
             };
