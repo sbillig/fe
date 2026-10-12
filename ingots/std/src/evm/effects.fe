@@ -324,6 +324,21 @@ pub trait RawStorage: EvmCapabilitySeal {
     }
 }
 
+/// The `T` at storage slot `slot`, as a storage place.
+///
+/// The caller must ensure that `slot` holds a `T` and that nothing the
+/// compiler allocates, such as a contract field, uses `slot` or the slots the
+/// `T` derives from it.
+#[raw_place]
+pub unsafe fn storage_at<T>(_ slot: u256) -> mut T uses (storage: mut RawStorage) {
+    var ptr: StorPtr<T> = unsafe { storage.stor_ptr(slot) }
+    unsafe {
+        with (ptr) {
+            core::effect_ref::target_mut(ptr)
+        }
+    }
+}
+
 /// Access to low-level EVM op functions (excluding raw stack ops).
 pub trait RawOps: RawStorage {
     fn calldataload(self, _: u256) -> u256

@@ -1,16 +1,6 @@
 // A raw-slot constructor's result is the place its handle points to: the
 // slot it is given is the handle's field, not the result's.
-use std::evm::{Evm, RawStorage, StorPtr, StorageMap}
-
-#[raw_place]
-unsafe fn storage_at<T>(_ slot: u256) -> mut T uses (storage: mut RawStorage) {
-    var ptr: StorPtr<T> = unsafe { storage.stor_ptr(slot) }
-    unsafe {
-        with (ptr) {
-            core::effect_ref::target_mut(ptr)
-        }
-    }
-}
+use std::evm::{Evm, RawStorage, StorageMap, storage_at}
 
 fn bump(_ slot: u256) uses (storage: mut RawStorage) {
     let m = unsafe { storage_at<StorageMap<u256, u256>>(slot) }
