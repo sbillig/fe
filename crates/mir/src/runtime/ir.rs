@@ -87,6 +87,21 @@ impl<'db> RuntimeClass<'db> {
         matches!(self, Self::Ref { .. } | Self::RawAddr { .. })
     }
 
+    pub fn contains_ref(&self, db: &'db dyn MirDb) -> bool {
+        match self {
+            Self::Scalar(_) | Self::RawAddr { .. } => false,
+            Self::Ref { .. } => true,
+            Self::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(layout) => layout.fields.iter().any(|field| field.contains_ref(db)),
+                Layout::Array(layout) => layout.elem.contains_ref(db),
+                Layout::Enum(layout) => layout
+                    .variants
+                    .iter()
+                    .any(|variant| variant.fields.iter().any(|field| field.contains_ref(db))),
+            },
+        }
+    }
+
     pub fn contains_transport(&self, db: &'db dyn MirDb) -> bool {
         match self {
             Self::Scalar(_) => false,

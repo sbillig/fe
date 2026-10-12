@@ -916,26 +916,21 @@ fn local_direct_value_lowers_as_unrooted<'db>(
     if local.role.root_provider(&body.locals).is_some() {
         return false;
     }
-    if !class.contains_transport(db)
-        || matches!(
-            (&local.role, class),
-            (
-                SemanticLocalRole::DirectValue {
-                    provenance: hir::analysis::semantic::ValueProvenance::Ordinary
-                },
-                RuntimeClass::RawAddr { .. }
-            )
-        )
-    {
-        return true;
-    }
-    matches!(
-        local.source,
-        Some(LocalBinding::Param {
-            mode: FuncParamMode::View,
-            ..
-        })
-    )
+    // A raw address is a plain word, so a field holding one leaves its
+    // aggregate a value; a reference field, which only projection return
+    // shapes have, roots it.
+    let unrooted = match class {
+        RuntimeClass::Scalar(_) => true,
+        RuntimeClass::AggregateValue { .. } => !class.contains_ref(db),
+        RuntimeClass::RawAddr { .. } => matches!(
+            local.role,
+            SemanticLocalRole::DirectValue {
+                provenance: hir::analysis::semantic::ValueProvenance::Ordinary
+            }
+        ),
+        RuntimeClass::Ref { .. } => false,
+    };
+    unrooted || local_is_read_only_view_param(local)
 }
 
 fn local_is_read_only_view_param<'db>(local: &SLocal<'db>) -> bool {
@@ -993,7 +988,7 @@ fn unrooted_read_value_candidate_carrier<'db>(
         return None;
     };
     let aggregate = class.aggregate_value_class()?;
-    (!aggregate.contains_transport(db)).then_some(RuntimeCarrier::Value(aggregate))
+    (!aggregate.contains_ref(db)).then_some(RuntimeCarrier::Value(aggregate))
 }
 
 fn runtime_provider_binding_id<'db>(

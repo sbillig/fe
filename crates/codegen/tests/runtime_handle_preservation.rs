@@ -813,6 +813,78 @@ fn entry() -> u256 {
 }
 
 #[test]
+fn immutable_own_pointer_aggregate_param_field_reads_stay_unrooted() {
+    with_runtime_package!(
+        "immutable_own_pointer_aggregate_param_field_reads_stay_unrooted.fe",
+        r#"use core::abi::Bytes
+
+struct Note {
+    id: u256,
+    body: Bytes,
+}
+
+fn note_size(_ note: own Note) -> u256 {
+    note.id + note.body.len()
+}
+
+fn entry() -> u256 {
+    note_size(Note { id: 1, body: Bytes::empty() })
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "note_size");
+
+            assert!(
+                matches!(body.locals[0].root, RuntimeLocalRoot::None),
+                "a pointer field should not root a field-read-only owned aggregate param:\n{body:#?}"
+            );
+            assert!(
+                !body_has_object_materialization(&body),
+                "a pointer-holding owned aggregate param should not materialize to an object:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
+fn pointer_aggregate_temporaries_stay_values() {
+    with_runtime_package!(
+        "pointer_aggregate_temporaries_stay_values.fe",
+        r#"use core::abi::store_word
+use core::ptr::MemBuffer
+
+fn buffer_len() -> u256 {
+    let buffer = MemBuffer::alloc(32)
+    unsafe { store_word(ptr: buffer.ptr(), value: 42) }
+    buffer.span().len()
+}
+"#,
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "buffer_len");
+            let mut buffers = body
+                .locals
+                .iter()
+                .filter(|local| local.semantic_ty.pretty_print(&db) == "MemBuffer")
+                .peekable();
+
+            assert!(
+                buffers.peek().is_some(),
+                "missing MemBuffer local:\n{body:#?}"
+            );
+            assert!(
+                buffers.all(|buffer| {
+                    matches!(
+                        buffer.carrier,
+                        RuntimeCarrier::Value(RuntimeClass::AggregateValue { .. })
+                    ) && matches!(buffer.root, RuntimeLocalRoot::None)
+                }),
+                "a read-only pointer-holding temporary should stay an unrooted aggregate value:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
 fn read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted() {
     with_runtime_package!(
         "read_only_mut_own_aggregate_receiver_field_reads_stay_unrooted.fe",
