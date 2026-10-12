@@ -33,3 +33,17 @@ impl<T> StateIndex for Slots<T> {
         (root + 1 + offset, 0)
     }
 }
+
+msg VaultMsg {
+    #[selector = 1]
+    Peek -> u256,
+}
+
+/// Its `init` is safe; its recv arm runs unsafe code.
+pub contract Vault {
+    init() {}
+
+    recv VaultMsg {
+        Peek -> u256 { round_trip(7) }
+    }
+}

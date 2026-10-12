@@ -20,7 +20,10 @@ use crate::{
         ty::{
             adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
             closure::closure_regions,
-            corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
+            corelib::{
+                ContractMetadataKind, RuntimeBuiltinFuncKind, contract_metadata_kind,
+                runtime_builtin_func_kind,
+            },
             effects::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
@@ -53,7 +56,7 @@ use crate::{
             ty_lower::{ParamSchemaId, SubstError},
         },
     },
-    hir_def::{CallableDef, ExprId, FuncParamMode, SpacePathId, scope_graph::ScopeId},
+    hir_def::{CallableDef, Contract, ExprId, FuncParamMode, SpacePathId, scope_graph::ScopeId},
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
         ResolvedEffectBinding, effect_param_provider_semantics, effect_requirements_for_site,
@@ -1449,6 +1452,25 @@ impl<'db> SemanticInstance<'db> {
                     ProviderAddressSpace::Code | ProviderAddressSpace::Calldata
                 )
         )
+    }
+
+    /// For an instance of a `Contract` metadata builtin, which part of which
+    /// contract's code it measures: the contract is its type argument.
+    pub fn contract_metadata(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<(ContractMetadataKind, Contract<'db>)> {
+        let key = self.key(db);
+        let BodyOwner::Func(func) = key.owner(db) else {
+            return None;
+        };
+        let kind = contract_metadata_kind(db, func)?;
+        let contract = key
+            .subst(db)
+            .generic_args(db)
+            .iter()
+            .find_map(|ty| ty.as_contract(db))?;
+        Some((kind, contract))
     }
 
     pub fn is_projection(self, db: &'db dyn HirAnalysisDb) -> bool {

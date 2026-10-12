@@ -3591,6 +3591,7 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
     for (fixture, test) in [
         ("unsafe_trust_safe_api", "untrusted_safe_api"),
         ("unsafe_trust_allowed", "allowed_unsafe_use"),
+        ("unsafe_trust_allowed", "allowed_created_contract"),
         ("unsafe_trust_delegated", "delegated_unsafe_use"),
     ] {
         let fixture_dir = fe_test_runner_fixture_dir(fixture);
@@ -3625,6 +3626,11 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
         (
             "unsafe_trust_locate",
             "flags[1] = first == 0",
+            "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
+        ),
+        (
+            "unsafe_trust_create",
+            "evm.create2<dep::Vault>(value: 0, args: (), salt: 0)",
             "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
         ),
     ] {
