@@ -3,7 +3,7 @@ use hir::analysis::{
     HirAnalysisDb,
     semantic::{
         ExecutableBlock, PlaceProvenance, SLocal, SLocalId, SemOrigin, SemanticBody,
-        SemanticInstance, SemanticLocalRole,
+        SemanticInstance, SemanticLocalRole, get_or_build_semantic_instance,
         normalized::{
             NBlock, NBlockId, NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutLocals,
             NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind,
@@ -12,10 +12,16 @@ use hir::analysis::{
         },
         semantic_executable_control_flow,
     },
+    ty::ty_check::LocalBinding,
 };
-use hir::hir_def::ExprId;
+use hir::hir_def::{ExprId, FuncParamMode};
 
-use crate::runtime::package::LowerError;
+use crate::{db::MirDb, runtime::package::LowerError};
+
+use super::{
+    source::local_read_places_extractable_from_value,
+    type_info::{RuntimeTypeEnv, stored_class_for_ty_in_env},
+};
 
 /// The admitted semantic and representation artifacts consumed by runtime lowering.
 ///
@@ -213,11 +219,7 @@ impl<'db> RuntimeSemanticBody<'db> {
         }
     }
 
-    pub(crate) fn root_demand(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        local: SLocalId,
-    ) -> RuntimeRootDemand {
+    pub(crate) fn root_demand(&self, db: &'db dyn MirDb, local: SLocalId) -> RuntimeRootDemand {
         let mut demand = RuntimeRootDemand {
             always_rooted: self.local(local).is_some_and(|local| {
                 matches!(
@@ -268,7 +270,7 @@ impl<'db> RuntimeSemanticBody<'db> {
 
     fn mark_expr_root_demand(
         &self,
-        db: &'db dyn HirAnalysisDb,
+        db: &'db dyn MirDb,
         local: SLocalId,
         expr: &NExpr<'db>,
         demand: &mut RuntimeRootDemand,
@@ -293,7 +295,27 @@ impl<'db> RuntimeSemanticBody<'db> {
                     demand.read_by_place = true;
                 }
             }
-            NExpr::Call { effect_args, .. } => {
+            NExpr::Call {
+                callee,
+                args,
+                effect_args,
+                ..
+            } => {
+                // A view of the local, or the local itself when it is a view,
+                // for a parameter that needs its address passes the local's
+                // own storage, so the callee does not copy it on every call.
+                demand.passed_by_place |= args.iter().enumerate().any(|(index, arg)| {
+                    (self.operand_local(*arg) == Some(local)
+                        || matches!(
+                            self.normalized.defining_expr(arg.value),
+                            Some((_, NExpr::MakeView { place, .. }))
+                                if self.place_source(db, place) == Some(local)
+                        ))
+                        && params_needing_place(db, get_or_build_semantic_instance(db, callee.key))
+                            .get(index)
+                            .copied()
+                            .unwrap_or(false)
+                });
                 for arg in effect_args {
                     match &arg.arg {
                         NEffectArgValue::Place(place)
@@ -352,4 +374,71 @@ impl<'db> RuntimeSemanticBody<'db> {
             }
         }
     }
+}
+
+/// Which aggregate view parameters of `instance` need their argument's
+/// address: the body borrows the parameter, reads it at a dynamic index, or
+/// passes it by place, including to a view parameter that needs one. A caller
+/// roots a value it views for such a parameter, so its calls share one copy
+/// instead of each copying the argument into the callee's own storage. A
+/// scalar view is always passed by value, so rooting its argument saves
+/// nothing.
+#[salsa::tracked(
+    return_ref,
+    cycle_fn = params_needing_place_cycle_recover,
+    cycle_initial = params_needing_place_cycle_initial
+)]
+pub(crate) fn params_needing_place<'db>(
+    db: &'db dyn MirDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<bool> {
+    let Ok(body) = RuntimeSemanticBody::admitted(db, instance) else {
+        return Vec::new();
+    };
+    let typed_body = instance.key(db).typed_body(db);
+    let env = RuntimeTypeEnv::for_semantic(db, instance);
+    (0..)
+        .map_while(|index| typed_body.param_binding(index))
+        .map(|binding| {
+            matches!(
+                binding,
+                LocalBinding::Param {
+                    mode: FuncParamMode::View,
+                    ..
+                }
+            ) && stored_class_for_ty_in_env(db, env, instance.binding_ty(db, binding))
+                .aggregate_layout()
+                .is_some()
+                && body
+                    .source
+                    .entry_locals
+                    .iter()
+                    .copied()
+                    .find(|local| {
+                        body.source.local(*local).and_then(|local| local.source) == Some(binding)
+                    })
+                    .is_some_and(|local| {
+                        let demand = body.root_demand(db, local);
+                        demand.needs_runtime_root()
+                            && !(demand.permits_unrooted_value_projection_reads()
+                                && local_read_places_extractable_from_value(&body, local))
+                    })
+        })
+        .collect()
+}
+
+fn params_needing_place_cycle_initial<'db>(
+    _: &'db dyn MirDb,
+    _: SemanticInstance<'db>,
+) -> Vec<bool> {
+    Vec::new()
+}
+
+fn params_needing_place_cycle_recover<'db>(
+    _: &'db dyn MirDb,
+    _: &Vec<bool>,
+    _: u32,
+    _: SemanticInstance<'db>,
+) -> salsa::CycleRecoveryAction<Vec<bool>> {
+    salsa::CycleRecoveryAction::Iterate
 }

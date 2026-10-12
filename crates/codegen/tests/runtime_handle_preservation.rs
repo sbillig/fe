@@ -708,6 +708,89 @@ fn loop_value_arguments_do_not_force_scalar_storage() {
 }
 
 #[test]
+fn arrays_viewed_for_address_taking_params_are_passed_by_address() {
+    with_runtime_package!(
+        "arrays_viewed_for_address_taking_params_are_passed_by_address.fe",
+        r#"fn sum_view(_ xs: [u256; 8]) -> u256 {
+    var s = 0
+    for x in xs {
+        s += x
+    }
+    s
+}
+
+fn sum_own(_ xs: own [u256; 8]) -> u256 {
+    var s = 0
+    for x in xs {
+        s += x
+    }
+    s
+}
+
+fn element(_ xs: [u256; 8], _ i: usize) -> u256 {
+    xs[i]
+}
+
+fn sum_calls(_ xs: [u256; 8]) -> u256 {
+    var s = 0
+    var i: usize = 0
+    while i < 8 {
+        s += element(xs, i)
+        i += 1
+    }
+    s
+}
+
+fn sum_local(_ a: u256) -> u256 {
+    let xs: [u256; 8] = [a; 8]
+    var s = 0
+    for x in xs {
+        s += x
+    }
+    s
+}
+
+fn run(_ a: u256) -> u256 {
+    let xs: [u256; 8] = [a; 8]
+    sum_view(xs) + sum_own(xs) + sum_calls(xs) + sum_local(a)
+}
+
+fn entry() -> u256 {
+    run(1)
+}
+"#,
+        |db, package| {
+            // Copying the array into a slot of its own, as a projection's or
+            // callee's receiver, would run once per element.
+            for symbol in ["sum_view", "sum_own", "sum_calls", "sum_local"] {
+                let body = runtime_body_for_symbol(&db, package, symbol);
+                let is_array = |local: RLocalId| {
+                    body.locals[local.as_u32() as usize]
+                        .semantic_ty
+                        .pretty_print(&db)
+                        == "[u256; 8]"
+                };
+                assert!(
+                    !runtime_body_stmts(&body).any(|stmt| matches!(
+                        stmt,
+                        RStmt::Assign { dst, expr: RExpr::Use(src) }
+                            if is_array(*dst)
+                                && is_array(*src)
+                                && matches!(body.locals[dst.as_u32() as usize].root, RuntimeLocalRoot::Slot(_))
+                    )),
+                    "`{symbol}` should pass its array by address, not copy it per access:\n{body:#?}"
+                );
+            }
+            let element = runtime_body_for_symbol(&db, package, "element");
+            assert!(
+                matches!(element.signature.params[0].class, RuntimeClass::Ref { .. }),
+                "a dynamically indexed array view should arrive by address:\n{element:#?}"
+            );
+        }
+    );
+}
+
+#[test]
 fn mutated_scalar_locals_stay_rooted() {
     with_runtime_package!(
         "mutated_scalar_locals_stay_rooted.fe",
