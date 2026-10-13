@@ -1,8 +1,8 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
-use hir::hir_def::TopLevelMod;
-use mir::runtime::{AddressSpaceKind, RefKind};
+use hir::{analysis::ty::AddressSpace, hir_def::TopLevelMod};
+use mir::runtime::RefKind;
 use mir::{
     IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
     RTerminator, RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance,
@@ -174,7 +174,7 @@ fn storage_pair_ref_layout<'db>(class: &RuntimeClass<'db>) -> Option<LayoutId<'d
             pointee,
             kind:
                 RefKind::Provider {
-                    space: AddressSpaceKind::Storage,
+                    space: AddressSpace::Storage,
                     ..
                 },
             ..
@@ -201,7 +201,7 @@ fn local_storage_handles_preserve_storage_effect_transport() {
                     store.class,
                     RuntimeClass::Ref {
                         kind: RefKind::Provider {
-                            space: AddressSpaceKind::Storage,
+                            space: AddressSpace::Storage,
                             ..
                         },
                         ..
@@ -410,7 +410,7 @@ pub fn pointer_roundtrip() -> u256 {
                             RStmt::Store {
                                 dst: RuntimePlace {
                                     root: PlaceRoot::Ptr {
-                                        space: AddressSpaceKind::Memory,
+                                        space: AddressSpace::Memory,
                                         ..
                                     },
                                     ..
@@ -432,7 +432,7 @@ pub fn pointer_roundtrip() -> u256 {
                                 expr: RExpr::Load {
                                     place: RuntimePlace {
                                         root: PlaceRoot::Ptr {
-                                            space: AddressSpaceKind::Memory,
+                                            space: AddressSpace::Memory,
                                             ..
                                         },
                                         ..
@@ -449,9 +449,9 @@ pub fn pointer_roundtrip() -> u256 {
 }
 
 #[test]
-fn default_view_pointer_params_use_direct_pointer_transport() {
+fn pointer_params_are_address_words() {
     with_runtime_package!(
-        "default_view_pointer_params_use_direct_pointer_transport.fe",
+        "pointer_params_are_address_words.fe",
         r#"
 struct Data {
     value: u256,
@@ -485,109 +485,68 @@ pub fn entry() -> u256 {
 "#
         .to_string(),
         |db, package| {
-            let read = runtime_body_for_symbol(&db, package, "read");
-            let param = read.signature.params[0].local;
-            assert!(
+            let word_param = |body: &RuntimeBody<'_>, root: fn(&RuntimeLocalRoot<'_>) -> bool| {
+                let local = body.local(body.signature.params[0].local).unwrap();
                 matches!(
-                    (
-                        &read.local(param).unwrap().carrier,
-                        &read.local(param).unwrap().root
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::None,
-                    )
-                ),
-                "default-view pointer params should use their pointer value directly:\n{read:#?}"
-            );
+                    local.carrier,
+                    RuntimeCarrier::Value(RuntimeClass::Scalar(_))
+                ) && root(&local.root)
+            };
+            // A pointee place is rooted at the pointer word's address.
+            let pointee_root = |body: &RuntimeBody<'_>, place: &RuntimePlace<'_>| {
+                let PlaceRoot::Ptr {
+                    addr,
+                    space: AddressSpace::Memory,
+                    ..
+                } = place.root
+                else {
+                    return false;
+                };
+                let param = body.signature.params[0].local;
+                matches!(place.path.as_ref(), [PlaceElem::Field(_)])
+                    && runtime_body_stmts(body).any(|stmt| {
+                        matches!(
+                            stmt,
+                            RStmt::Assign {
+                                dst,
+                                expr: RExpr::WordToRawAddr { value, .. },
+                            } if *dst == addr && *value == param
+                        )
+                    })
+            };
+
+            let read = runtime_body_for_symbol(&db, package, "read");
             assert!(
-                runtime_body_stmts(&read).any(|stmt| {
-                    matches!(
+                word_param(&read, |root| matches!(root, RuntimeLocalRoot::None))
+                    && runtime_body_stmts(&read).any(|stmt| matches!(
                         stmt,
                         RStmt::Assign {
-                            expr: RExpr::Load {
-                                place: RuntimePlace {
-                                    root: PlaceRoot::Ptr { addr, .. },
-                                    path,
-                                },
-                            },
+                            expr: RExpr::Load { place },
                             ..
-                        } if *addr == param
-                            && matches!(path.as_ref(), [PlaceElem::Field(_)])
-                    )
-                }),
-                "pointer field reads should project from the direct pointer value:\n{read:#?}"
+                        } if pointee_root(&read, place)
+                    )),
+                "pointee reads should address the pointer word directly:\n{read:#?}"
             );
 
             let write = runtime_body_for_symbol(&db, package, "write");
-            let param = write.signature.params[0].local;
             assert!(
-                matches!(
-                    (
-                        &write.local(param).unwrap().carrier,
-                        &write.local(param).unwrap().root
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::None,
-                    )
-                ) && runtime_body_stmts(&write).any(|stmt| {
-                    matches!(
+                word_param(&write, |root| matches!(root, RuntimeLocalRoot::None))
+                    && runtime_body_stmts(&write).any(|stmt| matches!(
                         stmt,
-                        RStmt::Store {
-                            dst: RuntimePlace {
-                                root: PlaceRoot::Ptr { addr, .. },
-                                path,
-                            },
-                            ..
-                        } if *addr == param
-                            && matches!(path.as_ref(), [PlaceElem::Field(_)])
-                    )
-                }),
+                        RStmt::Store { dst, .. } if pointee_root(&write, dst)
+                    )),
                 "pointee writes should not materialize a slot for the pointer value:\n{write:#?}"
             );
 
             let identity = runtime_body_for_symbol(&db, package, "identity");
-            let param = identity.signature.params[0].local;
             assert!(
-                matches!(
-                    (
-                        &identity.local(param).unwrap().carrier,
-                        &identity.local(param).unwrap().root,
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::None,
-                    )
-                ),
+                word_param(&identity, |root| matches!(root, RuntimeLocalRoot::None)),
                 "pointer value reads should not load the pointee:\n{identity:#?}"
             );
 
             let replace = runtime_body_for_symbol(&db, package, "replace");
-            let param = replace.signature.params[0].local;
             assert!(
-                matches!(
-                    (
-                        &replace.local(param).unwrap().carrier,
-                        &replace.local(param).unwrap().root,
-                    ),
-                    (
-                        RuntimeCarrier::Value(RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        }),
-                        RuntimeLocalRoot::Slot(_),
-                    )
-                ),
+                word_param(&replace, |root| matches!(root, RuntimeLocalRoot::Slot(_))),
                 "reassigned pointer values still require addressable local storage:\n{replace:#?}"
             );
         }
@@ -1764,8 +1723,8 @@ pub fn entry() -> u256 { forward(VALUES) }
             r#"
 fn read_input() -> u256 uses (values: [u256; 3]) { forward(values) }
 pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = evm.calldata_ptr<[u256; 3]>(0)
-    with (data) { read_input() }
+    let data = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
+    unsafe { with (*data) { read_input() } }
 }
 "#,
             "evm_calldata_load",
@@ -1808,8 +1767,8 @@ fn pick(_ input: Input) -> u256 { input.first }
 fn forward(_ input: Input) -> u256 { pick(input) }
 fn read_input() -> u256 uses (input: Input) { forward(input) }
 pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = evm.calldata_ptr<Input>(0)
-    with (data) { read_input() }
+    let data = unsafe { evm.calldata_ptr<Input>(0) }
+    unsafe { with (*data) { read_input() } }
 }
 "#,
     );
@@ -2540,7 +2499,12 @@ fn capability_gated_provider_ref_conversion_preserves_transport_in_rmir() {
                             matches!(
                                 stmt,
                                 RStmt::Assign {
-                                    expr: RExpr::AddrOf { .. } | RExpr::MaterializeToObject { .. },
+                                    expr: RExpr::AddrOf {
+                                        place: RuntimePlace {
+                                            root: PlaceRoot::Slot(_),
+                                            ..
+                                        },
+                                    } | RExpr::MaterializeToObject { .. },
                                     ..
                                 } | RStmt::CopyInto { .. }
                             )

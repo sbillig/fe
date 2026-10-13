@@ -20,7 +20,7 @@ func private %abi_encode_u256(v0.i256) {
 
     block1:
         v3.@layout_0 = call %alloc 32.i256;
-        v4.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_9416 v3;
+        v4.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_6ab2 v3;
         call %store_word v4 v0;
         jump block3;
 
@@ -91,7 +91,7 @@ func private %capacity(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %cast__g5f1e(v0.i256) -> i256 {
+func private %cast__gf0ab(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -99,7 +99,7 @@ func private %cast__g5f1e(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__gf0ab(v0.i256) -> i256 {
+func private %cast__g5f1e(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -270,7 +270,7 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         br v15 block10 block11;
 
     block6:
-        v23.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_901b v0;
+        v23.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0b32 v0;
         v24.i256 = call %impl_MemBuffer__len v0;
         v25.i256 = add v23 v24;
         v27.i256 = call %impl_MemBuffer__len v0;
@@ -281,7 +281,7 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         jump block8;
 
     block8:
-        v33.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_901b v0;
+        v33.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0b32 v0;
         v35.i256 = add v33 v1;
         return v35;
 
@@ -304,6 +304,25 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         jump block8;
 }
 
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0b32(v0.objref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_6ab2(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
 func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
@@ -312,25 +331,6 @@ func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
         v3.objref<i256> = obj.proj v0 0.i256;
         v4.i256 = obj.load v3;
         return v4;
-}
-
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_901b(v0.objref<@layout_0>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_9416(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
 }
 
 func private %return_data(v0.objref<@layout_1>) {

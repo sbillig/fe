@@ -1,5 +1,6 @@
 use common::layout::enum_tag_bits;
 use cranelift_entity::{EntityRef, entity_impl};
+use hir::analysis::ty::AddressSpace;
 use hir::analysis::{
     semantic::{FieldIndex, SemOrigin, SemanticInstance},
     ty::ty_def::TyId,
@@ -15,21 +16,6 @@ use crate::{
     instance::{RuntimeInstance, RuntimeInstanceKey},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub enum AddressSpaceKind {
-    Memory,
-    Storage,
-    Transient,
-    Calldata,
-    Code,
-}
-
-impl AddressSpaceKind {
-    pub fn is_byte_addressed(self) -> bool {
-        matches!(self, Self::Memory | Self::Calldata | Self::Code)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeClass<'db> {
     Scalar(ScalarClass<'db>),
@@ -42,49 +28,37 @@ pub enum RuntimeClass<'db> {
         view: RefView<'db>,
     },
     RawAddr {
-        space: AddressSpaceKind,
+        space: AddressSpace,
         pointee: Option<RawPointeeId<'db>>,
     },
 }
 
-/// The deferred or exact target of a raw address.
-///
-/// Identity is the immutable key: comparing or hashing a pointee never
-/// resolves its target. `Stored` names a closed, normalized source type whose
-/// stored class is classified on demand, which lets a recursive type point at
-/// itself before its own layout is complete. `Exact` carries an already-derived
-/// class, including specializations that no source type reconstructs.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum RawPointeeKey<'db> {
-    Stored(TyId<'db>),
-    Exact(RuntimeClass<'db>),
-}
-
+/// The target of a raw address.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RawPointeeId<'db> {
     #[return_ref]
-    pub key: RawPointeeKey<'db>,
-}
-
-impl<'db> RawPointeeId<'db> {
-    pub fn exact(db: &'db dyn MirDb, class: RuntimeClass<'db>) -> Self {
-        Self::new(db, RawPointeeKey::Exact(class))
-    }
-
-    /// The class this pointee denotes. Stored targets are classified one
-    /// level deep; their own raw fields remain deferred.
-    pub fn target(self, db: &'db dyn MirDb) -> RuntimeClass<'db> {
-        match self.key(db) {
-            RawPointeeKey::Exact(class) => class.clone(),
-            RawPointeeKey::Stored(_) => crate::runtime::lower::resolve_stored_raw_pointee(db, self),
-        }
-    }
+    pub target: RuntimeClass<'db>,
 }
 
 impl<'db> RuntimeClass<'db> {
     pub fn is_transport(&self) -> bool {
         matches!(self, Self::Ref { .. } | Self::RawAddr { .. })
+    }
+
+    /// Whether dereferencing this transport yields `target`. An opaque raw
+    /// address and a non-transport target nothing.
+    pub fn targets(&self, db: &'db dyn MirDb, target: &RuntimeClass<'db>) -> bool {
+        match self {
+            Self::Ref { pointee, .. } => **pointee == *target,
+            Self::RawAddr {
+                pointee: Some(pointee),
+                ..
+            } => pointee.target(db) == target,
+            Self::RawAddr { pointee: None, .. } | Self::Scalar(_) | Self::AggregateValue { .. } => {
+                false
+            }
+        }
     }
 
     pub fn contains_ref(&self, db: &'db dyn MirDb) -> bool {
@@ -154,7 +128,7 @@ impl<'db> RuntimeClass<'db> {
     pub fn provider_ref(
         layout: LayoutId<'db>,
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     ) -> Self {
         Self::Ref {
             pointee: Box::new(Self::AggregateValue { layout }),
@@ -163,14 +137,14 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpaceKind, pointee: Self) -> Self {
+    pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpace, pointee: Self) -> Self {
         Self::RawAddr {
             space,
-            pointee: Some(RawPointeeId::exact(db, pointee)),
+            pointee: Some(RawPointeeId::new(db, pointee)),
         }
     }
 
-    pub fn opaque_raw_addr(space: AddressSpaceKind) -> Self {
+    pub fn opaque_raw_addr(space: AddressSpace) -> Self {
         Self::RawAddr {
             space,
             pointee: None,
@@ -217,7 +191,7 @@ impl<'db> RuntimeClass<'db> {
             RuntimeClass::RawAddr {
                 pointee: Some(pointee),
                 ..
-            } => Some(pointee.target(db)),
+            } => Some(pointee.target(db).clone()),
             RuntimeClass::Scalar(_)
             | RuntimeClass::AggregateValue { .. }
             | RuntimeClass::RawAddr { pointee: None, .. } => None,
@@ -233,7 +207,7 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn address_space(&self) -> Option<AddressSpaceKind> {
+    pub fn address_space(&self) -> Option<AddressSpace> {
         match self {
             RuntimeClass::Ref {
                 kind: RefKind::Provider { space, .. },
@@ -347,7 +321,7 @@ pub enum RefKind<'db> {
     Object,
     Provider {
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
 }
 
@@ -422,13 +396,13 @@ fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db
         (
             RefKind::Object,
             RefKind::Provider {
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
                 ..
             },
         )
         | (
             RefKind::Provider {
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
                 ..
             },
             RefKind::Object,
@@ -800,7 +774,7 @@ pub enum RuntimeLocalRoot<'db> {
     Slot(RuntimeClass<'db>),
     Ref(RuntimeClass<'db>),
     Ptr {
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
@@ -1094,7 +1068,7 @@ pub enum BorrowAccess {
 pub struct BorrowTransportSet {
     pub allow_object: bool,
     pub allow_const: bool,
-    pub provider_spaces: Box<[AddressSpaceKind]>,
+    pub provider_spaces: Box<[AddressSpace]>,
     pub allow_raw_addr: bool,
 }
 
@@ -1207,7 +1181,7 @@ pub enum PlaceRoot<'db> {
     Provider(RuntimeProviderBindingId),
     Ptr {
         addr: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
@@ -1254,7 +1228,7 @@ pub enum ResolvedPlaceRootKind<'db> {
     },
     Ptr {
         addr: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
@@ -1558,11 +1532,11 @@ pub enum RExpr<'db> {
     ProviderRefFromRaw {
         raw: RValueId,
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
     WordToRawAddr {
         value: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
     ProviderRefToRaw {
         value: RValueId,
