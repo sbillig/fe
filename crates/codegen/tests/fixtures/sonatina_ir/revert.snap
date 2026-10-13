@@ -41,7 +41,7 @@ func private %cast(v0.i256) -> i256 {
         return v0;
 }
 
-func private %standalone_revert__revert__fail__gcd5c_7ef9() {
+func private %standalone_revert__revert__fail__gcd5c_b28f() {
     block0:
         v0.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
@@ -76,7 +76,7 @@ func private %standalone_revert__revert__fail__gcd5c_7ef9() {
         jump block4;
 }
 
-func private %standalone_revert__revert__fail__gcd5c_e19f() {
+func private %standalone_revert__revert__fail__gcd5c_b920() {
     block0:
         v0.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
@@ -126,7 +126,7 @@ func private %main() {
         jump block1;
 
     block1:
-        call %standalone_revert__revert__fail__gcd5c_7ef9;
+        call %standalone_revert__revert__fail__gcd5c_b920;
         unreachable;
 }
 

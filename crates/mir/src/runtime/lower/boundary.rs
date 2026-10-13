@@ -291,7 +291,7 @@ impl<'db> ExactBoundaryShapeMatcher<'db> {
 }
 
 fn raw_target_shape<'db>(db: &'db dyn MirDb, pointee: RawPointeeId<'db>) -> RuntimeClassShape<'db> {
-    RuntimeClassShape::from_class(&pointee.target(db))
+    RuntimeClassShape::from_class(pointee.target(db))
 }
 
 pub(super) struct SpecializedBoundary<'a, 'db> {
@@ -807,7 +807,7 @@ impl<'db> RuntimeValueMaterialization<'db> {
             {
                 Some(Self::RawAddrSlot {
                     pointee: pointee.clone(),
-                    target: RawPointeeId::exact(db, pointee.clone()),
+                    target: RawPointeeId::new(db, pointee.clone()),
                 })
             }
             RuntimeBoundarySpec::ExactTransport(_)
@@ -1305,7 +1305,7 @@ mod tests {
             Some(RuntimeValueUsePlan::MaterializeValue(
                 RuntimeValueMaterialization::RawAddrSlot {
                     pointee: word_class(),
-                    target: RawPointeeId::exact(&db, word_class()),
+                    target: RawPointeeId::new(&db, word_class()),
                 },
             ))
         );

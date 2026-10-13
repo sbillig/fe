@@ -47,39 +47,12 @@ pub enum RuntimeClass<'db> {
     },
 }
 
-/// The deferred or exact target of a raw address.
-///
-/// Identity is the immutable key: comparing or hashing a pointee never
-/// resolves its target. `Stored` names a closed, normalized source type whose
-/// stored class is classified on demand, which lets a recursive type point at
-/// itself before its own layout is complete. `Exact` carries an already-derived
-/// class, including specializations that no source type reconstructs.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub enum RawPointeeKey<'db> {
-    Stored(TyId<'db>),
-    Exact(RuntimeClass<'db>),
-}
-
+/// The target of a raw address.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RawPointeeId<'db> {
     #[return_ref]
-    pub key: RawPointeeKey<'db>,
-}
-
-impl<'db> RawPointeeId<'db> {
-    pub fn exact(db: &'db dyn MirDb, class: RuntimeClass<'db>) -> Self {
-        Self::new(db, RawPointeeKey::Exact(class))
-    }
-
-    /// The class this pointee denotes. Stored targets are classified one
-    /// level deep; their own raw fields remain deferred.
-    pub fn target(self, db: &'db dyn MirDb) -> RuntimeClass<'db> {
-        match self.key(db) {
-            RawPointeeKey::Exact(class) => class.clone(),
-            RawPointeeKey::Stored(_) => crate::runtime::lower::resolve_stored_raw_pointee(db, self),
-        }
-    }
+    pub target: RuntimeClass<'db>,
 }
 
 impl<'db> RuntimeClass<'db> {
@@ -166,7 +139,7 @@ impl<'db> RuntimeClass<'db> {
     pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpaceKind, pointee: Self) -> Self {
         Self::RawAddr {
             space,
-            pointee: Some(RawPointeeId::exact(db, pointee)),
+            pointee: Some(RawPointeeId::new(db, pointee)),
         }
     }
 
@@ -217,7 +190,7 @@ impl<'db> RuntimeClass<'db> {
             RuntimeClass::RawAddr {
                 pointee: Some(pointee),
                 ..
-            } => Some(pointee.target(db)),
+            } => Some(pointee.target(db).clone()),
             RuntimeClass::Scalar(_)
             | RuntimeClass::AggregateValue { .. }
             | RuntimeClass::RawAddr { pointee: None, .. } => None,

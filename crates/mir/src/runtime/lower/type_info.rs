@@ -1,19 +1,12 @@
-use hir::{
-    analysis::{
-        semantic::SemanticInstance,
-        ty::{
-            ProviderAddressSpace, ProviderKind,
-            const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
-            normalize::normalize_ty,
-            provider::{ProviderLayoutEvidence, provider_semantics},
-            trait_def::ResolvedImplInstance,
-            trait_resolution::PredicateListId,
-            ty_def::{
-                BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId, TyVarSort,
-            },
-        },
+use hir::analysis::{
+    semantic::SemanticInstance,
+    ty::{
+        ProviderAddressSpace,
+        const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
+        normalize::normalize_ty,
+        trait_resolution::PredicateListId,
+        ty_def::{BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId, TyVarSort},
     },
-    hir_def::scope_graph::ScopeId,
 };
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
@@ -22,8 +15,8 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, LowerError, RawPointeeId, RawPointeeKey, RefKind, RefView, RuntimeClass,
-        ScalarClass, ScalarRepr, ScalarRole,
+        AddressSpaceKind, LowerError, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
+        ScalarRole,
     },
 };
 
@@ -49,13 +42,6 @@ impl<'db> RuntimeTypeEnv<'db> {
             assumptions: semantic.assumptions(db),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub(crate) struct RuntimeEffectHandleInfo<'db> {
-    pub(crate) target_ty: TyId<'db>,
-    pub(crate) space: AddressSpaceKind,
-    pub(crate) impl_instance: ResolvedImplInstance<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Update)]
@@ -374,11 +360,6 @@ pub(super) fn runtime_zero_sized_transport_ty<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    if effect_handle_transport_class_for_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty)
-        .is_some()
-    {
-        return false;
-    }
     let interface_ty = runtime_interface_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
     if runtime_zero_sized_ty(db, interface_ty, scope, assumptions) {
         return true;
@@ -538,105 +519,6 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
     })
 }
 
-fn effect_handle_transport_class_for_info<'db>(
-    db: &'db dyn MirDb,
-    info: RuntimeEffectHandleInfo<'db>,
-    effect_scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> RuntimeClass<'db> {
-    if info.space == AddressSpaceKind::Memory {
-        return RuntimeClass::RawAddr {
-            space: info.space,
-            pointee: raw_addr_pointee_for_ty_in_env(
-                db,
-                RuntimeTypeEnv::new(Some(effect_scope), assumptions),
-                info.target_ty,
-            ),
-        };
-    }
-    provider_class_for_target_in_env(
-        db,
-        RuntimeTypeEnv::new(Some(effect_scope), assumptions),
-        Some(info.target_ty),
-        info.space,
-    )
-}
-
-pub(crate) fn effect_handle_transport_class_for_ty_in_env<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    ty: TyId<'db>,
-) -> Option<RuntimeClass<'db>> {
-    let repr_ty = runtime_repr_ty_in_env(db, env, ty);
-    if repr_ty.as_capability(db).is_some() {
-        return None;
-    }
-    let effect_scope = env.scope.or_else(|| repr_ty.as_scope(db))?;
-    let info = runtime_effect_handle_info(db, repr_ty, Some(effect_scope), env.assumptions)?;
-    Some(effect_handle_transport_class_for_info(
-        db,
-        info,
-        effect_scope,
-        env.assumptions,
-    ))
-}
-
-/// The raw pointee for a source target type, created without classifying it.
-///
-/// The key is the target normalized in the requesting environment and nothing
-/// else, so the same closed type yields the same handle in every caller.
-/// Scalar targets are classified directly; everything else stays deferred
-/// until dereferenced, which is what lets `Node { next: *Node }` name its own
-/// target while `layout(Node)` is still being built.
-fn raw_addr_pointee_for_ty_in_env<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    ty: TyId<'db>,
-) -> Option<RawPointeeId<'db>> {
-    let ty = runtime_repr_ty_in_env(db, env, ty);
-    if ty.has_param(db) || ty.contains_assoc_ty_of_param(db) {
-        return None;
-    }
-    if let Some(scalar) = scalar_class_from_repr_ty(db, ty) {
-        return Some(RawPointeeId::exact(db, RuntimeClass::Scalar(scalar)));
-    }
-    Some(RawPointeeId::new(db, RawPointeeKey::Stored(ty)))
-}
-
-/// Classifies a stored raw pointee in a context derived from its type alone:
-/// the first ADT declaration scope in the type's syntax (head before
-/// arguments), or no scope for ADT-free types, with empty assumptions.
-///
-/// The key is already normalized in the requesting environment, so resolution
-/// only normalizes instantiated field declarations. Coherence admits an impl
-/// for a closed self type only in the self type's or the trait's ingot, and
-/// impl lookup searches both whatever the origin, so the requester's scope and
-/// bounds do not select a different impl.
-#[salsa::tracked]
-pub(crate) fn resolve_stored_raw_pointee<'db>(
-    db: &'db dyn MirDb,
-    pointee: RawPointeeId<'db>,
-) -> RuntimeClass<'db> {
-    let RawPointeeKey::Stored(ty) = pointee.key(db) else {
-        panic!("exact raw pointees resolve without classification: {pointee:?}");
-    };
-    let env = RuntimeTypeEnv::new(
-        canonical_pointee_scope(db, *ty),
-        PredicateListId::empty_list(db),
-    );
-    stored_class_for_ty_in_env(db, env, *ty)
-}
-
-fn canonical_pointee_scope<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<ScopeId<'db>> {
-    let (base, args) = ty.decompose_ty_app(db);
-    if let TyData::TyBase(TyBase::Adt(_)) = base.data(db) {
-        return base.as_scope(db);
-    }
-    args.iter()
-        .filter(|arg| !matches!(arg.data(db), TyData::ConstTy(_)))
-        .find_map(|arg| canonical_pointee_scope(db, *arg))
-}
-
 /// The transport a pointer of type `pointer_ty` converts to when
 /// dereferenced: a raw memory address, or a state space's provider reference,
 /// as for a `StateIndex` entry.
@@ -690,33 +572,6 @@ fn runtime_stored_class<'db>(
 ) -> RuntimeClass<'db> {
     runtime_type_model(db, ty, scope, assumptions)
         .stored_class(db, RuntimeTypeEnv::new(scope, assumptions))
-}
-
-#[salsa::tracked]
-pub(crate) fn runtime_effect_handle_info<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> Option<RuntimeEffectHandleInfo<'db>> {
-    let repr_ty = runtime_repr_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
-    if repr_ty != ty {
-        return runtime_effect_handle_info(db, repr_ty, scope, assumptions);
-    }
-    let scope = scope.or_else(|| repr_ty.as_scope(db))?;
-    let semantics = provider_semantics(db, scope, assumptions, repr_ty);
-    if matches!(semantics.kind, ProviderKind::RootObject) {
-        return None;
-    }
-    let ProviderLayoutEvidence::ResolvedHandle(impl_instance) = semantics.evidence else {
-        return None;
-    };
-    let target_ty = semantics.target_ty?;
-    Some(RuntimeEffectHandleInfo {
-        target_ty,
-        space: provider_address_space_to_runtime(semantics.address_space?),
-        impl_instance,
-    })
 }
 
 #[salsa::tracked(
@@ -1073,18 +928,6 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
                 .expect("pointer parameter");
             let word = stored_class_for_ty_in_env(db, env, TyId::u256(db));
             assert_eq!(struct_fields(db, &node), vec![word.clone(), word]);
-        });
-    }
-
-    #[test]
-    fn canonical_scope_is_the_first_adt_in_type_syntax() {
-        with_source(|db, top_mod| {
-            let (pair_ty, _) = param(db, top_mod, "first", 2);
-            let (ptr_ty, _) = param(db, top_mod, "first", 0);
-            let (node_ty, _) = ptr_ty.as_ptr(db).unwrap();
-            assert_eq!(canonical_pointee_scope(db, pair_ty), node_ty.as_scope(db));
-            let (words_ty, _) = param(db, top_mod, "second", 2);
-            assert_eq!(canonical_pointee_scope(db, words_ty), None);
         });
     }
 

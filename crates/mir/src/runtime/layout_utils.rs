@@ -569,7 +569,7 @@ fn serialize_const_node_with_size<'db>(
             if let Some(RuntimeClass::AggregateValue { layout }) =
                 pointee.map(|pointee| pointee.target(db))
             {
-                return serialize_const_node_to_layout_bytes(db, layout, node, target);
+                return serialize_const_node_to_layout_bytes(db, *layout, node, target);
             }
             let ConstNode::Scalar(scalar) = node else {
                 return Err(LowerError::Unsupported(

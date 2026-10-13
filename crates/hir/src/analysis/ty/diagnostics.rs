@@ -1,7 +1,7 @@
 use super::{
     adt_def::AdtCycleMember,
     effects::rows::RowKey,
-    provider::{ProviderAddressSpace, ProviderLayoutFailure},
+    provider::ProviderAddressSpace,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, Kind, TyId},
@@ -215,35 +215,6 @@ pub enum TyLowerDiag<'db> {
         name: IdentId<'db>,
     },
 
-    /// A contract field is a selected `EffectHandle` whose `const SPACE` did not
-    /// resolve to a concrete `AddressSpace`, so the field's storage space is
-    /// unknown (a silent fallback would mis-place the field).
-    ContractFieldHandleSpaceUnresolved {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
-    ContractFieldProviderLayoutAmbiguous {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
-    ContractFieldProviderTargetUnresolved {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
-    ContractFieldProviderRawInvalid {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-        failure: ProviderLayoutFailure,
-    },
-
-    ContractFieldProviderCycle {
-        span: DynLazySpan<'db>,
-        ty: TyId<'db>,
-    },
-
     /// A contract field in storage or transient storage holding a memory
     /// pointer, which no later transaction can follow.
     ContractFieldCallPointer {
@@ -344,12 +315,7 @@ impl TyLowerDiag<'_> {
             Self::DuplicateGenericParamName(..) => 19,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
-            Self::ContractFieldHandleSpaceUnresolved { .. } => 41,
-            Self::ContractFieldProviderLayoutAmbiguous { .. } => 44,
-            Self::ContractFieldProviderTargetUnresolved { .. } => 45,
             Self::ContractFieldLayoutInvariant { .. } => 46,
-            Self::ContractFieldProviderCycle { .. } => 48,
-            Self::ContractFieldProviderRawInvalid { .. } => 49,
             Self::ContractFieldSlotNotConst { .. } => 62,
             Self::ContractFieldSlotInCode { .. } => 63,
             Self::ContractFieldSlotOverlap { .. } => 64,
@@ -1046,9 +1012,6 @@ pub enum BodyDiag<'db> {
         name: IdentId<'db>,
         write: bool,
     },
-    UnsafeProviderRequiresUnsafe {
-        primary: DynLazySpan<'db>,
-    },
     /// A `with` provider naming existing storage or transient state that the
     /// function's own effects do not cover.
     /// An access through a state pointer the body's own effects do not
@@ -1298,7 +1261,6 @@ impl<'db> BodyDiag<'db> {
             Self::ConstFnEffectfulCall { .. } => 63,
             Self::UnsafeDerefRequiresUnsafe { .. } => 96,
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
-            Self::UnsafeProviderRequiresUnsafe { .. } => 98,
         }
     }
 }
@@ -1530,12 +1492,6 @@ pub enum ImplDiag<'db> {
         const_name: IdentId<'db>,
     },
 
-    InvalidEffectHandleRaw {
-        primary: DynLazySpan<'db>,
-        raw_ty: TyId<'db>,
-        failure: ProviderLayoutFailure,
-    },
-
     /// An effect row or result space the trait does not declare.
     AccessItemNotDefinedInTrait {
         primary: DynLazySpan<'db>,
@@ -1584,7 +1540,6 @@ impl ImplDiag<'_> {
             Self::InherentConstConflict { .. } => 19,
             Self::InherentConstShadowsVariant { .. } => 20,
             Self::InherentConstShadowsFn { .. } => 21,
-            Self::InvalidEffectHandleRaw { .. } => 22,
             Self::TypeNotDefinedInTrait { .. } => 23,
             Self::AccessItemNotDefinedInTrait { .. } => 26,
             Self::MissingAssociatedSpace { .. } => 27,

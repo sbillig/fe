@@ -1402,8 +1402,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             SemanticLocalRole::DirectValue {
                 provenance: crate::analysis::semantic::ValueProvenance::RootProvider(_),
             }
-            | SemanticLocalRole::PlaceBoundValue { .. }
-            | SemanticLocalRole::DirectCarrier { .. } => PathReadSemantics::ForwardInterface,
+            | SemanticLocalRole::PlaceBoundValue { .. } => PathReadSemantics::ForwardInterface,
             SemanticLocalRole::PlaceCarrier { .. }
                 if normalize_ty(self.db, expr_ty, scope, self.assumptions)
                     .as_capability(self.db)

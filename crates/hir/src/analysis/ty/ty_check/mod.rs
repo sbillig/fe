@@ -1306,21 +1306,6 @@ fn typed_body_for_bodyless_func<'db>(
     .into()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BindingInterfaceShape<'db> {
-    OrdinaryValue,
-    ProviderValue {
-        kind: ProviderKind,
-        value_ty: TyId<'db>,
-    },
-    PlaceCarrier {
-        value_ty: TyId<'db>,
-    },
-    DirectCarrier {
-        target_ty: TyId<'db>,
-    },
-}
-
 pub struct TyChecker<'db> {
     pub(crate) db: &'db dyn HirAnalysisDb,
     pub(crate) env: TyCheckEnv<'db>,
@@ -1666,11 +1651,11 @@ impl<'db> TyChecker<'db> {
         self.table.commit(snapshot.table);
     }
 
-    fn concrete_borrow_provider_for_effect_handle_ty(
+    fn concrete_borrow_provider_for_capability_ty(
         &self,
         ty: TyId<'db>,
     ) -> Option<ProviderAddressSpace> {
-        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
+        let semantics = provider_semantics(self.db, ty);
         // Root-object defaults are binding-site semantics, not type-implied address spaces.
         (!matches!(semantics.kind, ProviderKind::RootObject)).then_some(semantics.address_space)?
     }
@@ -1771,7 +1756,7 @@ impl<'db> TyChecker<'db> {
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
         };
         binding_provider
-            .or_else(|| self.concrete_borrow_provider_for_effect_handle_ty(place_result_ty))
+            .or_else(|| self.concrete_borrow_provider_for_capability_ty(place_result_ty))
             .or_else(|| {
                 matches!(
                     binding,
@@ -2653,37 +2638,23 @@ impl<'db> TyChecker<'db> {
         crate::analysis::ty::ty_is_copy(self.db, self.env.scope(), ty, self.env.assumptions())
     }
 
-    fn binding_interface_shape(
-        &mut self,
-        binding: LocalBinding<'db>,
-    ) -> BindingInterfaceShape<'db> {
-        let ty = self.normalize_ty(self.env.lookup_binding_ty(&binding));
+    /// Whether a provider supplies `binding`, whose reads then forward the
+    /// provider's interface.
+    fn binding_has_provider(&self, binding: LocalBinding<'db>) -> bool {
         if self.env.binding_access(&binding).is_some() {
-            return BindingInterfaceShape::PlaceCarrier { value_ty: ty };
+            return false;
         }
-        let provider = match binding {
+        match binding {
             LocalBinding::EffectParam {
                 site, provider_idx, ..
-            } => self.env.provider_binding(site, provider_idx),
+            } => self.env.provider_binding(site, provider_idx).is_some(),
             LocalBinding::Param {
                 site: ParamSite::EffectField(site),
                 idx,
                 ..
-            } => self.env.resolved_provider_binding(site, idx),
-            LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
-        };
-        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
-        if let Some(target_ty) = semantics.binding_target_ty(self.db, provider.is_some()) {
-            return BindingInterfaceShape::DirectCarrier {
-                target_ty: self.normalize_ty(target_ty),
-            };
+            } => self.env.resolved_provider_binding(site, idx).is_some(),
+            LocalBinding::Local { .. } | LocalBinding::Param { .. } => false,
         }
-        provider.map_or(BindingInterfaceShape::OrdinaryValue, |provider| {
-            BindingInterfaceShape::ProviderValue {
-                kind: provider.semantics.kind,
-                value_ty: ty,
-            }
-        })
     }
 
     fn binding_path_read_semantics(
@@ -2694,15 +2665,11 @@ impl<'db> TyChecker<'db> {
         let expr_ty = self.normalize_ty(expr_ty);
         let binding_ty = self.normalize_ty(self.env.lookup_binding_ty(&binding));
         if binding_ty == expr_ty {
-            return PathReadSemantics::ReuseLocal;
-        }
-
-        match self.binding_interface_shape(binding) {
-            BindingInterfaceShape::OrdinaryValue | BindingInterfaceShape::PlaceCarrier { .. } => {
-                PathReadSemantics::MaterializeValue
-            }
-            BindingInterfaceShape::ProviderValue { .. }
-            | BindingInterfaceShape::DirectCarrier { .. } => PathReadSemantics::ForwardInterface,
+            PathReadSemantics::ReuseLocal
+        } else if self.binding_has_provider(binding) {
+            PathReadSemantics::ForwardInterface
+        } else {
+            PathReadSemantics::MaterializeValue
         }
     }
 
@@ -3492,7 +3459,7 @@ impl<'db> TyChecker<'db> {
                 typed_expr.ty = ty;
                 if typed_expr.borrow_provider.is_none() {
                     typed_expr.borrow_provider =
-                        self.concrete_borrow_provider_for_effect_handle_ty(ty);
+                        self.concrete_borrow_provider_for_capability_ty(ty);
                 }
                 typed_expr.path_read_semantics = typed_expr
                     .binding
@@ -5274,8 +5241,8 @@ impl<'db> TypedBody<'db> {
                     .call_effect_args(call_expr)?
                     .iter()
                     .find(|arg| arg.binding_idx as usize == effect_idx)?;
-                // A handle's own sources are not its target's, which lies
-                // wherever the handle points.
+                // A provider value whose target is not itself names that
+                // target indirectly: its own sources are not its target's.
                 let provider_ty = match effect_arg.arg {
                     EffectArg::Value(expr) => Some(self.expr_ty(db, expr)),
                     EffectArg::Binding(binding) => Some(self.binding_ty(db, binding)),

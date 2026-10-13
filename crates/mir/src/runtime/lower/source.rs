@@ -239,7 +239,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
             .is_some()
     }
 
-    pub(super) fn handle_like_semantic_value_is_available(&self, local: SLocalId) -> bool {
+    pub(super) fn transport_semantic_value_is_available(&self, local: SLocalId) -> bool {
         let Some(local_data) = self.env.body().local(local) else {
             return false;
         };
@@ -280,7 +280,6 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
             {
                 true
             }
-            SemanticLocalKind::DirectCarrier => self.handle_like_semantic_value_is_available(local),
             SemanticLocalKind::DirectValue
             | SemanticLocalKind::PlaceCarrier
             | SemanticLocalKind::PlaceBoundValue => {

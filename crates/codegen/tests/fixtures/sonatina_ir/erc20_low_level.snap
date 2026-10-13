@@ -123,18 +123,6 @@ func private %alloc_uninit(v0.i256) -> @layout_0 {
         return v10;
 }
 
-func private %allowance__g7ab3(v0.@layout_1, v1.@layout_1, v2.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v7.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v9.@layout_2 = insert_value v7 1.i256 v1;
-        v11.i256 = add v2 1.i256;
-        v12.i256 = call %get__g4007 v11 v9;
-        return v12;
-}
-
 func private %impl_Erc20__allowance(v0.i256, v1.@layout_1, v2.@layout_1) -> i256 {
     block0:
         jump block1;
@@ -143,6 +131,18 @@ func private %impl_Erc20__allowance(v0.i256, v1.@layout_1, v2.@layout_1) -> i256
         v7.@layout_2 = insert_value undef.@layout_2 0.i256 v1;
         v9.@layout_2 = insert_value v7 1.i256 v2;
         v11.i256 = add v0 1.i256;
+        v12.i256 = call %get__g4007 v11 v9;
+        return v12;
+}
+
+func private %allowance__g7ab3(v0.@layout_1, v1.@layout_1, v2.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v7.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
+        v9.@layout_2 = insert_value v7 1.i256 v1;
+        v11.i256 = add v2 1.i256;
         v12.i256 = call %get__g4007 v11 v9;
         return v12;
 }
@@ -169,21 +169,21 @@ func private %impl_Erc20__approve(v0.i256, v1.@layout_1, v2.@layout_1, v3.i256) 
         return;
 }
 
-func private %impl_Erc20__balance_of(v0.i256, v1.@layout_1) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %get__g5cd5 v0 v1;
-        return v4;
-}
-
 func private %balance_of__g7ab3(v0.@layout_1, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
         v4.i256 = call %get__g5cd5 v1 v0;
+        return v4;
+}
+
+func private %impl_Erc20__balance_of(v0.i256, v1.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %get__g5cd5 v0 v1;
         return v4;
 }
 

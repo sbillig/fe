@@ -788,7 +788,7 @@ mod tests {
         let layout = test_struct_layout(&db);
         let typed_raw = RuntimeClass::RawAddr {
             space: AddressSpaceKind::Storage,
-            pointee: Some(RawPointeeId::exact(
+            pointee: Some(RawPointeeId::new(
                 &db,
                 RuntimeClass::AggregateValue { layout },
             )),

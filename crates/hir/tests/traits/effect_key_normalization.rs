@@ -807,8 +807,6 @@ fn keyed_trait_effects_do_not_accept_target_type_only_matches() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("keyed_trait_effects_do_not_accept_target_type_only_matches.fe"),
         r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
 trait Logger {
     fn log(self)
 }
@@ -819,28 +817,11 @@ impl Logger for Console {
     fn log(self) {}
 }
 
-struct Ptr<T> {
-    raw: u256
-}
-
-impl<T> EffectHandle for Ptr<T> {
-    type Target = T
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl<T> EffectRef<T> for Ptr<T> {}
-
 fn needs() uses (logger: Logger) {}
 
-fn caller(p: Ptr<Console>) {
-    unsafe {
-        with (Logger = p) {
-            needs()
-        }
+fn caller(p: *Console) {
+    with (Logger = p) {
+        needs()
     }
 }
 "#,
@@ -848,9 +829,9 @@ fn caller(p: Ptr<Console>) {
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
     assert!(
-        diags.iter().any(|diag| diag.message.contains(
-            "keyed effect binding `Logger` requires `Ptr<Console>` to implement `Logger`",
-        )),
+        diags.iter().any(|diag| diag
+            .message
+            .contains("keyed effect binding `Logger` requires `*Console` to implement `Logger`",)),
         "expected keyed trait binding failure, got diagnostics: {diags:#?}"
     );
 }
@@ -1386,30 +1367,13 @@ fn schematic_type_keyed_with_bindings_do_not_accept_wrong_explicit_keys_via_prov
             "schematic_type_keyed_with_bindings_do_not_accept_wrong_explicit_keys_via_provider_wrappers.fe",
         ),
         r#"
-use core::effect_ref::{EffectHandle, EffectRef}
-
 struct Storage<T> {
     value: T,
 }
 
-struct Ptr<T> {
-    raw: u256
-}
-
-impl<T> EffectHandle for Ptr<T> {
-    type Target = T
-
-    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
-    type Raw = u256
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-impl<T> EffectRef<T> for Ptr<T> {}
-
 fn needs<T>() uses (store: Storage<T>) {}
 
-fn caller(p: own Ptr<Storage<u8>>) {
+fn caller(p: *Storage<u8>) {
     with (Storage<u16> = p) {
         needs()
     }

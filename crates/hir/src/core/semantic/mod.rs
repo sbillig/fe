@@ -321,8 +321,6 @@ fn func_provider_bindings_canonical<'db>(
     func: Func<'db>,
 ) -> Vec<ProviderBinding<'db>> {
     let requirements = func_effect_requirements_canonical(db, func);
-    let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-    let scope = func.scope();
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
     let mut providers = requirements
@@ -347,13 +345,7 @@ fn func_provider_bindings_canonical<'db>(
                     site: EffectParamSite::Func(func),
                     requirement_idx: requirement.binding_idx,
                 },
-                semantics: effect_param_provider_semantics(
-                    db,
-                    scope,
-                    assumptions,
-                    provider_ty,
-                    &requirement.key,
-                ),
+                semantics: effect_param_provider_semantics(db, provider_ty, &requirement.key),
             })
         })
         .collect::<Vec<_>>();
@@ -372,7 +364,7 @@ fn func_provider_bindings_canonical<'db>(
                         scope: RootProviderScope::Func(func),
                         registration,
                     },
-                    semantics: provider_semantics(db, scope, assumptions, provider_ty),
+                    semantics: provider_semantics(db, provider_ty),
                 }
             }),
     );
@@ -1485,7 +1477,6 @@ pub struct ContractFieldInfo<'db> {
     pub name: IdentId<'db>,
     pub declared: TyId<'db>,
     pub is_mut: bool,
-    pub is_provider: bool,
     /// The value the field holds: a provider's target, else `declared`.
     pub target: TyId<'db>,
 }
@@ -1817,7 +1808,7 @@ impl<'db> Contract<'db> {
         self.storage_layout(db)
             .semantic_fields()
             .into_iter()
-            .map(|(name, field, is_mut, is_provider, declared, target)| {
+            .map(|(name, field, is_mut, declared, target)| {
                 (
                     name,
                     ContractFieldInfo {
@@ -1825,7 +1816,6 @@ impl<'db> Contract<'db> {
                         name,
                         declared,
                         is_mut,
-                        is_provider,
                         target,
                     },
                 )
@@ -1963,29 +1953,20 @@ pub(crate) fn row_effect_provider<'db>(
             site: requirement.binding_site,
             requirement_idx: requirement.binding_idx,
         },
-        semantics: effect_param_provider_semantics(
-            db,
-            owner,
-            PredicateListId::empty_list(db),
-            provider_ty,
-            &requirement.key,
-        ),
+        semantics: effect_param_provider_semantics(db, provider_ty, &requirement.key),
     }
 }
 
 /// The semantics of `provider_ty`, the parameter a body is generic over for
-/// the provider of an effect keyed by `key`. One that is not a handle is a
-/// place of the key's type, so it lies where that type's places do: a
-/// state-only type is never in memory.
+/// the provider of an effect keyed by `key`: a place of the key's type, so it
+/// lies where that type's places do. A state-only type is never in memory.
 pub(crate) fn effect_param_provider_semantics<'db>(
     db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
     provider_ty: TyId<'db>,
     key: &EffectRequirementKey<'db>,
 ) -> ProviderSemantics<'db> {
-    let mut semantics = provider_semantics(db, scope, assumptions, provider_ty);
-    if semantics.evidence == ProviderLayoutEvidence::NotHandle
+    let mut semantics = provider_semantics(db, provider_ty);
+    if semantics.evidence == ProviderLayoutEvidence::Value
         && let EffectRequirementKey::Type(key_ty) = key
     {
         semantics.address_space = Some(key_ty.default_space(db));
@@ -2237,8 +2218,6 @@ fn contract_provider_bindings_canonical<'db>(
     contract: Contract<'db>,
     site: EffectParamSite<'db>,
 ) -> Vec<ProviderBinding<'db>> {
-    let scope = contract.scope();
-    let assumptions = PredicateListId::empty_list(db);
     let is_init_site = matches!(site, EffectParamSite::ContractInit { .. });
     let mut providers = contract
         .storage_layout(db)
@@ -2257,15 +2236,7 @@ fn contract_provider_bindings_canonical<'db>(
                 source: ProviderSource::ContractField { field: field.field },
                 semantics: ProviderSemantics {
                     provider_ty,
-                    kind: if provider_ty.is_struct(db)
-                        || provider_ty.is_array(db)
-                        || provider_ty.is_tuple(db)
-                        || provider_ty.as_enum(db).is_some()
-                    {
-                        crate::analysis::ty::ProviderKind::Handle
-                    } else {
-                        crate::analysis::ty::ProviderKind::RawAddress
-                    },
+                    kind: crate::analysis::ty::ProviderKind::Place,
                     address_space: Some(field.address_space).map(|space| {
                         if is_init_site && space == ProviderAddressSpace::Code {
                             ProviderAddressSpace::Memory
@@ -2297,7 +2268,7 @@ fn contract_provider_bindings_canonical<'db>(
                         scope: RootProviderScope::of_site(site),
                         registration,
                     },
-                    semantics: provider_semantics(db, scope, assumptions, provider_ty),
+                    semantics: provider_semantics(db, provider_ty),
                 }
             }),
     );
@@ -3585,8 +3556,7 @@ impl<'db> AdtDef<'db> {
 /// once rather than once per member, and each cycle is reported once, at its
 /// first ADT in item order. Only growth by type constructors written in field
 /// types is found: an argument computed by a trait projection or a const
-/// expression, and an effect handle's target, are left to the borrow
-/// checker's referent limit. Reachability follows only builtin arguments and
+/// expression is left to the borrow checker's referent limit. Reachability follows only builtin arguments and
 /// exposed ADT arguments, with array elements requiring known positive lengths.
 /// Other heads and symbolic lengths rely on the referent limit. Containment
 /// inside an ADT argument still counts every constructor, including `[T; 0]`.
@@ -5600,25 +5570,6 @@ impl<'db> FieldView<'db> {
                 ];
             }
             let diag = match error {
-                ContractLayoutError::AmbiguousProviderLayout => {
-                    TyLowerDiag::ContractFieldProviderLayoutAmbiguous { span, ty }
-                }
-                ContractLayoutError::UnresolvedProviderTarget => {
-                    TyLowerDiag::ContractFieldProviderTargetUnresolved { span, ty }
-                }
-                ContractLayoutError::UnresolvedProviderSpace => {
-                    TyLowerDiag::ContractFieldHandleSpaceUnresolved { span, ty }
-                }
-                ContractLayoutError::InvalidProviderRaw { failure } => {
-                    TyLowerDiag::ContractFieldProviderRawInvalid {
-                        span,
-                        ty,
-                        failure: *failure,
-                    }
-                }
-                ContractLayoutError::NonRegularProviderCycle => {
-                    TyLowerDiag::ContractFieldProviderCycle { span, ty }
-                }
                 ContractLayoutError::CallPointerInState { pointer } => {
                     TyLowerDiag::ContractFieldCallPointer {
                         span,

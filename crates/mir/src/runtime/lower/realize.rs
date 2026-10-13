@@ -30,7 +30,7 @@ pub(super) enum RuntimeArgSource<'db> {
         materialized_class: RuntimeClass<'db>,
     },
     RuntimeValue(SLocalId),
-    HandleLikeValue(SLocalId),
+    TransportValue(SLocalId),
     PlaceAddress(NPlace<'db>, TyId<'db>),
     PlaceValue(NPlace<'db>, TyId<'db>),
     ValueExtract {
@@ -325,7 +325,7 @@ impl<'db> SelectedRuntimeArg<'db> {
 
     pub(super) fn local_value(local: SLocalId, class: RuntimeClass<'db>) -> Self {
         let source = if class.is_transport() {
-            RuntimeArgSource::HandleLikeValue(local)
+            RuntimeArgSource::TransportValue(local)
         } else {
             RuntimeArgSource::RuntimeValue(local)
         };
@@ -336,8 +336,8 @@ impl<'db> SelectedRuntimeArg<'db> {
         Self::coerce(RuntimeArgSource::RuntimeValue(local), class)
     }
 
-    pub(super) fn handle_like_value(local: SLocalId, class: RuntimeClass<'db>) -> Self {
-        Self::coerce(RuntimeArgSource::HandleLikeValue(local), class)
+    pub(super) fn transport_value(local: SLocalId, class: RuntimeClass<'db>) -> Self {
+        Self::coerce(RuntimeArgSource::TransportValue(local), class)
     }
 
     pub(super) fn semantic_operand(arg: RuntimeOperand, class: RuntimeClass<'db>) -> Self {
@@ -600,7 +600,7 @@ mod tests {
             RLocalId::new(0),
             RuntimeValueUsePlan::MaterializeValue(RuntimeValueMaterialization::RawAddrSlot {
                 pointee: word_class(),
-                target: RawPointeeId::exact(&db, word_class()),
+                target: RawPointeeId::new(&db, word_class()),
             }),
             semantic_ty,
         );

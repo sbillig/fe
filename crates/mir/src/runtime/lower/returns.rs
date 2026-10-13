@@ -723,7 +723,7 @@ fn retarget_declaration_return_transport<'db>(
             space: *space,
             pointee: match source_target {
                 Some(source_target) if projected_transport => Some(*source_target),
-                Some(_) | None => Some(RawPointeeId::exact(db, *pointee)),
+                Some(_) | None => Some(RawPointeeId::new(db, *pointee)),
             },
         },
         (
@@ -738,7 +738,7 @@ fn retarget_declaration_return_transport<'db>(
         ) => RuntimeClass::RawAddr {
             space: *space,
             pointee: if projected_transport {
-                Some(RawPointeeId::exact(db, pointee.as_ref().clone()))
+                Some(RawPointeeId::new(db, pointee.as_ref().clone()))
             } else {
                 target
             },

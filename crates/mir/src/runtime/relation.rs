@@ -31,9 +31,8 @@ pub fn raw_pointees_equivalent<'db>(
     if lhs == rhs {
         return true;
     }
-    let lhs = lhs.target(db);
-    let rhs = rhs.target(db);
-    lhs == rhs || graph_equivalent(db, Obligation::Class(lhs, rhs))
+    let (lhs, rhs) = (lhs.target(db), rhs.target(db));
+    lhs == rhs || graph_equivalent(db, Obligation::Class(lhs.clone(), rhs.clone()))
 }
 
 pub fn raw_pointee_matches_class<'db>(
@@ -42,7 +41,7 @@ pub fn raw_pointee_matches_class<'db>(
     class: &RuntimeClass<'db>,
 ) -> bool {
     let target = pointee.target(db);
-    target == *class || graph_equivalent(db, Obligation::Class(target, class.clone()))
+    target == class || graph_equivalent(db, Obligation::Class(target.clone(), class.clone()))
 }
 
 /// Whether dereferencing `transport` yields a class equivalent to `target`.
@@ -108,7 +107,10 @@ fn graph_equivalent<'db>(db: &'db dyn MirDb, root: Obligation<'db>) -> bool {
             Obligation::Class(lhs, rhs) => push_class_edges(lhs, rhs, &mut pending),
             Obligation::Layout(lhs, rhs) => push_layout_edges(db, lhs, rhs, &mut pending),
             Obligation::Pointee(lhs, rhs) => {
-                pending.push(Obligation::Class(lhs.target(db), rhs.target(db)));
+                pending.push(Obligation::Class(
+                    lhs.target(db).clone(),
+                    rhs.target(db).clone(),
+                ));
                 true
             }
         };
@@ -317,7 +319,7 @@ mod tests {
             &db,
             RuntimeClass::RawAddr {
                 space: AddressSpaceKind::Memory,
-                pointee: Some(RawPointeeId::exact(&db, int(256))),
+                pointee: Some(RawPointeeId::new(&db, int(256))),
             },
         );
         assert_eq!(exact, respelled, "exact targets intern structurally");

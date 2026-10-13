@@ -218,7 +218,6 @@ pub enum SemanticLocalKind {
     DirectValue,
     PlaceCarrier,
     PlaceBoundValue,
-    DirectCarrier,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -235,10 +234,6 @@ pub enum SemanticLocalRole<'db> {
         provenance: PlaceProvenance<'db>,
         value_ty: TyId<'db>,
     },
-    DirectCarrier {
-        provider: Option<ProviderBinding<'db>>,
-        target_ty: TyId<'db>,
-    },
 }
 
 impl<'db> SemanticLocalRole<'db> {
@@ -248,7 +243,6 @@ impl<'db> SemanticLocalRole<'db> {
             Self::DirectValue { .. } => SemanticLocalKind::DirectValue,
             Self::PlaceCarrier { .. } => SemanticLocalKind::PlaceCarrier,
             Self::PlaceBoundValue { .. } => SemanticLocalKind::PlaceBoundValue,
-            Self::DirectCarrier { .. } => SemanticLocalKind::DirectCarrier,
         }
     }
 
@@ -257,7 +251,6 @@ impl<'db> SemanticLocalRole<'db> {
             Self::PlaceCarrier { value_ty, .. } | Self::PlaceBoundValue { value_ty, .. } => {
                 *value_ty
             }
-            Self::DirectCarrier { target_ty, .. } => *target_ty,
             Self::Erased | Self::DirectValue { .. } => local_ty,
         }
     }
@@ -272,16 +265,11 @@ impl<'db> SemanticLocalRole<'db> {
                 provider: Some(provider),
                 ..
             } => Some(provider.clone()),
-            Self::DirectCarrier {
-                provider: Some(provider),
-                ..
-            } => Some(provider.clone()),
             Self::Erased
             | Self::DirectValue {
                 provenance: ValueProvenance::Ordinary,
             }
-            | Self::PlaceCarrier { provider: None, .. }
-            | Self::DirectCarrier { provider: None, .. } => None,
+            | Self::PlaceCarrier { provider: None, .. } => None,
         }
     }
 }

@@ -8,7 +8,6 @@ use crate::{
             CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemConstScalar, SemConstValue,
             SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget,
             SemanticInstance, VariantIndex,
-            capability::handle::{HandleAddressSpace, OpaqueHandleContract},
         },
         ty::{
             provider::ProviderAddressSpace,
@@ -99,7 +98,7 @@ impl<'db> NormalizedBody<'db> {
     }
 
     /// Values required to access a place, including the value that initializes
-    /// temporary storage or supplies a handle's representation root.
+    /// temporary storage or supplies a capability's representation root.
     pub fn place_values<'a>(
         &'a self,
         place: &'a NPlace<'db>,
@@ -380,12 +379,6 @@ pub enum ViewAccess {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum HandleOrigin<'db> {
-    Provider(ProviderBinding<'db>),
-    Opaque(OpaqueHandleContract<'db>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NExpr<'db> {
     Forward {
         src: NOperand,
@@ -406,12 +399,6 @@ pub enum NExpr<'db> {
     MakeView {
         place: NPlace<'db>,
         access: ViewAccess,
-    },
-    MakeHandle {
-        ty: TyId<'db>,
-        variant: Option<VariantIndex>,
-        fields: Box<[NOperand]>,
-        origin: HandleOrigin<'db>,
     },
     StructuralRepack {
         value: NOperand,
@@ -489,9 +476,7 @@ impl<'db> NExpr<'db> {
                 f(*lhs);
                 f(*rhs);
             }
-            Self::AggregateMake { fields, .. }
-            | Self::EnumMake { fields, .. }
-            | Self::MakeHandle { fields, .. } => {
+            Self::AggregateMake { fields, .. } | Self::EnumMake { fields, .. } => {
                 fields.iter().copied().for_each(f);
             }
             Self::Call {
@@ -539,7 +524,6 @@ impl<'db> NExpr<'db> {
             | Self::ScalarCast { .. }
             | Self::ArrayRepeat { .. }
             | Self::AggregateMake { .. }
-            | Self::MakeHandle { .. }
             | Self::EnumMake { .. }
             | Self::GetEnumTag { .. }
             | Self::IsEnumVariant { .. }
@@ -715,37 +699,22 @@ pub fn copied_scalar_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<
         .unwrap_or(ty)
 }
 
-/// The runtime representation of a dynamic string literal owns a freshly allocated
-/// ABI payload. Keep its pointer source explicit in the shared constant contract.
-pub fn literal_allocation<'db>(
+/// Whether a constant of `ty` is a dynamic string literal, whose runtime
+/// representation owns a freshly allocated ABI payload.
+pub fn is_literal_allocation<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     constant: &SConst<'db>,
-) -> Option<(FieldIndex, OpaqueHandleContract<'db>)> {
+) -> bool {
     let SConst::Value(value) = constant else {
-        return None;
+        return false;
     };
-    if !ty.is_core_dyn_string(db)
-        || !matches!(
+    ty.is_core_dyn_string(db)
+        && matches!(
             value.value().value(db),
             SemConstValue::Scalar {
                 value: SemConstScalar::Bytes(_),
                 ..
             }
         )
-    {
-        return None;
-    }
-    let pointer_ty = *ty.field_types(db).first()?;
-    let (target_ty, ProviderAddressSpace::Memory) = pointer_ty.as_ptr(db)? else {
-        return None;
-    };
-    Some((
-        FieldIndex(0),
-        OpaqueHandleContract {
-            handle_ty: pointer_ty,
-            target_ty,
-            address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
-        },
-    ))
 }

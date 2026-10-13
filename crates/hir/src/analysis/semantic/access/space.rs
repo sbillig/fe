@@ -10,7 +10,6 @@ use crate::{
         ty::{provider::ProviderAddressSpace, result_space::PlaceStep, ty_def::TyId},
     },
     core::semantic::storage_field_lanes,
-    hir_def::scope_graph::ScopeId,
 };
 
 /// Where a path takes a place, step by step.
@@ -39,7 +38,6 @@ impl PathSpace {
         &mut self,
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
-        scope: ScopeId<'db>,
         start: Option<ProviderAddressSpace>,
         (container, step, result): (TyId<'db>, PlaceStep, TyId<'db>),
     ) {
@@ -56,7 +54,7 @@ impl PathSpace {
                     Some(ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)
                 ) =>
             {
-                self.lane |= storage_field_lanes(db, scope, container)
+                self.lane |= storage_field_lanes(db, container)
                     .get(field)
                     .copied()
                     .unwrap_or(false);

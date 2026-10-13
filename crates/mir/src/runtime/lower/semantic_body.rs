@@ -350,7 +350,6 @@ impl<'db> RuntimeSemanticBody<'db> {
             | NExpr::ScalarCast { .. }
             | NExpr::ArrayRepeat { .. }
             | NExpr::AggregateMake { .. }
-            | NExpr::MakeHandle { .. }
             | NExpr::EnumMake { .. }
             | NExpr::GetEnumTag { .. }
             | NExpr::IsEnumVariant { .. }

@@ -25,17 +25,16 @@ use crate::{
         semantic::{
             SemOrigin, SemanticInstance,
             access::{control::semantic_may_return, projection_result_spaces},
-            capability::semantics::{CapabilityClass, capability_semantics},
             definite_assignment::literal_index,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan, operand_origin,
             },
             get_or_build_semantic_instance,
             normalized::{
-                HandleOrigin, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue,
-                NExpr, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind,
-                NStructuralPath, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
-                ReadMode, access::AccessTarget,
+                NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NOperand,
+                NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind, NStructuralPath,
+                NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, ReadMode,
+                access::AccessTarget,
             },
         },
         ty::{
@@ -301,18 +300,6 @@ impl<'a, 'db> Analysis<'a, 'db> {
             || is_sealed_evm_capability(self.db, self.scope, self.assumptions, ty)
     }
 
-    /// The domain a handle of `ty` names when its provider is unknown.
-    fn dynamic_handle(&mut self, ty: TyId<'db>) -> Option<u32> {
-        matches!(
-            capability_semantics(self.db, self.scope, self.assumptions, ty),
-            Ok(Some(semantics)) if semantics.class == CapabilityClass::Handle
-        )
-        .then(|| {
-            let space = provider_semantics(self.db, self.scope, self.assumptions, ty).address_space;
-            self.domains.dynamic(space)
-        })
-    }
-
     fn seed_entry(&mut self) {
         let body = self.body;
         for (index, value) in body.values.iter().enumerate() {
@@ -335,17 +322,16 @@ impl<'a, 'db> Analysis<'a, 'db> {
             } else {
                 // An effect handle names its provider's domain.
                 let domain = match value.source {
-                    Some(LocalBinding::EffectParam { site, idx, .. }) => Some(
-                        self.domains.provider_source(
+                    Some(LocalBinding::EffectParam { site, idx, .. }) => {
+                        Some(self.domains.provider_source(
                             ProviderSource::UsesParam {
                                 site,
                                 requirement_idx: idx as u32,
                             },
-                            provider_semantics(self.db, self.scope, self.assumptions, value.ty)
-                                .address_space,
-                        ),
-                    ),
-                    _ => self.dynamic_handle(value.ty),
+                            provider_semantics(self.db, value.ty).address_space,
+                        ))
+                    }
+                    _ => None,
                 };
                 let Some(domain) = domain else {
                     continue;
@@ -463,13 +449,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 NDataProjection::Index(_) => PlaceStep::Index,
                 NDataProjection::Entry(_) => PlaceStep::Entry,
             };
-            walk.step(
-                db,
-                self.instance,
-                self.scope,
-                start,
-                (container, step, result),
-            );
+            walk.step(db, self.instance, start, (container, step, result));
             container = result;
         }
         walk
@@ -492,7 +472,6 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 (vec![rooted(self, base, path)], TokenSet::new())
             }
             NPlaceBase::CapabilityTarget { carrier } => {
-                let carrier_ty = self.body.values[carrier.index()].ty;
                 let direct = self.direct(carrier);
                 let mut regions: Vec<AbsPlace> = direct
                     .iter()
@@ -504,10 +483,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     })
                     .collect();
                 if regions.is_empty() {
-                    let base = self
-                        .dynamic_handle(carrier_ty)
-                        .map_or(Base::Raw, Base::Domain);
-                    regions = vec![rooted(self, base, path)];
+                    regions = vec![rooted(self, Base::Raw, path)];
                 }
                 regions.sort();
                 regions.dedup();
@@ -758,11 +734,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         ));
                     }
                 }
-                if loaded.is_empty() {
-                    self.unknown_handle(result, origin)
-                } else {
-                    loaded
-                }
+                loaded
             }
             // A borrow no `end` closes is not an access of its own: through
             // a carrier it names part of the carrier's access, and otherwise
@@ -797,30 +769,6 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NExpr::MakeView { place, .. } => {
                 self.open_access(result, origin, place, BorrowKind::Ref)
             }
-            NExpr::MakeHandle {
-                fields,
-                origin: handle_origin,
-                ty,
-                ..
-            } => {
-                let domain = match handle_origin {
-                    HandleOrigin::Provider(binding) => Some(self.domains.provider(binding)),
-                    HandleOrigin::Opaque(_) => self.dynamic_handle(*ty),
-                };
-                let mut held: Held = fields
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(field, operand)| {
-                        Self::prefixed(&of(self, operand), Step::Field(field as u16))
-                    })
-                    .collect();
-                if let Some(domain) = domain {
-                    let mut handle = self.new_token(TokenKind::Handle, BorrowKind::Mut, origin);
-                    handle.regions.push(AbsPlace::new(Base::Domain(domain)));
-                    held.insert((self.token(result, Site::Handle, handle), Path::new()));
-                }
-                held
-            }
             NExpr::Call {
                 callee,
                 args,
@@ -834,26 +782,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                         .insert(result, get_or_build_semantic_instance(self.db, callee.key));
                     return self.open_session(result, origin, func, shape, args, effect_args);
                 }
-                // A handle result names the domains of the handles the call
-                // was given, or an unknown one.
-                let handles: Held = args
-                    .iter()
-                    .flat_map(|arg| self.values[arg.value.index()].iter())
-                    .filter(|(token, rest)| {
-                        rest.is_empty() && self.tokens[*token as usize].kind == TokenKind::Handle
-                    })
-                    .cloned()
-                    .collect();
-                if self
-                    .dynamic_handle(self.body.values[result.index()].ty)
-                    .is_none()
-                {
-                    Held::new()
-                } else if handles.is_empty() {
-                    self.unknown_handle(result, origin)
-                } else {
-                    handles
-                }
+                Held::new()
             }
             NExpr::CodeRegionRef { .. }
             | NExpr::Const(_)
@@ -866,16 +795,6 @@ impl<'a, 'db> Analysis<'a, 'db> {
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. } => Held::new(),
         }
-    }
-
-    /// A handle whose provider the body cannot see names a dynamic domain.
-    fn unknown_handle(&mut self, result: NValueId, origin: SemOrigin<'db>) -> Held {
-        let Some(domain) = self.dynamic_handle(self.body.values[result.index()].ty) else {
-            return Held::new();
-        };
-        let mut handle = self.new_token(TokenKind::Handle, BorrowKind::Mut, origin);
-        handle.regions.push(AbsPlace::new(Base::Domain(domain)));
-        Held::from([(self.token(result, Site::Handle, handle), Path::new())])
     }
 
     fn open_access(

@@ -127,14 +127,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 return provider.semantics.kind == ProviderKind::RootObject;
             }
         }
-        provider_semantics(
-            self.db,
-            self.body.scope(),
-            self.assumptions,
-            self.expr_ty(expr),
-        )
-        .kind
-            == ProviderKind::RootObject
+        provider_semantics(self.db, self.expr_ty(expr)).kind == ProviderKind::RootObject
     }
 
     fn lower_effect_arg(&mut self, arg: &ResolvedEffectArg<'db>) -> SEffectArg<'db> {
@@ -178,8 +171,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         SEffectArgValue::Value(SOperand::inherited(local))
                     }
                 }
-                // A handle argument a `Field` authority is taken from: its
-                // place, read again.
                 EffectArg::Value(expr) => SEffectArgValue::Value(self.lower_expr_operand(*expr)),
                 EffectArg::Unknown => {
                     SEffectArgValue::Value(SOperand::synthetic(self.unit_value()))

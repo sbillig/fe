@@ -20,12 +20,12 @@ func private %alloc() -> i256 {
         return v3;
 }
 
-func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_572b(v0.i256) {
+func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a25(v0.i256) {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = mload v0 i256;
+        v2.i256 = evm_sload v0;
         (v4.i256, v5.i1) = uaddo v2 1.i256;
         br v5 block2 block3;
 
@@ -35,19 +35,19 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_572
         evm_revert 0.i256 36.i256;
 
     block3:
-        mstore v0 v4 i256;
-        v13.i256 = add v0 32.i256;
-        v14.i256 = mload v13 i256;
-        (v16.i256, v17.i1) = uaddo v14 2.i256;
-        br v17 block2 block4;
+        evm_sstore v0 v4;
+        v12.i256 = add v0 1.i256;
+        v13.i256 = evm_sload v12;
+        (v15.i256, v16.i1) = uaddo v13 2.i256;
+        br v16 block2 block4;
 
     block4:
-        v19.i256 = add v0 32.i256;
-        mstore v19 v16 i256;
+        v18.i256 = add v0 1.i256;
+        evm_sstore v18 v15;
         return;
 }
 
-func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_d8c4(v0.objref<@layout_0>) {
+func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a78(v0.objref<@layout_0>) {
     block0:
         jump block1;
 
@@ -76,12 +76,12 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_d8c
         return;
 }
 
-func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_e408(v0.i256) {
+func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_b2ea(v0.i256) {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = evm_sload v0;
+        v2.i256 = mload v0 i256;
         (v4.i256, v5.i1) = uaddo v2 1.i256;
         br v5 block2 block3;
 
@@ -91,15 +91,15 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_e40
         evm_revert 0.i256 36.i256;
 
     block3:
-        evm_sstore v0 v4;
-        v12.i256 = add v0 1.i256;
-        v13.i256 = evm_sload v12;
-        (v15.i256, v16.i1) = uaddo v13 2.i256;
-        br v16 block2 block4;
+        mstore v0 v4 i256;
+        v13.i256 = add v0 32.i256;
+        v14.i256 = mload v13 i256;
+        (v16.i256, v17.i1) = uaddo v14 2.i256;
+        br v17 block2 block4;
 
     block4:
-        v18.i256 = add v0 1.i256;
-        evm_sstore v18 v15;
+        v19.i256 = add v0 32.i256;
+        mstore v19 v16 i256;
         return;
 }
 
@@ -135,9 +135,9 @@ func private %test_effect_ptr_domains() {
 
     block1:
         v1.i256 = call %alloc;
-        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_572b v1;
+        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_b2ea v1;
         v4.i256 = call %stor_ptr 0.i256;
-        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_e408 v4;
+        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a25 v4;
         v8.constref<@layout_0> = const.ref $const_region_0;
         v10.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
         v12.@layout_0 = insert_value v10 1.i256 20.i256;
@@ -147,7 +147,7 @@ func private %test_effect_ptr_domains() {
         v15.objref<i256> = obj.proj v0 1.i256;
         v16.i256 = extract_value v12 1.i256;
         obj.store v15 v16;
-        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_d8c4 v0;
+        call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a78 v0;
         return;
 }
 

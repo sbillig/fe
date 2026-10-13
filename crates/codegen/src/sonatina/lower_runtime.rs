@@ -3160,7 +3160,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             } => Ok(PlaceTerminal::Ptr {
                 addr: value,
                 space: *space,
-                class: pointee.target(self.module.db),
+                class: pointee.target(self.module.db).clone(),
                 lane: None,
             }),
             RuntimeClass::RawAddr { pointee: None, .. } => Err(LowerError::Unsupported(

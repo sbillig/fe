@@ -22,8 +22,8 @@ use crate::{
     instance::RuntimeInstanceKey,
     runtime::{
         AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
-        LayoutKey, RawPointeeId, RawPointeeKey, RefKind, RefView, RuntimeCarrier, RuntimeClass,
-        RuntimeLocalRoot, RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
+        LayoutKey, RawPointeeId, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot,
+        RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
         package::raw_pointee_sort_key,
         relation::{raw_pointee_matches_class, raw_pointees_equivalent, transport_target_matches},
     },
@@ -32,9 +32,9 @@ use crate::{
 use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeBodyCx,
-        carrier_value_class, local_slot_uses_transport_class, local_uses_effect_handle_transport,
-        provider_erases_runtime_root, runtime_class_for_direct_value_provider_in_env,
-        runtime_class_for_effect_binding_provider_in_env, runtime_class_for_provider_binding,
+        carrier_value_class, local_slot_uses_transport_class, provider_erases_runtime_root,
+        runtime_class_for_direct_value_provider_in_env,
+        runtime_class_for_effect_binding_provider_in_env,
     },
     conversion::RuntimeConversionPlanner,
     returns::declaration_runtime_return_class,
@@ -44,9 +44,8 @@ use super::{
         place_index_bounds,
     },
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
-        provider_class_for_target_in_env, runtime_repr_ty_in_env, runtime_zero_sized_transport_ty,
-        runtime_zero_sized_ty, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
+        RuntimeTypeEnv, provider_class_for_target_in_env, runtime_repr_ty_in_env,
+        runtime_zero_sized_transport_ty, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
     },
 };
 
@@ -61,10 +60,6 @@ pub(super) enum RuntimeLocalLowering<'db> {
         place_class: RuntimeClass<'db>,
     },
     PlaceBoundValue {
-        provider: Option<RuntimeProviderBindingId>,
-        place_class: RuntimeClass<'db>,
-    },
-    DirectCarrier {
         provider: Option<RuntimeProviderBindingId>,
         place_class: RuntimeClass<'db>,
     },
@@ -169,8 +164,6 @@ impl<'a, 'lookup, 'db> CarrierInferer<'a, 'lookup, 'db, FullBodySpace<'a, 'db>> 
                 local,
                 local_data,
                 class.clone(),
-                self.env.scope(),
-                self.env.assumptions(),
             );
             self.set_carrier(local, desired);
         }
@@ -356,15 +349,7 @@ impl<'db, S: AssignmentSpace<'db>> SparseAnalysis for CarrierInferer<'_, '_, 'db
         let Some(class) = class else {
             return Ok(false);
         };
-        let desired = desired_runtime_value_carrier(
-            db,
-            self.env.body(),
-            assign.dst,
-            local,
-            class,
-            self.env.scope(),
-            self.env.assumptions(),
-        );
+        let desired = desired_runtime_value_carrier(db, self.env.body(), assign.dst, local, class);
         if !self.set_carrier(assign.dst, desired) {
             return Ok(false);
         }
@@ -404,25 +389,6 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
                         provider,
                     )
                 }),
-            (SemanticLocalRole::DirectCarrier { .. }, Some(provider)) => {
-                let visible = env
-                    .actual_runtime_visible_root_provider_class(carriers, provider)
-                    .map(|(_, class)| class);
-                if effect_handle_transport_class_for_ty_in_env(env.db(), env.type_env(), local.ty)
-                    .is_some()
-                {
-                    visible
-                } else {
-                    visible.or_else(|| {
-                        runtime_class_for_provider_binding(
-                            env.db(),
-                            provider,
-                            env.scope(),
-                            env.assumptions(),
-                        )
-                    })
-                }
-            }
             (SemanticLocalRole::PlaceCarrier { .. }, Some(provider)) => env
                 .actual_runtime_visible_root_provider_class(carriers, provider)
                 .map(|(_, class)| class)
@@ -447,11 +413,7 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
     local_id: SLocalId,
     local: &SLocal<'db>,
     class: RuntimeClass<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> RuntimeCarrier<'db> {
-    let env = RuntimeTypeEnv::new(scope, assumptions);
-    let is_effect_handle = effect_handle_transport_class_for_ty_in_env(db, env, local.ty).is_some();
     if runtime_class_has_zero_sized_payload(db, &class) {
         return RuntimeCarrier::Erased;
     }
@@ -463,14 +425,6 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
         }
     ) {
         return RuntimeCarrier::Erased;
-    }
-    if !is_effect_handle
-        && !class.is_transport()
-        && matches!(local.role, SemanticLocalRole::DirectCarrier { .. })
-        && let Some(transport_class) =
-            fallback_root_transport_class(db, body, local, scope, assumptions)
-    {
-        return RuntimeCarrier::Value(transport_class);
     }
     match class {
         RuntimeClass::AggregateValue { layout }
@@ -582,31 +536,6 @@ fn lower_semantic_locals<'db>(
                                 "missing normalized place class for root-provider place-bound local {idx}"
                             )
                         }),
-                    provider_local,
-                ))
-            }
-            (SemanticLocalKind::DirectCarrier, Some(provider)) => {
-                let provider_local = cx
-                    .env
-                    .actual_runtime_visible_root_provider_class(carriers, provider)
-                    .map_or(local_id, |(provider_local, _)| provider_local);
-                let provider_class = cx
-                    .env
-                    .actual_runtime_visible_root_provider_class(carriers, provider)
-                    .map(|(_, class)| class)
-                    .or_else(|| {
-                        runtime_class_for_provider_binding(db, provider, scope, assumptions)
-                    })
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "missing direct-carrier runtime class for semantic local {idx}: {}",
-                            local.ty.pretty_print(db),
-                        )
-                    });
-                Some((
-                    provider.clone(),
-                    provider_class,
-                    carrier_local_place_class(db, local, local_id, carriers, scope, assumptions),
                     provider_local,
                 ))
             }
@@ -727,47 +656,6 @@ fn lower_semantic_locals<'db>(
                     place_class,
                 }
             }
-            (SemanticLocalKind::DirectCarrier, provider) => {
-                let place_class = carrier_local_place_class(
-                    db,
-                    local,
-                    SLocalId::from_u32(idx as u32),
-                    carriers,
-                    scope,
-                    assumptions,
-                );
-                let provider = provider.map(|provider| {
-                    if let Some(binding) =
-                        runtime_provider_binding_id(&provider_bindings, provider)
-                    {
-                        return binding;
-                    }
-                    let (provider_local, provider_class) = cx
-                        .env
-                        .actual_runtime_visible_root_provider_class(carriers, provider)
-                        .or_else(|| {
-                            runtime_class_for_provider_binding(db, provider, scope, assumptions)
-                                .map(|class| (SLocalId::from_u32(idx as u32), class))
-                        })
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "missing direct-carrier runtime class for semantic local {idx}: {}",
-                                local.ty.pretty_print(db),
-                            )
-                        });
-                    push_runtime_provider_binding(
-                        &mut provider_bindings,
-                        provider.clone(),
-                        provider_local,
-                        provider_class,
-                        place_class.clone(),
-                    )
-                });
-                RuntimeLocalLowering::DirectCarrier {
-                    provider,
-                    place_class,
-                }
-            }
         }
         })
         .collect();
@@ -842,9 +730,7 @@ fn local_lowers_as_direct_read_value<'db>(
             local_is_read_only_view_param(local)
                 && place_carrier_lowers_as_direct_value(db, local, carrier, scope, assumptions)
         }
-        SemanticLocalKind::Erased
-        | SemanticLocalKind::DirectCarrier
-        | SemanticLocalKind::PlaceBoundValue => false,
+        SemanticLocalKind::Erased | SemanticLocalKind::PlaceBoundValue => false,
     }
 }
 
@@ -955,14 +841,10 @@ fn carrier_local_place_class<'db>(
     let env = RuntimeTypeEnv::new(scope, assumptions);
     let target_ty = match &local.role {
         SemanticLocalRole::PlaceCarrier { value_ty, .. } => value_ty,
-        SemanticLocalRole::DirectCarrier { target_ty, .. } => target_ty,
         _ => {
             panic!("carrier local missing carrier lowering: {local_id:?}");
         }
     };
-    if effect_handle_transport_class_for_ty_in_env(db, env, local.ty).is_some() {
-        return stored_class_for_ty_in_env(db, env, *target_ty);
-    }
     carrier_value_class(local_id, carriers)
         .and_then(|class| class.aggregate_value_class())
         .unwrap_or_else(|| stored_class_for_ty_in_env(db, env, *target_ty))
@@ -1107,21 +989,11 @@ pub(super) fn local_place_root_class<'db>(
             cx.carriers,
         )
         .or_else(|| cx.env.root_place_fallback_class(local)),
-        SemanticLocalKind::DirectCarrier => {
-            if let Some(carrier_class) = carrier.value_class().cloned()
-                && let Some(place_class) =
-                    materialized_place_class_from_runtime_source(cx.env.db(), &carrier_class)
-            {
-                return Some(place_class);
-            }
-            cx.env.root_place_fallback_class(local)
-        }
     }
 }
 
 pub(super) fn fallback_root_transport_class<'db>(
     db: &'db dyn MirDb,
-    body: &RuntimeSemanticBody<'db>,
     local: &SLocal<'db>,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
@@ -1135,17 +1007,8 @@ pub(super) fn fallback_root_transport_class<'db>(
             provider,
             value_ty: target_ty,
         } => {
-            let local_is_effect_handle =
-                effect_handle_transport_class_for_ty_in_env(db, env, local.ty).is_some();
-            if local_is_effect_handle
-                && !local_uses_effect_handle_transport(local, &body.locals)
-                && runtime_zero_sized_ty(db, local.ty, scope, assumptions)
-            {
-                return None;
-            }
             if runtime_zero_sized_transport_ty(db, local.ty, scope, assumptions)
-                || (!local_is_effect_handle
-                    && runtime_zero_sized_transport_ty(db, *target_ty, scope, assumptions))
+                || runtime_zero_sized_transport_ty(db, *target_ty, scope, assumptions)
             {
                 return None;
             }
@@ -1153,41 +1016,6 @@ pub(super) fn fallback_root_transport_class<'db>(
                 .as_ref()
                 .and_then(|provider| {
                     runtime_class_for_effect_binding_provider_in_env(db, env, provider)
-                })
-                .or_else(|| {
-                    top_level_class_for_ty_in_env(db, env, local.ty, AddressSpaceKind::Memory)
-                })
-                .or_else(|| {
-                    Some(provider_class_for_target_in_env(
-                        db,
-                        env,
-                        Some(*target_ty),
-                        AddressSpaceKind::Memory,
-                    ))
-                })
-        }
-        SemanticLocalRole::DirectCarrier {
-            provider,
-            target_ty,
-        } => {
-            let local_is_effect_handle =
-                effect_handle_transport_class_for_ty_in_env(db, env, local.ty).is_some();
-            if local_is_effect_handle
-                && !local_uses_effect_handle_transport(local, &body.locals)
-                && runtime_zero_sized_ty(db, local.ty, scope, assumptions)
-            {
-                return None;
-            }
-            if runtime_zero_sized_transport_ty(db, local.ty, scope, assumptions)
-                || (!local_is_effect_handle
-                    && runtime_zero_sized_transport_ty(db, *target_ty, scope, assumptions))
-            {
-                return None;
-            }
-            provider
-                .as_ref()
-                .and_then(|provider| {
-                    runtime_class_for_provider_binding(db, provider, scope, assumptions)
                 })
                 .or_else(|| {
                     top_level_class_for_ty_in_env(db, env, local.ty, AddressSpaceKind::Memory)
@@ -1256,10 +1084,8 @@ impl RuntimeJoinDemand {
             prefer_owned_object: body
                 .root_demand(db, local_id)
                 .needs_projectable_owned_storage(),
-            prefer_transport: matches!(
-                local.role.kind(),
-                SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier
-            ) || local.role.root_provider(&body.locals).is_some(),
+            prefer_transport: matches!(local.role.kind(), SemanticLocalKind::PlaceCarrier)
+                || local.role.root_provider(&body.locals).is_some(),
         }
     }
 }
@@ -1382,7 +1208,7 @@ fn raw_addr_join_pointee<'db>(
     match raw_pointee {
         Some(raw_pointee) if !raw_pointee_matches_class(db, raw_pointee, ref_pointee) => None,
         Some(raw_pointee) => Some(Some(raw_pointee)),
-        None => Some(Some(RawPointeeId::exact(db, ref_pointee.clone()))),
+        None => Some(Some(RawPointeeId::new(db, ref_pointee.clone()))),
     }
 }
 
@@ -1565,23 +1391,17 @@ pub(super) fn merge_runtime_class<'db>(
 }
 
 /// Chooses between two distinct but equivalent raw targets meeting at a join
-/// with no fixed target. Source recipes win over exact ones, then the naming
-/// string decides; naming strings are not injective, so interned identity
-/// breaks any remaining tie. That last step is stable within one database
-/// only and never reaches an external name.
+/// with no fixed target. The naming string decides; naming strings are not
+/// injective, so interned identity breaks any remaining tie. That last step
+/// is stable within one database only and never reaches an external name.
 fn preferred_equivalent_pointee<'db>(
     db: &'db dyn MirDb,
     lhs: RawPointeeId<'db>,
     rhs: RawPointeeId<'db>,
 ) -> RawPointeeId<'db> {
-    let preference = |pointee: RawPointeeId<'db>| {
-        let kind_rank = match pointee.key(db) {
-            RawPointeeKey::Stored(_) => 0,
-            RawPointeeKey::Exact(_) => 1,
-        };
-        (kind_rank, raw_pointee_sort_key(db, pointee), pointee)
-    };
-    std::cmp::min_by_key(lhs, rhs, |pointee| preference(*pointee))
+    std::cmp::min_by_key(lhs, rhs, |pointee| {
+        (raw_pointee_sort_key(db, *pointee), *pointee)
+    })
 }
 
 fn merge_layouts<'db>(

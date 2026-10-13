@@ -47,7 +47,7 @@ use crate::{
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
         DispatchDefault, EntryEffectArgPlan, EntrySemanticArgsPlan, InitArgsPlan, LayoutId,
-        LayoutKey, RawPointeeId, RawPointeeKey, RefKind, RefView, ResolvedCodeRegion, RuntimeClass,
+        LayoutKey, RawPointeeId, RefKind, RefView, ResolvedCodeRegion, RuntimeClass,
         RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner,
         RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage,
         RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
@@ -2195,15 +2195,10 @@ fn runtime_class_sort_key<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) ->
     }
 }
 
-/// Names a raw target without resolving it. Exact targets keep the class
-/// rendering; stored targets name their source type. The result is a naming
-/// and ordering string, not an identity: `type_identity` renders every const
-/// hole as `_`, so distinct pointees can share a name.
+/// Names a raw target by its class rendering. The result is a naming and
+/// ordering string, not an identity.
 pub(crate) fn raw_pointee_sort_key<'db>(db: &'db dyn MirDb, pointee: RawPointeeId<'db>) -> String {
-    match pointee.key(db) {
-        RawPointeeKey::Stored(ty) => format!("stored({})", type_identity(db, *ty)),
-        RawPointeeKey::Exact(class) => runtime_class_sort_key(db, class),
-    }
+    runtime_class_sort_key(db, pointee.target(db))
 }
 
 fn scalar_class_sort_key<'db>(db: &'db dyn MirDb, class: &ScalarClass<'db>) -> String {

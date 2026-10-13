@@ -5,7 +5,7 @@ use crate::{
         ty::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
             normalize::normalize_ty,
-            provider::{EffectHandleResolution, ProviderAddressSpace, resolve_effect_handle},
+            provider::ProviderAddressSpace,
             trait_resolution::PredicateListId,
             ty_def::{BorrowKind, CapabilityKind, TyId},
         },
@@ -17,7 +17,6 @@ use crate::{
 pub enum CapabilityClass {
     Borrow(BorrowKind),
     View,
-    Handle,
     /// A copyable raw memory address. Passing it does not reserve its referent.
     Pointer,
 }
@@ -29,49 +28,34 @@ pub struct CapabilitySemantics<'db> {
     pub representation_ty: TyId<'db>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnresolvedCapability<'db>(pub TyId<'db>);
-
 pub fn capability_semantics<'db>(
     db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
     ty: TyId<'db>,
-) -> Result<Option<CapabilitySemantics<'db>>, UnresolvedCapability<'db>> {
+) -> Option<CapabilitySemantics<'db>> {
     if let Some((kind, target_ty)) = ty.as_capability(db) {
         let class = match kind {
             CapabilityKind::Mut => CapabilityClass::Borrow(BorrowKind::Mut),
             CapabilityKind::Ref => CapabilityClass::Borrow(BorrowKind::Ref),
             CapabilityKind::View => CapabilityClass::View,
         };
-        return Ok(Some(CapabilitySemantics {
+        return Some(CapabilitySemantics {
             class,
             target_ty,
             representation_ty: ty,
-        }));
+        });
     }
-    if let Some((target_ty, ProviderAddressSpace::Memory)) = ty.as_ptr(db) {
-        return Ok(Some(CapabilitySemantics {
-            class: CapabilityClass::Pointer,
-            target_ty,
-            representation_ty: ty,
-        }));
-    }
-    // Semantic shapes retain generic targets; allocation layout requires a concrete target.
-    let target_ty = match resolve_effect_handle(db, scope, assumptions, ty) {
-        EffectHandleResolution::NotHandle => None,
-        EffectHandleResolution::Resolved { target_ty, .. } => Some(target_ty),
-        EffectHandleResolution::Invalid(_) => return Err(UnresolvedCapability(ty)),
+    let (target_ty, ProviderAddressSpace::Memory) = ty.as_ptr(db)? else {
+        return None;
     };
-    Ok(target_ty.map(|target_ty| CapabilitySemantics {
-        class: CapabilityClass::Handle,
+    Some(CapabilitySemantics {
+        class: CapabilityClass::Pointer,
         target_ty,
         representation_ty: ty,
-    }))
+    })
 }
 
-/// Whether a value of `ty` holds a capability carrier, provider handle or raw
-/// pointer, without following one to its target.
+/// Whether a value of `ty` holds a capability carrier or raw pointer, without
+/// following one to its target.
 #[salsa::tracked(cycle_fn=contains_capability_cycle_recover, cycle_initial=contains_capability_cycle_initial)]
 pub fn contains_capability<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -80,10 +64,7 @@ pub fn contains_capability<'db>(
     ty: TyId<'db>,
 ) -> bool {
     let ty = normalize_ty(db, ty, scope, assumptions);
-    if matches!(
-        capability_semantics(db, scope, assumptions, ty),
-        Ok(Some(_))
-    ) {
+    if capability_semantics(db, ty).is_some() {
         return true;
     }
     if ty.is_array(db) {

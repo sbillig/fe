@@ -12,33 +12,26 @@ use crate::{
             STerminatorKind, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
             SemanticLocalRole, ValueProvenance, VariantIndex,
             capability::semantics::contains_capability,
-            capability::{
-                array::ArrayLength,
-                handle::OpaqueHandleContract,
-                semantics::{CapabilityClass, CapabilitySemantics, capability_semantics},
-            },
+            capability::{array::ArrayLength, semantics::capability_semantics},
             eval_const_ref, get_or_build_semantic_instance,
             lower::layout_backing_source_path_is_prefix,
             normalized::{
-                HandleOrigin, NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg,
-                NEffectArgValue, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId,
-                NRootKind, NStatement, NStatementId, NStatementKind, NStructuralPath, NSuccessor,
-                NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
-                ReadMode, StructuralRepack, ViewAccess, copied_scalar_ty,
+                NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
+                NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId, NRootKind, NStatement,
+                NStatementId, NStatementKind, NStructuralPath, NSuccessor, NTerminator,
+                NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody, ReadMode,
+                StructuralRepack, ViewAccess, copied_scalar_ty, is_literal_allocation,
                 layout_plan::{
                     NLayoutBackingSource, NLayoutPlan, NLayoutProjection, NLayoutSourcePath,
                     NLayoutUseBacking, NRootRepresentation, NValueRepresentation,
                 },
-                literal_allocation,
                 verify::project_path_ty,
             },
             sem_const_ty,
         },
         ty::{
             adt_def::AdtRef,
-            provider::{
-                ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, provider_semantics,
-            },
+            provider::{ProviderAddressSpace, ProviderKind},
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
@@ -56,7 +49,7 @@ pub enum NormalizeError<'db> {
     MissingRoot(SLocalId),
     MissingProviderAddressSpace(ProviderBinding<'db>),
     InvalidProjection,
-    UnresolvedHandleOrigin(TyId<'db>),
+    UnresolvedCapabilityConst(TyId<'db>),
     UnsupportedPlaceProjection,
     UnsupportedCapabilityCast { from: TyId<'db>, to: TyId<'db> },
     InvalidControlFlow,
@@ -275,11 +268,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             let local_id = SLocalId::new(index);
             let local = &self.raw.locals[index];
             let direct_capability = local.ty.as_capability(self.db).is_some();
-            let direct_carrier = matches!(local.role, SemanticLocalRole::DirectCarrier { .. });
             let provider = semantic_root_provider(&local.role, local.ty);
             let root = if let Some((provider, value_ty)) = provider {
                 let root = self.provider_root(provider, value_ty)?;
-                if direct_capability || direct_carrier {
+                if direct_capability {
                     self.provider_target_root_for_local[index] = Some(root);
                     None
                 } else {
@@ -800,7 +792,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     self.raw.locals[raw_value.value.index()].role,
                     SemanticLocalRole::PlaceCarrier { .. }
                         | SemanticLocalRole::PlaceBoundValue { .. }
-                        | SemanticLocalRole::DirectCarrier { .. }
                 ) && to.as_capability(self.db).is_none()
                     && self.local_has_place(raw_value.value);
                 let (value, from) = if materialize_place {
@@ -1100,49 +1091,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .into_boxed_slice(),
             },
         };
-        match normalized {
-            NExpr::AggregateMake { ty, fields } => self.construct_value(ty, None, fields),
-            NExpr::EnumMake {
-                enum_ty,
-                variant,
-                fields,
-            } => self.construct_value(enum_ty, Some(variant), fields),
-            normalized => Ok(normalized),
-        }
-    }
-
-    fn construct_value(
-        &self,
-        ty: TyId<'db>,
-        variant: Option<VariantIndex>,
-        fields: Box<[NOperand]>,
-    ) -> Result<NExpr<'db>, NormalizeError<'db>> {
-        let contract = OpaqueHandleContract::for_ty(
-            self.db,
-            self.instance
-                .key(self.db)
-                .impl_env(self.db)
-                .normalization_scope(self.db),
-            self.assumptions,
-            ty,
-        )
-        .map_err(|error| NormalizeError::UnresolvedHandleOrigin(error.0))?;
-        Ok(if let Some(contract) = contract {
-            NExpr::MakeHandle {
-                ty,
-                variant,
-                fields,
-                origin: HandleOrigin::Opaque(contract),
-            }
-        } else if let Some(variant) = variant {
-            NExpr::EnumMake {
-                enum_ty: ty,
-                variant,
-                fields,
-            }
-        } else {
-            NExpr::AggregateMake { ty, fields }
-        })
+        Ok(normalized)
     }
 
     fn contains_capability(&self, ty: TyId<'db>) -> bool {
@@ -1194,12 +1143,12 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             SConst::Ref(reference) => match eval_const_ref(self.db, reference) {
                 EvalOutcome::Ready(value) => value,
                 EvalOutcome::Blocked(_) | EvalOutcome::Failed(_) => {
-                    return Err(NormalizeError::UnresolvedHandleOrigin(ty));
+                    return Err(NormalizeError::UnresolvedCapabilityConst(ty));
                 }
             },
         };
         let constant = SConst::from_trusted_source(self.db, value);
-        if literal_allocation(self.db, ty, &constant).is_some() {
+        if is_literal_allocation(self.db, ty, &constant) {
             return Ok(NExpr::Const(constant));
         }
         let (variant, fields) = match value.value(self.db) {
@@ -1211,7 +1160,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 variant, fields, ..
             } => (Some(*variant), fields),
             SemConstValue::Scalar { .. } | SemConstValue::Unit | SemConstValue::Description(..) => {
-                return Err(NormalizeError::UnresolvedHandleOrigin(ty));
+                return Err(NormalizeError::UnresolvedCapabilityConst(ty));
             }
         };
         let fields = fields
@@ -1230,8 +1179,16 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 let value = self.emit_define(block, None, origin, ty, source, expr)?;
                 Ok(self.operand(value, origin, ReadMode::Move))
             })
-            .collect::<Result<Vec<_>, NormalizeError<'db>>>()?;
-        self.construct_value(ty, variant, fields.into_boxed_slice())
+            .collect::<Result<Vec<_>, NormalizeError<'db>>>()?
+            .into_boxed_slice();
+        Ok(match variant {
+            Some(variant) => NExpr::EnumMake {
+                enum_ty: ty,
+                variant,
+                fields,
+            },
+            None => NExpr::AggregateMake { ty, fields },
+        })
     }
 
     fn load_or_borrow_place(
@@ -1894,7 +1851,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 NExpr::Const(_)
                     | NExpr::AggregateMake { .. }
                     | NExpr::EnumMake { .. }
-                    | NExpr::MakeHandle { .. }
                     | NExpr::ArrayRepeat { .. }
             );
         let forwarded = match &expr {
@@ -2394,9 +2350,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             .and_then(|value| value.source)
             .or(local.source);
         let ty = self.normalized_local_ty(local_id);
-        if ty.as_capability(self.db).is_some()
-            || matches!(local.role, SemanticLocalRole::DirectCarrier { .. })
-        {
+        if ty.as_capability(self.db).is_some() {
             ReadMode::Copy
         } else if matches!(
             source,
@@ -2428,18 +2382,18 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             // moves, which the access checker rejects.
             NPlaceBase::Root(root)
                 if matches!(self.roots[root.index()].kind, NRootKind::Provider { .. })
-                    && self.ty_is_copy_or_direct_carrier(ty) =>
+                    && self.ty_is_copy(ty) =>
             {
                 ReadMode::Copy
             }
             NPlaceBase::CapabilityTarget { .. } | NPlaceBase::Deref { .. } => {
                 if self.origin_is_implicit_move(origin) {
-                    if self.ty_is_copy_or_direct_carrier(ty) {
+                    if self.ty_is_copy(ty) {
                         ReadMode::Copy
                     } else {
                         ReadMode::Move
                     }
-                } else if self.ty_is_copy_or_direct_carrier(ty) {
+                } else if self.ty_is_copy(ty) {
                     ReadMode::Copy
                 } else {
                     ReadMode::Read
@@ -2450,20 +2404,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             }
             NPlaceBase::Root(_) => ReadMode::Copy,
         }
-    }
-
-    fn ty_is_copy_or_direct_carrier(&self, ty: TyId<'db>) -> bool {
-        self.ty_is_copy(ty)
-            || matches!(
-                provider_semantics(
-                    self.db,
-                    self.raw.template_owner.scope(),
-                    self.assumptions,
-                    ty,
-                )
-                .evidence,
-                ProviderLayoutEvidence::ResolvedHandle(_)
-            )
     }
 }
 
@@ -2483,10 +2423,6 @@ fn semantic_root_provider<'db>(
             provenance: PlaceProvenance::RootProvider(provider),
             value_ty,
         } => Some((provider.clone(), *value_ty)),
-        SemanticLocalRole::DirectCarrier {
-            provider: Some(provider),
-            target_ty,
-        } => Some((provider.clone(), *target_ty)),
         SemanticLocalRole::Erased
         | SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::Ordinary,
@@ -2495,8 +2431,7 @@ fn semantic_root_provider<'db>(
         | SemanticLocalRole::PlaceBoundValue {
             provenance: PlaceProvenance::Derived(_),
             ..
-        }
-        | SemanticLocalRole::DirectCarrier { provider: None, .. } => None,
+        } => None,
     }
 }
 
@@ -2580,39 +2515,19 @@ impl<'db> StructuralRepackCollector<'db> {
             && !deferred_runtime_leaf(source)
             && !deferred_runtime_leaf(target)
         {
-            let scope = instance.key(db).impl_env(db).normalization_scope(db);
             match (
-                capability_semantics(db, scope, instance.assumptions(db), source),
-                capability_semantics(db, scope, instance.assumptions(db), target),
+                capability_semantics(db, source),
+                capability_semantics(db, target),
             ) {
-                (Ok(None), Ok(None)) => true,
-                (Ok(Some(source)), Ok(Some(target))) if source.class == target.class => {
-                    let spaces_match = if source.class == CapabilityClass::Handle {
-                        let space = |semantics: CapabilitySemantics<'db>| {
-                            OpaqueHandleContract::for_ty(
-                                db,
-                                scope,
-                                instance.assumptions(db),
-                                semantics.representation_ty,
-                            )
-                            .ok()
-                            .flatten()
-                            .map(|contract| contract.address_space)
-                        };
-                        space(source)
-                            .zip(space(target))
-                            .is_some_and(|(source, target)| source == target)
-                    } else {
-                        true
-                    };
+                (None, None) => true,
+                (Some(source), Some(target)) if source.class == target.class => {
                     let mapping_len = self.mapping.len();
-                    let valid = spaces_match
-                        && self.collect(
-                            source.target_ty,
-                            target.target_ty,
-                            source_path.clone(),
-                            target_path.clone(),
-                        );
+                    let valid = self.collect(
+                        source.target_ty,
+                        target.target_ty,
+                        source_path.clone(),
+                        target_path.clone(),
+                    );
                     self.mapping.truncate(mapping_len);
                     valid
                 }

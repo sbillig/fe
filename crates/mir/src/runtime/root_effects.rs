@@ -287,7 +287,7 @@ pub(crate) fn target_root_provider_materialization<'db>(
             pointee: Some(pointee),
         } => match pointee.target(db) {
             RuntimeClass::AggregateValue { layout } => {
-                Some(TargetRootProviderMaterialization::MemoryRawAddr { layout })
+                Some(TargetRootProviderMaterialization::MemoryRawAddr { layout: *layout })
             }
             RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
                 None
