@@ -5,57 +5,15 @@ use crate::{
         ty::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
             normalize::normalize_ty,
-            provider::AddressSpace,
             trait_resolution::PredicateListId,
-            ty_def::{BorrowKind, CapabilityKind, TyId},
+            ty_def::TyId,
         },
     },
     hir_def::scope_graph::ScopeId,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CapabilityClass {
-    Borrow(BorrowKind),
-    View,
-    /// A copyable raw memory address. Passing it does not reserve its referent.
-    Pointer,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CapabilitySemantics<'db> {
-    pub class: CapabilityClass,
-    pub target_ty: TyId<'db>,
-    pub representation_ty: TyId<'db>,
-}
-
-pub fn capability_semantics<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> Option<CapabilitySemantics<'db>> {
-    if let Some((kind, target_ty)) = ty.as_capability(db) {
-        let class = match kind {
-            CapabilityKind::Mut => CapabilityClass::Borrow(BorrowKind::Mut),
-            CapabilityKind::Ref => CapabilityClass::Borrow(BorrowKind::Ref),
-            CapabilityKind::View => CapabilityClass::View,
-        };
-        return Some(CapabilitySemantics {
-            class,
-            target_ty,
-            representation_ty: ty,
-        });
-    }
-    let (target_ty, AddressSpace::Memory) = ty.as_ptr(db)? else {
-        return None;
-    };
-    Some(CapabilitySemantics {
-        class: CapabilityClass::Pointer,
-        target_ty,
-        representation_ty: ty,
-    })
-}
-
-/// Whether a value of `ty` holds a capability carrier or raw pointer, without
-/// following one to its target.
+/// Whether a value of `ty` holds a capability carrier, without following one
+/// to its target. A pointer is data.
 #[salsa::tracked(cycle_fn=contains_capability_cycle_recover, cycle_initial=contains_capability_cycle_initial)]
 pub fn contains_capability<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -64,7 +22,7 @@ pub fn contains_capability<'db>(
     ty: TyId<'db>,
 ) -> bool {
     let ty = normalize_ty(db, ty, scope, assumptions);
-    if capability_semantics(db, ty).is_some() {
+    if ty.as_capability(db).is_some() {
         return true;
     }
     if ty.is_array(db) {

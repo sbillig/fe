@@ -11,8 +11,8 @@ use crate::{
             SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId, SStmtKind,
             STerminatorKind, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
             SemanticLocalRole, ValueProvenance, VariantIndex,
+            capability::array::ArrayLength,
             capability::semantics::contains_capability,
-            capability::{array::ArrayLength, semantics::capability_semantics},
             eval_const_ref, get_or_build_semantic_instance,
             lower::layout_backing_source_path_is_prefix,
             normalized::{
@@ -2503,38 +2503,7 @@ impl<'db> StructuralRepackCollector<'db> {
         let deferred_const_leaf = |ty: TyId<'db>| {
             matches!(ty.data(db), TyData::ConstTy(_)) && (ty.has_param(db) || ty.has_var(db))
         };
-        let nominal_targets_match = if source != target
-            && source.as_capability(db).is_none()
-            && target.as_capability(db).is_none()
-            && !deferred_const_leaf(source)
-            && !deferred_const_leaf(target)
-            && !deferred_runtime_leaf(source)
-            && !deferred_runtime_leaf(target)
-        {
-            match (
-                capability_semantics(db, source),
-                capability_semantics(db, target),
-            ) {
-                (None, None) => true,
-                (Some(source), Some(target)) if source.class == target.class => {
-                    let mapping_len = self.mapping.len();
-                    let valid = self.collect(
-                        source.target_ty,
-                        target.target_ty,
-                        source_path.clone(),
-                        target_path.clone(),
-                    );
-                    self.mapping.truncate(mapping_len);
-                    valid
-                }
-                _ => false,
-            }
-        } else {
-            true
-        };
-        let result = if !nominal_targets_match {
-            false
-        } else if deferred_const_leaf(source)
+        let result = if deferred_const_leaf(source)
             || deferred_const_leaf(target)
             || self.allow_deferred_leaves
                 && (deferred_runtime_leaf(source) || deferred_runtime_leaf(target))
