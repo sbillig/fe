@@ -11,7 +11,7 @@ use crate::{
             trait_def::{ResolvedImplInstance, TraitInstId, resolve_trait_impl_instance},
             trait_resolution::{PredicateListId, Selection, TraitSolveCx},
             ty_check::EffectParamSite,
-            ty_def::{CapabilityKind, TyId},
+            ty_def::TyId,
         },
     },
     hir_def::{Contract, Func, IdentId, scope_graph::ScopeId},
@@ -67,16 +67,6 @@ pub struct ProviderSemantics<'db> {
     pub address_space: Option<AddressSpace>,
     pub target_ty: Option<TyId<'db>>,
     pub transport: ProviderTransport,
-    pub evidence: ProviderLayoutEvidence,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum ProviderLayoutEvidence {
-    /// The provider type is a capability.
-    Capability,
-    /// The provider type is a plain value type.
-    Value,
-    ContractField,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -189,28 +179,16 @@ pub fn provider_semantics<'db>(
     db: &'db dyn HirAnalysisDb,
     provider_ty: TyId<'db>,
 ) -> ProviderSemantics<'db> {
-    let Some((kind, inner)) = provider_ty.as_capability(db) else {
-        return ProviderSemantics {
-            provider_ty,
-            kind: ProviderKind::RootObject,
-            address_space: Some(AddressSpace::Memory),
-            target_ty: None,
-            transport: ProviderTransport::ByValue,
-            evidence: ProviderLayoutEvidence::Value,
-        };
-    };
-    let address_space = match kind {
-        CapabilityKind::View | CapabilityKind::Ref | CapabilityKind::Mut => {
-            Some(AddressSpace::Memory)
-        }
+    let (kind, target_ty) = match provider_ty.as_capability(db) {
+        Some((_, inner)) => (ProviderKind::Place, Some(inner)),
+        None => (ProviderKind::RootObject, None),
     };
     ProviderSemantics {
         provider_ty,
-        kind: ProviderKind::Place,
-        address_space,
-        target_ty: Some(inner),
+        kind,
+        address_space: Some(AddressSpace::Memory),
+        target_ty,
         transport: ProviderTransport::ByValue,
-        evidence: ProviderLayoutEvidence::Capability,
     }
 }
 
@@ -222,13 +200,9 @@ pub fn provider_semantics_for_specialized_call<'db>(
     transport: ProviderTransport,
 ) -> ProviderSemantics<'db> {
     let mut semantics = provider_semantics(db, provider_ty);
-    let root_object_refinement = matches!(semantics.evidence, ProviderLayoutEvidence::Value)
-        && target_ty.is_some_and(|target| target == provider_ty);
-    if matches!(
-        semantics.evidence,
-        ProviderLayoutEvidence::Capability | ProviderLayoutEvidence::ContractField
-    ) || root_object_refinement
-    {
+    // A capability names its target's place, and so does a root object
+    // specialized to its own type.
+    if provider_ty.as_capability(db).is_some() || target_ty == Some(provider_ty) {
         if let Some(target_ty) = target_ty {
             semantics.kind = ProviderKind::Place;
             semantics.target_ty = Some(target_ty);

@@ -98,7 +98,7 @@ use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
 use crate::analysis::ty::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     provider::{
-        ProviderLayoutEvidence, ProviderSemantics, RootProviderRegistration, RootProviderScope,
+        ProviderKind, ProviderSemantics, RootProviderRegistration, RootProviderScope,
         provider_semantics, registered_root_providers,
     },
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
@@ -1963,7 +1963,7 @@ pub(crate) fn effect_param_provider_semantics<'db>(
     key: &EffectRequirementKey<'db>,
 ) -> ProviderSemantics<'db> {
     let mut semantics = provider_semantics(db, provider_ty);
-    if semantics.evidence == ProviderLayoutEvidence::Value
+    if semantics.kind == ProviderKind::RootObject
         && let EffectRequirementKey::Type(key_ty) = key
     {
         semantics.address_space = Some(key_ty.default_space(db));
@@ -2232,7 +2232,7 @@ fn contract_provider_bindings_canonical<'db>(
                 source: ProviderSource::ContractField { field: field.field },
                 semantics: ProviderSemantics {
                     provider_ty,
-                    kind: crate::analysis::ty::ProviderKind::Place,
+                    kind: ProviderKind::Place,
                     address_space: Some(field.address_space).map(|space| {
                         if is_init_site && space == AddressSpace::Code {
                             AddressSpace::Memory
@@ -2242,7 +2242,6 @@ fn contract_provider_bindings_canonical<'db>(
                     }),
                     target_ty: Some(provider_ty),
                     transport: crate::analysis::ty::ProviderTransport::ByValue,
-                    evidence: ProviderLayoutEvidence::ContractField,
                 },
             }
         })

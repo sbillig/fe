@@ -32,9 +32,9 @@ use crate::{
             instantiate_trait_self,
             normalize::normalize_ty,
             provider::{
-                AddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
-                RootProviderRegistration, RootProviderScope, provider_semantics,
-                provider_semantics_for_specialized_call, registered_root_providers,
+                AddressSpace, ProviderKind, ProviderTransport, RootProviderRegistration,
+                RootProviderScope, provider_semantics, provider_semantics_for_specialized_call,
+                registered_root_providers,
             },
             result_space::{
                 ResolvedSpace, SpaceContract, SpaceKey, declared_result_spaces, resolve_space_key,
@@ -1910,7 +1910,6 @@ fn provisional_provider_binding_for_effect<'db>(
                         address_space: Some(field.address_space),
                         target_ty: Some(provider_ty),
                         transport: ProviderTransport::ByValue,
-                        evidence: ProviderLayoutEvidence::ContractField,
                     },
                 });
             }
@@ -2557,21 +2556,11 @@ fn instantiate_provider_binding<'db>(
         .target_ty
         .map(|ty| instantiate_normalized_ty(db, key, ty))
         .transpose()?;
-    let semantics = if matches!(
-        provider.semantics.evidence,
-        ProviderLayoutEvidence::ContractField
-    ) {
+    let semantics = if matches!(provider.source, ProviderSource::ContractField { .. }) {
         crate::analysis::ty::provider::ProviderSemantics {
             provider_ty,
-            kind: if target_ty.is_some() {
-                ProviderKind::Place
-            } else {
-                provider.semantics.kind
-            },
-            address_space: provider.semantics.address_space,
             target_ty,
-            transport: provider.semantics.transport,
-            evidence: ProviderLayoutEvidence::ContractField,
+            ..provider.semantics
         }
     } else {
         let mut semantics = provider_semantics_for_specialized_call(
@@ -2583,8 +2572,8 @@ fn instantiate_provider_binding<'db>(
         );
         // A root object lies where its binding says, which its type alone
         // cannot tell (`effect_param_provider_semantics`).
-        if semantics.evidence == ProviderLayoutEvidence::Value
-            && provider.semantics.evidence == ProviderLayoutEvidence::Value
+        if provider_ty.as_capability(db).is_none()
+            && provider.semantics.provider_ty.as_capability(db).is_none()
         {
             semantics.address_space = provider.semantics.address_space;
         }
