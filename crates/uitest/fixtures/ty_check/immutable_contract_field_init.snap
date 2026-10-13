@@ -8,7 +8,7 @@ error[3-0065]: contract state cannot hold a memory pointer
     ┌─ immutable_contract_field_init.fe:200:10
     │
 200 │     ptr: *u256
-    │          ^^^^^ `*<u256>` holds the memory pointer `*<u256>`
+    │          ^^^^^ `*u256` holds the memory pointer `*u256`
     │
     = memory lasts for one transaction, so a later one could not follow the pointer
 
@@ -24,7 +24,7 @@ error[3-0065]: contract state cannot hold a memory pointer
     ┌─ immutable_contract_field_init.fe:308:10
     │
 308 │     ptr: *()
-    │          ^^^ `*<()>` holds the memory pointer `*<()>`
+    │          ^^^ `*()` holds the memory pointer `*()`
     │
     = memory lasts for one transaction, so a later one could not follow the pointer
 
@@ -40,7 +40,7 @@ error[3-0065]: contract state cannot hold a memory pointer
     ┌─ immutable_contract_field_init.fe:316:10
     │
 316 │     ptr: *Empty
-    │          ^^^^^^ `*<Empty>` holds the memory pointer `*<Empty>`
+    │          ^^^^^^ `*Empty` holds the memory pointer `*Empty`
     │
     = memory lasts for one transaction, so a later one could not follow the pointer
 

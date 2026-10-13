@@ -2275,6 +2275,13 @@ fn pretty_print_ty_app<'db>(
             inner.pretty_print_with_mode(db, mode)
         }
 
+        TyData::TyBase(Prim(Ptr(ProviderAddressSpace::Memory))) => {
+            let Some(inner) = args.first() else {
+                return "*<missing>".to_string();
+            };
+            format!("*{}", inner.pretty_print_with_mode(db, mode))
+        }
+
         TyData::TyBase(Prim(Array)) => {
             let elem_ty = args[0].pretty_print_with_mode(db, mode);
             let len = args[1].pretty_print_with_mode(db, mode);

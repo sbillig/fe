@@ -14,7 +14,7 @@ error[3-0065]: contract state cannot hold a memory pointer
    ┌─ pointer_spaces.fe:21:17
    │
 21 │     mut memory: *u256,
-   │                 ^^^^^ `*<u256>` holds the memory pointer `*<u256>`
+   │                 ^^^^^ `*u256` holds the memory pointer `*u256`
    │
    = memory lasts for one transaction, so a later one could not follow the pointer
 
@@ -31,7 +31,7 @@ error[8-0055]: cast is not provably lossless
    ┌─ pointer_spaces.fe:12:13
    │
 12 │     let _ = p as StorPtr<u256>
-   │             ^^^^^^^^^^^^^^^^^^ cannot cast `*<u256>` to `StorPtr<u256>` with `as`
+   │             ^^^^^^^^^^^^^^^^^^ cannot cast `*u256` to `StorPtr<u256>` with `as`
    │
    = a pointer cannot change its address space
 
@@ -39,7 +39,7 @@ error[8-0055]: cast is not provably lossless
    ┌─ pointer_spaces.fe:13:13
    │
 13 │     let _ = s as *u256
-   │             ^^^^^^^^^^ cannot cast `StorPtr<u256>` to `*<u256>` with `as`
+   │             ^^^^^^^^^^ cannot cast `StorPtr<u256>` to `*u256` with `as`
    │
    = a pointer cannot change its address space
 

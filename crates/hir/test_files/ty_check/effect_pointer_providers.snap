@@ -62,7 +62,7 @@ note:
    ┌─ effect_pointer_providers.fe:12:9
    │
 12 │     let p = ptr::alloc<u256>()
-   │         ^ *<u256>
+   │         ^ *u256
 
 note:
    ┌─ effect_pointer_providers.fe:12:13
@@ -74,7 +74,7 @@ note:
    ┌─ effect_pointer_providers.fe:12:13
    │
 12 │     let p = ptr::alloc<u256>()
-   │             ^^^^^^^^^^^^^^^^^^ *<u256>
+   │             ^^^^^^^^^^^^^^^^^^ *u256
 
 note:
    ┌─ effect_pointer_providers.fe:13:5
@@ -112,7 +112,7 @@ note:
    ┌─ effect_pointer_providers.fe:14:20
    │
 14 │         with (mut *p) {
-   │                    ^ *<u256>
+   │                    ^ *u256
 
 note:
    ┌─ effect_pointer_providers.fe:14:23

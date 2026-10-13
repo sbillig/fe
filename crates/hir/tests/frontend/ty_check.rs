@@ -134,7 +134,7 @@ fn trigger() -> *u256 {
     let diags = diagnostics_for(&db, top_mod);
 
     assert!(
-        diagnostics_contain(&diags, "cannot cast `{integer}` to `*<u256>` with `as`"),
+        diagnostics_contain(&diags, "cannot cast `{integer}` to `*u256` with `as`"),
         "{diags:#?}"
     );
 }
@@ -261,7 +261,7 @@ fn trigger(lhs: *u8, rhs: *u256) -> bool {
     let diags = diagnostics_for(&db, top_mod);
 
     assert!(
-        diagnostics_contain(&diags, "expected `*<u8>`, but `*<u256>` is given"),
+        diagnostics_contain(&diags, "expected `*u8`, but `*u256` is given"),
         "{diags:#?}"
     );
 }
