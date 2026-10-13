@@ -815,14 +815,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     let from = self.values[value.value.index()].ty;
                     (value, from)
                 };
+                // Lowering left only the leaves of a newtype cast.
                 if from == to {
                     NExpr::Forward { src: value }
                 } else if from.as_ptr(self.db).is_some() || to.as_ptr(self.db).is_some() {
                     NExpr::PointerCast { value, to }
-                } else if self.contains_capability(from) || self.contains_capability(to) {
-                    let mapping = structural_repack_mapping(self.db, self.instance, from, to)
-                        .ok_or(NormalizeError::UnsupportedCapabilityCast { from, to })?;
-                    NExpr::StructuralRepack { value, mapping }
                 } else {
                     NExpr::ScalarCast { value, to }
                 }

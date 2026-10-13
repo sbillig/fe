@@ -26,15 +26,14 @@ use super::{
         ParamSite, PendingPrimitiveOp, ProvidedEffect, TraitObligation, TraitObligationOrigin,
         TyCheckEnv,
     },
-    merged_borrow_provider,
+    has_invisible_newtype_field, merged_borrow_provider,
     path::ResolvedPathInBody,
-    ty_may_be_code_region_token,
+    transparent_newtype_field_ty, ty_may_be_code_region_token,
 };
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
 use crate::analysis::ty::{
     AddressSpace,
-    adt_def::AdtRef,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonicalized, Solution},
     const_ty::{LoweringContext, instantiate_inherent_const_decl_ty},
@@ -106,7 +105,7 @@ use crate::analysis::{
         ty_lower::lower_hir_ty,
     },
 };
-use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{BlockKind, ItemKind, scope_graph::ScopeId};
 use crate::semantic::{ProviderBinding, ProviderSource};
 use common::indexmap::IndexMap;
 
@@ -1031,8 +1030,8 @@ impl<'db> TyChecker<'db> {
         }
 
         // Check if the cast failed due to invisible struct fields.
-        let hint = if self.is_single_field_struct_with_invisible_field(from)
-            || self.is_single_field_struct_with_invisible_field(to)
+        let hint = if has_invisible_newtype_field(self.db, self.env.scope(), from)
+            || has_invisible_newtype_field(self.db, self.env.scope(), to)
         {
             Some("cast is not allowed because the struct field is not `pub`".to_string())
         } else if from.as_ptr(self.db).is_some() && to.as_ptr(self.db).is_some() {
@@ -1129,51 +1128,8 @@ impl<'db> TyChecker<'db> {
         )
     }
 
-    fn transparent_newtype_field_ty(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
-        if ty.is_tuple(self.db) {
-            let field_tys = ty.field_types(self.db);
-            return (field_tys.len() == 1).then(|| field_tys[0]);
-        }
-
-        if ty.is_struct(self.db) {
-            let field_tys = ty.field_types(self.db);
-            if field_tys.len() != 1 {
-                return None;
-            }
-
-            // Reject cast if the struct field is not visible from the current scope.
-            if self.is_single_field_struct_with_invisible_field(ty) {
-                return None;
-            }
-
-            return Some(field_tys[0]);
-        }
-
-        None
-    }
-
-    /// Returns `true` if `ty` is a single-field struct whose field is not visible
-    /// from the current scope.
-    fn is_single_field_struct_with_invisible_field(&self, ty: TyId<'db>) -> bool {
-        if !ty.is_struct(self.db) {
-            return false;
-        }
-        let field_tys = ty.field_types(self.db);
-        if field_tys.len() != 1 {
-            return false;
-        }
-        let Some(adt_def) = ty.adt_def(self.db) else {
-            return false;
-        };
-        let AdtRef::Struct(s) = adt_def.adt_ref(self.db) else {
-            return false;
-        };
-        let field_scope = ScopeId::Field(FieldParent::Struct(s), 0);
-        !is_scope_visible_from(self.db, field_scope, self.env.scope())
-    }
-
     fn peel_transparent_newtypes(&self, mut ty: TyId<'db>) -> TyId<'db> {
-        while let Some(inner) = self.transparent_newtype_field_ty(ty) {
+        while let Some(inner) = transparent_newtype_field_ty(self.db, self.env.scope(), ty) {
             ty = inner;
         }
         ty

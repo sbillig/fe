@@ -20,8 +20,9 @@ pub use self::contract::{
 };
 pub(crate) use self::contract::{contract_field_slot, eval_msg_variant_selector};
 pub use self::path::RecordLike;
-use crate::analysis::name_resolution::ResolvedVariant;
+use crate::analysis::name_resolution::{ResolvedVariant, is_scope_visible_from};
 pub use crate::analysis::ty::AddressSpace;
+use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::method_table::ProbedMethod;
@@ -32,7 +33,9 @@ use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
-use crate::hir_def::{CallableDef, ImplTrait, Trait, params::FuncParamMode};
+use crate::hir_def::{
+    CallableDef, FieldParent, ImplTrait, Trait, params::FuncParamMode, scope_graph::ScopeId,
+};
 use crate::{
     hir_def::{
         BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
@@ -3809,6 +3812,35 @@ pub(crate) enum SmirLoweringReadiness {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
     tables: Arc<TypedBodyTables<'db>>,
+}
+
+/// The field type of a transparent newtype, which a cast sees through: a
+/// one-element tuple, or a struct with one field visible from `scope`.
+pub(crate) fn transparent_newtype_field_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    if !ty.is_tuple(db) && !ty.is_struct(db) {
+        return None;
+    }
+    let [field_ty] = ty.field_types(db)[..] else {
+        return None;
+    };
+    (!has_invisible_newtype_field(db, scope, ty)).then_some(field_ty)
+}
+
+/// Whether `ty` is a single-field struct whose field `scope` cannot see.
+pub(crate) fn has_invisible_newtype_field<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    let Some(AdtRef::Struct(s)) = ty.adt_def(db).map(|adt| adt.adt_ref(db)) else {
+        return false;
+    };
+    ty.field_types(db).len() == 1
+        && !is_scope_visible_from(db, ScopeId::Field(FieldParent::Struct(s), 0), scope)
 }
 
 // A private module keeps the shared tables type out of the crate's public
