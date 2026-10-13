@@ -17,7 +17,6 @@ use crate::{
     runtime::{
         AddressSpaceKind, BorrowAccess, BorrowTransportSet, LayoutId, RawPointeeId, RefKind,
         RefView, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimePlace,
-        relation::{raw_pointee_matches_class, runtime_classes_equivalent},
     },
 };
 
@@ -643,20 +642,17 @@ impl BoundaryMatcher {
                     pointee: actual_pointee,
                     kind: RefKind::Object | RefKind::Native,
                     view: RefView::Whole,
-                } => allow.allow_object && runtime_classes_equivalent(db, actual_pointee, pointee),
+                } => allow.allow_object && **actual_pointee == *pointee,
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Const,
                     view: RefView::Whole,
-                } => allow.allow_const && runtime_classes_equivalent(db, actual_pointee, pointee),
+                } => allow.allow_const && **actual_pointee == *pointee,
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Provider { space, .. },
                     view: RefView::Whole,
-                } => {
-                    allow.provider_spaces.contains(space)
-                        && runtime_classes_equivalent(db, actual_pointee, pointee)
-                }
+                } => allow.provider_spaces.contains(space) && **actual_pointee == *pointee,
                 RuntimeClass::Ref {
                     view: RefView::EnumVariant(_),
                     ..
@@ -664,9 +660,7 @@ impl BoundaryMatcher {
                 RuntimeClass::RawAddr {
                     pointee: Some(actual_pointee),
                     ..
-                } => {
-                    allow.allow_raw_addr && raw_pointee_matches_class(db, *actual_pointee, pointee)
-                }
+                } => allow.allow_raw_addr && actual_pointee.target(db) == pointee,
                 RuntimeClass::RawAddr { pointee: None, .. } => false,
                 RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => false,
             },
@@ -759,19 +753,16 @@ impl BoundaryMatcher {
                     view: expected_view,
                     ..
                 },
-            ) => {
-                actual_view == expected_view
-                    && runtime_classes_equivalent(db, actual_pointee, expected_pointee)
-            }
+            ) => actual_view == expected_view && actual_pointee == expected_pointee,
             (
                 RuntimeClass::RawAddr {
                     pointee: actual_pointee,
                     ..
                 },
                 RuntimeClass::Ref { pointee, .. },
-            ) => actual_pointee.is_some_and(|actual_pointee| {
-                raw_pointee_matches_class(db, actual_pointee, pointee)
-            }),
+            ) => {
+                actual_pointee.is_some_and(|actual_pointee| actual_pointee.target(db) == &**pointee)
+            }
             (
                 RuntimeClass::RawAddr {
                     pointee: actual_pointee,

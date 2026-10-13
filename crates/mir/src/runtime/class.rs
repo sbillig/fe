@@ -23,7 +23,6 @@ use crate::{
             resolve_runtime_place_address_class, runtime_value_class, scalar_class_from_const,
             verify_enum_handle, verify_value_enum_variant, verify_value_enum_variant_ref,
         },
-        relation::{raw_pointee_matches_class, transport_target_matches},
     },
     verify::{VerifyError, verify_const_region},
 };
@@ -146,7 +145,7 @@ pub fn expr_result_class<'db>(
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
-            if !transport_target_matches(db, source, pointee)
+            if !source.targets(db, pointee)
                 || !matches!(
                     source,
                     RuntimeClass::Ref {
@@ -189,9 +188,8 @@ pub fn expr_result_class<'db>(
                     view: RefView::Whole,
                 }) if actual_provider_ty == provider_ty && *actual_space == *space => {
                     if *space == AddressSpaceKind::Memory
-                        || raw_pointee.is_some_and(|raw_pointee| {
-                            !raw_pointee_matches_class(db, raw_pointee, pointee)
-                        })
+                        || raw_pointee
+                            .is_some_and(|raw_pointee| raw_pointee.target(db) != &**pointee)
                     {
                         return Err(VerifyError::InvalidExprClass(dst));
                     }

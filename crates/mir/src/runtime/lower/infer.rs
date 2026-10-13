@@ -24,8 +24,6 @@ use crate::{
         AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
         LayoutKey, RawPointeeId, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot,
         RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
-        package::raw_pointee_sort_key,
-        relation::{raw_pointee_matches_class, raw_pointees_equivalent, transport_target_matches},
     },
 };
 
@@ -1142,7 +1140,7 @@ pub(super) fn join_reference_transports<'db>(
         return merge_runtime_class(db, current, desired);
     }
     let pointee = current.deref_target(db)?;
-    if !transport_target_matches(db, desired, &pointee) {
+    if !desired.targets(db, &pointee) {
         return None;
     }
     let native = RuntimeClass::Ref {
@@ -1206,7 +1204,7 @@ fn raw_addr_join_pointee<'db>(
     ref_pointee: &RuntimeClass<'db>,
 ) -> Option<Option<RawPointeeId<'db>>> {
     match raw_pointee {
-        Some(raw_pointee) if !raw_pointee_matches_class(db, raw_pointee, ref_pointee) => None,
+        Some(raw_pointee) if raw_pointee.target(db) != ref_pointee => None,
         Some(raw_pointee) => Some(Some(raw_pointee)),
         None => Some(Some(RawPointeeId::new(db, ref_pointee.clone()))),
     }
@@ -1331,11 +1329,6 @@ pub(super) fn merge_runtime_class<'db>(
             let pointee = match (current_pointee, desired_pointee) {
                 (None, None) => None,
                 (Some(current), Some(desired)) if current == desired => Some(*current),
-                (Some(current), Some(desired))
-                    if raw_pointees_equivalent(db, *current, *desired) =>
-                {
-                    Some(preferred_equivalent_pointee(db, *current, *desired))
-                }
                 (Some(_), Some(_)) | (None, Some(_)) | (Some(_), None) => return None,
             };
             let space = preferred_address_space(*current_space, *desired_space)?;
@@ -1362,9 +1355,7 @@ pub(super) fn merge_runtime_class<'db>(
                 kind,
                 view: RefView::Whole,
             },
-        ) if raw_pointee
-            .is_some_and(|raw_pointee| raw_pointee_matches_class(db, raw_pointee, pointee)) =>
-        {
+        ) if raw_pointee.is_some_and(|raw_pointee| raw_pointee.target(db) == &**pointee) => {
             if *kind == RefKind::Native {
                 return Some(RuntimeClass::Ref {
                     pointee: pointee.clone(),
@@ -1388,20 +1379,6 @@ pub(super) fn merge_runtime_class<'db>(
         }
         _ => None,
     }
-}
-
-/// Chooses between two distinct but equivalent raw targets meeting at a join
-/// with no fixed target. The naming string decides; naming strings are not
-/// injective, so interned identity breaks any remaining tie. That last step
-/// is stable within one database only and never reaches an external name.
-fn preferred_equivalent_pointee<'db>(
-    db: &'db dyn MirDb,
-    lhs: RawPointeeId<'db>,
-    rhs: RawPointeeId<'db>,
-) -> RawPointeeId<'db> {
-    std::cmp::min_by_key(lhs, rhs, |pointee| {
-        (raw_pointee_sort_key(db, *pointee), *pointee)
-    })
 }
 
 fn merge_layouts<'db>(

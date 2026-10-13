@@ -60,6 +60,21 @@ impl<'db> RuntimeClass<'db> {
         matches!(self, Self::Ref { .. } | Self::RawAddr { .. })
     }
 
+    /// Whether dereferencing this transport yields `target`. An opaque raw
+    /// address and a non-transport target nothing.
+    pub fn targets(&self, db: &'db dyn MirDb, target: &RuntimeClass<'db>) -> bool {
+        match self {
+            Self::Ref { pointee, .. } => **pointee == *target,
+            Self::RawAddr {
+                pointee: Some(pointee),
+                ..
+            } => pointee.target(db) == target,
+            Self::RawAddr { pointee: None, .. } | Self::Scalar(_) | Self::AggregateValue { .. } => {
+                false
+            }
+        }
+    }
+
     pub fn contains_ref(&self, db: &'db dyn MirDb) -> bool {
         match self {
             Self::Scalar(_) | Self::RawAddr { .. } => false,

@@ -25,7 +25,6 @@ use crate::{
     runtime::{
         AddressSpaceKind, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId, LayoutKey,
         RawPointeeId, RefKind, RuntimeClass, RuntimeExitBehavior,
-        relation::runtime_classes_equivalent,
     },
 };
 
@@ -681,7 +680,7 @@ fn retarget_declaration_return_transport<'db>(
             kind: RefKind::Native,
             ..
         } = &stored
-        && runtime_classes_equivalent(db, pointee, target_pointee)
+        && pointee == target_pointee
     {
         return stored;
     }
@@ -878,7 +877,7 @@ pub(crate) fn declared_return_class_admits<'db>(
         vec![(returned.clone(), None), (declared.clone(), None)],
         semantic.normalized_result_ty(db).as_borrow(db).is_some(),
     )
-    .is_some_and(|merged| runtime_classes_equivalent(db, &merged, declared))
+    .is_some_and(|merged| merged == *declared)
 }
 
 /// The class carrying every value a body returns, given each with the enum

@@ -5,7 +5,6 @@ use crate::{
     runtime::{
         AddressSpaceKind, LayoutId, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RefKind, RefView,
         RuntimeClass, RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
-        relation::{raw_pointee_matches_class, transport_target_matches},
     },
 };
 
@@ -338,7 +337,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     kind: RefKind::Native,
                     view: RefView::Whole,
                 },
-            ) if transport_target_matches(self.db, &source, desired) => {
+            ) if source.targets(self.db, desired) => {
                 steps.push(RuntimeConversionStep::NativeRef { class: target });
                 Ok(())
             }
@@ -401,9 +400,8 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 },
             ) if *space != AddressSpaceKind::Memory
                 && space == provider_space
-                && raw_pointee.is_none_or(|raw_pointee| {
-                    raw_pointee_matches_class(self.db, raw_pointee, pointee)
-                }) =>
+                && raw_pointee
+                    .is_none_or(|raw_pointee| raw_pointee.target(self.db) == &**pointee) =>
             {
                 steps.push(RuntimeConversionStep::ProviderRefFromRaw {
                     class: target.clone(),
@@ -440,13 +438,10 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 RuntimeClass::AggregateValue {
                     layout: target_layout,
                 },
-            ) if raw_pointee_matches_class(
-                self.db,
-                *pointee,
-                &RuntimeClass::AggregateValue {
+            ) if *pointee.target(self.db)
+                == (RuntimeClass::AggregateValue {
                     layout: *target_layout,
-                },
-            ) =>
+                }) =>
             {
                 steps.push(RuntimeConversionStep::LoadRawAddr {
                     class: RuntimeClass::AggregateValue {
@@ -561,8 +556,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     pointee: raw_pointee,
                 },
             ) if provider_space == raw_space
-                && raw_pointee
-                    .is_none_or(|target| raw_pointee_matches_class(self.db, target, pointee)) =>
+                && raw_pointee.is_none_or(|target| target.target(self.db) == &**pointee) =>
             {
                 steps.push(RuntimeConversionStep::ProviderRefToRaw { class: target });
                 Ok(())
