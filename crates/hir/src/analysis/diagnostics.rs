@@ -2082,24 +2082,29 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
 
 
             Self::ContractFieldCallPointer { span, ty, pointer } => {
-                let (space, lifetime) = match pointer.as_ptr(db) {
-                    Some((_, AddressSpace::Calldata)) => ("calldata", "one call"),
-                    _ => ("memory", "one transaction"),
+                let space = match pointer.as_ptr(db) {
+                    Some((_, AddressSpace::Calldata)) => "calldata",
+                    _ => "memory",
+                };
+                let label = if ty == pointer {
+                    format!("`{}` is a {space} pointer", ty.pretty_print(db))
+                } else {
+                    format!(
+                        "`{}` holds the {space} pointer `{}`",
+                        ty.pretty_print(db),
+                        pointer.pretty_print(db)
+                    )
                 };
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!("contract state cannot hold a {space} pointer"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: format!(
-                            "`{}` holds the {space} pointer `{}`",
-                            ty.pretty_print(db),
-                            pointer.pretty_print(db)
-                        ),
+                        message: label,
                         span: span.resolve(db),
                     }],
                     notes: vec![format!(
-                        "{space} lasts for {lifetime}, so a later one could not follow the pointer"
+                        "{space} lasts for one call, so a later one could not follow the pointer"
                     )],
                     error_code,
                 }

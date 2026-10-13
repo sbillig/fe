@@ -10,7 +10,7 @@ error[3-0065]: contract state cannot hold a memory pointer
 13 │     mut buf: MemBuffer,
    │              ^^^^^^^^^ `MemBuffer` holds the memory pointer `*u8`
    │
-   = memory lasts for one transaction, so a later one could not follow the pointer
+   = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a memory pointer
    ┌─ contract_state_admissibility.fe:14:16
@@ -18,7 +18,7 @@ error[3-0065]: contract state cannot hold a memory pointer
 14 │     mut items: MemArray<u256>,
    │                ^^^^^^^^^^^^^^ `MemArray<u256>` holds the memory pointer `*u256`
    │
-   = memory lasts for one transaction, so a later one could not follow the pointer
+   = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0066]: a persistent collection cannot lie in transient storage
    ┌─ contract_state_admissibility.fe:15:15

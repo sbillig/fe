@@ -8,15 +8,15 @@ error[3-0065]: contract state cannot hold a memory pointer
     ┌─ immutable_contract_field_init.fe:200:10
     │
 200 │     ptr: *u256
-    │          ^^^^^ `*u256` holds the memory pointer `*u256`
+    │          ^^^^^ `*u256` is a memory pointer
     │
-    = memory lasts for one transaction, so a later one could not follow the pointer
+    = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a calldata pointer
     ┌─ immutable_contract_field_init.fe:204:10
     │
 204 │     ptr: std::evm::CalldataPtr<u256>
-    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<u256>` holds the calldata pointer `CalldataPtr<u256>`
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<u256>` is a calldata pointer
     │
     = calldata lasts for one call, so a later one could not follow the pointer
 
@@ -24,15 +24,15 @@ error[3-0065]: contract state cannot hold a memory pointer
     ┌─ immutable_contract_field_init.fe:308:10
     │
 308 │     ptr: *()
-    │          ^^^ `*()` holds the memory pointer `*()`
+    │          ^^^ `*()` is a memory pointer
     │
-    = memory lasts for one transaction, so a later one could not follow the pointer
+    = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a calldata pointer
     ┌─ immutable_contract_field_init.fe:312:10
     │
 312 │     ptr: std::evm::CalldataPtr<()>
-    │          ^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<()>` holds the calldata pointer `CalldataPtr<()>`
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<()>` is a calldata pointer
     │
     = calldata lasts for one call, so a later one could not follow the pointer
 
@@ -40,15 +40,15 @@ error[3-0065]: contract state cannot hold a memory pointer
     ┌─ immutable_contract_field_init.fe:316:10
     │
 316 │     ptr: *Empty
-    │          ^^^^^^ `*Empty` holds the memory pointer `*Empty`
+    │          ^^^^^^ `*Empty` is a memory pointer
     │
-    = memory lasts for one transaction, so a later one could not follow the pointer
+    = memory lasts for one call, so a later one could not follow the pointer
 
 error[3-0065]: contract state cannot hold a calldata pointer
     ┌─ immutable_contract_field_init.fe:320:10
     │
 320 │     ptr: std::evm::CalldataPtr<Empty>
-    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<Empty>` holds the calldata pointer `CalldataPtr<Empty>`
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CalldataPtr<Empty>` is a calldata pointer
     │
     = calldata lasts for one call, so a later one could not follow the pointer
 

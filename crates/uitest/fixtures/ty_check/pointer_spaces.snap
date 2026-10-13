@@ -14,9 +14,9 @@ error[3-0065]: contract state cannot hold a memory pointer
    ┌─ pointer_spaces.fe:21:17
    │
 21 │     mut memory: *u256,
-   │                 ^^^^^ `*u256` holds the memory pointer `*u256`
+   │                 ^^^^^ `*u256` is a memory pointer
    │
-   = memory lasts for one transaction, so a later one could not follow the pointer
+   = memory lasts for one call, so a later one could not follow the pointer
 
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ pointer_spaces.fe:28:9
