@@ -223,7 +223,6 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     is_mut: bool,
     address_space: AddressSpace,
     declared: TyId<'db>,
-    target: TyId<'db>,
     /// The slot `#[slot(e)]` places the field at.
     explicit_slot: Option<U256>,
     slot_count: usize,
@@ -243,8 +242,6 @@ pub struct FieldStorageLayout<'db> {
     pub address_space: AddressSpace,
     /// The field's declared type.
     pub declared: TyId<'db>,
-    /// The value the field holds: a provider's target, else `declared`.
-    pub target: TyId<'db>,
     /// The field's first slot, or for a code field its first word.
     pub slot_offset: U256,
     pub slot_count: usize,
@@ -309,28 +306,16 @@ impl<'db> ContractStorageLayoutResult<'db> {
             .flat_map(|layout| layout.fields.values())
     }
 
-    /// The fields whose layout is valid, by name: index, `is_mut`, declared
-    /// type and target.
+    /// The fields whose layout is valid, by name: index, `is_mut` and
+    /// declared type.
     pub(crate) fn semantic_fields(
         &self,
-    ) -> Vec<(
-        IdentId<'db>,
-        ContractFieldId<'db>,
-        bool,
-        TyId<'db>,
-        TyId<'db>,
-    )> {
+    ) -> Vec<(IdentId<'db>, ContractFieldId<'db>, bool, TyId<'db>)> {
         self.field_results
             .iter()
             .filter_map(|field| {
                 let plan = field.result.as_ref().ok()?;
-                Some((
-                    field.name,
-                    plan.field,
-                    plan.is_mut,
-                    plan.declared,
-                    plan.target,
-                ))
+                Some((field.name, plan.field, plan.is_mut, plan.declared))
             })
             .collect()
     }
@@ -868,7 +853,6 @@ fn collect_field_plan<'db>(
     } else {
         AddressSpace::Code
     };
-    let target = declared;
     let explicit_slot = match field.slot {
         Some(_) if address_space == AddressSpace::Code => {
             return Some((name, Err(vec![ContractLayoutError::ExplicitSlotInCode])));
@@ -885,21 +869,16 @@ fn collect_field_plan<'db>(
         content_spaces: Vec::new(),
         call_pointer: None,
     };
-    let output = walker.walk_ty(ConcreteTypeView::identity(target), &[], &[]);
+    let output = walker.walk_ty(ConcreteTypeView::identity(declared), &[], &[]);
     // Every contract field outlives the call: code-backed ones too.
     if walker.errors.is_empty()
         && let Some(pointer) = walker.call_pointer
     {
         walker.push_error(ContractLayoutError::CallPointerInState { pointer });
     }
-    let in_state = walker.errors.is_empty()
-        && matches!(
-            address_space,
-            AddressSpace::Storage | AddressSpace::Transient
-        );
-    if in_state
-        && let Some(collection) =
-            persistent_under_transient(db, scope, target, address_space == AddressSpace::Transient)
+    if walker.errors.is_empty()
+        && address_space == AddressSpace::Storage
+        && let Some(collection) = persistent_under_transient(db, scope, declared)
     {
         walker.push_error(ContractLayoutError::PersistentUnderTransient { collection });
     }
@@ -933,7 +912,6 @@ fn collect_field_plan<'db>(
             is_mut: field.is_mut,
             address_space,
             declared,
-            target,
             explicit_slot,
             slot_count: output.span,
             spaces,
@@ -1005,13 +983,11 @@ const MAX_STATE_NESTING: usize = 64;
 
 /// The persistent collection `ty` keeps inside a transient collection's
 /// contents, as the map of a `TSlot<StorageMap<K, V>>`, whose entries would
-/// persist after the value holding them is gone. `transient` is whether `ty`
-/// itself lies in transient storage.
+/// persist after the value holding them is gone.
 fn persistent_under_transient<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: TyId<'db>,
-    transient: bool,
 ) -> Option<TyId<'db>> {
     fn walk<'db>(
         db: &'db dyn HirAnalysisDb,
@@ -1054,7 +1030,7 @@ fn persistent_under_transient<'db>(
             .into_iter()
             .find_map(|part| walk(db, scope, part, transient, depth + 1, seen))
     }
-    walk(db, scope, ty, transient, 0, &mut FxHashSet::default())
+    walk(db, scope, ty, false, 0, &mut FxHashSet::default())
 }
 
 /// The counter a space's slots are numbered by. Storage and transient slots
@@ -1152,7 +1128,6 @@ fn allocate_contract<'db>(
                 is_mut: plan.is_mut,
                 address_space: plan.address_space,
                 declared: plan.declared,
-                target: plan.target,
                 slot_offset,
                 slot_count: plan.slot_count,
                 inline_leaves: plan.inline_leaves.clone(),

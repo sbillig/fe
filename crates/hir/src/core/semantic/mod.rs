@@ -1477,8 +1477,6 @@ pub struct ContractFieldInfo<'db> {
     pub name: IdentId<'db>,
     pub declared: TyId<'db>,
     pub is_mut: bool,
-    /// The value the field holds: a provider's target, else `declared`.
-    pub target: TyId<'db>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -1808,7 +1806,7 @@ impl<'db> Contract<'db> {
         self.storage_layout(db)
             .semantic_fields()
             .into_iter()
-            .map(|(name, field, is_mut, declared, target)| {
+            .map(|(name, field, is_mut, declared)| {
                 (
                     name,
                     ContractFieldInfo {
@@ -1816,7 +1814,6 @@ impl<'db> Contract<'db> {
                         name,
                         declared,
                         is_mut,
-                        target,
                     },
                 )
             })
@@ -2163,7 +2160,7 @@ fn contract_scoped_effect_requirements_canonical<'db>(
             && fields.contains_key(&name)
         {
             let key = match contract.storage_layout(db).field(&name) {
-                Some(layout) => EffectRequirementKey::Type(layout.target),
+                Some(layout) => EffectRequirementKey::Type(layout.declared),
                 None => EffectRequirementKey::Other,
             };
 
@@ -2225,7 +2222,7 @@ fn contract_provider_bindings_canonical<'db>(
         .cloned()
         .enumerate()
         .map(|(idx, field)| {
-            let provider_ty = field.target;
+            let provider_ty = field.declared;
             ProviderBinding {
                 provider_idx: idx as u32,
                 provider_ty,

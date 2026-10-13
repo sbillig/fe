@@ -128,7 +128,7 @@ fn verify_contract_field_binding<'db>(
         .values()
         .find(|field| field.field == binding.field)
         .ok_or(VerifyError::UnknownContractField(binding.field))?;
-    let expected_ty = field.target;
+    let expected_ty = field.declared;
     if binding.declared_ty != expected_ty {
         return Err(VerifyError::ContractFieldTypeMismatch {
             field: binding.field,

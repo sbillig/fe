@@ -1898,7 +1898,7 @@ fn provisional_provider_binding_for_effect<'db>(
                 .enumerate()
                 .find(|(idx, _)| *idx as u32 == provider_idx)
             {
-                let provider_ty = field.target;
+                let provider_ty = field.declared;
                 return Some(ProviderBinding {
                     provider_idx,
                     provider_ty,

@@ -878,7 +878,7 @@ fn valid_contract_fields<'db>(
     contract
         .storage_layout(db)
         .values()
-        .filter(|field| !field.declared.has_invalid(db) && !field.target.has_invalid(db))
+        .filter(|field| !field.declared.has_invalid(db))
         .filter(move |field| {
             FieldView {
                 parent: FieldParent::Contract(contract),
