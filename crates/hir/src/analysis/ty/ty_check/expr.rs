@@ -33,7 +33,7 @@ use super::{
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
 use crate::analysis::ty::{
-    ProviderAddressSpace,
+    AddressSpace,
     adt_def::AdtRef,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonicalized, Solution},
@@ -825,7 +825,7 @@ impl<'db> TyChecker<'db> {
         if *op == UnOp::Deref {
             // Calldata is immutable input.
             if let Some((pointee, space)) = prop.ty.as_ptr(self.db) {
-                return ExprProp::new(pointee, space != ProviderAddressSpace::Calldata);
+                return ExprProp::new(pointee, space != AddressSpace::Calldata);
             }
 
             let expected = TyId::ptr_to(self.db, self.fresh_ty());
@@ -2024,7 +2024,7 @@ impl<'db> TyChecker<'db> {
                         .or_else(|| self.concrete_borrow_provider_for_capability_ty(provider.ty))
                         .or_else(|| {
                             matches!(pass_mode, super::EffectPassMode::ByTempPlace)
-                                .then_some(ProviderAddressSpace::Memory)
+                                .then_some(AddressSpace::Memory)
                         });
                     if matches!(
                         pass_mode,
@@ -2674,7 +2674,7 @@ impl<'db> TyChecker<'db> {
         &self,
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
-    ) -> Option<ProviderAddressSpace> {
+    ) -> Option<AddressSpace> {
         match pass_mode {
             super::EffectPassMode::ByTempPlace => match arg {
                 super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
@@ -2729,7 +2729,7 @@ impl<'db> TyChecker<'db> {
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
         provider_target_ty: Option<TyId<'db>>,
-        provider_space: Option<ProviderAddressSpace>,
+        provider_space: Option<AddressSpace>,
     ) -> EffectProviderSpecialization<'db> {
         let provenance = self
             .effect_provider_provenance(provided, arg)
@@ -4501,7 +4501,7 @@ impl<'db> TyChecker<'db> {
         let scrutinee_prop = self.open_matched_place(*scrutinee, scrutinee_prop, arm_pats);
 
         let mut match_ty = expected;
-        let mut first_provider: Option<ProviderAddressSpace> = None;
+        let mut first_provider: Option<AddressSpace> = None;
         let mut provider_unknown = false;
         let mut provider_conflict = false;
         let mut arm_statuses = Vec::with_capacity(arms.len());
@@ -5129,7 +5129,7 @@ impl<'db> TyChecker<'db> {
         let base_ty = self.env.typed_expr(base)?.ty;
         if matches!(
             self.normalize_ty(base_ty).as_ptr(self.db),
-            Some((_, ProviderAddressSpace::Calldata))
+            Some((_, AddressSpace::Calldata))
         ) {
             Some(base)
         } else if deref {

@@ -1,5 +1,6 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::semantic::SemOrigin;
+use hir::analysis::ty::AddressSpace;
 use hir::{
     analysis::ty::{
         corelib::{resolve_core_trait, resolve_lib_type_path},
@@ -20,12 +21,12 @@ use crate::{
         RuntimeInstance, RuntimeInstanceKey, RuntimeInstanceSource, get_or_build_runtime_instance,
     },
     runtime::{
-        AddressSpaceKind, BorrowAccess, ConstScalar, ContractFieldSlot, ContractInitAbiPlan,
-        ContractRecvAbiPlan, DispatchDefault, EntryEffectArgPlan, EntrySemanticArgsPlan,
-        InitArgsPlan, LowerError, PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId,
-        RStmt, RTerminator, RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier,
-        RuntimeClass, RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature,
-        RuntimeLocalRoot, RuntimeMemoryLayout, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan,
+        BorrowAccess, ConstScalar, ContractFieldSlot, ContractInitAbiPlan, ContractRecvAbiPlan,
+        DispatchDefault, EntryEffectArgPlan, EntrySemanticArgsPlan, InitArgsPlan, LowerError,
+        PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator,
+        RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
+        RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
+        RuntimeMemoryLayout, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan,
         RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
         TargetRootProviderMaterialization,
         lower::{
@@ -684,7 +685,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
             let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
             let dst_raw_class =
-                RuntimeClass::raw_addr(self.db, AddressSpaceKind::Memory, pointee_class.clone());
+                RuntimeClass::raw_addr(self.db, AddressSpace::Memory, pointee_class.clone());
             let dst_raw_addr = self.push_local(
                 TyId::u256(self.db),
                 RuntimeCarrier::Value(dst_raw_class),
@@ -696,14 +697,14 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     dst: dst_raw_addr,
                     expr: RExpr::WordToRawAddr {
                         value: dst_addr,
-                        space: AddressSpaceKind::Memory,
+                        space: AddressSpace::Memory,
                     },
                 },
             );
             let dst_place = RuntimePlace {
                 root: PlaceRoot::Ptr {
                     addr: dst_raw_addr,
-                    space: AddressSpaceKind::Memory,
+                    space: AddressSpace::Memory,
                     class: pointee_class,
                 },
                 path: Box::default(),
@@ -883,7 +884,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             tuple_ty,
             field_indices,
             |emitter, field_ty| {
-                top_level_class_for_ty_in_env(emitter.db, env, field_ty, AddressSpaceKind::Memory)
+                top_level_class_for_ty_in_env(emitter.db, env, field_ty, AddressSpace::Memory)
                     .unwrap_or_else(memory_fallback_class)
             },
         )
@@ -1171,7 +1172,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     | RuntimeLocalRoot::Ref(_)
                     | RuntimeLocalRoot::Ptr { .. } => unreachable!(),
                 },
-                AddressSpaceKind::Memory,
+                AddressSpace::Memory,
                 false,
             ),
             PlaceRoot::Ref(_) => (
@@ -1181,7 +1182,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     | RuntimeLocalRoot::Slot(_)
                     | RuntimeLocalRoot::Ptr { .. } => unreachable!(),
                 },
-                AddressSpaceKind::Memory,
+                AddressSpace::Memory,
                 false,
             ),
             PlaceRoot::Ptr { space, class, .. } => (
@@ -1309,7 +1310,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             self.db,
             self.runtime_type_env(scope),
             ty,
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
         )
         .expect("memory bytes runtime class");
         let root = match &class {
@@ -1377,7 +1378,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let addr = self.push_malloc_bytes(bb, size);
         let raw_class = RuntimeClass::raw_addr(
             self.db,
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
             RuntimeClass::AggregateValue { layout },
         );
         Ok(self.coerce_runtime_value(bb, addr, &raw_class, semantic_ty))
@@ -1718,7 +1719,7 @@ fn test_raw_storage_root() uses (storage: mut RawStorage) {
                 RStmt::Assign {
                     expr: RExpr::Placeholder {
                         class: RuntimeClass::RawAddr {
-                            space: AddressSpaceKind::Memory,
+                            space: AddressSpace::Memory,
                             pointee: Some(_),
                         }
                     },

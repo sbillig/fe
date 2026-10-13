@@ -32,7 +32,7 @@ use crate::{
             instantiate_trait_self,
             normalize::normalize_ty,
             provider::{
-                ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
+                AddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
                 RootProviderRegistration, RootProviderScope, provider_semantics,
                 provider_semantics_for_specialized_call, registered_root_providers,
             },
@@ -88,7 +88,7 @@ impl<'db> SemanticInstanceKey<'db> {
     fn with_param_spaces(
         self,
         db: &'db dyn HirAnalysisDb,
-        param_spaces: Vec<(u32, ProviderAddressSpace)>,
+        param_spaces: Vec<(u32, AddressSpace)>,
     ) -> Self {
         if param_spaces.is_empty() {
             return self;
@@ -167,7 +167,7 @@ impl<'db> ForLoopCallSites<'db> {
 pub(crate) struct CallSiteProviderRefinement {
     pub call_site: CallSiteId,
     pub input: RefinedInput,
-    pub address_space: ProviderAddressSpace,
+    pub address_space: AddressSpace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -1064,7 +1064,7 @@ fn invalid_size_diagnostic<'db>(
 fn specialize_provider_address_space<'db>(
     db: &'db dyn HirAnalysisDb,
     specialization: &mut EffectProviderSpecialization<'db>,
-    address_space: ProviderAddressSpace,
+    address_space: AddressSpace,
 ) {
     let provider = &specialization.provider;
     let semantics = provider_semantics_for_specialized_call(
@@ -1282,7 +1282,7 @@ impl<'db> SemanticInstance<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         contract: SpaceContract<'db>,
-    ) -> Option<ProviderAddressSpace> {
+    ) -> Option<AddressSpace> {
         let key = self.key(db);
         match contract {
             SpaceContract::Space(space) => Some(space),
@@ -1358,10 +1358,10 @@ impl<'db> SemanticInstance<'db> {
     fn sub_place_space(
         self,
         db: &'db dyn HirAnalysisDb,
-        start: ProviderAddressSpace,
+        start: AddressSpace,
         root: TyId<'db>,
         steps: SpacePathId<'db>,
-    ) -> Option<ProviderAddressSpace> {
+    ) -> Option<AddressSpace> {
         let scope = self.normalization_scope(db);
         let root = self.normalized_ty(db, root.as_capability(db).map_or(root, |(_, inner)| inner));
         let mut walk = PathSpace::new(db, root);
@@ -1435,7 +1435,7 @@ impl<'db> SemanticInstance<'db> {
                 && ty_is_snapshot(db, self.normalization_scope(db), ty, self.assumptions(db))
                 && !matches!(
                     self.param_space(db, idx as u32),
-                    ProviderAddressSpace::Code | ProviderAddressSpace::Calldata
+                    AddressSpace::Code | AddressSpace::Calldata
                 )
         )
     }
@@ -1465,7 +1465,7 @@ impl<'db> SemanticInstance<'db> {
 
     /// The address space of the place data parameter `param` names in this
     /// instantiation: the caller's, or else its type's default.
-    pub fn param_space(self, db: &'db dyn HirAnalysisDb, param: u32) -> ProviderAddressSpace {
+    pub fn param_space(self, db: &'db dyn HirAnalysisDb, param: u32) -> AddressSpace {
         let key = self.key(db);
         key.effect_providers(db)
             .param_spaces(db)
@@ -1479,7 +1479,7 @@ impl<'db> SemanticInstance<'db> {
                             .map_or(ty, |(_, inner)| inner)
                             .default_space(db)
                     }
-                    _ => ProviderAddressSpace::Memory,
+                    _ => AddressSpace::Memory,
                 },
                 |(_, space)| *space,
             )
@@ -1497,7 +1497,7 @@ impl<'db> SemanticInstance<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
-    ) -> Option<ProviderAddressSpace> {
+    ) -> Option<AddressSpace> {
         crate::analysis::ty::provider::state_index_space(
             db,
             self.normalization_scope(db),
@@ -2396,7 +2396,7 @@ fn root_owner_effect_providers<'db>(
                     db,
                     provider_ty,
                     target_ty,
-                    Some(ProviderAddressSpace::Memory),
+                    Some(AddressSpace::Memory),
                     ProviderTransport::ByValue,
                 ),
             })
@@ -2845,7 +2845,7 @@ mod tests {
                 binding_idx: site.effect_args[0].binding_idx,
                 provider_idx: None,
             },
-            address_space: ProviderAddressSpace::Storage,
+            address_space: AddressSpace::Storage,
         };
         finalize_call_site(
             db,
@@ -2858,10 +2858,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(
-            site.effect_args[0].provider,
-            Some(ProviderAddressSpace::Storage)
-        );
+        assert_eq!(site.effect_args[0].provider, Some(AddressSpace::Storage));
         assert_ne!(site, before);
     }
 }

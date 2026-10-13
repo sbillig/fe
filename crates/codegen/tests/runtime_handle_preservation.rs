@@ -1,8 +1,8 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_runtime_package_sonatina_ir_optimized};
-use hir::hir_def::TopLevelMod;
-use mir::runtime::{AddressSpaceKind, RefKind};
+use hir::{analysis::ty::AddressSpace, hir_def::TopLevelMod};
+use mir::runtime::RefKind;
 use mir::{
     IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RExpr, RLocalId, RStmt,
     RTerminator, RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeInstance,
@@ -174,7 +174,7 @@ fn storage_pair_ref_layout<'db>(class: &RuntimeClass<'db>) -> Option<LayoutId<'d
             pointee,
             kind:
                 RefKind::Provider {
-                    space: AddressSpaceKind::Storage,
+                    space: AddressSpace::Storage,
                     ..
                 },
             ..
@@ -201,7 +201,7 @@ fn local_storage_handles_preserve_storage_effect_transport() {
                     store.class,
                     RuntimeClass::Ref {
                         kind: RefKind::Provider {
-                            space: AddressSpaceKind::Storage,
+                            space: AddressSpace::Storage,
                             ..
                         },
                         ..
@@ -410,7 +410,7 @@ pub fn pointer_roundtrip() -> u256 {
                             RStmt::Store {
                                 dst: RuntimePlace {
                                     root: PlaceRoot::Ptr {
-                                        space: AddressSpaceKind::Memory,
+                                        space: AddressSpace::Memory,
                                         ..
                                     },
                                     ..
@@ -432,7 +432,7 @@ pub fn pointer_roundtrip() -> u256 {
                                 expr: RExpr::Load {
                                     place: RuntimePlace {
                                         root: PlaceRoot::Ptr {
-                                            space: AddressSpaceKind::Memory,
+                                            space: AddressSpace::Memory,
                                             ..
                                         },
                                         ..
@@ -496,7 +496,7 @@ pub fn entry() -> u256 {
             let pointee_root = |body: &RuntimeBody<'_>, place: &RuntimePlace<'_>| {
                 let PlaceRoot::Ptr {
                     addr,
-                    space: AddressSpaceKind::Memory,
+                    space: AddressSpace::Memory,
                     ..
                 } = place.root
                 else {

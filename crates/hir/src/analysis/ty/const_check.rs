@@ -133,7 +133,7 @@ impl<'db> ConstFnChecker<'db, '_> {
                     || arg.pass_mode != EffectPassMode::ByValue
                     || arg.layout_view != EffectArgLayoutView::Direct
                     || arg.provider.is_some_and(|space| {
-                        space != crate::analysis::ty::provider::ProviderAddressSpace::Memory
+                        space != crate::analysis::ty::provider::AddressSpace::Memory
                     })
                     || arg.provider_target_ty.is_some()
             })

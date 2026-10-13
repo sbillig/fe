@@ -10,7 +10,7 @@ use crate::{
             SemanticInstance, VariantIndex,
         },
         ty::{
-            provider::ProviderAddressSpace,
+            provider::AddressSpace,
             ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
@@ -225,7 +225,7 @@ pub enum NValueDefinition {
 pub struct NRoot<'db> {
     pub kind: NRootKind<'db>,
     pub ty: TyId<'db>,
-    pub address_space: ProviderAddressSpace,
+    pub address_space: AddressSpace,
     pub mutability: Mutability,
     pub origin: SemOrigin<'db>,
 }
@@ -364,7 +364,7 @@ pub struct NEffectArg<'db> {
     pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
     pub provider_target_ty: Option<TyId<'db>>,
-    pub provider: Option<ProviderAddressSpace>,
+    pub provider: Option<AddressSpace>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -394,7 +394,7 @@ pub enum NExpr<'db> {
     Borrow {
         place: NPlace<'db>,
         kind: BorrowKind,
-        provider: Option<ProviderAddressSpace>,
+        provider: Option<AddressSpace>,
     },
     MakeView {
         place: NPlace<'db>,

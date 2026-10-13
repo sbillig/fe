@@ -10,7 +10,7 @@ use crate::analysis::{
         is_scope_visible_from,
     },
     ty::{
-        ProviderAddressSpace,
+        AddressSpace,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
             FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
@@ -2083,7 +2083,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
 
             Self::ContractFieldCallPointer { span, ty, pointer } => {
                 let (space, lifetime) = match pointer.as_ptr(db) {
-                    Some((_, ProviderAddressSpace::Calldata)) => ("calldata", "one call"),
+                    Some((_, AddressSpace::Calldata)) => ("calldata", "one call"),
                     _ => ("memory", "one transaction"),
                 };
                 CompleteDiagnostic {
@@ -4059,11 +4059,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }],
                 notes: vec![match space {
-                    ProviderAddressSpace::Memory => "memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state".to_string(),
-                    ProviderAddressSpace::Calldata => "calldata belongs to one call and has no stable contract-field location; access receive arguments or calldata handles locally instead".to_string(),
-                    ProviderAddressSpace::Storage
-                    | ProviderAddressSpace::Transient
-                    | ProviderAddressSpace::Code => unreachable!("supported contract field address space"),
+                    AddressSpace::Memory => "memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state".to_string(),
+                    AddressSpace::Calldata => "calldata belongs to one call and has no stable contract-field location; access receive arguments or calldata handles locally instead".to_string(),
+                    AddressSpace::Storage
+                    | AddressSpace::Transient
+                    | AddressSpace::Code => unreachable!("supported contract field address space"),
                 }],
                 error_code,
             },

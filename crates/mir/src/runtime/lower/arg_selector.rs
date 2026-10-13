@@ -1,4 +1,5 @@
 use cranelift_entity::EntityRef;
+use hir::analysis::ty::AddressSpace;
 use hir::analysis::{
     semantic::{
         SLocalId, SemanticLocalKind,
@@ -9,9 +10,7 @@ use hir::analysis::{
     ty::ty_def::TyId,
 };
 
-use crate::runtime::{
-    AddressSpaceKind, RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass,
-};
+use crate::runtime::{RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass};
 
 use super::{
     boundary::{
@@ -602,7 +601,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     self.env.db(),
                     &root_class,
                     &value_class,
-                    AddressSpaceKind::Memory,
+                    AddressSpace::Memory,
                     false,
                 );
                 if let Some(selected) =

@@ -42,7 +42,7 @@ use crate::analysis::{
     semantic::int_const,
     ty::{
         adt_def::AdtRef,
-        provider::ProviderAddressSpace,
+        provider::AddressSpace,
         trait_resolution::{TraitSolveCx, check_ty_wf},
         ty_error::emit_invalid_ty_error,
     },
@@ -121,7 +121,7 @@ impl<'db> TyId<'db> {
 
     /// The state space this type is pinned to, when its `StateIndex`
     /// implementation decides one; see `adt_def::Pin`.
-    pub fn pin(self, db: &'db dyn HirAnalysisDb) -> Option<ProviderAddressSpace> {
+    pub fn pin(self, db: &'db dyn HirAnalysisDb) -> Option<AddressSpace> {
         match super::adt_def::ty_pin(db, self) {
             Pin::Pinned(space) => Some(space),
             Pin::Unpinned | Pin::Undecided => None,
@@ -131,11 +131,11 @@ impl<'db> TyId<'db> {
     /// The space a place of this type lies in when no caller decides it: its
     /// pin, storage for another state-only type, which never lives in
     /// memory, and memory otherwise.
-    pub fn default_space(self, db: &'db dyn HirAnalysisDb) -> ProviderAddressSpace {
+    pub fn default_space(self, db: &'db dyn HirAnalysisDb) -> AddressSpace {
         self.pin(db).unwrap_or(if self.pinned_part(db).is_some() {
-            ProviderAddressSpace::Storage
+            AddressSpace::Storage
         } else {
-            ProviderAddressSpace::Memory
+            AddressSpace::Memory
         })
     }
 
@@ -345,26 +345,22 @@ impl<'db> TyId<'db> {
         (*base, args)
     }
 
-    pub(super) fn ptr(db: &'db dyn HirAnalysisDb, space: ProviderAddressSpace) -> TyId<'db> {
+    pub(super) fn ptr(db: &'db dyn HirAnalysisDb, space: AddressSpace) -> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr(space))))
     }
 
     /// A memory pointer, `*inner`.
     pub fn ptr_to(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
-        Self::ptr_in(db, ProviderAddressSpace::Memory, inner)
+        Self::ptr_in(db, AddressSpace::Memory, inner)
     }
 
     /// A pointer to `inner` in `space`.
-    pub fn ptr_in(
-        db: &'db dyn HirAnalysisDb,
-        space: ProviderAddressSpace,
-        inner: TyId<'db>,
-    ) -> TyId<'db> {
+    pub fn ptr_in(db: &'db dyn HirAnalysisDb, space: AddressSpace, inner: TyId<'db>) -> TyId<'db> {
         Self::app(db, Self::ptr(db, space), inner)
     }
 
     /// A pointer's target and the space it points into.
-    pub fn as_ptr(self, db: &'db dyn HirAnalysisDb) -> Option<(TyId<'db>, ProviderAddressSpace)> {
+    pub fn as_ptr(self, db: &'db dyn HirAnalysisDb) -> Option<(TyId<'db>, AddressSpace)> {
         let (base, args) = self.decompose_ty_app(db);
         let inner = args.first().copied()?;
         match base.data(db) {
@@ -1921,11 +1917,11 @@ impl<'db> TyBase<'db> {
                 PrimTy::String => "String",
                 PrimTy::Array => "[]",
                 PrimTy::Tuple(_) => "()",
-                PrimTy::Ptr(ProviderAddressSpace::Memory) => "*",
-                PrimTy::Ptr(ProviderAddressSpace::Storage) => "StorPtr",
-                PrimTy::Ptr(ProviderAddressSpace::Transient) => "TStorPtr",
-                PrimTy::Ptr(ProviderAddressSpace::Calldata) => "CalldataPtr",
-                PrimTy::Ptr(ProviderAddressSpace::Code) => "CodePtr",
+                PrimTy::Ptr(AddressSpace::Memory) => "*",
+                PrimTy::Ptr(AddressSpace::Storage) => "StorPtr",
+                PrimTy::Ptr(AddressSpace::Transient) => "TStorPtr",
+                PrimTy::Ptr(AddressSpace::Calldata) => "CalldataPtr",
+                PrimTy::Ptr(AddressSpace::Code) => "CodePtr",
                 PrimTy::View => "View",
                 PrimTy::BorrowMut => "BorrowMut",
                 PrimTy::BorrowRef => "BorrowRef",
@@ -2018,7 +2014,7 @@ pub enum PrimTy {
     Tuple(usize),
     /// A raw pointer into an address space: `*T` in memory, or `StorPtr<T>`,
     /// `TStorPtr<T>` and `CalldataPtr<T>`.
-    Ptr(ProviderAddressSpace),
+    Ptr(AddressSpace),
     View,
     BorrowMut,
     BorrowRef,
@@ -2275,7 +2271,7 @@ fn pretty_print_ty_app<'db>(
             inner.pretty_print_with_mode(db, mode)
         }
 
-        TyData::TyBase(Prim(Ptr(ProviderAddressSpace::Memory))) => {
+        TyData::TyBase(Prim(Ptr(AddressSpace::Memory))) => {
             let Some(inner) = args.first() else {
                 return "*<missing>".to_string();
             };

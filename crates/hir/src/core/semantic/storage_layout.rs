@@ -13,7 +13,7 @@ use crate::{
         HirAnalysisDb,
         semantic::{RuntimeSizeError, runtime_size_bytes_with_source},
         ty::{
-            ProviderAddressSpace,
+            AddressSpace,
             adt_def::{
                 AdtDef, AdtRef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand,
             },
@@ -58,7 +58,7 @@ pub struct ContractLayoutEntry<'db> {
     pub field: ContractFieldId<'db>,
     pub path: ContractLayoutPath<'db>,
     pub ty: TyId<'db>,
-    pub address_space: ProviderAddressSpace,
+    pub address_space: AddressSpace,
     pub value: ContractLayoutValue<'db>,
     /// For a scalar packed with others into one slot, its bytes in the slot.
     pub lane: Option<ContractLayoutLane>,
@@ -221,7 +221,7 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     field: ContractFieldId<'db>,
     name: IdentId<'db>,
     is_mut: bool,
-    address_space: ProviderAddressSpace,
+    address_space: AddressSpace,
     declared: TyId<'db>,
     target: TyId<'db>,
     /// The slot `#[slot(e)]` places the field at.
@@ -231,7 +231,7 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     /// part of it lies outside a pinned type, and those its pinned types are
     /// pinned to, which keep their contents at their own slot numbers there
     /// (a `TSlot`'s value in transient storage).
-    spaces: Vec<ProviderAddressSpace>,
+    spaces: Vec<AddressSpace>,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
 
@@ -240,7 +240,7 @@ pub struct FieldStorageLayout<'db> {
     pub field: ContractFieldId<'db>,
     pub name: IdentId<'db>,
     pub is_mut: bool,
-    pub address_space: ProviderAddressSpace,
+    pub address_space: AddressSpace,
     /// The field's declared type.
     pub declared: TyId<'db>,
     /// The value the field holds: a provider's target, else `declared`.
@@ -426,7 +426,7 @@ struct FieldWalker<'db> {
     db: &'db dyn HirAnalysisDb,
     errors: Vec<ContractLayoutError<'db>>,
     /// The spaces the pinned types walked are pinned to.
-    content_spaces: Vec<ProviderAddressSpace>,
+    content_spaces: Vec<AddressSpace>,
     /// The first memory pointer the walked value holds.
     call_pointer: Option<TyId<'db>>,
 }
@@ -540,10 +540,7 @@ impl<'db> FieldWalker<'db> {
         } else {
             if matches!(
                 ty.as_ptr(self.db),
-                Some((
-                    _,
-                    ProviderAddressSpace::Memory | ProviderAddressSpace::Calldata
-                ))
+                Some((_, AddressSpace::Memory | AddressSpace::Calldata))
             ) {
                 self.call_pointer.get_or_insert(ty);
             }
@@ -867,13 +864,13 @@ fn collect_field_plan<'db>(
         return Some((name, Err(vec![ContractLayoutError::InvalidFieldType])));
     }
     let address_space = if field.is_mut {
-        ProviderAddressSpace::Storage
+        AddressSpace::Storage
     } else {
-        ProviderAddressSpace::Code
+        AddressSpace::Code
     };
     let target = declared;
     let explicit_slot = match field.slot {
-        Some(_) if address_space == ProviderAddressSpace::Code => {
+        Some(_) if address_space == AddressSpace::Code => {
             return Some((name, Err(vec![ContractLayoutError::ExplicitSlotInCode])));
         }
         Some(body) => match contract_field_slot(db, body) {
@@ -898,15 +895,11 @@ fn collect_field_plan<'db>(
     let in_state = walker.errors.is_empty()
         && matches!(
             address_space,
-            ProviderAddressSpace::Storage | ProviderAddressSpace::Transient
+            AddressSpace::Storage | AddressSpace::Transient
         );
     if in_state
-        && let Some(collection) = persistent_under_transient(
-            db,
-            scope,
-            target,
-            address_space == ProviderAddressSpace::Transient,
-        )
+        && let Some(collection) =
+            persistent_under_transient(db, scope, target, address_space == AddressSpace::Transient)
     {
         walker.push_error(ContractLayoutError::PersistentUnderTransient { collection });
     }
@@ -1035,8 +1028,8 @@ fn persistent_under_transient<'db>(
         let mut parts = Vec::new();
         if let Some(space) = state_index_space(db, scope, assumptions, ty) {
             match space {
-                ProviderAddressSpace::Storage if transient => return Some(ty),
-                ProviderAddressSpace::Transient => transient = true,
+                AddressSpace::Storage if transient => return Some(ty),
+                AddressSpace::Transient => transient = true,
                 _ => {}
             }
             parts.extend(state_index_tys(db, scope, ty, assumptions).map(|(_, output)| output));
@@ -1069,9 +1062,9 @@ fn persistent_under_transient<'db>(
 /// collection keeps its contents at its own slot number in its contents'
 /// space (a `TSlot`'s value in transient storage, a map's entries in
 /// storage) wherever the collection itself lies.
-fn slot_counter(space: ProviderAddressSpace) -> ProviderAddressSpace {
+fn slot_counter(space: AddressSpace) -> AddressSpace {
     match space {
-        ProviderAddressSpace::Transient => ProviderAddressSpace::Storage,
+        AddressSpace::Transient => AddressSpace::Storage,
         space => space,
     }
 }
@@ -1089,7 +1082,7 @@ fn allocate_contract<'db>(
             .expect("allocation requires every field to validate")
     });
     // The slots explicit fields take, by space.
-    let mut explicit: FxHashMap<ProviderAddressSpace, Vec<(U256, U256, IdentId<'db>)>> =
+    let mut explicit: FxHashMap<AddressSpace, Vec<(U256, U256, IdentId<'db>)>> =
         FxHashMap::default();
     for plan in plans.clone() {
         let Some(slot) = plan.explicit_slot else {
@@ -1114,7 +1107,7 @@ fn allocate_contract<'db>(
             }
         }
     }
-    let mut counters: FxHashMap<ProviderAddressSpace, U256> = FxHashMap::default();
+    let mut counters: FxHashMap<AddressSpace, U256> = FxHashMap::default();
     let mut code_slot_count = 0;
     let mut fields = IndexMap::new();
     for plan in plans {
@@ -1142,7 +1135,7 @@ fn allocate_contract<'db>(
                 if !count.is_zero() {
                     *counter = end;
                 }
-                if plan.address_space == ProviderAddressSpace::Code {
+                if plan.address_space == AddressSpace::Code {
                     code_slot_count = usize::try_from(end)
                         .ok()
                         .filter(|end| end.checked_mul(32).is_some())
@@ -1216,11 +1209,11 @@ fn allocated_contract_layout_report<'db>(
     }
     entries.sort_by(|first, second| {
         let space_order = |space| match space {
-            ProviderAddressSpace::Storage => 0,
-            ProviderAddressSpace::Transient => 1,
-            ProviderAddressSpace::Code => 2,
-            ProviderAddressSpace::Memory => 3,
-            ProviderAddressSpace::Calldata => 4,
+            AddressSpace::Storage => 0,
+            AddressSpace::Transient => 1,
+            AddressSpace::Code => 2,
+            AddressSpace::Memory => 3,
+            AddressSpace::Calldata => 4,
         };
         space_order(first.address_space)
             .cmp(&space_order(second.address_space))

@@ -11,7 +11,7 @@ use crate::{
             resolved_provider_binding_for_instance_effect,
         },
         ty::{
-            ProviderAddressSpace, ProviderKind,
+            AddressSpace, ProviderKind,
             effects::EffectKeyKind,
             provider::provider_semantics,
             ty_check::{
@@ -83,10 +83,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         body_value
     }
 
-    fn effect_arg_provider_space(
-        &self,
-        arg: &ResolvedEffectArg<'db>,
-    ) -> Option<ProviderAddressSpace> {
+    fn effect_arg_provider_space(&self, arg: &ResolvedEffectArg<'db>) -> Option<AddressSpace> {
         arg.provider.or_else(|| match &arg.arg {
             EffectArg::Place(place) => {
                 let PlaceBase::Binding(binding) = place.base;

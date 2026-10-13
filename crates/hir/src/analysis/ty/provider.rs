@@ -20,7 +20,7 @@ use crate::{
 use super::resolve_default_root_effect_ty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
-pub enum ProviderAddressSpace {
+pub enum AddressSpace {
     Memory,
     Storage,
     Transient,
@@ -28,7 +28,11 @@ pub enum ProviderAddressSpace {
     Code,
 }
 
-impl ProviderAddressSpace {
+impl AddressSpace {
+    pub fn is_byte_addressed(self) -> bool {
+        matches!(self, Self::Memory | Self::Calldata | Self::Code)
+    }
+
     pub fn pretty(self) -> &'static str {
         match self {
             Self::Memory => "memory",
@@ -60,7 +64,7 @@ pub enum ProviderTransport {
 pub struct ProviderSemantics<'db> {
     pub provider_ty: TyId<'db>,
     pub kind: ProviderKind,
-    pub address_space: Option<ProviderAddressSpace>,
+    pub address_space: Option<AddressSpace>,
     pub target_ty: Option<TyId<'db>>,
     pub transport: ProviderTransport,
     pub evidence: ProviderLayoutEvidence,
@@ -189,7 +193,7 @@ pub fn provider_semantics<'db>(
         return ProviderSemantics {
             provider_ty,
             kind: ProviderKind::RootObject,
-            address_space: Some(ProviderAddressSpace::Memory),
+            address_space: Some(AddressSpace::Memory),
             target_ty: None,
             transport: ProviderTransport::ByValue,
             evidence: ProviderLayoutEvidence::Value,
@@ -197,7 +201,7 @@ pub fn provider_semantics<'db>(
     };
     let address_space = match kind {
         CapabilityKind::View | CapabilityKind::Ref | CapabilityKind::Mut => {
-            Some(ProviderAddressSpace::Memory)
+            Some(AddressSpace::Memory)
         }
     };
     ProviderSemantics {
@@ -214,7 +218,7 @@ pub fn provider_semantics_for_specialized_call<'db>(
     db: &'db dyn HirAnalysisDb,
     provider_ty: TyId<'db>,
     target_ty: Option<TyId<'db>>,
-    address_space: Option<ProviderAddressSpace>,
+    address_space: Option<AddressSpace>,
     transport: ProviderTransport,
 ) -> ProviderSemantics<'db> {
     let mut semantics = provider_semantics(db, provider_ty);
@@ -245,7 +249,7 @@ pub fn state_index_space<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     collection_ty: TyId<'db>,
-) -> Option<ProviderAddressSpace> {
+) -> Option<AddressSpace> {
     let state_index = super::corelib::resolve_core_trait(db, scope, &["ops", "StateIndex"])?;
     let inst = TraitInstId::new(db, state_index, vec![collection_ty], IndexMap::new());
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
@@ -308,7 +312,7 @@ pub(crate) fn effect_space_from_resolved_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     resolved: ResolvedImplInstance<'db>,
-) -> Option<ProviderAddressSpace> {
+) -> Option<AddressSpace> {
     let space_ident = IdentId::new(db, "SPACE".to_string());
     let const_ty = super::const_ty::const_ty_from_resolved_trait_const(db, resolved, space_ident)?;
     effect_space_from_const_ty(db, scope, const_ty)
@@ -318,7 +322,7 @@ pub(crate) fn effect_space_from_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     const_ty: super::const_ty::ConstTyId<'db>,
-) -> Option<ProviderAddressSpace> {
+) -> Option<AddressSpace> {
     let evaluated = const_ty.evaluate(db, None);
     let value = sem_const_from_ty(db, TyId::const_ty(db, evaluated))?;
     let SemConstValue::Enum { ty, variant, .. } = value.value(db) else {
@@ -341,8 +345,8 @@ pub(crate) fn effect_space_from_const_ty<'db>(
         .data(db)
         .as_str()
     {
-        "Storage" => Some(ProviderAddressSpace::Storage),
-        "TransientStorage" => Some(ProviderAddressSpace::Transient),
+        "Storage" => Some(AddressSpace::Storage),
+        "TransientStorage" => Some(AddressSpace::Transient),
         _ => None,
     }
 }

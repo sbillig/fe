@@ -1,7 +1,7 @@
 use super::{
     adt_def::AdtCycleMember,
     effects::rows::RowKey,
-    provider::ProviderAddressSpace,
+    provider::AddressSpace,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, Kind, TyId},
@@ -787,7 +787,7 @@ pub enum BodyDiag<'db> {
     UnsupportedContractFieldAddressSpace {
         primary: DynLazySpan<'db>,
         field: IdentId<'db>,
-        space: ProviderAddressSpace,
+        space: AddressSpace,
     },
     ImmutableContractFieldMutBinding {
         primary: DynLazySpan<'db>,

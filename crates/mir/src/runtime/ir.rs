@@ -1,5 +1,6 @@
 use common::layout::enum_tag_bits;
 use cranelift_entity::{EntityRef, entity_impl};
+use hir::analysis::ty::AddressSpace;
 use hir::analysis::{
     semantic::{FieldIndex, SemOrigin, SemanticInstance},
     ty::ty_def::TyId,
@@ -15,21 +16,6 @@ use crate::{
     instance::{RuntimeInstance, RuntimeInstanceKey},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub enum AddressSpaceKind {
-    Memory,
-    Storage,
-    Transient,
-    Calldata,
-    Code,
-}
-
-impl AddressSpaceKind {
-    pub fn is_byte_addressed(self) -> bool {
-        matches!(self, Self::Memory | Self::Calldata | Self::Code)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeClass<'db> {
     Scalar(ScalarClass<'db>),
@@ -42,7 +28,7 @@ pub enum RuntimeClass<'db> {
         view: RefView<'db>,
     },
     RawAddr {
-        space: AddressSpaceKind,
+        space: AddressSpace,
         pointee: Option<RawPointeeId<'db>>,
     },
 }
@@ -142,7 +128,7 @@ impl<'db> RuntimeClass<'db> {
     pub fn provider_ref(
         layout: LayoutId<'db>,
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     ) -> Self {
         Self::Ref {
             pointee: Box::new(Self::AggregateValue { layout }),
@@ -151,14 +137,14 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpaceKind, pointee: Self) -> Self {
+    pub fn raw_addr(db: &'db dyn MirDb, space: AddressSpace, pointee: Self) -> Self {
         Self::RawAddr {
             space,
             pointee: Some(RawPointeeId::new(db, pointee)),
         }
     }
 
-    pub fn opaque_raw_addr(space: AddressSpaceKind) -> Self {
+    pub fn opaque_raw_addr(space: AddressSpace) -> Self {
         Self::RawAddr {
             space,
             pointee: None,
@@ -221,7 +207,7 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
-    pub fn address_space(&self) -> Option<AddressSpaceKind> {
+    pub fn address_space(&self) -> Option<AddressSpace> {
         match self {
             RuntimeClass::Ref {
                 kind: RefKind::Provider { space, .. },
@@ -335,7 +321,7 @@ pub enum RefKind<'db> {
     Object,
     Provider {
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
 }
 
@@ -410,13 +396,13 @@ fn ref_kinds_share_runtime_rep<'db>(actual: &RefKind<'db>, desired: &RefKind<'db
         (
             RefKind::Object,
             RefKind::Provider {
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
                 ..
             },
         )
         | (
             RefKind::Provider {
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
                 ..
             },
             RefKind::Object,
@@ -788,7 +774,7 @@ pub enum RuntimeLocalRoot<'db> {
     Slot(RuntimeClass<'db>),
     Ref(RuntimeClass<'db>),
     Ptr {
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
@@ -1082,7 +1068,7 @@ pub enum BorrowAccess {
 pub struct BorrowTransportSet {
     pub allow_object: bool,
     pub allow_const: bool,
-    pub provider_spaces: Box<[AddressSpaceKind]>,
+    pub provider_spaces: Box<[AddressSpace]>,
     pub allow_raw_addr: bool,
 }
 
@@ -1195,7 +1181,7 @@ pub enum PlaceRoot<'db> {
     Provider(RuntimeProviderBindingId),
     Ptr {
         addr: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
@@ -1242,7 +1228,7 @@ pub enum ResolvedPlaceRootKind<'db> {
     },
     Ptr {
         addr: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
     },
 }
@@ -1546,11 +1532,11 @@ pub enum RExpr<'db> {
     ProviderRefFromRaw {
         raw: RValueId,
         provider_ty: TyId<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
     WordToRawAddr {
         value: RValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     },
     ProviderRefToRaw {
         value: RValueId,

@@ -31,7 +31,7 @@ use crate::{
         },
         ty::{
             adt_def::AdtRef,
-            provider::{ProviderAddressSpace, ProviderKind},
+            provider::{AddressSpace, ProviderKind},
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
@@ -298,7 +298,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         }
         let address_space = binding.semantics.address_space.or_else(|| {
             matches!(binding.semantics.kind, ProviderKind::RootObject)
-                .then_some(ProviderAddressSpace::Memory)
+                .then_some(AddressSpace::Memory)
         });
         let Some(address_space) = address_space else {
             return Err(NormalizeError::MissingProviderAddressSpace(binding));
@@ -336,7 +336,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 |param| NRootKind::ParamPlace { param },
             ),
             ty: self.normalized_local_ty(local),
-            address_space: ProviderAddressSpace::Memory,
+            address_space: AddressSpace::Memory,
             mutability: local_data.mutability,
             origin: crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
         });
@@ -955,13 +955,13 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 && matches!(place.base, NPlaceBase::Root(root)
                                     if matches!(self.roots[root.index()].kind, NRootKind::Provider { .. })
                                         && match self.roots[root.index()].address_space {
-                                            ProviderAddressSpace::Code => false,
-                                            ProviderAddressSpace::Calldata => {
+                                            AddressSpace::Code => false,
+                                            AddressSpace::Calldata => {
                                                 ty_has_enum(self.db, target)
                                             }
-                                            ProviderAddressSpace::Memory
-                                            | ProviderAddressSpace::Storage
-                                            | ProviderAddressSpace::Transient => true,
+                                            AddressSpace::Memory
+                                            | AddressSpace::Storage
+                                            | AddressSpace::Transient => true,
                                         });
                             if provider_copy
                                 || structural_repack_mapping(self.db, self.instance, place.ty, target)
@@ -1494,7 +1494,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         self.roots.push(NRoot {
             kind: NRootKind::Temporary { value },
             ty: self.values[value.index()].ty,
-            address_space: ProviderAddressSpace::Memory,
+            address_space: AddressSpace::Memory,
             mutability: self.values[value.index()].mutability,
             origin,
         });

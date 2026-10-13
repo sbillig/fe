@@ -19,7 +19,7 @@ use super::{
     },
     fold::{TyFoldable, TyFolder},
     generic_defaults::DefaultApplication,
-    provider::ProviderAddressSpace,
+    provider::AddressSpace,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, PrimTy, TyBase, TyId},
@@ -68,7 +68,7 @@ fn raw_impl_self_key<'db>(
         scope: ScopeId<'db>,
     ) -> Option<ImplSelfKey<'db>> {
         match ty.data(db) {
-            HirTyKind::Ptr(_) => Some(ImplSelfKey::Prim(PrimTy::Ptr(ProviderAddressSpace::Memory))),
+            HirTyKind::Ptr(_) => Some(ImplSelfKey::Prim(PrimTy::Ptr(AddressSpace::Memory))),
             HirTyKind::Mode(TypeMode::Mut, _) => Some(ImplSelfKey::Prim(PrimTy::BorrowMut)),
             HirTyKind::Mode(TypeMode::Ref, _) => Some(ImplSelfKey::Prim(PrimTy::BorrowRef)),
             HirTyKind::Mode(TypeMode::Own, inner) => lower(db, inner.to_opt()?, scope),

@@ -5,7 +5,7 @@ use crate::{
     analysis::{
         semantic::instance::{SemanticInstance, SemanticInstanceKey},
         ty::{
-            provider::ProviderAddressSpace,
+            provider::AddressSpace,
             ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode, ForLoopStep, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
@@ -422,7 +422,7 @@ pub struct SEffectArg<'db> {
     pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
     pub provider_target_ty: Option<TyId<'db>>,
-    pub provider: Option<ProviderAddressSpace>,
+    pub provider: Option<AddressSpace>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -528,7 +528,7 @@ pub enum SExpr<'db> {
     Borrow {
         place: SPlace<'db>,
         kind: BorrowKind,
-        provider: Option<ProviderAddressSpace>,
+        provider: Option<AddressSpace>,
     },
     GetEnumTag {
         value: SOperand,

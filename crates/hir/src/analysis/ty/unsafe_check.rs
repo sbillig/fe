@@ -5,7 +5,7 @@ use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::corelib::effect_key_state_access;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::effects::rows::expand_rows;
-use crate::analysis::ty::provider::ProviderAddressSpace;
+use crate::analysis::ty::provider::AddressSpace;
 use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::ty_check::RecordInitLowering;
 use crate::analysis::ty::ty_check::{BodyOwner, TypedBody};
@@ -85,10 +85,7 @@ impl<'db> UnsafeChecker<'db, '_> {
             ty.as_capability(self.db)
                 .map_or(ty, |(_, inner)| inner)
                 .as_ptr(self.db),
-            Some((
-                _,
-                ProviderAddressSpace::Storage | ProviderAddressSpace::Transient
-            ))
+            Some((_, AddressSpace::Storage | AddressSpace::Transient))
         )
     }
 

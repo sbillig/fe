@@ -14,19 +14,19 @@ use driver::DriverDataBase;
 use hir::{
     analysis::{
         semantic::FieldIndex,
-        ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId},
+        ty::{AddressSpace, ty_check::BodyOwner, ty_def::TyId},
     },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
 use mir::runtime::RefKind;
 use mir::{
-    AddressSpaceKind, ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement,
-    IntrinsicArithBinOp, Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator,
-    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass,
-    RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot,
-    RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp,
-    ScalarClass, ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement, IntrinsicArithBinOp,
+    Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
+    ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
+    RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
+    RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr,
+    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
     scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -699,7 +699,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         };
         let db = self.db;
         let declared_pointer = |ty: Option<TyId<'db>>| {
-            ty.is_some_and(|ty| matches!(ty.as_ptr(db), Some((_, ProviderAddressSpace::Memory))))
+            ty.is_some_and(|ty| matches!(ty.as_ptr(db), Some((_, AddressSpace::Memory))))
         };
         let mut params = Vec::with_capacity(signature.params.len());
         for (idx, param) in signature.params.iter().enumerate() {
@@ -736,7 +736,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     self.builder.objref_type(pointee_ty)
                 }
                 RefKind::Provider {
-                    space: AddressSpaceKind::Memory,
+                    space: AddressSpace::Memory,
                     ..
                 } => {
                     let pointee_ty = self.ty_for_class(pointee)?;
@@ -948,7 +948,7 @@ enum PlaceTerminal<'db> {
     },
     Ptr {
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
         /// For a packed storage field, its bytes in the word at `addr`.
         lane: Option<PackedLane>,
@@ -1007,7 +1007,7 @@ enum CopySource<'db> {
     },
     Ptr {
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: RuntimeClass<'db>,
         lane: Option<PackedLane>,
     },
@@ -1732,7 +1732,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         kind:
                             RefKind::Object
                             | RefKind::Provider {
-                                space: AddressSpaceKind::Memory,
+                                space: AddressSpace::Memory,
                                 ..
                             },
                         ..
@@ -1753,7 +1753,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RExpr::ProviderRefFromRaw { raw, space, .. } => {
                 let value = self.local_value(*raw)?;
-                if *space == AddressSpaceKind::Memory {
+                if *space == AddressSpace::Memory {
                     return Err(LowerError::Unsupported(
                         "memory provider reconstruction from raw addresses is not supported"
                             .to_string(),
@@ -2646,7 +2646,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         pointee,
                         kind:
                             RefKind::Provider {
-                                space: AddressSpaceKind::Memory,
+                                space: AddressSpace::Memory,
                                 ..
                             },
                         ..
@@ -2665,7 +2665,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     RuntimeClass::Ref {
                         kind:
                             RefKind::Provider {
-                                space: AddressSpaceKind::Code,
+                                space: AddressSpace::Code,
                                 ..
                             },
                         ..
@@ -2941,14 +2941,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         kind:
                             RefKind::Provider {
                                 space:
-                                    AddressSpaceKind::Storage
-                                    | AddressSpaceKind::Transient
-                                    | AddressSpaceKind::Calldata
-                                    | AddressSpaceKind::Code,
+                                    AddressSpace::Storage
+                                    | AddressSpace::Transient
+                                    | AddressSpace::Calldata
+                                    | AddressSpace::Code,
                                 ..
                             },
                         ..
-                    } => self.store_to_ptr(ptr, AddressSpaceKind::Memory, &class, value)?,
+                    } => self.store_to_ptr(ptr, AddressSpace::Memory, &class, value)?,
                     RuntimeClass::Ref { .. } => {
                         let value = self.coerce_value_to_ty(value, ty)?;
                         self.fb.insert_inst_no_result(Mstore::new(
@@ -2994,14 +2994,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         kind:
                             RefKind::Provider {
                                 space:
-                                    AddressSpaceKind::Storage
-                                    | AddressSpaceKind::Transient
-                                    | AddressSpaceKind::Calldata
-                                    | AddressSpaceKind::Code,
+                                    AddressSpace::Storage
+                                    | AddressSpace::Transient
+                                    | AddressSpace::Calldata
+                                    | AddressSpace::Code,
                                 ..
                             },
                         ..
-                    } => self.load_from_ptr(*ptr, AddressSpaceKind::Memory, &class),
+                    } => self.load_from_ptr(*ptr, AddressSpace::Memory, &class),
                     RuntimeClass::Ref { .. } => Ok(self
                         .fb
                         .insert_inst(Mload::new(self.module.inst_set(), *ptr, *ty), *ty)),
@@ -3061,7 +3061,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             | RuntimeClass::Ref {
                 kind:
                     RefKind::Provider {
-                        space: AddressSpaceKind::Memory,
+                        space: AddressSpace::Memory,
                         ..
                     },
                 ..
@@ -3135,7 +3135,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             | RuntimeClass::Ref {
                 kind:
                     RefKind::Provider {
-                        space: AddressSpaceKind::Memory,
+                        space: AddressSpace::Memory,
                         ..
                     },
                 pointee,
@@ -4117,7 +4117,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         self.body.value_class(dst),
                         Some(RuntimeClass::Ref {
                             kind: RefKind::Provider {
-                                space: AddressSpaceKind::Memory,
+                                space: AddressSpace::Memory,
                                 ..
                             },
                             ..
@@ -4231,7 +4231,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn copy_to_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: &RuntimeClass<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
@@ -4444,7 +4444,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn load_from_ptr_lane(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         lane: Option<PackedLane>,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
@@ -4464,7 +4464,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn store_to_ptr_lane(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         lane: Option<PackedLane>,
         class: &RuntimeClass<'db>,
         src: ValueId,
@@ -4561,16 +4561,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn store_word(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         word: ValueId,
     ) -> Result<(), LowerError> {
         match space {
-            AddressSpaceKind::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
+            AddressSpace::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
                 self.module.required_inst::<EvmSstore>()?,
                 addr,
                 word,
             )),
-            AddressSpaceKind::Transient => self.fb.insert_inst_no_result(EvmTstore::new(
+            AddressSpace::Transient => self.fb.insert_inst_no_result(EvmTstore::new(
                 self.module.required_inst::<EvmTstore>()?,
                 addr,
                 word,
@@ -4587,7 +4587,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn load_from_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         self.load_memory_value(addr, ReferentLayout::Raw(space), class)
@@ -4617,10 +4617,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 kind:
                     RefKind::Provider {
                         space:
-                            AddressSpaceKind::Storage
-                            | AddressSpaceKind::Transient
-                            | AddressSpaceKind::Calldata
-                            | AddressSpaceKind::Code,
+                            AddressSpace::Storage
+                            | AddressSpace::Transient
+                            | AddressSpace::Calldata
+                            | AddressSpace::Code,
                         ..
                     },
                 ..
@@ -4827,25 +4827,25 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst(Phi::new(self.module.inst_set(), phi_args), ty))
     }
 
-    fn load_word(&mut self, addr: ValueId, space: AddressSpaceKind) -> Result<ValueId, LowerError> {
+    fn load_word(&mut self, addr: ValueId, space: AddressSpace) -> Result<ValueId, LowerError> {
         match space {
-            AddressSpaceKind::Memory => Ok(self.fb.insert_inst(
+            AddressSpace::Memory => Ok(self.fb.insert_inst(
                 Mload::new(self.module.inst_set(), addr, Type::I256),
                 Type::I256,
             )),
-            AddressSpaceKind::Storage => Ok(self.fb.insert_inst(
+            AddressSpace::Storage => Ok(self.fb.insert_inst(
                 EvmSload::new(self.module.required_inst::<EvmSload>()?, addr),
                 Type::I256,
             )),
-            AddressSpaceKind::Transient => Ok(self.fb.insert_inst(
+            AddressSpace::Transient => Ok(self.fb.insert_inst(
                 EvmTload::new(self.module.required_inst::<EvmTload>()?, addr),
                 Type::I256,
             )),
-            AddressSpaceKind::Calldata => Ok(self.fb.insert_inst(
+            AddressSpace::Calldata => Ok(self.fb.insert_inst(
                 EvmCalldataLoad::new(self.module.required_inst::<EvmCalldataLoad>()?, addr),
                 Type::I256,
             )),
-            AddressSpaceKind::Code => Ok(self.fb.insert_inst(
+            AddressSpace::Code => Ok(self.fb.insert_inst(
                 EvmCodeLoad::new(self.module.required_inst::<EvmCodeLoad>()?, addr),
                 Type::I256,
             )),
@@ -4855,10 +4855,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn load_scalar(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        if self.module.is_native_target() && matches!(space, AddressSpaceKind::Memory) {
+        if self.module.is_native_target() && matches!(space, AddressSpace::Memory) {
             let ty = scalar_ty(scalar);
             return Ok(self
                 .fb
@@ -4883,12 +4883,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn store_to_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        space: AddressSpace,
         class: &RuntimeClass<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
-        let native_memory =
-            self.module.is_native_target() && matches!(space, AddressSpaceKind::Memory);
+        let native_memory = self.module.is_native_target() && matches!(space, AddressSpace::Memory);
         let value = match class {
             RuntimeClass::Scalar(scalar) => {
                 let ty = if native_memory {
@@ -4903,10 +4902,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     // to the whole word.
                     ScalarRepr::Int { bits, signed: true }
                         if bits < 256
-                            && matches!(
-                                space,
-                                AddressSpaceKind::Storage | AddressSpaceKind::Transient
-                            ) =>
+                            && matches!(space, AddressSpace::Storage | AddressSpace::Transient) =>
                     {
                         let mask = self.fb.make_imm_value(lane_mask(
                             StorageLane {
@@ -4926,10 +4922,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 kind:
                     RefKind::Provider {
                         space:
-                            AddressSpaceKind::Storage
-                            | AddressSpaceKind::Transient
-                            | AddressSpaceKind::Calldata
-                            | AddressSpaceKind::Code,
+                            AddressSpace::Storage
+                            | AddressSpace::Transient
+                            | AddressSpace::Calldata
+                            | AddressSpace::Code,
                         ..
                     },
                 ..
@@ -4944,7 +4940,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             ),
         }?;
         match space {
-            AddressSpaceKind::Memory => match class {
+            AddressSpace::Memory => match class {
                 RuntimeClass::Scalar(_) if native_memory => {
                     self.fb.insert_inst_no_result(Mstore::new(
                         self.module.inst_set(),
@@ -4973,10 +4969,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     kind:
                         RefKind::Provider {
                             space:
-                                AddressSpaceKind::Storage
-                                | AddressSpaceKind::Transient
-                                | AddressSpaceKind::Calldata
-                                | AddressSpaceKind::Code,
+                                AddressSpace::Storage
+                                | AddressSpace::Transient
+                                | AddressSpace::Calldata
+                                | AddressSpace::Code,
                             ..
                         },
                     ..
@@ -4990,22 +4986,22 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
                 RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => unreachable!(),
             },
-            AddressSpaceKind::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
+            AddressSpace::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
                 self.module.required_inst::<EvmSstore>()?,
                 addr,
                 value,
             )),
-            AddressSpaceKind::Transient => self.fb.insert_inst_no_result(EvmTstore::new(
+            AddressSpace::Transient => self.fb.insert_inst_no_result(EvmTstore::new(
                 self.module.required_inst::<EvmTstore>()?,
                 addr,
                 value,
             )),
-            AddressSpaceKind::Calldata => {
+            AddressSpace::Calldata => {
                 return Err(LowerError::Unsupported(
                     "storing into calldata-backed providers is not supported".to_string(),
                 ));
             }
-            AddressSpaceKind::Code => {
+            AddressSpace::Code => {
                 return Err(LowerError::Unsupported(
                     "storing into code-backed providers is not supported".to_string(),
                 ));
@@ -6307,7 +6303,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         base: ValueId,
         layout: &ArrayLayout<'db>,
         index: usize,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     ) -> Result<ValueId, LowerError> {
         let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
             .array_element_offset(layout, index as u64)?;
@@ -6319,7 +6315,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         base: ValueId,
         variant: VariantId<'db>,
         field: FieldIndex,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     ) -> Result<ValueId, LowerError> {
         let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
             .variant_field_offset(variant, field)?;
@@ -6329,7 +6325,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn ptr_index_stride_for_space(
         &self,
         class: &RuntimeClass<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     ) -> Result<u64, LowerError> {
         Ok(RuntimeMemoryLayout::for_space(self.module.db, space).index_stride(class)?)
     }

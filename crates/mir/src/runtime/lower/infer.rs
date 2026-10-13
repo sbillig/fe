@@ -1,3 +1,4 @@
+use hir::analysis::ty::AddressSpace;
 use std::convert::Infallible;
 
 use cranelift_entity::{EntityRef, SecondaryMap};
@@ -21,9 +22,9 @@ use crate::{
     db::MirDb,
     instance::RuntimeInstanceKey,
     runtime::{
-        AddressSpaceKind, ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId,
-        LayoutKey, RawPointeeId, RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot,
-        RuntimeProviderBinding, RuntimeProviderBindingId, StructLayout,
+        ArrayLayout, EnumLayoutKey, EnumVariantLayout, Layout, LayoutId, LayoutKey, RawPointeeId,
+        RefKind, RefView, RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, RuntimeProviderBinding,
+        RuntimeProviderBindingId, StructLayout,
     },
 };
 
@@ -446,7 +447,7 @@ pub(super) fn runtime_class_has_zero_sized_payload<'db>(
             pointee,
             kind:
                 RefKind::Provider {
-                    space: AddressSpaceKind::Memory,
+                    space: AddressSpace::Memory,
                     ..
                 },
             ..
@@ -941,7 +942,7 @@ fn infer_runtime_local_root<'db>(
         RuntimeClass::Ref {
             kind: RefKind::Provider { space, .. },
             ..
-        } if space != AddressSpaceKind::Memory => RuntimeLocalRoot::Ptr {
+        } if space != AddressSpace::Memory => RuntimeLocalRoot::Ptr {
             space,
             class: place_class,
         },
@@ -1015,15 +1016,13 @@ pub(super) fn fallback_root_transport_class<'db>(
                 .and_then(|provider| {
                     runtime_class_for_effect_binding_provider_in_env(db, env, provider)
                 })
-                .or_else(|| {
-                    top_level_class_for_ty_in_env(db, env, local.ty, AddressSpaceKind::Memory)
-                })
+                .or_else(|| top_level_class_for_ty_in_env(db, env, local.ty, AddressSpace::Memory))
                 .or_else(|| {
                     Some(provider_class_for_target_in_env(
                         db,
                         env,
                         Some(*target_ty),
-                        AddressSpaceKind::Memory,
+                        AddressSpace::Memory,
                     ))
                 })
         }
@@ -1473,12 +1472,12 @@ fn merge_ref_kind<'db>(current: &RefKind<'db>, desired: &RefKind<'db>) -> Option
             let space = preferred_address_space(*current_space, *desired_space)?;
             let provider_ty = if current_provider_ty == desired_provider_ty {
                 *current_provider_ty
-            } else if *current_space == AddressSpaceKind::Memory
-                && *desired_space != AddressSpaceKind::Memory
+            } else if *current_space == AddressSpace::Memory
+                && *desired_space != AddressSpace::Memory
             {
                 *desired_provider_ty
-            } else if *desired_space == AddressSpaceKind::Memory
-                && *current_space != AddressSpaceKind::Memory
+            } else if *desired_space == AddressSpace::Memory
+                && *current_space != AddressSpace::Memory
             {
                 *current_provider_ty
             } else {
@@ -1490,12 +1489,9 @@ fn merge_ref_kind<'db>(current: &RefKind<'db>, desired: &RefKind<'db>) -> Option
     }
 }
 
-fn preferred_address_space(
-    current: AddressSpaceKind,
-    desired: AddressSpaceKind,
-) -> Option<AddressSpaceKind> {
+fn preferred_address_space(current: AddressSpace, desired: AddressSpace) -> Option<AddressSpace> {
     match (current, desired) {
-        (AddressSpaceKind::Memory, other) | (other, AddressSpaceKind::Memory) => Some(other),
+        (AddressSpace::Memory, other) | (other, AddressSpace::Memory) => Some(other),
         (current, desired) if current == desired => Some(current),
         // Two distinct non-Memory spaces (e.g. Storage vs Transient) name physically
         // different regions and cannot be reconciled into a single returned pointer.
@@ -1506,10 +1502,10 @@ fn preferred_address_space(
     }
 }
 
-fn ref_kind_address_space(kind: &RefKind<'_>) -> Option<AddressSpaceKind> {
+fn ref_kind_address_space(kind: &RefKind<'_>) -> Option<AddressSpace> {
     match kind {
         RefKind::Provider { space, .. } => Some(*space),
-        RefKind::Object | RefKind::Const => Some(AddressSpaceKind::Memory),
+        RefKind::Object | RefKind::Const => Some(AddressSpace::Memory),
         RefKind::Native => None,
     }
 }
@@ -1610,8 +1606,8 @@ mod tests {
             ),
         };
         (
-            provider(TyId::bool(db), AddressSpaceKind::Storage, pointee.clone()),
-            provider(TyId::u256(db), AddressSpaceKind::Memory, pointee),
+            provider(TyId::bool(db), AddressSpace::Storage, pointee.clone()),
+            provider(TyId::u256(db), AddressSpace::Memory, pointee),
         )
     }
 
@@ -1630,12 +1626,12 @@ mod tests {
             kind: RefKind::Object,
             view: RefView::Whole,
         };
-        let packed = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, pointee.clone());
+        let packed = RuntimeClass::raw_addr(&db, AddressSpace::Memory, pointee.clone());
         let storage = RuntimeClass::Ref {
             pointee: Box::new(pointee.clone()),
             kind: RefKind::Provider {
                 provider_ty: TyId::u8(&db),
-                space: AddressSpaceKind::Storage,
+                space: AddressSpace::Storage,
             },
             view: RefView::Whole,
         };
@@ -1770,7 +1766,7 @@ mod tests {
             pointee: Box::new(pointee),
             kind: RefKind::Provider {
                 provider_ty: TyId::u256(&db),
-                space: AddressSpaceKind::Storage,
+                space: AddressSpace::Storage,
             },
             view: RefView::Whole,
         };
@@ -1784,7 +1780,7 @@ mod tests {
 
     #[test]
     fn preferred_address_space_is_commutative() {
-        use AddressSpaceKind::{Calldata, Code, Memory, Storage, Transient};
+        use AddressSpace::{Calldata, Code, Memory, Storage, Transient};
         let spaces = [Memory, Storage, Transient, Calldata, Code];
         for a in spaces {
             for b in spaces {
@@ -1800,8 +1796,8 @@ mod tests {
     #[test]
     fn merge_runtime_class_merges_memory_raw_addr_into_non_memory_space() {
         let db = DriverDataBase::default();
-        let memory = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Memory);
-        let storage = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
+        let memory = RuntimeClass::opaque_raw_addr(AddressSpace::Memory);
+        let storage = RuntimeClass::opaque_raw_addr(AddressSpace::Storage);
 
         // Memory always yields to the concrete space, and the result must not depend
         // on which side is `current`.
@@ -1815,8 +1811,8 @@ mod tests {
     #[test]
     fn merge_runtime_class_rejects_conflicting_non_memory_raw_addr_spaces() {
         let db = DriverDataBase::default();
-        let storage = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
-        let transient = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Transient);
+        let storage = RuntimeClass::opaque_raw_addr(AddressSpace::Storage);
+        let transient = RuntimeClass::opaque_raw_addr(AddressSpace::Transient);
 
         // Two distinct non-Memory spaces cannot be reconciled; the merge must fail
         // symmetrically rather than silently picking the left operand.
@@ -1842,8 +1838,8 @@ mod tests {
             },
             view: RefView::Whole,
         };
-        let storage = provider(AddressSpaceKind::Storage);
-        let transient = provider(AddressSpaceKind::Transient);
+        let storage = provider(AddressSpace::Storage);
+        let transient = provider(AddressSpace::Transient);
 
         // Same provider type, irreconcilable spaces: `merge_ref_kind` must propagate
         // the conflict as `None` in both orders.

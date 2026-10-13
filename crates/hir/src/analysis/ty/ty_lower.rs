@@ -15,7 +15,7 @@ use super::{
     },
     generic_defaults::DefaultApplication,
     normalize::normalize_ty,
-    provider::ProviderAddressSpace,
+    provider::AddressSpace,
     trait_def::TraitInstId,
     trait_resolution::{
         PredicateListId,
@@ -758,7 +758,7 @@ fn lower_type_alias_from_hir_in_mode<'db>(
         TyId::invalid(db, InvalidCause::Other)
     } else if let Some(space) = crate::core::semantic::type_alias_pointer_space(db, alias) {
         match alias_to.as_ptr(db) {
-            Some((target, ProviderAddressSpace::Memory)) => TyId::ptr_in(db, space, target),
+            Some((target, AddressSpace::Memory)) => TyId::ptr_in(db, space, target),
             _ => TyId::invalid(db, InvalidCause::Other),
         }
     } else {

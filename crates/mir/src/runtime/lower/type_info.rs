@@ -1,7 +1,7 @@
 use hir::analysis::{
     semantic::SemanticInstance,
     ty::{
-        ProviderAddressSpace,
+        AddressSpace,
         const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
         normalize::normalize_ty,
         trait_resolution::PredicateListId,
@@ -14,10 +14,7 @@ use salsa::Update;
 
 use crate::{
     db::MirDb,
-    runtime::{
-        AddressSpaceKind, LowerError, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
-        ScalarRole,
-    },
+    runtime::{LowerError, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole},
 };
 
 use super::layout::layout_for_ty_in_env;
@@ -79,7 +76,7 @@ impl<'db> RuntimeTypeModel<'db> {
     fn top_level_class(
         &self,
         db: &'db dyn MirDb,
-        default_space: AddressSpaceKind,
+        default_space: AddressSpace,
         env: RuntimeTypeEnv<'db>,
     ) -> Option<RuntimeClass<'db>> {
         match &self.shape {
@@ -124,7 +121,7 @@ impl<'db> RuntimeTypeModel<'db> {
                 view: RefView::Whole,
             },
             RuntimeTypeShape::Capability { inner } => {
-                provider_class_for_target_in_env(db, env, Some(*inner), AddressSpaceKind::Memory)
+                provider_class_for_target_in_env(db, env, Some(*inner), AddressSpace::Memory)
             }
             RuntimeTypeShape::Scalar(scalar) => RuntimeClass::Scalar(scalar.clone()),
             RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => RuntimeClass::AggregateValue {
@@ -377,7 +374,7 @@ pub(crate) fn top_level_class_for_ty_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     ty: TyId<'db>,
-    default_space: AddressSpaceKind,
+    default_space: AddressSpace,
 ) -> Option<RuntimeClass<'db>> {
     runtime_top_level_class(db, ty, default_space, env.scope, env.assumptions)
 }
@@ -407,7 +404,7 @@ pub(crate) fn provider_class_for_target_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     target_ty: Option<TyId<'db>>,
-    space: AddressSpaceKind,
+    space: AddressSpace,
 ) -> RuntimeClass<'db> {
     match target_ty.map(|ty| runtime_repr_ty_in_env(db, env, ty)) {
         Some(target_ty) => RuntimeClass::Ref {
@@ -429,16 +426,6 @@ pub(crate) fn scalar_class_for_ty_in_env<'db>(
 ) -> Option<ScalarClass<'db>> {
     let ty = runtime_repr_ty_in_env(db, env, ty);
     scalar_class_from_repr_ty(db, ty)
-}
-
-pub(crate) fn provider_address_space_to_runtime(space: ProviderAddressSpace) -> AddressSpaceKind {
-    match space {
-        ProviderAddressSpace::Memory => AddressSpaceKind::Memory,
-        ProviderAddressSpace::Storage => AddressSpaceKind::Storage,
-        ProviderAddressSpace::Transient => AddressSpaceKind::Transient,
-        ProviderAddressSpace::Calldata => AddressSpaceKind::Calldata,
-        ProviderAddressSpace::Code => AddressSpaceKind::Code,
-    }
 }
 
 fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<ScalarClass<'db>> {
@@ -528,10 +515,10 @@ pub(crate) fn deref_transport_class_in_env<'db>(
     pointer_ty: TyId<'db>,
 ) -> Option<RuntimeClass<'db>> {
     let (target, space) = runtime_repr_ty_in_env(db, env, pointer_ty).as_ptr(db)?;
-    Some(match provider_address_space_to_runtime(space) {
-        AddressSpaceKind::Memory => RuntimeClass::raw_addr(
+    Some(match space {
+        AddressSpace::Memory => RuntimeClass::raw_addr(
             db,
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
             stored_class_for_ty_in_env(db, env, target),
         ),
         space => provider_class_for_target_in_env(db, env, Some(target), space),
@@ -542,7 +529,7 @@ pub(crate) fn deref_transport_class_in_env<'db>(
 fn runtime_top_level_class<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
-    default_space: AddressSpaceKind,
+    default_space: AddressSpace,
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeClass<'db>> {
@@ -657,7 +644,7 @@ mod tests {
                 &db,
                 RuntimeTypeEnv::new(None, assumptions),
                 unit,
-                AddressSpaceKind::Memory
+                AddressSpace::Memory
             ),
             None
         );
@@ -666,7 +653,7 @@ mod tests {
                 &db,
                 RuntimeTypeEnv::new(None, assumptions),
                 unit,
-                AddressSpaceKind::Memory
+                AddressSpace::Memory
             ),
             None
         );
@@ -688,7 +675,7 @@ mod tests {
             &db,
             RuntimeTypeEnv::new(None, assumptions),
             borrowed_unit,
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
         )
         .expect("borrowed ZST should stay runtime-visible as provider transport");
         let RuntimeBoundarySpec::ExactShape(class) = boundary else {
@@ -700,7 +687,7 @@ mod tests {
             &db,
             RuntimeTypeEnv::new(None, assumptions),
             borrowed_unit,
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
         )
         .expect("borrowed ZST should have a top-level provider class");
         assert_memory_provider_ref(&top_level);
@@ -722,7 +709,7 @@ mod tests {
             &db,
             RuntimeTypeEnv::new(None, assumptions),
             borrowed_word,
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
         )
         .expect("non-ZST borrow should stay runtime-visible");
         let RuntimeBoundarySpec::BorrowLike { access, .. } = boundary else {
@@ -734,7 +721,7 @@ mod tests {
             &db,
             RuntimeTypeEnv::new(None, assumptions),
             borrowed_word,
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
         )
         .expect("non-ZST borrow should have a top-level object ref class");
         assert!(
@@ -764,15 +751,15 @@ mod tests {
         let word = stored_class_for_ty_in_env(&db, env, TyId::u256(&db));
         let word_ptr_ty = TyId::ptr_to(&db, TyId::u256(&db));
         let word_ptr_ptr_ty = TyId::ptr_to(&db, word_ptr_ty);
-        let slot_ty = TyId::ptr_in(&db, ProviderAddressSpace::Storage, TyId::u256(&db));
+        let slot_ty = TyId::ptr_in(&db, AddressSpace::Storage, TyId::u256(&db));
 
         for ty in [word_ptr_ty, word_ptr_ptr_ty, slot_ty] {
             assert_eq!(
-                top_level_class_for_ty_in_env(&db, env, ty, AddressSpaceKind::Memory),
+                top_level_class_for_ty_in_env(&db, env, ty, AddressSpace::Memory),
                 Some(word.clone())
             );
         }
-        let memory = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, word.clone());
+        let memory = RuntimeClass::raw_addr(&db, AddressSpace::Memory, word.clone());
         assert_eq!(
             deref_transport_class_in_env(&db, env, word_ptr_ty),
             Some(memory.clone())
@@ -787,7 +774,7 @@ mod tests {
                 &db,
                 env,
                 Some(TyId::u256(&db)),
-                AddressSpaceKind::Storage,
+                AddressSpace::Storage,
             ))
         );
     }
@@ -803,7 +790,7 @@ mod tests {
             }),
         );
         let aggregate = RuntimeClass::AggregateValue { layout };
-        let pointer = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, aggregate);
+        let pointer = RuntimeClass::raw_addr(&db, AddressSpace::Memory, aggregate);
 
         assert_eq!(pointer.aggregate_layout(), None);
         assert_eq!(
@@ -939,7 +926,7 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
             matches!(
                 kind,
                 RefKind::Provider {
-                    space: AddressSpaceKind::Memory,
+                    space: AddressSpace::Memory,
                     ..
                 }
             ),

@@ -1,6 +1,6 @@
 use crate::layout_test_support::{parse_module, parse_ok};
 use fe_hir::{
-    analysis::{initialize_analysis_pass, ty::ProviderAddressSpace},
+    analysis::{initialize_analysis_pass, ty::AddressSpace},
     core::semantic::{
         ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind, ContractLayoutError,
         ContractLayoutValue,
@@ -94,11 +94,11 @@ contract C {
     let contract = find_contract(&db, top_mod, "C");
     let report = contract.layout_report(&db).unwrap();
     for (path, space, value) in [
-        ("stored", ProviderAddressSpace::Storage, "0"),
+        ("stored", AddressSpace::Storage, "0"),
         // A transient cell is a collection numbered with storage fields.
-        ("temporary", ProviderAddressSpace::Storage, "1"),
-        ("later", ProviderAddressSpace::Storage, "2"),
-        ("immutable", ProviderAddressSpace::Code, "0"),
+        ("temporary", AddressSpace::Storage, "1"),
+        ("later", AddressSpace::Storage, "2"),
+        ("immutable", AddressSpace::Code, "0"),
     ] {
         let entry = entry(&db, &report.entries, path);
         assert_eq!(entry.address_space, space, "{path}");
@@ -136,22 +136,22 @@ contract C {
     // slot for the namespace `example.main`. Transient slot 1 is free for
     // `flag`, and `after` continues the shared counter.
     for (path, space, value) in [
-        ("first", ProviderAddressSpace::Storage, "0"),
-        ("placed", ProviderAddressSpace::Storage, "1"),
-        ("pair.left", ProviderAddressSpace::Storage, "2"),
-        ("pair.right", ProviderAddressSpace::Storage, "3"),
+        ("first", AddressSpace::Storage, "0"),
+        ("placed", AddressSpace::Storage, "1"),
+        ("pair.left", AddressSpace::Storage, "2"),
+        ("pair.right", AddressSpace::Storage, "3"),
         (
             "main.left",
-            ProviderAddressSpace::Storage,
+            AddressSpace::Storage,
             "10958655983261152271848436692291137275443024275653522991983264966744321209600",
         ),
         (
             "main.right",
-            ProviderAddressSpace::Storage,
+            AddressSpace::Storage,
             "10958655983261152271848436692291137275443024275653522991983264966744321209601",
         ),
-        ("flag", ProviderAddressSpace::Storage, "1"),
-        ("after", ProviderAddressSpace::Storage, "4"),
+        ("flag", AddressSpace::Storage, "1"),
+        ("after", AddressSpace::Storage, "4"),
     ] {
         let entry = entry(&db, &report.entries, path);
         assert_eq!(entry.address_space, space, "{path}");

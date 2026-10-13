@@ -42,7 +42,7 @@ use crate::{
                 MemoryAccessKind, effect_key_state_access, external_call_state_access,
                 is_sealed_evm_capability,
             },
-            provider::{ProviderAddressSpace, provider_semantics},
+            provider::{AddressSpace, provider_semantics},
             result_space::PlaceStep,
             shape::Shape,
             trait_resolution::PredicateListId,
@@ -289,7 +289,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     /// The address space of data parameter `param`'s place in this
     /// instantiation.
-    fn param_space(&self, param: u32) -> ProviderAddressSpace {
+    fn param_space(&self, param: u32) -> AddressSpace {
         self.instance.param_space(self.db, param)
     }
 
@@ -424,7 +424,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     /// Where the path of `place` takes it from `start`, the space of the
     /// place the path is relative to.
-    fn path_space(&self, place: &NPlace<'db>, start: Option<ProviderAddressSpace>) -> PathSpace {
+    fn path_space(&self, place: &NPlace<'db>, start: Option<AddressSpace>) -> PathSpace {
         let db = self.db;
         let ty_at = |len| {
             self.body
@@ -493,7 +493,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             // state pointee may be any place of its space.
             NPlaceBase::Deref { pointer } => {
                 let base = match self.body.values[pointer.index()].ty.as_ptr(self.db) {
-                    Some((_, ProviderAddressSpace::Memory)) | None => Base::Raw,
+                    Some((_, AddressSpace::Memory)) | None => Base::Raw,
                     Some((_, space)) => Base::Domain(self.domains.dynamic(Some(space))),
                 };
                 (vec![rooted(self, base, path)], TokenSet::new())
@@ -508,21 +508,21 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     /// The space `region` lies in: its base's, unless a pinned type or an
     /// entry along its path moved it.
-    pub fn region_space(&self, region: &AbsPlace) -> Option<ProviderAddressSpace> {
+    pub fn region_space(&self, region: &AbsPlace) -> Option<AddressSpace> {
         region.space.or_else(|| self.space(region.base))
     }
 
     /// The space a retained grant to `region` lies in: memory for a lane,
     /// whose grant is a memory copy, else the region's own.
-    pub fn grant_space(&self, region: &AbsPlace) -> Option<ProviderAddressSpace> {
+    pub fn grant_space(&self, region: &AbsPlace) -> Option<AddressSpace> {
         if region.lane {
-            Some(ProviderAddressSpace::Memory)
+            Some(AddressSpace::Memory)
         } else {
             self.region_space(region)
         }
     }
 
-    pub fn space(&self, base: Base) -> Option<ProviderAddressSpace> {
+    pub fn space(&self, base: Base) -> Option<AddressSpace> {
         match base {
             Base::Root(root) => Some(self.body.roots[root.index()].address_space),
             Base::Param(param) => Some(self.param_space(param)),
@@ -535,7 +535,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     .copied()
                     .flatten()
             }
-            Base::Raw => Some(ProviderAddressSpace::Memory),
+            Base::Raw => Some(AddressSpace::Memory),
         }
     }
 
@@ -1132,7 +1132,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     // --- checks -----------------------------------------------------------
 
     /// Checks the body; returns its result-space contract.
-    pub fn check(&mut self) -> Result<Vec<Option<ProviderAddressSpace>>, Diag<'db>> {
+    pub fn check(&mut self) -> Result<Vec<Option<AddressSpace>>, Diag<'db>> {
         self.checking = true;
         for block in self.reverse_postorder() {
             let Some(mut state) = self.block_entry(block) else {
@@ -1670,11 +1670,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
         };
         if kind == MemoryAccessKind::Move
-            && let Some(space @ (ProviderAddressSpace::Storage | ProviderAddressSpace::Transient)) =
-                resolved
-                    .regions
-                    .iter()
-                    .find_map(|region| self.region_space(region))
+            && let Some(space @ (AddressSpace::Storage | AddressSpace::Transient)) = resolved
+                .regions
+                .iter()
+                .find_map(|region| self.region_space(region))
         {
             return Err(self.diag(
                 SemanticDiagnosticKind::MoveConflict,
@@ -1803,7 +1802,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
         for region in regions {
-            if let Some(space @ (ProviderAddressSpace::Calldata | ProviderAddressSpace::Code)) =
+            if let Some(space @ (AddressSpace::Calldata | AddressSpace::Code)) =
                 self.region_space(region)
             {
                 return Err(self.diag(
@@ -2100,7 +2099,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// A projection's yields: each component of every yield site names a
     /// place in one address space, its result-space contract, and the access
     /// components of a split are disjoint.
-    fn check_yields(&self) -> Result<Vec<Option<ProviderAddressSpace>>, Diag<'db>> {
+    fn check_yields(&self) -> Result<Vec<Option<AddressSpace>>, Diag<'db>> {
         let BodyOwner::Func(func) = self.instance.key(self.db).owner(self.db) else {
             return Ok(Vec::new());
         };
@@ -2108,8 +2107,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             return Ok(Vec::new());
         };
         let components = access_components(shape);
-        let mut spaces: Vec<Option<(ProviderAddressSpace, SemOrigin<'db>)>> =
-            vec![None; components.len()];
+        let mut spaces: Vec<Option<(AddressSpace, SemOrigin<'db>)>> = vec![None; components.len()];
         for block in &self.body.blocks {
             let NTerminatorKind::Yield { value, .. } = &block.terminator.kind else {
                 continue;
@@ -2263,12 +2261,9 @@ fn access_components<'db>(shape: &Shape<'db>) -> Vec<(Path, BorrowKind, TyId<'db
 
 /// Every persistent and transient slot.
 fn state_regions() -> Vec<AbsPlace> {
-    [
-        ProviderAddressSpace::Storage,
-        ProviderAddressSpace::Transient,
-    ]
-    .map(|space| AbsPlace::new(Base::State(space)))
-    .to_vec()
+    [AddressSpace::Storage, AddressSpace::Transient]
+        .map(|space| AbsPlace::new(Base::State(space)))
+        .to_vec()
 }
 
 fn verb(kind: MemoryAccessKind) -> &'static str {
@@ -2295,7 +2290,7 @@ pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
-) -> Result<(Vec<Diag<'db>>, Vec<Option<ProviderAddressSpace>>), Diag<'db>> {
+) -> Result<(Vec<Diag<'db>>, Vec<Option<AddressSpace>>), Diag<'db>> {
     let mut analysis = Analysis::new(db, instance, body, true);
     analysis.solve();
     let spaces = analysis.check()?;

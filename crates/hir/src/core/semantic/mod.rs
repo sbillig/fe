@@ -25,7 +25,7 @@ pub mod reference;
 mod storage_layout;
 pub mod symbol;
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::ProviderAddressSpace;
+use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::closure::closure_effect_requirements;
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
 use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLowerDiag};
@@ -132,7 +132,7 @@ pub(crate) fn lower_type_alias_body<'db>(
 pub(crate) fn type_alias_pointer_space<'db>(
     db: &'db dyn HirAnalysisDb,
     alias: TypeAlias<'db>,
-) -> Option<ProviderAddressSpace> {
+) -> Option<AddressSpace> {
     if alias.top_mod(db).ingot(db).kind(db) != IngotKind::Core {
         return None;
     }
@@ -145,9 +145,9 @@ pub(crate) fn type_alias_pointer_space<'db>(
         return None;
     };
     match arg.key_str(db)? {
-        "storage" => Some(ProviderAddressSpace::Storage),
-        "transient" => Some(ProviderAddressSpace::Transient),
-        "calldata" => Some(ProviderAddressSpace::Calldata),
+        "storage" => Some(AddressSpace::Storage),
+        "transient" => Some(AddressSpace::Transient),
+        "calldata" => Some(AddressSpace::Calldata),
         _ => None,
     }
 }
@@ -2231,15 +2231,14 @@ fn contract_provider_bindings_canonical<'db>(
                 provider_ty,
                 // Immutable contract fields (i.e. code-backed) are writable during `init`.
                 // They are materialized into memory during initialization and later embedded into code.
-                is_mut: field.is_mut
-                    || (is_init_site && field.address_space == ProviderAddressSpace::Code),
+                is_mut: field.is_mut || (is_init_site && field.address_space == AddressSpace::Code),
                 source: ProviderSource::ContractField { field: field.field },
                 semantics: ProviderSemantics {
                     provider_ty,
                     kind: crate::analysis::ty::ProviderKind::Place,
                     address_space: Some(field.address_space).map(|space| {
-                        if is_init_site && space == ProviderAddressSpace::Code {
-                            ProviderAddressSpace::Memory
+                        if is_init_site && space == AddressSpace::Code {
+                            AddressSpace::Memory
                         } else {
                             space
                         }

@@ -1,3 +1,4 @@
+use hir::analysis::ty::AddressSpace;
 use std::{collections::HashSet, mem::size_of};
 
 use cranelift_entity::EntityRef;
@@ -47,9 +48,9 @@ use crate::{
         project_field_class, project_index_class, project_variant_field_class, runtime_place_lane,
     },
     runtime::{
-        AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
-        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
-        RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
+        ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem, PlaceRoot, RBlock,
+        RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
         RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
         RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
@@ -98,9 +99,9 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, deref_transport_class_in_env, provider_address_space_to_runtime,
-        provider_class_for_target_in_env, runtime_array_len, stored_class_for_ty_in_env,
-        top_level_class_for_ty_in_env, validate_runtime_array_extents_in_env,
+        RuntimeTypeEnv, deref_transport_class_in_env, provider_class_for_target_in_env,
+        runtime_array_len, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
+        validate_runtime_array_extents_in_env,
     },
 };
 
@@ -458,7 +459,7 @@ pub(super) struct RmirEmitter<'db> {
 struct Lane<'db> {
     slot: RLocalId,
     offset: RLocalId,
-    space: AddressSpaceKind,
+    space: AddressSpace,
     codec: TyId<'db>,
     ty: TyId<'db>,
 }
@@ -726,7 +727,7 @@ impl<'db> RmirEmitter<'db> {
     fn top_level_class_for_ty(
         &self,
         ty: TyId<'db>,
-        default_space: crate::runtime::AddressSpaceKind,
+        default_space: AddressSpace,
     ) -> Option<RuntimeClass<'db>> {
         top_level_class_for_ty_in_env(self.db, self.env, ty, default_space)
     }
@@ -1654,7 +1655,7 @@ impl<'db> RmirEmitter<'db> {
         let mut field_classes = Vec::with_capacity(bytes.len());
         for (byte, field_ty) in bytes.iter().copied().zip(field_tys) {
             let field_class = self
-                .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
+                .top_level_class_for_ty(field_ty, AddressSpace::Memory)
                 .unwrap_or_else(|| {
                     panic!(
                         "bytes array element should have a runtime class: {}",
@@ -1897,7 +1898,7 @@ impl<'db> RmirEmitter<'db> {
         scalar: ConstScalar,
     ) -> RLocalId {
         let class = self
-            .top_level_class_for_ty(ty, AddressSpaceKind::Memory)
+            .top_level_class_for_ty(ty, AddressSpace::Memory)
             .unwrap_or_else(|| panic!("scalar const should have a runtime class: {ty:?}"));
         self.lower_sem_const_scalar_with_class(bb, ty, class, scalar)
     }
@@ -2234,12 +2235,12 @@ impl<'db> RmirEmitter<'db> {
             return (value, stored);
         }
         let value = if let Some(boundary) =
-            boundary_spec_for_ty_in_env(self.db, self.env, field_ty, AddressSpaceKind::Memory)
+            boundary_spec_for_ty_in_env(self.db, self.env, field_ty, AddressSpace::Memory)
         {
             self.lower_semantic_operand_for_boundary(bb, field, &boundary)
         } else {
             let class = self
-                .top_level_class_for_ty(field_ty, AddressSpaceKind::Memory)
+                .top_level_class_for_ty(field_ty, AddressSpace::Memory)
                 .unwrap_or_else(|| {
                     panic!(
                         "non-zst constructor field should have a runtime class: owner={:?} field_ty={} stored={stored:#?}",
@@ -3019,7 +3020,7 @@ impl<'db> RmirEmitter<'db> {
                     return None;
                 };
                 let RuntimeClass::Scalar(class) =
-                    self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?
+                    self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?
                 else {
                     return None;
                 };
@@ -3036,7 +3037,7 @@ impl<'db> RmirEmitter<'db> {
                 let [lhs, rhs] = runtime_args.as_slice() else {
                     return None;
                 };
-                let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?;
+                let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
                 if matches!(op, BinOp::Comp(_))
                     && runtime_args.iter().any(|arg| {
                         matches!(self.value_class(*arg), Some(RuntimeClass::RawAddr { .. }))
@@ -3406,7 +3407,7 @@ impl<'db> RmirEmitter<'db> {
                 ret
             }
             LoweredBuiltinCall::Binary { op, lhs, rhs } => {
-                let class = self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?;
+                let class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
                 let word = RuntimeClass::Scalar(word_scalar_class());
                 let lhs = self.coerce_value(bb, lhs, &word);
                 let rhs = self.coerce_value(bb, rhs, &word);
@@ -3539,7 +3540,7 @@ impl<'db> RmirEmitter<'db> {
         );
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         let ret_ty = semantic_return_ty(self.db, semantic);
-        let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpaceKind::Memory)?;
+        let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
         let scalar = match &ret_class {
             RuntimeClass::Scalar(scalar) => scalar.clone(),
             RuntimeClass::Ref { .. } => return None,
@@ -3827,7 +3828,7 @@ impl<'db> RmirEmitter<'db> {
                     crate::runtime::RuntimeBuiltin::Malloc { size: *size },
                     self.top_level_class_for_ty(
                         semantic_return_ty(self.db, semantic),
-                        AddressSpaceKind::Memory,
+                        AddressSpace::Memory,
                     ),
                 )
             }
@@ -3837,7 +3838,7 @@ impl<'db> RmirEmitter<'db> {
                     crate::runtime::RuntimeBuiltin::NativePtrIsNull { ptr: *ptr },
                     self.top_level_class_for_ty(
                         semantic_return_ty(self.db, semantic),
-                        AddressSpaceKind::Memory,
+                        AddressSpace::Memory,
                     ),
                 )
             }
@@ -4489,20 +4490,20 @@ impl<'db> RmirEmitter<'db> {
             self.db,
             self.env,
             Some(bytes_ty),
-            AddressSpaceKind::Memory,
+            AddressSpace::Memory,
         );
         let provider = match self.value_class(value) {
             Some(
                 RuntimeClass::Ref {
                     kind:
                         RefKind::Provider {
-                            space: AddressSpaceKind::Memory,
+                            space: AddressSpace::Memory,
                             ..
                         },
                     ..
                 }
                 | RuntimeClass::RawAddr {
-                    space: AddressSpaceKind::Memory,
+                    space: AddressSpace::Memory,
                     ..
                 },
             ) => value,
@@ -4517,7 +4518,7 @@ impl<'db> RmirEmitter<'db> {
             provider,
             &RuntimeClass::raw_addr(
                 self.db,
-                AddressSpaceKind::Memory,
+                AddressSpace::Memory,
                 RuntimeClass::AggregateValue { layout },
             ),
         );
@@ -5168,11 +5169,9 @@ impl<'db> RmirEmitter<'db> {
         key: NValueId,
     ) -> EntryPlace<'db> {
         let owner = self.semantic_body.owner();
-        let space = provider_address_space_to_runtime(
-            owner
-                .state_index_space(self.db, collection_ty)
-                .expect("a collection whose elements are places declares their space"),
-        );
+        let space = owner
+            .state_index_space(self.db, collection_ty)
+            .expect("a collection whose elements are places declares their space");
         let lanes = owner.state_index_lanes(self.db, collection_ty);
         let word_ty = TyId::u256(self.db);
         let word = word_class();
@@ -5408,7 +5407,7 @@ impl<'db> RmirEmitter<'db> {
         };
         let space = match kind {
             RefKind::Provider { space, .. } => space,
-            RefKind::Object | RefKind::Native => AddressSpaceKind::Memory,
+            RefKind::Object | RefKind::Native => AddressSpace::Memory,
             RefKind::Const => unreachable!("a `mut` place is not a constant"),
         };
         let ref_ty = self.locals[place.index()].semantic_ty;

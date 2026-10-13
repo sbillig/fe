@@ -5,7 +5,7 @@ use crate::{
         ty::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
             normalize::normalize_ty,
-            provider::ProviderAddressSpace,
+            provider::AddressSpace,
             trait_resolution::PredicateListId,
             ty_def::{BorrowKind, CapabilityKind, TyId},
         },
@@ -44,7 +44,7 @@ pub fn capability_semantics<'db>(
             representation_ty: ty,
         });
     }
-    let (target_ty, ProviderAddressSpace::Memory) = ty.as_ptr(db)? else {
+    let (target_ty, AddressSpace::Memory) = ty.as_ptr(db)? else {
         return None;
     };
     Some(CapabilitySemantics {

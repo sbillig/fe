@@ -1,3 +1,4 @@
+use hir::analysis::ty::AddressSpace;
 use std::borrow::Cow;
 
 use common::indexmap::IndexSet;
@@ -15,8 +16,8 @@ use rustc_hash::FxHashMap;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, BorrowAccess, BorrowTransportSet, LayoutId, RawPointeeId, RefKind,
-        RefView, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimePlace,
+        BorrowAccess, BorrowTransportSet, LayoutId, RawPointeeId, RefKind, RefView,
+        RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass, RuntimePlace,
     },
 };
 
@@ -114,7 +115,7 @@ pub(super) enum RuntimeClassShape<'db> {
     },
     /// Raw targets stay unresolved leaves; matchers resolve them on demand.
     RawAddr {
-        space: AddressSpaceKind,
+        space: AddressSpace,
         pointee: Option<RawPointeeId<'db>>,
     },
 }
@@ -146,7 +147,7 @@ pub(super) enum RefShapeKind {
     Native,
     Const,
     Object,
-    Provider(AddressSpaceKind),
+    Provider(AddressSpace),
 }
 
 impl RefShapeKind {
@@ -167,7 +168,7 @@ pub(super) enum BoundaryShapeMatcher<'db> {
         pointee: RuntimeClassShape<'db>,
         allow_object: bool,
         allow_const: bool,
-        provider_spaces: Box<[AddressSpaceKind]>,
+        provider_spaces: Box<[AddressSpace]>,
         allow_raw_addr: bool,
     },
 }
@@ -730,7 +731,7 @@ impl BoundaryMatcher {
                 })
             }
             RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } if allow.allow_raw_addr => Some(
-                RuntimeClass::raw_addr(db, AddressSpaceKind::Memory, pointee.clone()),
+                RuntimeClass::raw_addr(db, AddressSpace::Memory, pointee.clone()),
             ),
             RuntimeBoundarySpec::BorrowLike { .. } => None,
         }
@@ -811,7 +812,7 @@ impl<'db> RuntimeValueMaterialization<'db> {
         match self {
             Self::ObjectRef(layout) => RuntimeClass::object_ref(*layout),
             Self::RawAddrSlot { target, .. } => RuntimeClass::RawAddr {
-                space: AddressSpaceKind::Memory,
+                space: AddressSpace::Memory,
                 pointee: Some(*target),
             },
         }
@@ -850,23 +851,23 @@ pub(crate) fn boundary_spec_for_ty_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     ty: TyId<'db>,
-    default_space: AddressSpaceKind,
+    default_space: AddressSpace,
 ) -> Option<RuntimeBoundarySpec<'db>> {
     runtime_boundary_spec(db, ty, default_space, env.scope, env.assumptions)
 }
 
 pub(crate) fn default_borrow_transport_set(
     access: BorrowAccess,
-    default_space: AddressSpaceKind,
+    default_space: AddressSpace,
 ) -> BorrowTransportSet {
     let mut provider_spaces = IndexSet::new();
     provider_spaces.insert(default_space);
-    provider_spaces.insert(AddressSpaceKind::Memory);
-    provider_spaces.insert(AddressSpaceKind::Storage);
-    provider_spaces.insert(AddressSpaceKind::Transient);
+    provider_spaces.insert(AddressSpace::Memory);
+    provider_spaces.insert(AddressSpace::Storage);
+    provider_spaces.insert(AddressSpace::Transient);
     if matches!(access, BorrowAccess::ReadOnly) {
-        provider_spaces.insert(AddressSpaceKind::Calldata);
-        provider_spaces.insert(AddressSpaceKind::Code);
+        provider_spaces.insert(AddressSpace::Calldata);
+        provider_spaces.insert(AddressSpace::Code);
     }
     BorrowTransportSet {
         allow_object: true,
@@ -898,7 +899,7 @@ pub(crate) fn boundary_source_uses_transport_sensitive_aggregate<'db>(
 fn runtime_boundary_spec<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
-    default_space: AddressSpaceKind,
+    default_space: AddressSpace,
     scope: Option<ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeBoundarySpec<'db>> {
@@ -990,7 +991,7 @@ pub(crate) fn default_by_place_boundary<'db>(
     db: &'db dyn MirDb,
     type_env: RuntimeTypeEnv<'db>,
     target_ty: Option<TyId<'db>>,
-    space: AddressSpaceKind,
+    space: AddressSpace,
 ) -> RuntimeBoundarySpec<'db> {
     let Some(target_ty) = target_ty else {
         return RuntimeBoundarySpec::ExactShape(provider_class_for_target_in_env(
@@ -1034,7 +1035,7 @@ mod tests {
         })
     }
 
-    fn raw_addr_class<'db>(db: &'db dyn MirDb, space: AddressSpaceKind) -> RuntimeClass<'db> {
+    fn raw_addr_class<'db>(db: &'db dyn MirDb, space: AddressSpace) -> RuntimeClass<'db> {
         RuntimeClass::raw_addr(db, space, word_class())
     }
 
@@ -1053,7 +1054,7 @@ mod tests {
     fn provider_ref<'db>(
         db: &'db dyn MirDb,
         pointee: RuntimeClass<'db>,
-        space: AddressSpaceKind,
+        space: AddressSpace,
     ) -> RuntimeClass<'db> {
         ref_class(
             pointee,
@@ -1090,7 +1091,7 @@ mod tests {
 
     fn scalar_borrow_boundary<'db>(
         access: BorrowAccess,
-        default_space: AddressSpaceKind,
+        default_space: AddressSpace,
     ) -> RuntimeBoundarySpec<'db> {
         RuntimeBoundarySpec::BorrowLike {
             pointee: word_class(),
@@ -1128,8 +1129,8 @@ mod tests {
     #[test]
     fn exact_transport_requires_transport_match_but_exact_shape_preserves_source_transport() {
         let db = DriverDataBase::default();
-        let source = raw_addr_class(&db, AddressSpaceKind::Storage);
-        let target = raw_addr_class(&db, AddressSpaceKind::Memory);
+        let source = raw_addr_class(&db, AddressSpace::Storage);
+        let target = raw_addr_class(&db, AddressSpace::Memory);
         let exact_transport = RuntimeBoundarySpec::ExactTransport(target.clone());
         let exact_shape = RuntimeBoundarySpec::ExactShape(target.clone());
 
@@ -1161,20 +1162,17 @@ mod tests {
     #[test]
     fn exact_shape_ref_matching_ignores_provider_space_but_not_view_or_pointee() {
         let db = DriverDataBase::default();
-        let boundary = RuntimeBoundarySpec::ExactShape(provider_ref(
-            &db,
-            word_class(),
-            AddressSpaceKind::Memory,
-        ));
+        let boundary =
+            RuntimeBoundarySpec::ExactShape(provider_ref(&db, word_class(), AddressSpace::Memory));
 
         assert!(BoundaryMatcher::class_satisfies_boundary(
             &db,
-            &provider_ref(&db, word_class(), AddressSpaceKind::Storage),
+            &provider_ref(&db, word_class(), AddressSpace::Storage),
             &boundary
         ));
         assert!(!BoundaryMatcher::class_satisfies_boundary(
             &db,
-            &provider_ref(&db, bool_class(), AddressSpaceKind::Storage),
+            &provider_ref(&db, bool_class(), AddressSpace::Storage),
             &boundary
         ));
         assert!(!BoundaryMatcher::class_satisfies_boundary(
@@ -1183,7 +1181,7 @@ mod tests {
                 word_class(),
                 RefKind::Provider {
                     provider_ty: TyId::unit(&db),
-                    space: AddressSpaceKind::Storage,
+                    space: AddressSpace::Storage,
                 },
                 RefView::EnumVariant(test_enum_variant(&db))
             ),
@@ -1191,11 +1189,11 @@ mod tests {
         ));
         assert!(!BoundaryMatcher::class_satisfies_boundary(
             &db,
-            &provider_ref(&db, word_class(), AddressSpaceKind::Storage),
+            &provider_ref(&db, word_class(), AddressSpace::Storage),
             &RuntimeBoundarySpec::ExactTransport(provider_ref(
                 &db,
                 word_class(),
-                AddressSpaceKind::Memory
+                AddressSpace::Memory
             ))
         ));
     }
@@ -1203,7 +1201,7 @@ mod tests {
     #[test]
     fn borrow_like_boundary_respects_transport_allowlist() {
         let db = DriverDataBase::default();
-        let boundary = scalar_borrow_boundary(BorrowAccess::ReadWrite, AddressSpaceKind::Storage);
+        let boundary = scalar_borrow_boundary(BorrowAccess::ReadWrite, AddressSpace::Storage);
         let cases = [
             (
                 "object ref",
@@ -1212,17 +1210,17 @@ mod tests {
             ),
             (
                 "storage provider",
-                provider_ref(&db, word_class(), AddressSpaceKind::Storage),
+                provider_ref(&db, word_class(), AddressSpace::Storage),
                 true,
             ),
             (
                 "memory provider",
-                provider_ref(&db, word_class(), AddressSpaceKind::Memory),
+                provider_ref(&db, word_class(), AddressSpace::Memory),
                 true,
             ),
             (
                 "calldata provider",
-                provider_ref(&db, word_class(), AddressSpaceKind::Calldata),
+                provider_ref(&db, word_class(), AddressSpace::Calldata),
                 false,
             ),
             (
@@ -1230,16 +1228,12 @@ mod tests {
                 ref_class(word_class(), RefKind::Const, RefView::Whole),
                 false,
             ),
-            (
-                "raw addr",
-                raw_addr_class(&db, AddressSpaceKind::Memory),
-                true,
-            ),
+            ("raw addr", raw_addr_class(&db, AddressSpace::Memory), true),
             (
                 "wrong raw pointee",
                 RuntimeClass::raw_addr(
                     &db,
-                    AddressSpaceKind::Memory,
+                    AddressSpace::Memory,
                     RuntimeClass::Scalar(ScalarClass {
                         repr: ScalarRepr::Int {
                             bits: 8,
@@ -1274,8 +1268,8 @@ mod tests {
     #[test]
     fn borrow_like_planner_prefers_compatible_address_then_scalar_slot_materialization() {
         let db = DriverDataBase::default();
-        let boundary = scalar_borrow_boundary(BorrowAccess::ReadWrite, AddressSpaceKind::Storage);
-        let address = provider_ref(&db, word_class(), AddressSpaceKind::Storage);
+        let boundary = scalar_borrow_boundary(BorrowAccess::ReadWrite, AddressSpace::Storage);
+        let address = provider_ref(&db, word_class(), AddressSpace::Storage);
 
         assert_eq!(
             RuntimeValueUsePlanner::select(
@@ -1309,7 +1303,7 @@ mod tests {
         let boundary = RuntimeBoundarySpec::BorrowLike {
             pointee: RuntimeClass::AggregateValue { layout },
             access: BorrowAccess::ReadWrite,
-            allow: default_borrow_transport_set(BorrowAccess::ReadWrite, AddressSpaceKind::Memory),
+            allow: default_borrow_transport_set(BorrowAccess::ReadWrite, AddressSpace::Memory),
         };
 
         assert_eq!(

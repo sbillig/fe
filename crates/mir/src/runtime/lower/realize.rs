@@ -460,12 +460,13 @@ impl<'db> SelectedRuntimeArg<'db> {
 mod tests {
     use cranelift_entity::EntityRef;
     use driver::DriverDataBase;
+    use hir::analysis::ty::AddressSpace;
     use hir::analysis::ty::ty_def::TyId;
 
     use crate::db::MirDb;
     use crate::runtime::{
-        AddressSpaceKind, RBlockId, RLocalId, RawPointeeId, RuntimeClass, RuntimePlace,
-        ScalarClass, ScalarRepr, ScalarRole,
+        RBlockId, RLocalId, RawPointeeId, RuntimeClass, RuntimePlace, ScalarClass, ScalarRepr,
+        ScalarRole,
     };
 
     use super::super::boundary::{RuntimeValueMaterialization, RuntimeValueUsePlan};
@@ -491,7 +492,7 @@ mod tests {
         })
     }
 
-    fn raw_addr_class<'db>(db: &'db dyn MirDb, space: AddressSpaceKind) -> RuntimeClass<'db> {
+    fn raw_addr_class<'db>(db: &'db dyn MirDb, space: AddressSpace) -> RuntimeClass<'db> {
         RuntimeClass::raw_addr(db, space, word_class())
     }
 
@@ -608,7 +609,7 @@ mod tests {
         assert_eq!(result, RLocalId::new(3));
         assert_eq!(
             emitter.classes[result.index()],
-            Some(raw_addr_class(&db, AddressSpaceKind::Memory))
+            Some(raw_addr_class(&db, AddressSpace::Memory))
         );
         assert_eq!(emitter.roots[RLocalId::new(2).index()], Some(word_class()));
         assert_eq!(
@@ -625,7 +626,7 @@ mod tests {
                 },
                 FakeEmitOp::AddrOf {
                     dst: RLocalId::new(3),
-                    class: raw_addr_class(&db, AddressSpaceKind::Memory),
+                    class: raw_addr_class(&db, AddressSpace::Memory),
                 },
             ]
         );
