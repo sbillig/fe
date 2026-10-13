@@ -37,7 +37,6 @@ use hir::hir_def::{
     scope_graph::ScopeId,
 };
 use hir::projection::IndexSource;
-use hir::semantic::ProviderBinding;
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -2439,14 +2438,7 @@ impl<'db> RmirEmitter<'db> {
                         };
                         local
                     }
-                    NRootKind::Provider { binding } => {
-                        let binding = binding.clone();
-                        let value_ty = root.ty;
-                        let path = place.path.iter().copied().collect::<Vec<_>>();
-                        return self.lower_provider_value_extract_path_read(
-                            bb, dst, &binding, value_ty, &path,
-                        );
-                    }
+                    NRootKind::Provider { .. } => return false,
                     NRootKind::CapabilityRepresentation { carrier } => {
                         let Some(local) = self.semantic_body.value_local(*carrier) else {
                             return false;
@@ -2475,35 +2467,6 @@ impl<'db> RmirEmitter<'db> {
         let Some(class) = self.value_class(value).cloned() else {
             return false;
         };
-        self.lower_value_extract_from_value(bb, dst, value, class, path)
-    }
-
-    fn lower_provider_value_extract_path_read(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        binding: &ProviderBinding<'db>,
-        value_ty: TyId<'db>,
-        path: &[NDataProjection],
-    ) -> bool {
-        // Only a root naming the provider itself reads the provider's value.
-        // Target roots load the referent through the provider's address.
-        if value_ty != binding.provider_ty {
-            return false;
-        }
-        let Some(local) = self.facts.root_provider_local(binding) else {
-            return false;
-        };
-        let value = self.runtime_value(local);
-        let Some(actual) = self.value_class(value).cloned() else {
-            return false;
-        };
-        let value_ty = self.semantic_body.locals[local.index()].ty;
-        let class = stored_class_for_ty_in_env(self.db, self.env, value_ty);
-        if !actual.shares_runtime_rep_with(self.db, &class) {
-            return false;
-        }
-        let value = self.emit_plain_runtime_coercion(bb, value, actual, &class, value_ty);
         self.lower_value_extract_from_value(bb, dst, value, class, path)
     }
 
