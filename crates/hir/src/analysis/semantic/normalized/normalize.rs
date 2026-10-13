@@ -1079,7 +1079,6 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 }
                             },
                             pass_mode: arg.pass_mode,
-                            layout_view: arg.layout_view,
                             required_mut: arg.required_mut,
                             provider_target_ty: arg
                                 .provider_target_ty

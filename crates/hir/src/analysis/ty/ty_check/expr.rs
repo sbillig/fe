@@ -16,8 +16,8 @@ use crate::core::{
 use crate::span::DynLazySpan;
 
 use super::{
-    BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArgLayoutView,
-    RecordLike, RowArg, Typeable, ValuePathRef,
+    BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike, RowArg, Typeable,
+    ValuePathRef,
     effect_env::{
         FamilyKeyedEntry, FrameLookupResult, MatchedForwarder, MatchedKeyedEntry, MatchedWitness,
     },
@@ -49,7 +49,7 @@ use crate::analysis::ty::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
         EffectRequirementDecl, EffectRequirementKey, EffectWitness, ForwardedEffectKey,
         PatternSlotKind, StoredEffectKey, StoredTraitKey, StoredTypeKey, TraitKeySchema,
-        TraitPatternKey, TypePatternKey, WitnessTransport,
+        TraitPatternKey, TypePatternKey,
         elaborate::{
             build_barrier_pattern_for_with_key,
             build_conservative_same_family_barrier_pattern_in_scope, build_effect_query_for_call,
@@ -137,19 +137,16 @@ enum EffectEvidence<'db> {
         target_ty: Option<TyId<'db>>,
         commit: EffectCommitPlan<'db>,
         arg_style: EffectArgStyle,
-        layout_view: EffectArgLayoutView,
     },
     UnkeyedType {
         provider: ProvidedEffect<'db>,
         commit: EffectCommitPlan<'db>,
         arg_style: EffectArgStyle,
-        layout_view: EffectArgLayoutView,
     },
     UnkeyedTrait {
         provider: ProvidedEffect<'db>,
         commit: EffectCommitPlan<'db>,
         arg_style: EffectArgStyle,
-        layout_view: EffectArgLayoutView,
     },
 }
 
@@ -1878,94 +1875,81 @@ impl<'db> TyChecker<'db> {
             }
             match resolution {
                 EffectResolution::Chosen(evidence) => {
-                    let (provider, arg_style, layout_view, key_kind, instantiated_key_ty) =
-                        match *evidence {
-                            EffectEvidence::Keyed {
-                                provider,
-                                key_kind,
-                                target_ty,
-                                commit,
-                                arg_style,
-                                layout_view,
-                            } => {
-                                let committed = self.apply_effect_commit_plan(commit);
-                                debug_assert!(
-                                    committed,
-                                    "chosen keyed effect evidence commit failed"
-                                );
-                                if !committed {
-                                    let diag = BodyDiag::MissingEffect {
-                                        primary: call_span.clone(),
-                                        func,
-                                        key: key_ty,
-                                    };
-                                    self.push_diag(diag);
-                                    continue;
-                                }
-                                (provider, arg_style, layout_view, key_kind, target_ty)
-                            }
-                            EffectEvidence::UnkeyedType {
-                                provider,
-                                commit,
-                                arg_style,
-                                layout_view,
-                            } => {
-                                let target_ty = match commit.key_match.clone() {
-                                    Some(KeyMatchCommit::QueryToType { actual, .. }) => {
-                                        Some(self.table.fold_ty(self.db, actual))
-                                    }
-                                    _ => match req.key.clone() {
-                                        EffectRequirementKey::Type(_) => self
-                                            .query_type_key(&query.key)
-                                            .map(|ty| self.table.fold_ty(self.db, ty)),
-                                        EffectRequirementKey::Trait(_) => None,
-                                    },
+                    let (provider, arg_style, key_kind, instantiated_key_ty) = match *evidence {
+                        EffectEvidence::Keyed {
+                            provider,
+                            key_kind,
+                            target_ty,
+                            commit,
+                            arg_style,
+                        } => {
+                            let committed = self.apply_effect_commit_plan(commit);
+                            debug_assert!(committed, "chosen keyed effect evidence commit failed");
+                            if !committed {
+                                let diag = BodyDiag::MissingEffect {
+                                    primary: call_span.clone(),
+                                    func,
+                                    key: key_ty,
                                 };
-                                let committed = self.apply_effect_commit_plan(commit);
-                                debug_assert!(
-                                    committed,
-                                    "chosen unkeyed type effect evidence commit failed"
-                                );
-                                if !committed {
-                                    let diag = BodyDiag::MissingEffect {
-                                        primary: call_span.clone(),
-                                        func,
-                                        key: key_ty,
-                                    };
-                                    self.push_diag(diag);
-                                    continue;
-                                }
-                                (
-                                    provider,
-                                    arg_style,
-                                    layout_view,
-                                    EffectKeyKind::Type,
-                                    target_ty,
-                                )
+                                self.push_diag(diag);
+                                continue;
                             }
-                            EffectEvidence::UnkeyedTrait {
-                                provider,
-                                commit,
-                                arg_style,
-                                layout_view,
-                            } => {
-                                let committed = self.apply_effect_commit_plan(commit);
-                                debug_assert!(
-                                    committed,
-                                    "chosen unkeyed trait effect evidence commit failed"
-                                );
-                                if !committed {
-                                    let diag = BodyDiag::MissingEffect {
-                                        primary: call_span.clone(),
-                                        func,
-                                        key: key_ty,
-                                    };
-                                    self.push_diag(diag);
-                                    continue;
+                            (provider, arg_style, key_kind, target_ty)
+                        }
+                        EffectEvidence::UnkeyedType {
+                            provider,
+                            commit,
+                            arg_style,
+                        } => {
+                            let target_ty = match commit.key_match.clone() {
+                                Some(KeyMatchCommit::QueryToType { actual, .. }) => {
+                                    Some(self.table.fold_ty(self.db, actual))
                                 }
-                                (provider, arg_style, layout_view, EffectKeyKind::Trait, None)
+                                _ => match req.key.clone() {
+                                    EffectRequirementKey::Type(_) => self
+                                        .query_type_key(&query.key)
+                                        .map(|ty| self.table.fold_ty(self.db, ty)),
+                                    EffectRequirementKey::Trait(_) => None,
+                                },
+                            };
+                            let committed = self.apply_effect_commit_plan(commit);
+                            debug_assert!(
+                                committed,
+                                "chosen unkeyed type effect evidence commit failed"
+                            );
+                            if !committed {
+                                let diag = BodyDiag::MissingEffect {
+                                    primary: call_span.clone(),
+                                    func,
+                                    key: key_ty,
+                                };
+                                self.push_diag(diag);
+                                continue;
                             }
-                        };
+                            (provider, arg_style, EffectKeyKind::Type, target_ty)
+                        }
+                        EffectEvidence::UnkeyedTrait {
+                            provider,
+                            commit,
+                            arg_style,
+                        } => {
+                            let committed = self.apply_effect_commit_plan(commit);
+                            debug_assert!(
+                                committed,
+                                "chosen unkeyed trait effect evidence commit failed"
+                            );
+                            if !committed {
+                                let diag = BodyDiag::MissingEffect {
+                                    primary: call_span.clone(),
+                                    func,
+                                    key: key_ty,
+                                };
+                                self.push_diag(diag);
+                                continue;
+                            }
+                            (provider, arg_style, EffectKeyKind::Trait, None)
+                        }
+                    };
 
                     if req.required_mut
                         && let Some(binding) = provider.binding
@@ -2078,7 +2062,6 @@ impl<'db> TyChecker<'db> {
                             EffectOrigin::Param { .. } => None,
                         },
                         pass_mode,
-                        layout_view,
                         required_mut: req.required_mut,
                         key_kind,
                         instantiated_key_ty,
@@ -2126,7 +2109,6 @@ impl<'db> TyChecker<'db> {
                     arg: super::EffectArg::Binding(binding),
                     with_source: None,
                     pass_mode: super::EffectPassMode::ByValue,
-                    layout_view: super::EffectArgLayoutView::Direct,
                     required_mut: requirement.is_mut,
                     key_kind: EffectKeyKind::Row,
                     instantiated_key_ty: None,
@@ -2411,7 +2393,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         matched: MatchedKeyedEntry<'db>,
     ) -> Option<EffectEvidence<'db>> {
-        let (provider, transport, key_kind, target_ty, key_commit) = match matched {
+        let (provider, key_kind, target_ty, key_commit) = match matched {
             MatchedKeyedEntry::Witness(matched) => {
                 let (key_kind, target_ty) = match matched.witness.key {
                     StoredEffectKey::Type(stored) => (EffectKeyKind::Type, Some(stored.carrier)),
@@ -2419,7 +2401,6 @@ impl<'db> TyChecker<'db> {
                 };
                 (
                     matched.witness.provider,
-                    matched.witness.transport,
                     key_kind,
                     target_ty,
                     matched.key_commit,
@@ -2430,37 +2411,26 @@ impl<'db> TyChecker<'db> {
                     // The body's own binding provides its key directly: its
                     // type is the key with the layout its caller supplied,
                     // which the key's pattern leaves open.
-                    ForwardedEffectKey::Type(_)
-                        if matched.forwarder.transport == WitnessTransport::Direct =>
-                    {
+                    ForwardedEffectKey::Type(_) => {
                         (EffectKeyKind::Type, Some(matched.forwarder.provider.ty))
-                    }
-                    ForwardedEffectKey::Type(forwarded) => {
-                        (EffectKeyKind::Type, Some(forwarded.carrier))
                     }
                     ForwardedEffectKey::Trait(_) => (EffectKeyKind::Trait, None),
                 };
                 (
                     matched.forwarder.provider,
-                    matched.forwarder.transport,
                     key_kind,
                     target_ty,
                     matched.key_commit,
                 )
             }
         };
-        let arg_style = match (transport, target_ty) {
-            (WitnessTransport::Direct, Some(_)) => self
+        // A type key is provided by its place; a trait key by value.
+        let arg_style = match target_ty {
+            Some(_) => self
                 .direct_arg_style_for_provider(provider)
                 .unwrap_or(EffectArgStyle::Value),
-            _ => EffectArgStyle::Value,
+            None => EffectArgStyle::Value,
         };
-        let layout_view =
-            if key_kind == EffectKeyKind::Type && transport == WitnessTransport::ByValue {
-                EffectArgLayoutView::ProviderTarget
-            } else {
-                EffectArgLayoutView::Direct
-            };
         Some(EffectEvidence::Keyed {
             provider,
             key_kind,
@@ -2471,7 +2441,6 @@ impl<'db> TyChecker<'db> {
                 extra_unifications: SmallVec::new(),
             },
             arg_style,
-            layout_view,
         })
     }
 
@@ -2503,7 +2472,6 @@ impl<'db> TyChecker<'db> {
                         extra_unifications: SmallVec::new(),
                     },
                     arg_style,
-                    layout_view: EffectArgLayoutView::Direct,
                 });
             }
         }
@@ -2543,7 +2511,6 @@ impl<'db> TyChecker<'db> {
                 extra_unifications: SmallVec::new(),
             },
             arg_style: EffectArgStyle::Value,
-            layout_view: EffectArgLayoutView::Direct,
         })
     }
 
@@ -3085,7 +3052,6 @@ impl<'db> TyChecker<'db> {
                         },
                     }));
                 };
-                let transport = WitnessTransport::Direct;
                 let snapshot = self.snapshot_state();
                 let specialized = self
                     .specialize_type_pattern_key(pattern.clone(), actual)
@@ -3133,11 +3099,7 @@ impl<'db> TyChecker<'db> {
                     }));
                 };
                 Ok((
-                    EffectWitness {
-                        key,
-                        provider,
-                        transport,
-                    },
+                    EffectWitness { key, provider },
                     EffectCommitPlan {
                         key_match: Some(KeyMatchCommit::QueryToType {
                             query: pattern,
@@ -3272,11 +3234,7 @@ impl<'db> TyChecker<'db> {
                     }));
                 };
                 Ok((
-                    EffectWitness {
-                        key,
-                        provider,
-                        transport: WitnessTransport::ByValue,
-                    },
+                    EffectWitness { key, provider },
                     EffectCommitPlan {
                         key_match: None,
                         trait_solutions: SmallVec::new(),

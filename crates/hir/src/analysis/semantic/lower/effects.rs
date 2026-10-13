@@ -182,7 +182,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 arg.pass_mode
             },
             arg: value,
-            layout_view: arg.layout_view,
             required_mut: arg.required_mut,
             provider_target_ty: arg.provider_target_ty,
             provider: self.effect_arg_provider_space(arg),

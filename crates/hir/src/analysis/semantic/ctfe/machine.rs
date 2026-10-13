@@ -34,8 +34,8 @@ use crate::{
             normalize::normalize_ty,
             provider::AddressSpace,
             ty_check::{
-                BodyOwner, EffectArgLayoutView, EffectParamSite, EffectPassMode, LocalBinding,
-                ParamSite, infer_body, inference_met_lowering_cycle,
+                BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, infer_body,
+                inference_met_lowering_cycle,
             },
             ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
         },
@@ -1528,7 +1528,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                             arg.pass_mode,
                             EffectPassMode::ByValue | EffectPassMode::ByPlace
                         )
-                        || arg.layout_view != EffectArgLayoutView::Direct
                         || arg
                             .provider
                             .is_some_and(|space| space != AddressSpace::Memory)

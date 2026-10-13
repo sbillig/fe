@@ -3711,12 +3711,6 @@ pub enum EffectPassMode {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum EffectArgLayoutView {
-    Direct,
-    ProviderTarget,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ResolvedEffectArg<'db> {
     pub param_idx: usize,
@@ -3726,7 +3720,6 @@ pub struct ResolvedEffectArg<'db> {
     /// The with-binding whose source was evaluated on entry to the block.
     pub with_source: Option<ExprId>,
     pub pass_mode: EffectPassMode,
-    pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
     pub key_kind: EffectKeyKind,
     pub instantiated_key_ty: Option<TyId<'db>>,
@@ -5235,21 +5228,6 @@ impl<'db> TypedBody<'db> {
                     .call_effect_args(call_expr)?
                     .iter()
                     .find(|arg| arg.binding_idx as usize == effect_idx)?;
-                // A provider value whose target is not itself names that
-                // target indirectly: its own sources are not its target's.
-                let provider_ty = match effect_arg.arg {
-                    EffectArg::Value(expr) => Some(self.expr_ty(db, expr)),
-                    EffectArg::Binding(binding) => Some(self.binding_ty(db, binding)),
-                    EffectArg::Place(_) | EffectArg::Unknown => None,
-                };
-                if effect_arg.pass_mode == EffectPassMode::ByValue
-                    && let Some(provider_ty) = provider_ty
-                    && effect_arg
-                        .provider_target_ty
-                        .is_some_and(|target| target != provider_ty)
-                {
-                    return None;
-                }
                 match &effect_arg.arg {
                     EffectArg::Place(place) => self.forwarded_return_sources_from_place(
                         db,

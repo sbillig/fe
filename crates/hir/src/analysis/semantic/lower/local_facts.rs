@@ -306,17 +306,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         ),
                         SEffectArgValue::Value(value) => {
                             let base = value.value;
-                            let value_ty = self.locals[base.index()].ty;
-                            // A provider value whose target is not itself
-                            // names that target indirectly: its own backings
-                            // are not its target's.
-                            if effect_arg
-                                .provider_target_ty
-                                .is_some_and(|target| target != value_ty)
-                            {
-                                continue;
-                            }
-                            (value_ty, self.local_layout_backing_sources(base))
+                            (
+                                self.locals[base.index()].ty,
+                                self.local_layout_backing_sources(base),
+                            )
                         }
                     }
                 }
