@@ -2192,24 +2192,29 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
-            Self::ContractFieldMemoryValue { span, ty, pointer } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "contract state cannot hold a memory value".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "`{}` holds the memory pointer `{}`",
-                        ty.pretty_print(db),
-                        pointer.pretty_print(db)
-                    ),
-                    span: span.resolve(db),
-                }],
-                notes: vec![
-                    "memory lasts for one transaction, so a later one could not follow the pointer"
-                        .to_string(),
-                ],
-                error_code,
-            },
+            Self::ContractFieldCallPointer { span, ty, pointer } => {
+                let (space, lifetime) = match pointer.as_ptr(db) {
+                    Some((_, ProviderAddressSpace::Calldata)) => ("calldata", "one call"),
+                    _ => ("memory", "one transaction"),
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("contract state cannot hold a {space} pointer"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` holds the {space} pointer `{}`",
+                            ty.pretty_print(db),
+                            pointer.pretty_print(db)
+                        ),
+                        span: span.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "{space} lasts for {lifetime}, so a later one could not follow the pointer"
+                    )],
+                    error_code,
+                }
+            }
 
             Self::ContractFieldPersistentUnderTransient {
                 span,
@@ -4115,6 +4120,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         MutabilityFix::Effect => {
                             format!("write `mut {name}` in `uses` to write it")
                         }
+                        MutabilityFix::Calldata => {
+                            format!("`{name}` points into calldata, which is read-only")
+                        }
                     };
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
@@ -5084,18 +5092,20 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
-            BodyDiag::UncoveredProvider { primary, is_mut } => CompleteDiagnostic {
+            BodyDiag::UncoveredStateAccess { primary, is_mut } => CompleteDiagnostic {
                 severity,
-                message: "a `with` provider naming storage needs the function's own authority"
+                message: "an access through a state pointer needs the function's own authority"
                     .to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this handle names storage the function's `uses` does not cover"
-                        .to_string(),
+                    message: format!(
+                        "this {} state the function's `uses` does not cover",
+                        if *is_mut { "writes" } else { "reads" }
+                    ),
                     span: primary.resolve(db),
                 }],
                 notes: vec![format!(
-                    "require it via `uses (storage: {}RawStorage)`, or vouch for it in an `unsafe` block",
+                    "require it via `uses (storage: {}RawStorage)`; `unsafe` does not grant authority",
                     if *is_mut { "mut " } else { "" }
                 )],
                 error_code,

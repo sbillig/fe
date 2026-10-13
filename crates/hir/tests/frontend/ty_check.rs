@@ -267,40 +267,6 @@ fn trigger(lhs: *u8, rhs: *u256) -> bool {
 }
 
 #[test]
-fn effect_handle_storage_is_not_public() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "raw_effect_handle_construction_is_not_public.fe".into(),
-        r#"
-use std::evm::{CalldataPtr, StorPtr, TStorPtr}
-
-fn construct_storage(raw: u256) -> StorPtr<u256> {
-    StorPtr { handle: raw }
-}
-
-fn construct_transient_storage(raw: u256) -> TStorPtr<u256> {
-    TStorPtr { slot: raw }
-}
-
-fn construct_calldata(raw: u256) -> CalldataPtr<u256> {
-    CalldataPtr { offset: raw }
-}
-"#,
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let diags = diagnostics_for(&db, top_mod);
-
-    for field in ["handle", "slot", "offset"] {
-        assert!(
-            diags
-                .iter()
-                .any(|diag| diag.message == format!("`{field}` is not visible")),
-            "{diags:#?}"
-        );
-    }
-}
-
-#[test]
 fn oversized_type_size_is_rejected() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

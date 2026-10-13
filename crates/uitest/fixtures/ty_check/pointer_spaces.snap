@@ -10,6 +10,23 @@ error[12-0001]: unsupported `#[pointer]` attribute on type alias `Slot`
 4 │ #[pointer(storage)]
   │ ^^^^^^^^^^^^^^^^^^^ `#[pointer]` is only supported on type aliases in `core`
 
+error[3-0065]: contract state cannot hold a memory pointer
+   ┌─ pointer_spaces.fe:21:17
+   │
+21 │     mut memory: *u256,
+   │                 ^^^^^ `*<u256>` holds the memory pointer `*<u256>`
+   │
+   = memory lasts for one transaction, so a later one could not follow the pointer
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ pointer_spaces.fe:28:9
+   │
+26 │ fn calldata(c: core::ptr::CalldataPtr<u256>) -> u256 {
+   │             - `c` points into calldata, which is read-only
+27 │     unsafe {
+28 │         *c = 1
+   │         ^^ immutable assignment
+
 error[8-0055]: cast is not provably lossless
    ┌─ pointer_spaces.fe:12:13
    │
@@ -42,10 +59,11 @@ error[8-0055]: cast is not provably lossless
    │
    = a pointer converts only to and from its `u256` address
 
-error[8-0084]: memory-backed contract fields are not supported
-   ┌─ pointer_spaces.fe:21:17
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ pointer_spaces.fe:39:15
    │
-21 │     mut memory: *u256,
-   │                 ^^^^^ `memory` has a memory-backed contract field type
-   │
-   = memory handles cannot be persisted as contract fields; use a plain immutable field for code-backed data or a plain `mut` field for storage-backed state
+37 │ fn provide_calldata(c: core::ptr::CalldataPtr<u256>) {
+   │                     - `c` does not provide mutable access
+38 │     unsafe {
+39 │         with (mut *c) {
+   │               ^^^^^^ cannot borrow as `mut`

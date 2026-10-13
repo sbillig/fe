@@ -1723,8 +1723,8 @@ pub fn entry() -> u256 { forward(VALUES) }
             r#"
 fn read_input() -> u256 uses (values: [u256; 3]) { forward(values) }
 pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = evm.calldata_ptr<[u256; 3]>(0)
-    with (data) { read_input() }
+    let data = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
+    unsafe { with (*data) { read_input() } }
 }
 "#,
             "evm_calldata_load",
@@ -1767,8 +1767,8 @@ fn pick(_ input: Input) -> u256 { input.first }
 fn forward(_ input: Input) -> u256 { pick(input) }
 fn read_input() -> u256 uses (input: Input) { forward(input) }
 pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = evm.calldata_ptr<Input>(0)
-    with (data) { read_input() }
+    let data = unsafe { evm.calldata_ptr<Input>(0) }
+    unsafe { with (*data) { read_input() } }
 }
 "#,
     );
@@ -2499,7 +2499,12 @@ fn capability_gated_provider_ref_conversion_preserves_transport_in_rmir() {
                             matches!(
                                 stmt,
                                 RStmt::Assign {
-                                    expr: RExpr::AddrOf { .. } | RExpr::MaterializeToObject { .. },
+                                    expr: RExpr::AddrOf {
+                                        place: RuntimePlace {
+                                            root: PlaceRoot::Slot(_),
+                                            ..
+                                        },
+                                    } | RExpr::MaterializeToObject { .. },
                                     ..
                                 } | RStmt::CopyInto { .. }
                             )

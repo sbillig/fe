@@ -678,17 +678,8 @@ func inline(always) private %mem_word_at(v0.i256, v1.i256) -> i256 {
     block1:
         v4.i256 = add v0 v1;
         v5.i256 = call %cast v4;
-        v6.i256 = call %mem_word_load v5;
+        v6.i256 = mload v5 i256;
         return v6;
-}
-
-func private %mem_word_load(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = mload v0 i256;
-        return v2;
 }
 
 func private %payload_size__ge513(v0.i256) -> i256 {

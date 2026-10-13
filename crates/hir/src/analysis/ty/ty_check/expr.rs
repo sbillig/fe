@@ -33,6 +33,7 @@ use super::{
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
 use crate::analysis::ty::{
+    ProviderAddressSpace,
     adt_def::AdtRef,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonicalized, Solution},
@@ -845,8 +846,9 @@ impl<'db> TyChecker<'db> {
         }
 
         if *op == UnOp::Deref {
-            if let Some((pointee, _)) = prop.ty.as_ptr(self.db) {
-                return ExprProp::new(pointee, true);
+            // Calldata is immutable input.
+            if let Some((pointee, space)) = prop.ty.as_ptr(self.db) {
+                return ExprProp::new(pointee, space != ProviderAddressSpace::Calldata);
             }
 
             let expected = TyId::ptr_to(self.db, self.fresh_ty());
@@ -2048,7 +2050,7 @@ impl<'db> TyChecker<'db> {
                         .or_else(|| self.concrete_borrow_provider_for_effect_handle_ty(provider.ty))
                         .or_else(|| {
                             matches!(pass_mode, super::EffectPassMode::ByTempPlace)
-                                .then_some(super::ProviderAddressSpace::Memory)
+                                .then_some(ProviderAddressSpace::Memory)
                         });
                     if matches!(
                         pass_mode,
@@ -2788,7 +2790,7 @@ impl<'db> TyChecker<'db> {
         &self,
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
-    ) -> Option<super::ProviderAddressSpace> {
+    ) -> Option<ProviderAddressSpace> {
         match pass_mode {
             super::EffectPassMode::ByTempPlace => match arg {
                 super::EffectArg::Value(expr) => self.env.typed_expr(*expr).and_then(|prop| {
@@ -2843,7 +2845,7 @@ impl<'db> TyChecker<'db> {
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
         provider_target_ty: Option<TyId<'db>>,
-        provider_space: Option<super::ProviderAddressSpace>,
+        provider_space: Option<ProviderAddressSpace>,
     ) -> EffectProviderSpecialization<'db> {
         let provenance = self
             .effect_provider_provenance(provided, arg)
@@ -3143,8 +3145,7 @@ impl<'db> TyChecker<'db> {
             .expect("missing required core trait `core::EffectRef`");
         let effect_ref_mut_trait = resolve_core_trait(self.db, scope, &["EffectRefMut"])
             .expect("missing required core trait `core::EffectRefMut`");
-        let effect_handle_trait = resolve_core_trait(self.db, scope, &["EffectHandle"])
-            .expect("missing required core trait `core::EffectHandle`");
+        let effect_handle_trait = resolve_core_trait(self.db, scope, &["EffectHandle"])?;
         let target_ident = IdentId::new(self.db, "Target".to_string());
         let effect_handle_inst = TraitInstId::new(
             self.db,
@@ -4816,7 +4817,7 @@ impl<'db> TyChecker<'db> {
         let scrutinee_prop = self.open_matched_place(*scrutinee, scrutinee_prop, arm_pats);
 
         let mut match_ty = expected;
-        let mut first_provider: Option<super::ProviderAddressSpace> = None;
+        let mut first_provider: Option<ProviderAddressSpace> = None;
         let mut provider_unknown = false;
         let mut provider_conflict = false;
         let mut arm_statuses = Vec::with_capacity(arms.len());
@@ -5288,6 +5289,21 @@ impl<'db> TyChecker<'db> {
             return AssignLhsStatus::NonAssignable;
         }
 
+        if let Some(pointer) = self.calldata_pointer_of_place(lhs) {
+            let binding = self.find_base_binding(pointer).map(|binding| {
+                (
+                    binding.binding_name(&self.env),
+                    binding.def_span(&self.env),
+                    MutabilityFix::Calldata,
+                )
+            });
+            self.push_diag(BodyDiag::ImmutableAssignment {
+                primary: lhs.span(self.body()).into(),
+                binding,
+            });
+            return AssignLhsStatus::Immutable;
+        }
+
         if !typed_lhs.is_mut {
             let binding = self.find_base_binding(lhs);
             if self.report_write_to_capture(binding, lhs.span(self.body()).into()) {
@@ -5413,6 +5429,29 @@ impl<'db> TyChecker<'db> {
             Expr::Bin(_, _, op) if *op == BinOp::Index => true,
             Expr::Un(_, UnOp::Deref) => true,
             _ => self.env.is_grant_place(expr),
+        }
+    }
+
+    /// The calldata pointer whose pointee holds the place `expr` names.
+    fn calldata_pointer_of_place(&mut self, expr: ExprId) -> Option<ExprId> {
+        let (base, deref) = match self.env.expr_data(expr) {
+            Partial::Present(Expr::Un(inner, UnOp::Deref)) => (*inner, true),
+            Partial::Present(Expr::Field(base, ..)) => (*base, false),
+            Partial::Present(Expr::Bin(base, _, BinOp::Index)) => {
+                return self.calldata_pointer_of_place(*base);
+            }
+            _ => return None,
+        };
+        let base_ty = self.env.typed_expr(base)?.ty;
+        if matches!(
+            self.normalize_ty(base_ty).as_ptr(self.db),
+            Some((_, ProviderAddressSpace::Calldata))
+        ) {
+            Some(base)
+        } else if deref {
+            None
+        } else {
+            self.calldata_pointer_of_place(base)
         }
     }
 

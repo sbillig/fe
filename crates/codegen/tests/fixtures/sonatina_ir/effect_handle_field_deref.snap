@@ -11,7 +11,6 @@ type @layout_1 = {i256, i256, i256};
 type @layout_2 = {i256, i256};
 type @layout_3 = {};
 type @layout_4 = {@layout_3};
-type @layout_5 = {@layout_0, i256};
 
 global private const @layout_0 $const_region_0 = {0};
 
@@ -29,10 +28,9 @@ func private %__EffectHandleFieldDeref_recv_0_0(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.@layout_0 = call %stor_ptr v0;
-        v4.i256 = call %raw v3;
-        v6.i256 = call %write_cell v1 v4;
-        return v6;
+        v3.i256 = call %stor_ptr v0;
+        v5.i256 = call %write_cell v1 v3;
+        return v5;
 }
 
 func private %__EffectHandleFieldDeref_recv_0_1(v0.i256) -> i256 {
@@ -40,13 +38,12 @@ func private %__EffectHandleFieldDeref_recv_0_1(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v2.@layout_0 = call %stor_ptr v0;
-        v6.@layout_5 = insert_value undef.@layout_5 0.i256 v2;
-        v7.@layout_5 = insert_value v6 1.i256 1.i256;
-        v8.@layout_0 = call %extract_ptr v7;
-        v9.i256 = call %raw v8;
-        v10.i256 = call %read_cell v9;
-        return v10;
+        v2.i256 = call %stor_ptr v0;
+        v6.@layout_2 = insert_value undef.@layout_2 0.i256 v2;
+        v7.@layout_2 = insert_value v6 1.i256 1.i256;
+        v8.i256 = call %extract_ptr v7;
+        v9.i256 = call %read_cell v8;
+        return v9;
 }
 
 func private %__EffectHandleFieldDeref_recv_0_2(v0.i256, v1.i256) -> i256 {
@@ -646,12 +643,12 @@ func inline(always) private %encode_single_root_alloc(v0.i256) -> @layout_1 {
         return v3;
 }
 
-func private %extract_ptr(v0.@layout_5) -> @layout_0 {
+func private %extract_ptr(v0.@layout_2) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.@layout_0 = extract_value v0 0.i256;
+        v3.i256 = extract_value v0 0.i256;
         return v3;
 }
 
@@ -797,15 +794,6 @@ func private %ptr_offset(v0.i256, v1.i256) -> i256 {
     block1:
         v4.i256 = add v0 v1;
         return v4;
-}
-
-func private %raw(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
 }
 
 func private %read_cell(v0.i256) -> i256 {
@@ -987,13 +975,12 @@ func inline(always) private %slice(v0.@layout_2, v1.i256, v2.i256) -> @layout_2 
         br v22 block2 block3;
 }
 
-func private %stor_ptr(v0.i256) -> @layout_0 {
+func private %stor_ptr(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v4;
+        return v0;
 }
 
 func inline(always) private %impl_AbiFrame__store_word(v0.@layout_2, v1.i256, v2.i256) {

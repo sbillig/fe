@@ -5619,8 +5619,8 @@ impl<'db> FieldView<'db> {
                 ContractLayoutError::NonRegularProviderCycle => {
                     TyLowerDiag::ContractFieldProviderCycle { span, ty }
                 }
-                ContractLayoutError::MemoryValueInState { pointer } => {
-                    TyLowerDiag::ContractFieldMemoryValue {
+                ContractLayoutError::CallPointerInState { pointer } => {
+                    TyLowerDiag::ContractFieldCallPointer {
                         span,
                         ty,
                         pointer: *pointer,

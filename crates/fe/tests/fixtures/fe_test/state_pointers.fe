@@ -1,5 +1,5 @@
 use core::ptr::{StorPtr, TStorPtr}
-use std::evm::Evm
+use std::evm::{Evm, RawStorage}
 
 struct Cell {
     value: u256,
@@ -24,12 +24,13 @@ fn bump() -> u256 uses (cell: mut Cell) {
     cell.count
 }
 
-pub contract C {
+// An access through a state pointer needs the contract's raw state authority.
+pub contract C uses (storage: mut RawStorage) {
     // A storage pointer is a slot number, so it may persist in storage.
     mut saved: StorPtr<Cell>,
 
     recv M {
-        Write { slot, value } -> u256 uses (mut saved) {
+        Write { slot, value } -> u256 uses (mut saved, mut storage) {
             let cell = slot as StorPtr<Cell>
             saved = cell
             unsafe {
@@ -38,12 +39,12 @@ pub contract C {
             }
         }
 
-        ReadWord { slot } -> u256 {
+        ReadWord { slot } -> u256 uses (storage) {
             let word = slot as StorPtr<u256>
             unsafe { *word }
         }
 
-        Bump {} -> u256 uses (saved) {
+        Bump {} -> u256 uses (saved, mut storage) {
             let cell = saved
             unsafe {
                 with (mut *cell) {
@@ -52,7 +53,7 @@ pub contract C {
             }
         }
 
-        Flag { slot } -> bool {
+        Flag { slot } -> bool uses (mut storage) {
             let flag = slot as TStorPtr<bool>
             unsafe {
                 *flag = true

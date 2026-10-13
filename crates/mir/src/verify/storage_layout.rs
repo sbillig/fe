@@ -265,8 +265,7 @@ mod tests {
     };
 
     const CONTRACTS: &str = r#"
-use std::evm::StorageMap
-use std::evm::effects::TStorPtr
+use std::evm::{StorageMap, TSlot}
 
 struct Word {
     value: u256,
@@ -280,7 +279,7 @@ msg LayoutMsg {
 pub contract Layouts {
     mut words: [[u256; 2]; 2],
     mut maps: StorageMap<u256, u256>,
-    mut temp: TStorPtr<u256>,
+    mut temp: TSlot<u256>,
     fixed: Word,
 
     init() uses (mut fixed) {
@@ -289,7 +288,7 @@ pub contract Layouts {
 
     recv LayoutMsg {
         Read -> u256 uses (words, maps, temp, fixed) {
-            words[0][0] + maps.get(key: 0) + temp + fixed.value
+            words[0][0] + maps.get(key: 0) + temp[()] + fixed.value
         }
     }
 }
@@ -520,7 +519,7 @@ pub contract Other {
             for (field, space, span) in [
                 (words, ProviderAddressSpace::Storage, 4),
                 (maps, ProviderAddressSpace::Storage, 1),
-                (temp, ProviderAddressSpace::Transient, 1),
+                (temp, ProviderAddressSpace::Storage, 1),
                 (fixed, ProviderAddressSpace::Code, 1),
             ] {
                 let hir = contract
@@ -612,7 +611,7 @@ pub contract Other {
 
             assert!(matches!(
                 mutated_wrapper_error(db, package, contract, EntryKind::Recv, |args| {
-                    set_binding_space(field_binding_mut(args, temp), AddressSpaceKind::Storage)
+                    set_binding_space(field_binding_mut(args, temp), AddressSpaceKind::Transient)
                 }),
                 VerifyError::ContractFieldAddressSpaceMismatch { field, .. }
                     if field == temp

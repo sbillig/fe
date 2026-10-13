@@ -21,3 +21,23 @@ pub contract C {
     mut memory: *u256,
     mut slot: StorPtr<u256>,
 }
+
+// Calldata is immutable input.
+fn calldata(c: core::ptr::CalldataPtr<u256>) -> u256 {
+    unsafe {
+        *c = 1
+        *c
+    }
+}
+
+fn set() uses (value: mut u256) {
+    value = 1
+}
+
+fn provide_calldata(c: core::ptr::CalldataPtr<u256>) {
+    unsafe {
+        with (mut *c) {
+            set()
+        }
+    }
+}

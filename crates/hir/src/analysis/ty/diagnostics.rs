@@ -246,7 +246,7 @@ pub enum TyLowerDiag<'db> {
 
     /// A contract field in storage or transient storage holding a memory
     /// pointer, which no later transaction can follow.
-    ContractFieldMemoryValue {
+    ContractFieldCallPointer {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
         pointer: TyId<'db>,
@@ -353,7 +353,7 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldSlotNotConst { .. } => 62,
             Self::ContractFieldSlotInCode { .. } => 63,
             Self::ContractFieldSlotOverlap { .. } => 64,
-            Self::ContractFieldMemoryValue { .. } => 65,
+            Self::ContractFieldCallPointer { .. } => 65,
             Self::ContractFieldPersistentUnderTransient { .. } => 66,
         }
     }
@@ -398,6 +398,8 @@ pub enum MutabilityFix {
     OwnSelf,
     /// An effect binding: `uses (mut x)`.
     Effect,
+    /// A calldata pointer: calldata is read-only input.
+    Calldata,
 }
 
 /// Where an access marker stands in place of the names it belongs on.
@@ -1049,7 +1051,9 @@ pub enum BodyDiag<'db> {
     },
     /// A `with` provider naming existing storage or transient state that the
     /// function's own effects do not cover.
-    UncoveredProvider {
+    /// An access through a state pointer the body's own effects do not
+    /// cover.
+    UncoveredStateAccess {
         primary: DynLazySpan<'db>,
         is_mut: bool,
     },
@@ -1229,7 +1233,7 @@ impl<'db> BodyDiag<'db> {
             Self::TryReturnMismatch { .. } => 104,
             Self::ViewInstantiation { .. } => 105,
             Self::MissingRow { .. } => 106,
-            Self::UncoveredProvider { .. } => 107,
+            Self::UncoveredStateAccess { .. } => 107,
             Self::ClosureInConstContext { .. } => 108,
             Self::ClosureArityMismatch { .. } => 109,
             Self::WriteToCapture { .. } => 110,

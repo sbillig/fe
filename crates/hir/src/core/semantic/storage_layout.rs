@@ -191,8 +191,9 @@ pub enum ContractLayoutError<'db> {
     IncompleteAdtLayoutProjection {
         ty: TyId<'db>,
     },
-    /// A field in storage or transient storage holding a memory pointer.
-    MemoryValueInState {
+    /// A field holding a pointer into memory or calldata, which last at
+    /// most one call.
+    CallPointerInState {
         pointer: TyId<'db>,
     },
     /// A persistent collection inside a transient collection's contents.
@@ -219,7 +220,9 @@ impl ContractLayoutError<'_> {
             Self::ExplicitSlotOverlap { .. } => "the explicit slots overlap another field's",
             Self::LayoutExtentOverflow => "layout extent overflowed",
             Self::IncompleteAdtLayoutProjection { .. } => "layout projection is incomplete",
-            Self::MemoryValueInState { .. } => "contract state holds a memory pointer",
+            Self::CallPointerInState { .. } => {
+                "contract state holds a pointer into memory or calldata"
+            }
             Self::PersistentUnderTransient { .. } => {
                 "a persistent collection lies in transient storage"
             }
@@ -451,7 +454,7 @@ struct FieldWalker<'db> {
     /// the implementation that selects each target.
     expanding: Vec<(TyId<'db>, ImplementorId<'db>)>,
     /// The first memory pointer the walked value holds.
-    memory_pointer: Option<TyId<'db>>,
+    call_pointer: Option<TyId<'db>>,
 }
 
 /// How a handle's target relates to the targets being checked around it.
@@ -614,8 +617,14 @@ impl<'db> FieldWalker<'db> {
         {
             WalkOutput::empty()
         } else {
-            if matches!(ty.as_ptr(self.db), Some((_, ProviderAddressSpace::Memory))) {
-                self.memory_pointer.get_or_insert(ty);
+            if matches!(
+                ty.as_ptr(self.db),
+                Some((
+                    _,
+                    ProviderAddressSpace::Memory | ProviderAddressSpace::Calldata
+                ))
+            ) {
+                self.call_pointer.get_or_insert(ty);
             }
             WalkOutput::leaf(self.db, ty, path, dimensions, InlineLayoutLeafKind::Field)
         }
@@ -1019,17 +1028,20 @@ fn collect_field_plan<'db>(
         errors: Vec::new(),
         content_spaces: Vec::new(),
         expanding: Vec::new(),
-        memory_pointer: None,
+        call_pointer: None,
     };
     let output = walker.walk_ty(ConcreteTypeView::identity(target), &[], &[]);
+    // Every contract field outlives the call: code-backed ones too.
+    if walker.errors.is_empty()
+        && let Some(pointer) = walker.call_pointer
+    {
+        walker.push_error(ContractLayoutError::CallPointerInState { pointer });
+    }
     let in_state = walker.errors.is_empty()
         && matches!(
             address_space,
             ProviderAddressSpace::Storage | ProviderAddressSpace::Transient
         );
-    if in_state && let Some(pointer) = walker.memory_pointer {
-        walker.push_error(ContractLayoutError::MemoryValueInState { pointer });
-    }
     if in_state
         && let Some(collection) = persistent_under_transient(
             db,
@@ -1094,7 +1106,7 @@ pub(crate) fn storage_slot_span<'db>(
         errors: Vec::new(),
         content_spaces: Vec::new(),
         expanding: Vec::new(),
-        memory_pointer: None,
+        call_pointer: None,
     };
     let output = walker.walk_ty(ConcreteTypeView::identity(ty), &[], &[]);
     walker.errors.is_empty().then_some(output.span)
@@ -1119,7 +1131,7 @@ pub(crate) fn storage_field_lanes<'db>(
         errors: Vec::new(),
         content_spaces: Vec::new(),
         expanding: Vec::new(),
-        memory_pointer: None,
+        call_pointer: None,
     };
     let shapes: Vec<_> = ty
         .field_types(db)

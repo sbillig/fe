@@ -8,7 +8,7 @@ use hir::analysis::{
         SemanticLocalRole, ValueProvenance, VariantIndex, get_or_build_semantic_instance,
         normalized::{
             NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase,
-            NRootKind, NStatementKind, NValueDefinition, NValueId,
+            NRootKind, NStatementKind, NValueDefinition, NValueId, copied_scalar_ty,
         },
     },
     ty::{
@@ -2107,12 +2107,22 @@ fn runtime_exact_class_for_visible_binding_in_env<'db>(
         SemanticLocalRole::PlaceCarrier {
             provider: None,
             value_ty,
-        } => Some(provider_class_for_target_in_env(
-            db,
-            env,
-            Some(value_ty),
-            AddressSpaceKind::Memory,
-        )),
+        } => {
+            // A view of a primitive scalar or a pointer is passed by copy.
+            let carrier_ty = semantic
+                .key(db)
+                .typed_body(db)
+                .binding_carrier_ty(db, binding);
+            if copied_scalar_ty(db, carrier_ty) != carrier_ty {
+                return top_level_class_for_ty_in_env(db, env, value_ty, AddressSpaceKind::Memory);
+            }
+            Some(provider_class_for_target_in_env(
+                db,
+                env,
+                Some(value_ty),
+                AddressSpaceKind::Memory,
+            ))
+        }
         SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             value_ty,
