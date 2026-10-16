@@ -117,6 +117,17 @@ impl<T> MemArray<T> {
         array
     }
 
+    /// `len` elements, element `i` being `f(i)`.
+    pub fn from_fn<F: FnMut(usize) -> T>(_ len: usize, _ f: mut F) -> Self uses F::E {
+        // Each element is written before anything reads it: `f` is given
+        // only an index, and a revert inside it discards the array.
+        var array = unsafe { Self::new_uninit(len) }
+        for i in 0..len {
+            array[i] = f(i)
+        }
+        array
+    }
+
     pub fn ptr(self) -> *T {
         self.ptr
     }
@@ -169,6 +180,16 @@ impl<T> MemArray<T> {
 
     pub fn ptr_at(self, _ index: usize) -> *T {
         mem_array_elem(self, index)
+    }
+
+    /// A copy of element `index`, or `None` past the end.
+    pub fn get(self, _ index: usize) -> Option<T>
+        where T: Copy
+    {
+        if index >= self.len {
+            return Option::None
+        }
+        Option::Some(unsafe { *elem(self.ptr, index) })
     }
 
     pub fn get_mut(mut self, _ index: usize) -> Option<mut T> {
@@ -373,6 +394,25 @@ impl MemSlice<u8> {
             Option::None => index_out_of_bounds()
         }
     }
+
+    /// The 32 bytes from `offset` on, which need not be word-aligned, as a
+    /// big-endian word. Reverts unless all 32 lie in the span.
+    pub fn read_word(self, _ offset: usize) -> u256 {
+        unsafe { *cast<u8, u256>(self.word_ptr(offset)) }
+    }
+
+    /// Writes `value` big-endian over the 32 bytes from `offset` on, which
+    /// need not be word-aligned. Reverts unless all 32 lie in the span.
+    pub fn write_word(mut self, offset: usize, value: u256) {
+        unsafe { *cast<u8, u256>(self.word_ptr(offset)) = value }
+    }
+
+    fn word_ptr(self, _ offset: usize) -> *u8 {
+        if offset > self.len || 32 > self.len - offset {
+            index_out_of_bounds()
+        }
+        offset_bytes(self.ptr, offset as u256)
+    }
 }
 
 impl MemBuffer {
@@ -452,6 +492,12 @@ impl MemBuffer {
 
     pub fn slice(self, offset: usize, len: usize) -> ref MemSpan {
         self.span().slice(offset, len)
+    }
+
+    /// The 32 bytes from `offset` on, which need not be word-aligned, as a
+    /// big-endian word. Reverts unless all 32 lie in the logical extent.
+    pub fn read_word(self, _ offset: usize) -> u256 {
+        self.span().read_word(offset)
     }
 
     /// The bytes `offset..offset + len`, to write through.
