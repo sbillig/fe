@@ -25,7 +25,8 @@ way: `for (i, mut x) in xs.enumerate()`.
 cursor, `at` projects the element at it. `CollectionMut` adds `at_mut` with
 `mut` access for loops whose item is `mut`, and `Bidirectional` traverses in
 reverse. Arrays, `MemArray`, `MemSlice`, ranges, `SolArray` and
-`SolEnumerableSet` are collections; a collection declares the effects its
+`SolEnumerableSet` are collections, and so is `DynArray`, whose loop decodes
+each element as it reaches it; a collection declares the effects its
 methods need (`uses E`) and the space of the places it yields (`space S`).
 
 A loop that copies each item (a `Copy` element bound by a plain name or
