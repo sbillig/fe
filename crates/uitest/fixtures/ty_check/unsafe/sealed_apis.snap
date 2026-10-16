@@ -23,7 +23,7 @@ error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` blo
     │
     ┌─ src/ptr.fe:234:19
     │
-234 │     pub unsafe fn from_raw_parts(ptr: *T, len: u256) -> ref Self {
+234 │     pub unsafe fn from_raw_parts(ptr: *T, len: usize) -> ref Self {
     │                   -------------- callee defined here
 
 error[8-0097]: call to unsafe function `store_word` requires an `unsafe` block or function
@@ -56,5 +56,5 @@ error[8-0097]: call to unsafe function `alloc_array` requires an `unsafe` block 
     │
     ┌─ src/ptr.fe:674:15
     │
-674 │ pub unsafe fn alloc_array<T>(_ len: u256) -> MemArray<T> {
+674 │ pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
     │               ----------- callee defined here
