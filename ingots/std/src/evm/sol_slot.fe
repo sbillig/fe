@@ -7,7 +7,7 @@
 //!
 //! ```fe
 //! // `address owner; bool paused;` share slot 0: owner at byte 0, paused at 20.
-//! let slot = unsafe { SolSlot::at(0) }
+//! let slot = unsafe { SolSlot::at_mut(0) }
 //! let owner: Address = slot.read(offset: 0)
 //! slot.write(offset: 20, value: true)
 //! ```
@@ -17,7 +17,7 @@
 //! the slot into a `SolWord` and `store` it back:
 //!
 //! ```fe
-//! let slot = unsafe { SolSlot::at(0) }
+//! let slot = unsafe { SolSlot::at_mut(0) }
 //! var word = slot.load()
 //! let owner: Address = word.get(offset: 0)
 //! word.set(offset: 20, value: false)
@@ -35,7 +35,7 @@ use core::marker::Pinned
 use core::ops::{Location, StateIndex, WrappingAdd}
 use core::ptr::{self, MemSpan}
 use super::crypto::keccak_words
-use super::effects::{Address, RawStorage, revert_error, storage_at_mut}
+use super::effects::{Address, RawStorage, revert_error, storage_at, storage_at_mut}
 use super::ops::{revert_empty, signextend}
 use super::panic::{PANIC_STORAGE_ENCODING, Panic}
 
@@ -73,12 +73,20 @@ unsafe impl StateIndex for Payload {
 }
 
 impl SolSlot {
-    /// The storage slot `slot`.
+    /// The storage slot `slot`, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the slots its payload derives.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The storage slot `slot`, to read and write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 

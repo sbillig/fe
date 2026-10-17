@@ -181,7 +181,7 @@ raw-slot collections, whose `at` constructors are raw places, are held at
 once this way, and `MemArray::pair_mut` is one inside a library function:
 
 ```fe
-let (mut a, mut b) = unsafe { (SolArray<u256>::at(x), SolArray<u256>::at(y)) }
+let (mut a, mut b) = unsafe { (SolArray<u256>::at_mut(x), SolArray<u256>::at_mut(y)) }
 a.push(1)                           // all storage stays reserved until both end
 b.push(2)
 ```

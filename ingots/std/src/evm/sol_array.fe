@@ -14,7 +14,7 @@
 //!
 //! ```fe
 //! // `address[] owners;` at slot 2, which no contract field uses
-//! let owners = unsafe { SolArray<Address>::at(2) }
+//! let owners = unsafe { SolArray<Address>::at_mut(2) }
 //! owners.push(owner)
 //! let first = owners[0]
 //! ```
@@ -27,7 +27,7 @@ use core::option::Option
 use core::intrinsic::storage_slots
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
-use super::effects::{RawStorage, revert_error, storage_at_mut}
+use super::effects::{RawStorage, revert_error, storage_at, storage_at_mut}
 use super::panic::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_POP_EMPTY, Panic}
 use super::sol_slot::{SolPacked, data_slot, field_mask}
 
@@ -95,12 +95,20 @@ fn element_location(first: u256, index: u256, bits: u256, slots: u256) -> Locati
 }
 
 impl<T> SolArray<T> {
-    /// The array whose length is stored at `slot`.
+    /// The array whose length is stored at `slot`, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the elements' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The array whose length is stored at `slot`, to read and write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 
