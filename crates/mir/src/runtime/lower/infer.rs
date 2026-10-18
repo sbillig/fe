@@ -723,7 +723,7 @@ fn local_lowers_as_direct_read_value<'db>(
     }
     match local.role.kind() {
         SemanticLocalKind::DirectValue => {
-            local_direct_value_lowers_as_unrooted(local, body, db, &class)
+            local_direct_value_lowers_as_unrooted(local, body, &class)
         }
         SemanticLocalKind::PlaceCarrier => {
             local_is_read_only_view_param(local)
@@ -736,18 +736,13 @@ fn local_lowers_as_direct_read_value<'db>(
 fn local_direct_value_lowers_as_unrooted<'db>(
     local: &SLocal<'db>,
     body: &RuntimeSemanticBody<'db>,
-    db: &'db dyn MirDb,
     class: &RuntimeClass<'db>,
 ) -> bool {
     if local.role.root_provider(&body.locals).is_some() {
         return false;
     }
-    // A raw address is a plain word, so a field holding one leaves its
-    // aggregate a value; a reference field, which only projection return
-    // shapes have, roots it.
     let unrooted = match class {
-        RuntimeClass::Scalar(_) => true,
-        RuntimeClass::AggregateValue { .. } => !class.contains_ref(db),
+        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => true,
         RuntimeClass::RawAddr { .. } => matches!(
             local.role,
             SemanticLocalRole::DirectValue {
@@ -778,7 +773,7 @@ pub(super) fn local_lowers_as_unrooted_read_value<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Option<RuntimeCarrier<'db>> {
-    let candidate = unrooted_read_value_candidate_carrier(db, local, carrier)?;
+    let candidate = unrooted_read_value_candidate_carrier(local, carrier)?;
     if !local_lowers_as_direct_read_value(db, body, local, &candidate, scope, assumptions) {
         return None;
     }
@@ -790,7 +785,6 @@ pub(super) fn local_lowers_as_unrooted_read_value<'db>(
 }
 
 fn unrooted_read_value_candidate_carrier<'db>(
-    db: &'db dyn MirDb,
     local: &SLocal<'db>,
     carrier: &RuntimeCarrier<'db>,
 ) -> Option<RuntimeCarrier<'db>> {
@@ -813,8 +807,7 @@ fn unrooted_read_value_candidate_carrier<'db>(
     else {
         return None;
     };
-    let aggregate = class.aggregate_value_class()?;
-    (!aggregate.contains_ref(db)).then_some(RuntimeCarrier::Value(aggregate))
+    Some(RuntimeCarrier::Value(class.aggregate_value_class()?))
 }
 
 fn runtime_provider_binding_id<'db>(

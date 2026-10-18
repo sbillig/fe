@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/ref_is_not_a_copy.fe
 ---
@@ -31,12 +30,11 @@ func private %main_root() {
 
 func private %test_ref_is_not_a_copy() {
     block0:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
+        v2.constref<@layout_0> = const.ref $const_region_0;
         v3.constref<@layout_0> = const.ref $const_region_0;
-        v4.constref<@layout_0> = const.ref $const_region_0;
         jump block9;
 
     block2:
@@ -46,55 +44,49 @@ func private %test_ref_is_not_a_copy() {
         jump block11;
 
     block4:
-        v6.i256 = const.load v31;
-        v7.i1 = eq v6 20.i256;
+        v5.i256 = const.load v26;
+        v6.i1 = eq v5 20.i256;
         jump block13;
 
     block5:
         jump block7;
 
     block6:
-        v10.*i8 = evm_malloc 64.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        mstore v11 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v15.i256, v16.i1) = uaddo v11 32.i256;
-        br v16 block14 block15;
+        v9.*i8 = evm_malloc 64.i256;
+        v10.i256 = ptr_to_int v9 i256;
+        mstore v10 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        (v14.i256, v15.i1) = uaddo v10 32.i256;
+        br v15 block14 block15;
 
     block7:
         return;
 
     block8:
-        v25.objref<constref<i256>> = obj.proj v0 0.i256;
-        v26.constref<i256> = extract_value v39 0.i256;
-        obj.store v25 v26;
-        v28.objref<constref<i256>> = obj.proj v0 1.i256;
-        v29.constref<i256> = extract_value v39 1.i256;
-        obj.store v28 v29;
-        v30.constref<i256> = extract_value v39 0.i256;
-        v31.constref<i256> = extract_value v39 1.i256;
-        v32.i256 = const.load v30;
-        v33.i1 = eq v32 10.i256;
-        br v33 block2 block3;
+        v24.constref<i256> = extract_value v34 0.i256;
+        v26.constref<i256> = extract_value v34 1.i256;
+        v27.i256 = const.load v24;
+        v28.i1 = eq v27 10.i256;
+        br v28 block2 block3;
 
     block9:
-        v35.constref<i256> = const.proj v4 0.i256;
-        v36.constref<i256> = const.proj v4 1.i256;
-        v38.@layout_1 = insert_value undef.@layout_1 0.i256 v35;
-        v39.@layout_1 = insert_value v38 1.i256 v36;
+        v30.constref<i256> = const.proj v3 0.i256;
+        v31.constref<i256> = const.proj v3 1.i256;
+        v33.@layout_1 = insert_value undef.@layout_1 0.i256 v30;
+        v34.@layout_1 = insert_value v33 1.i256 v31;
         jump block8;
 
     block10:
-        v40.*i8 = evm_malloc 64.i256;
-        v41.i256 = ptr_to_int v40 i256;
-        mstore v41 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v43.i256, v44.i1) = uaddo v41 32.i256;
-        br v44 block14 block16;
+        v35.*i8 = evm_malloc 64.i256;
+        v36.i256 = ptr_to_int v35 i256;
+        mstore v36 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        (v38.i256, v39.i1) = uaddo v36 32.i256;
+        br v39 block14 block16;
 
     block11:
         jump block10;
 
     block12:
-        br v7 block5 block6;
+        br v6 block5 block6;
 
     block13:
         jump block12;
@@ -105,12 +97,12 @@ func private %test_ref_is_not_a_copy() {
         evm_revert 0.i256 36.i256;
 
     block15:
-        mstore v15 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v11 36.i256;
+        mstore v14 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v10 36.i256;
 
     block16:
-        mstore v43 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v41 36.i256;
+        mstore v38 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v36 36.i256;
 }
 
 
