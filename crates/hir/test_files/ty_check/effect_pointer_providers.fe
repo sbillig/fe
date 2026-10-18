@@ -18,8 +18,8 @@ fn test_mem_ptr() {
     }
 }
 
-fn test_calldata_ptr_readonly() uses (evm: std::evm::RawOps) {
-    let c = unsafe { evm.calldata_ptr<u256>(0) }
+fn test_calldata_ptr_readonly() {
+    let c = 0 as u256 as std::evm::CalldataPtr<u256>
     unsafe {
         with (*c) {
             let _v = read_x()
@@ -31,8 +31,8 @@ fn read_calldata_triplet_ptr_offset() -> u256 uses (arr: std::evm::CalldataPtr<[
     arr as u256
 }
 
-fn test_calldata_ptr_array_provider() uses (evm: std::evm::RawOps) {
-    let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
+fn test_calldata_ptr_array_provider() {
+    let c = 0 as u256 as std::evm::CalldataPtr<[u256; 3]>
     with (c) {
         let _v = read_calldata_triplet_ptr_offset()
     }

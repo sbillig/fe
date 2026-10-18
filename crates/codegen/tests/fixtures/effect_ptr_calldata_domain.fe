@@ -1,11 +1,11 @@
-use std::evm::{Evm, RawOps}
+use std::evm::CalldataPtr
 
 fn read_x() -> u256 uses (x: u256) {
     x
 }
 
-fn test_calldata_ptr_domain(evm: mut Evm) {
-    let c = unsafe { evm.calldata_ptr<u256>(0) }
+fn test_calldata_ptr_domain() {
+    let c = 0 as u256 as CalldataPtr<u256>
     unsafe {
         with (*c) {
             let _v = read_x()
@@ -13,6 +13,6 @@ fn test_calldata_ptr_domain(evm: mut Evm) {
     }
 }
 
-pub fn main() uses (evm: mut Evm) {
-    test_calldata_ptr_domain(mut evm)
+pub fn main() {
+    test_calldata_ptr_domain()
 }

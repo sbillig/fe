@@ -1,4 +1,4 @@
-use std::evm::{Address, Evm}
+use std::evm::{Address, CalldataPtr, Evm}
 
 struct Env {
     first: u256,
@@ -77,8 +77,8 @@ pub contract Snapshot {
             assert!(copied.second == 22)
             pick(copied, 1)
         }
-        ReadCalldata { .. } -> u256 uses (evm: Evm) {
-            let data = unsafe { evm.calldata_ptr<[u256; 3]>(4) }
+        ReadCalldata { .. } -> u256 {
+            let data = 4 as u256 as CalldataPtr<[u256; 3]>
             unsafe { with (*data) { read_words() } }
         }
     }

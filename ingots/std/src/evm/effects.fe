@@ -264,10 +264,6 @@ pub fn read_transient_word(_ slot: u256) -> u256 uses (storage: RawStorage) {
 pub trait RawOps: RawStorage {
     fn calldataload(self, _: u256) -> u256
     fn calldatasize(self) -> u256
-    /// The caller must ensure that a valid `T` is encoded at `offset`.
-    unsafe fn calldata_ptr<T>(self, _ offset: u256) -> CalldataPtr<T> {
-        offset as CalldataPtr<T>
-    }
     fn calldatacopy(
         mut self,
         dest: mut MemBuffer,

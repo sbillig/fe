@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/effect_pointer_providers.fe
 ---
@@ -155,11 +155,11 @@ note:
    │             ^^^^^^^^ ()
 
 note:
-   ┌─ effect_pointer_providers.fe:21:62
+   ┌─ effect_pointer_providers.fe:21:33
    │
-21 │   fn test_calldata_ptr_readonly() uses (evm: std::evm::RawOps) {
-   │ ╭──────────────────────────────────────────────────────────────^
-22 │ │     let c = unsafe { evm.calldata_ptr<u256>(0) }
+21 │   fn test_calldata_ptr_readonly() {
+   │ ╭─────────────────────────────────^
+22 │ │     let c = 0 as u256 as std::evm::CalldataPtr<u256>
 23 │ │     unsafe {
 24 │ │         with (*c) {
    · │
@@ -170,32 +170,26 @@ note:
 note:
    ┌─ effect_pointer_providers.fe:22:9
    │
-22 │     let c = unsafe { evm.calldata_ptr<u256>(0) }
+22 │     let c = 0 as u256 as std::evm::CalldataPtr<u256>
    │         ^ CalldataPtr<u256>
 
 note:
    ┌─ effect_pointer_providers.fe:22:13
    │
-22 │     let c = unsafe { evm.calldata_ptr<u256>(0) }
-   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
+22 │     let c = 0 as u256 as std::evm::CalldataPtr<u256>
+   │             ^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:22:22
+   ┌─ effect_pointer_providers.fe:22:13
    │
-22 │     let c = unsafe { evm.calldata_ptr<u256>(0) }
-   │                      ^^^ evm
+22 │     let c = 0 as u256 as std::evm::CalldataPtr<u256>
+   │             ^^^^^^^^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:22:22
+   ┌─ effect_pointer_providers.fe:22:13
    │
-22 │     let c = unsafe { evm.calldata_ptr<u256>(0) }
-   │                      ^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
-
-note:
-   ┌─ effect_pointer_providers.fe:22:45
-   │
-22 │     let c = unsafe { evm.calldata_ptr<u256>(0) }
-   │                                             ^ u256
+22 │     let c = 0 as u256 as std::evm::CalldataPtr<u256>
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
 
 note:
    ┌─ effect_pointer_providers.fe:23:5
@@ -276,11 +270,11 @@ note:
    │     ^^^^^^^^^^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:34:68
+   ┌─ effect_pointer_providers.fe:34:39
    │
-34 │   fn test_calldata_ptr_array_provider() uses (evm: std::evm::RawOps) {
-   │ ╭────────────────────────────────────────────────────────────────────^
-35 │ │     let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
+34 │   fn test_calldata_ptr_array_provider() {
+   │ ╭───────────────────────────────────────^
+35 │ │     let c = 0 as u256 as std::evm::CalldataPtr<[u256; 3]>
 36 │ │     with (c) {
 37 │ │         let _v = read_calldata_triplet_ptr_offset()
 38 │ │     }
@@ -290,32 +284,26 @@ note:
 note:
    ┌─ effect_pointer_providers.fe:35:9
    │
-35 │     let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
+35 │     let c = 0 as u256 as std::evm::CalldataPtr<[u256; 3]>
    │         ^ CalldataPtr<[u256; 3]>
 
 note:
    ┌─ effect_pointer_providers.fe:35:13
    │
-35 │     let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
-   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<[u256; 3]>
+35 │     let c = 0 as u256 as std::evm::CalldataPtr<[u256; 3]>
+   │             ^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:35:22
+   ┌─ effect_pointer_providers.fe:35:13
    │
-35 │     let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
-   │                      ^^^ evm
+35 │     let c = 0 as u256 as std::evm::CalldataPtr<[u256; 3]>
+   │             ^^^^^^^^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:35:22
+   ┌─ effect_pointer_providers.fe:35:13
    │
-35 │     let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
-   │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<[u256; 3]>
-
-note:
-   ┌─ effect_pointer_providers.fe:35:50
-   │
-35 │     let c = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
-   │                                                  ^ u256
+35 │     let c = 0 as u256 as std::evm::CalldataPtr<[u256; 3]>
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<[u256; 3]>
 
 note:
    ┌─ effect_pointer_providers.fe:36:5

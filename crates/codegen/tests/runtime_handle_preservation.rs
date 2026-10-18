@@ -1722,8 +1722,8 @@ pub fn entry() -> u256 { forward(VALUES) }
         (
             r#"
 fn read_input() -> u256 uses (values: [u256; 3]) { forward(values) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = unsafe { evm.calldata_ptr<[u256; 3]>(0) }
+pub fn entry() -> u256 {
+    let data = 0 as u256 as std::evm::CalldataPtr<[u256; 3]>
     unsafe { with (*data) { read_input() } }
 }
 "#,
@@ -1766,8 +1766,8 @@ impl Copy for Input {}
 fn pick(_ input: Input) -> u256 { input.first }
 fn forward(_ input: Input) -> u256 { pick(input) }
 fn read_input() -> u256 uses (input: Input) { forward(input) }
-pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
-    let data = unsafe { evm.calldata_ptr<Input>(0) }
+pub fn entry() -> u256 {
+    let data = 0 as u256 as std::evm::CalldataPtr<Input>
     unsafe { with (*data) { read_input() } }
 }
 "#,
