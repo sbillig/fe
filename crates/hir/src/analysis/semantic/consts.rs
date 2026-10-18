@@ -1048,11 +1048,11 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
                     .map(|(canonical, source)| ConcreteTypeView::new(canonical, source)),
                 visiting,
             )?
-        } else if matches!(
-            ty.base_ty(db).data(db),
-            TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
-        ) {
+        } else if matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Func(_))) {
             Some(0)
+        // A contract value is its address, a word, as MIR lays it out.
+        } else if matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Contract(_))) {
+            Some(WORD_SIZE_BYTES)
         } else if ty.is_array(db) {
             if !source.is_array(db) {
                 return Err(RuntimeSizeError::UnavailableConcrete);

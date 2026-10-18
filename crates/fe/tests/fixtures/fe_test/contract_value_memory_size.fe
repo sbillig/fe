@@ -1,0 +1,20 @@
+// A contract value is its address, a word, in memory as in storage, so
+// `size_of` and the memory strides std computes from it count a word.
+use core::size_of
+
+pub contract Other {}
+
+#[test]
+fn contract_value_takes_a_word() {
+    assert(size_of<Other>() == 32)
+    assert(size_of<(u256, Other)>() == 64)
+}
+
+#[test]
+fn contract_elements_do_not_overlap() {
+    var arr = unsafe { MemArray<(u256, Other, u256)>::new_uninit(2) }
+    arr[1].0 = 0
+    arr[0].2 = 7
+    assert(arr[1].0 == 0)
+    assert(arr[0].2 == 7)
+}
