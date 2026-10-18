@@ -280,7 +280,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             CompiledValuePassPlan::ExactShapeRefLike(boundary) => self
                 .select_operand_boundary_compatible_value(arg, boundary)
                 .or_else(|| self.select_exact_shape_ref_like_value(local, boundary))
-                .or_else(|| self.exact_shape_ref_like_placeholder(local, boundary)),
+                .or_else(|| Some(self.exact_shape_ref_like_placeholder(local, boundary))),
             CompiledValuePassPlan::ReadOnlyView { value, borrow } => self
                 .select_operand_boundary_compatible_value(arg, borrow)
                 .or_else(|| self.select_free_boundary_compatible_value(local, borrow))
@@ -623,26 +623,38 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         }
     }
 
+    /// A reference to a zero-sized pointee reads nothing through its address,
+    /// so a source with no runtime carrier (an erased zero-sized provider or
+    /// element) passes a placeholder address.
     fn exact_shape_ref_like_placeholder(
         &mut self,
         local: SLocalId,
         boundary: &StagedBoundary<'db>,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        let RuntimeBoundarySpec::ExactShape(class) = self.specialized_boundary(local, boundary)
-        else {
-            panic!(
-                "exact-shape ref-like pass plan specialized to non-exact-shape boundary: owner={:?}; local={local:?}; boundary={boundary:?}",
+    ) -> SelectedRuntimeArg<'db> {
+        match self.specialized_boundary(local, boundary) {
+            RuntimeBoundarySpec::ExactShape(RuntimeClass::Ref {
+                pointee,
+                kind,
+                view,
+            }) if pointee.is_runtime_zst(self.env.db()) => SelectedRuntimeArg::placeholder(
+                self.env.body().locals[local.index()].ty,
+                RuntimeClass::Ref {
+                    pointee,
+                    kind,
+                    view,
+                },
+            ),
+            boundary => panic!(
+                "exact-shape reference argument has no runtime source: owner={:?}; local={local:?}; local_data={:?}; carrier={:?}; boundary={boundary:?}",
                 self.env
                     .body()
                     .owner()
                     .key(self.env.db())
                     .owner(self.env.db()),
-            );
-        };
-        Some(SelectedRuntimeArg::placeholder(
-            self.env.body().locals[local.index()].ty,
-            class,
-        ))
+                self.env.body().local(local),
+                self.carriers.get(local.index()),
+            ),
+        }
     }
 
     fn select_place_for_boundary(
