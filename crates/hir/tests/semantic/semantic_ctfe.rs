@@ -177,10 +177,10 @@ fn semantic_ctfe_preserves_const_and_anonymous_result_modes() {
 }
 
 #[test]
-fn semantic_const_operands_keep_formal_evidence_distinct() {
+fn semantic_const_param_paths_stay_symbolic_in_generic_bodies() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
-        "semantic_const_evidence.fe".into(),
+        "semantic_const_param_path.fe".into(),
         "fn echo<const N: usize>() -> usize { N }",
     );
     let (module, _) = db.top_mod(file);
@@ -199,7 +199,7 @@ fn semantic_const_operands_keep_formal_evidence_distinct() {
             .any(|stmt| matches!(
                 &stmt.kind,
                 SStmtKind::Assign {
-                    expr: SExpr::Const(SConst::Evidence(_)),
+                    expr: SExpr::Const(SConst::Description(_)),
                     ..
                 }
             ))
@@ -1045,7 +1045,7 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
             .expect("valid semantic body should be canonicalizable");
         for stmt in body.blocks.iter().flat_map(|block| block.stmts.iter()) {
             if let SStmtKind::Assign {
-                expr: SExpr::Const(SConst::Description(value) | SConst::Evidence(value)),
+                expr: SExpr::Const(SConst::Description(value)),
                 ..
             } = &stmt.kind
                 && matches!(value.value(&db), SemConstValue::Description(..))

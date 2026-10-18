@@ -1362,14 +1362,12 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                         !local_disallows_const_ref_storage(body, dst),
                     )
                 }
-                SConst::Description(value) | SConst::Evidence(value) | SConst::Invalid(value) => {
-                    runtime_const_value_class(
-                        db,
-                        type_env,
-                        *value,
-                        !local_disallows_const_ref_storage(body, dst),
-                    )
-                }
+                SConst::Description(value) | SConst::Invalid(value) => runtime_const_value_class(
+                    db,
+                    type_env,
+                    *value,
+                    !local_disallows_const_ref_storage(body, dst),
+                ),
             }),
             NExpr::Unary { .. }
             | NExpr::Binary { .. }

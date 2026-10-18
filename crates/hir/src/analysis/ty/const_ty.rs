@@ -2305,9 +2305,7 @@ pub(crate) fn const_ty_from_sem_const<'db>(
     }
     match SConst::from_trusted_source(db, value) {
         SConst::Value(value) => ConstTyId::new(db, ConstTyData::Value(value)),
-        SConst::Description(value) | SConst::Evidence(value) => {
-            ConstTyId::new(db, ConstTyData::Description(value))
-        }
+        SConst::Description(value) => ConstTyId::new(db, ConstTyData::Description(value)),
         SConst::Invalid(value) => ConstTyId::new(
             db,
             ConstTyData::Invalid(crate::analysis::semantic::sem_const_ty(db, value)),

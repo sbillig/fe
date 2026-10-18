@@ -1373,7 +1373,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 },
             ),
             Some(ValuePathRef::TypeConst(ty)) => {
-                if let Some(value) = sem_const_from_ty(self.db, ty) {
+                if sem_const_from_ty(self.db, ty).is_some() {
                     let TyData::ConstTy(template) = ty.data(self.db) else {
                         unreachable!("type-level value paths contain constant templates")
                     };
@@ -1382,23 +1382,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     let instantiated =
                         sem_const_from_ty(self.db, TyId::const_ty(self.db, instantiated))
                             .expect("instantiated constant template retains its value description");
-                    let constant = reify_runtime_const_for_ty(
+                    let constant = SConst::from_trusted_source(
                         self.db,
-                        self.instance,
-                        self.expr_ty(expr),
-                        instantiated,
-                    )
-                    .map_or_else(
-                        || {
-                            // Only a value path naming a declaration parameter
-                            // retains formal identity for runtime ABI evidence.
-                            if matches!(template.data(self.db), ConstTyData::TyParam(..)) {
-                                SConst::Evidence(value)
-                            } else {
-                                SConst::from_trusted_source(self.db, instantiated)
-                            }
-                        },
-                        |value| SConst::from_trusted_source(self.db, value),
+                        reify_runtime_const_for_ty(
+                            self.db,
+                            self.instance,
+                            self.expr_ty(expr),
+                            instantiated,
+                        )
+                        .unwrap_or(instantiated),
                     );
                     self.emit_expr_with_origin(
                         SemOrigin::Expr(expr),

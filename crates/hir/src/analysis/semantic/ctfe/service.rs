@@ -9,10 +9,10 @@ use crate::analysis::{
         EffectProviderSubst, ImplEnv, SConst, SExpr, SLocalId, SStmt, SStmtKind, STerminatorKind,
         SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
         SemanticInstanceKey, SemanticLocalRole, array_const, bool_const,
-        consts::{instantiate_const_template, retype_verified_sem_const},
-        enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
-        get_or_build_semantic_instance, int_const, int_ty_shape, normalize_int_to_shape,
-        sem_const_from_ty, sem_const_ty, struct_const, tuple_const,
+        consts::retype_verified_sem_const, enum_const, execute_scalar_cast,
+        execute_source_int_binary, execute_source_int_unary, get_or_build_semantic_instance,
+        int_const, int_ty_shape, normalize_int_to_shape, sem_const_from_ty, sem_const_ty,
+        struct_const, tuple_const,
     },
     ty::{
         const_expr::{ConstExpr, ConstExprId, ConstInvocation},
@@ -420,7 +420,6 @@ fn extract_pure_body_term<'db>(
     }
     let mut walk = BodyTermWalk {
         db,
-        key,
         body,
         stack,
         frames,
@@ -470,7 +469,6 @@ enum BodyTermExit {
 
 struct BodyTermWalk<'a, 'db> {
     db: &'db dyn HirAnalysisDb,
-    key: SemanticInstanceKey<'db>,
     body: &'db SemanticBody<'db>,
     stack: Vec<BodyOwner<'db>>,
     frames: &'a [TermCallFrame<'db>],
@@ -672,7 +670,6 @@ impl<'db> BodyTermWalk<'_, 'db> {
     /// Extracts one assignment, moving each operand's term into its user.
     fn assign(&mut self, stmt: &SStmt<'db>, state: &mut BodyTerms<'db>) -> Option<()> {
         let db = self.db;
-        let key = self.key;
         self.extraction.remaining = self.extraction.remaining.checked_sub(1)?;
         let SStmtKind::Assign { dst, expr } = &stmt.kind else {
             return None;
@@ -692,23 +689,13 @@ impl<'db> BodyTermWalk<'_, 'db> {
             (int_ty_shape(db, ty).is_some() || ty.is_bool(db)).then_some(())
         };
         let (term, deps) = match expr {
-            SExpr::Const(
-                constant @ (SConst::Value(..) | SConst::Description(..) | SConst::Evidence(..)),
-            ) => {
+            SExpr::Const(constant @ (SConst::Value(..) | SConst::Description(..))) => {
                 let value = match constant {
                     SConst::Value(value) => value.value(),
-                    SConst::Description(value) | SConst::Evidence(value) => *value,
+                    SConst::Description(value) => *value,
                     _ => unreachable!(),
                 };
                 let term = const_ty_from_sem_const(db, value);
-                // Evidence deliberately retains a declaration's formal
-                // parameter for runtime ABI selection. Translate only this
-                // explicit template; other operands are already in context.
-                let term = if matches!(constant, SConst::Evidence(_)) {
-                    instantiate_const_template(db, get_or_build_semantic_instance(db, key), term)
-                } else {
-                    term
-                };
                 let mut provenance = operation_provenance(
                     term,
                     stmt.origin,

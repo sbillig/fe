@@ -187,7 +187,7 @@ pub(super) fn check_runtime_body_supported<'db>(
             {
                 let value = match constant {
                     SConst::Value(value) => value.value(),
-                    SConst::Description(value) | SConst::Evidence(value) => *value,
+                    SConst::Description(value) => *value,
                     SConst::Invalid(value) => {
                         return Err(LowerError::Unsupported(format!(
                             "invalid semantic constant from {:?}: {value:?}",
@@ -1422,7 +1422,7 @@ impl<'db> RmirEmitter<'db> {
     fn lower_const_into(&mut self, bb: RBlockId, dst: RLocalId, const_: &SConst<'db>) {
         let value = match const_ {
             SConst::Value(value) => value.value(),
-            SConst::Description(value) | SConst::Evidence(value) => *value,
+            SConst::Description(value) => *value,
             SConst::Invalid(_) => unreachable!("invalid constant passed runtime admission"),
             SConst::Ref(cref) => evaluated_const_ref_value(self.db, *cref),
         };

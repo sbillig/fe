@@ -612,7 +612,6 @@ impl SExpr<'_> {
 pub enum SConst<'db> {
     Value(VerifiedConstValueId<'db>),
     Description(SemConstId<'db>),
-    Evidence(SemConstId<'db>),
     Invalid(SemConstId<'db>),
     Ref(SemanticConstRef<'db>),
 }

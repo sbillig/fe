@@ -436,21 +436,14 @@ fn canonicalize_const<'db>(
             );
         }
         SConst::Value(value) => value.value(),
-        SConst::Description(value) | SConst::Evidence(value) | SConst::Invalid(value) => *value,
+        SConst::Description(value) | SConst::Invalid(value) => *value,
     };
     let value = canonicalize_const_value(db, value);
     match reify_runtime_const_for_ty(db, instance, result_ty, value) {
         Some(runtime) => (SConst::from_trusted_source(db, runtime), Some(runtime)),
         // A formal parameter's value may remain symbolic here. It is not a
         // constant fact; runtime admission checks it before lowering.
-        None => (
-            if matches!(constant, SConst::Evidence(_)) {
-                constant.clone()
-            } else {
-                SConst::from_trusted_source(db, value)
-            },
-            None,
-        ),
+        None => (SConst::from_trusted_source(db, value), None),
     }
 }
 
@@ -493,11 +486,7 @@ fn canonicalize_const_value<'db>(
                 return value;
             };
             if matches!(evaluated.value(db), SemConstValue::Description(..)) {
-                // Canonicalization did not produce a runtime value. Preserve
-                // the original symbolic reference so a formal const-parameter
-                // use keeps its exact parameter identity; replacing it with
-                // an instantiated hole would make runtime ABI selection rely
-                // on structural root matching.
+                // Evaluation left the term symbolic: keep the original term.
                 value
             } else {
                 evaluated

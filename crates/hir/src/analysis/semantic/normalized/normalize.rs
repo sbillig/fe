@@ -1127,7 +1127,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         }
         let value = match constant {
             SConst::Value(value) => value.value(),
-            SConst::Description(value) | SConst::Evidence(value) | SConst::Invalid(value) => value,
+            SConst::Description(value) | SConst::Invalid(value) => value,
             SConst::Ref(reference) => match eval_const_ref(self.db, reference) {
                 EvalOutcome::Ready(value) => value,
                 EvalOutcome::Blocked(_) | EvalOutcome::Failed(_) => {

@@ -19,10 +19,10 @@ use crate::{
             PrimitiveFault, RuntimeSizeError, SConst, SEffectArgValue, SExpr, SLocalId, SOperand,
             SPlace, SStmt, SStmtId, SStmtKind, STerminatorKind, SemConstId, SemConstScalar,
             SemConstValue, SemOrigin, SemanticBody, SemanticConstRef, VariantIndex, array_const,
-            bool_const, bytes_const, consts::instantiate_const_template, enum_const,
-            execute_scalar_cast, execute_source_int_binary, execute_source_int_unary, int_const,
-            int_in_range, int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
-            sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
+            bool_const, bytes_const, enum_const, execute_scalar_cast, execute_source_int_binary,
+            execute_source_int_unary, int_const, int_in_range, int_ty_shape,
+            normalize_int_to_shape, runtime_size_bytes, sem_const_eq, sem_const_ty, struct_const,
+            tuple_const, unit_const,
         },
         ty::{
             const_check::const_effects_supported,
@@ -1677,22 +1677,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             SExpr::CodeRegionRef { .. } => Err(CtfeError::NotConstEvaluable { origin }.into()),
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(self.db, value)),
             SExpr::Const(SConst::Description(value)) => self.load_sem_const(value, origin),
-            SExpr::Const(SConst::Evidence(value)) => {
-                let SemConstValue::Description(template) = value.value(self.db) else {
-                    return Err(EvalStop::Failed(EvalFailure::Invariant {
-                        origin,
-                        message: "formal evidence must name a constant template".into(),
-                    }));
-                };
-                let term = instantiate_const_template(
-                    self.db,
-                    self.frames[frame_idx].body.owner,
-                    *template,
-                );
-                let value = sem_const_from_ty(self.db, TyId::const_ty(self.db, term))
-                    .ok_or(CtfeError::InvalidBody { origin })?;
-                self.load_sem_const(value, origin)
-            }
             SExpr::Const(SConst::Invalid(value)) => self.load_sem_const(value, origin),
             SExpr::Unary { op, value } => {
                 let value = self.load_value(frame_idx, value, origin)?;
@@ -3543,7 +3527,7 @@ mod tests {
             .flat_map(|block| &block.stmts)
             .find_map(|stmt| match &stmt.kind {
                 SStmtKind::Assign {
-                    expr: SExpr::Const(SConst::Evidence(value)),
+                    expr: SExpr::Const(SConst::Description(value)),
                     ..
                 } if sem_const_dependency(&db, *value).is_some() => Some(*value),
                 _ => None,
