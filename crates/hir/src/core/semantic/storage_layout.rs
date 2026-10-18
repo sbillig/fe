@@ -359,8 +359,8 @@ impl<'db> ContractStorageLayoutResult<'db> {
 
 /// The bytes a scalar struct or tuple field takes in a packed storage slot:
 /// booleans and integers narrower than a word, like Solidity's value types.
-/// Everything else takes whole slots. Runtime lowering classifies scalars
-/// the same way (`mir::runtime::storage_scalar_bytes`).
+/// Everything else takes whole slots. Runtime lowering reads the layout
+/// these give (`storage_struct_layout`).
 fn storage_packable_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u32> {
     let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
         return None;
