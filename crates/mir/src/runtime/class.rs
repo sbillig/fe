@@ -146,6 +146,8 @@ pub fn expr_result_class<'db>(
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
+            // A native reference's referent is in memory: an object (a
+            // constant is copied into one) or a memory address.
             if !source.targets(db, pointee)
                 || !matches!(
                     source,
@@ -153,10 +155,16 @@ pub fn expr_result_class<'db>(
                         kind: RefKind::Const
                             | RefKind::Object
                             | RefKind::Native
-                            | RefKind::Provider { .. },
+                            | RefKind::Provider {
+                                space: AddressSpace::Memory,
+                                ..
+                            },
                         view: RefView::Whole,
                         ..
-                    } | RuntimeClass::RawAddr { .. }
+                    } | RuntimeClass::RawAddr {
+                        space: AddressSpace::Memory,
+                        ..
+                    }
                 )
             {
                 return Err(VerifyError::InvalidExprClass(dst));
