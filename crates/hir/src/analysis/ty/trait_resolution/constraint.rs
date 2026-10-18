@@ -12,7 +12,6 @@ use crate::analysis::{
     ty::{
         binder::Binder,
         const_ty::{ConstBodyLowering, LoweringContext, RebaseConstUseEnv},
-        corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
             place_effect_provider_param_index_map,
@@ -27,11 +26,9 @@ use crate::analysis::{
     },
 };
 
-/// Collect provider constraints induced by a function's `uses` clause.
-///
-/// Type-key effects produce `EffectRef`/`EffectRefMut` bounds from the hidden
-/// provider type to the visible effect target, while trait-key effects produce
-/// the corresponding trait bound on the hidden provider type.
+/// The trait bounds a function's trait-key effects (`uses (x: SomeTrait)`)
+/// put on their hidden provider types. A type-key effect's provider is its
+/// target, so it has no bound.
 pub(crate) fn collect_func_effect_provider_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
@@ -43,93 +40,35 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
         .instantiate_identity()
         .extend_all_bounds(db);
 
-    let mut out = Vec::new();
-    let mut effect_ref_traits = None;
-    for binding in func.effect_requirements(db) {
-        if !matches!(
-            binding.key.kind(),
-            EffectKeyKind::Type | EffectKeyKind::Trait
-        ) {
-            continue;
-        }
-
-        let Some(provider_idx) = provider_map
-            .get(binding.binding_idx as usize)
-            .copied()
-            .flatten()
-        else {
-            continue;
-        };
-        let Some(&provider_ty) = provider_params.get(provider_idx) else {
-            continue;
-        };
-
-        let identity = canonical_effect_identity_for_binding(
-            db,
-            binding,
-            scope,
-            assumptions,
-            None,
-            EffectKeyCanonMode::Solver,
-        );
-
-        match (identity.key_ty, identity.key_trait) {
-            (_, Some(inst)) => {
-                let mut args = inst.args(db).to_vec();
-                if args.is_empty() {
-                    args.push(provider_ty);
-                } else {
-                    args[0] = provider_ty;
-                }
-                out.push(TraitInstId::new(
-                    db,
-                    inst.def(db),
-                    args,
-                    inst.assoc_type_bindings(db).clone(),
-                ));
+    func.effect_requirements(db)
+        .iter()
+        .filter(|binding| binding.key.kind() == EffectKeyKind::Trait)
+        .filter_map(|binding| {
+            let provider_idx = (*provider_map.get(binding.binding_idx as usize)?)?;
+            let &provider_ty = provider_params.get(provider_idx)?;
+            let inst = canonical_effect_identity_for_binding(
+                db,
+                binding,
+                scope,
+                assumptions,
+                None,
+                EffectKeyCanonMode::Solver,
+            )
+            .key_trait?;
+            let mut args = inst.args(db).to_vec();
+            if args.is_empty() {
+                args.push(provider_ty);
+            } else {
+                args[0] = provider_ty;
             }
-            (Some(target_ty), None) => {
-                if !target_ty.is_star_kind(db) {
-                    continue;
-                }
-                let (effect_ref_trait, effect_ref_mut_trait) =
-                    effect_ref_traits.unwrap_or_else(|| {
-                        let Some(effect_ref_trait) =
-                            resolve_core_trait(db, func.scope(), &["EffectRef"])
-                        else {
-                            panic!("missing required core trait EffectRef — stdlib is broken");
-                        };
-                        let Some(effect_ref_mut_trait) =
-                            resolve_core_trait(db, func.scope(), &["EffectRefMut"])
-                        else {
-                            panic!("missing required core trait EffectRefMut — stdlib is broken");
-                        };
-                        let traits = (effect_ref_trait, effect_ref_mut_trait);
-                        effect_ref_traits = Some(traits);
-                        traits
-                    });
-
-                out.push(TraitInstId::new(
-                    db,
-                    effect_ref_trait,
-                    vec![provider_ty, target_ty],
-                    IndexMap::new(),
-                ));
-
-                if identity.is_mut {
-                    out.push(TraitInstId::new(
-                        db,
-                        effect_ref_mut_trait,
-                        vec![provider_ty, target_ty],
-                        IndexMap::new(),
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    out
+            Some(TraitInstId::new(
+                db,
+                inst.def(db),
+                args,
+                inst.assoc_type_bindings(db).clone(),
+            ))
+        })
+        .collect()
 }
 
 /// Returns a constraints list which is derived from the given type.
@@ -690,9 +629,7 @@ mod tests {
     use camino::Utf8PathBuf;
 
     use super::*;
-    use crate::analysis::ty::{
-        GoalSatisfiability, TraitSolveCx, corelib::resolve_lib_type_path, is_goal_satisfiable,
-    };
+    use crate::analysis::ty::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable};
     use crate::test_db::HirAnalysisTestDb;
 
     fn find_func<'db>(
@@ -808,40 +745,6 @@ trait Decode<A: Abi> {
     }
 
     #[test]
-    fn effect_provider_constraints_include_concrete_type_key_bounds() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("effect_provider_constraints_include_concrete_type_key_bounds.fe"),
-            r#"
-use std::evm::Evm
-
-fn f() uses (evm: mut Evm) {}
-"#,
-        );
-        let (top_mod, _) = db.top_mod(file);
-        db.assert_no_diags(top_mod);
-        let func = find_func(&db, top_mod, "f");
-        let provider_map = place_effect_provider_param_index_map(&db, func);
-        let provider_idx = provider_map[0].expect("missing provider slot for evm");
-        let provider_ty = CallableDef::Func(func).params(&db)[provider_idx];
-        let evm_ty = resolve_lib_type_path(&db, func.scope(), "std::evm::Evm")
-            .expect("missing std::evm::Evm");
-        let effect_ref_trait = resolve_core_trait(&db, func.scope(), &["EffectRef"]).unwrap();
-        let effect_ref_mut_trait =
-            resolve_core_trait(&db, func.scope(), &["EffectRefMut"]).unwrap();
-        let constraints = collect_func_effect_provider_constraints(&db, func);
-
-        assert_ne!(provider_ty, evm_ty);
-        assert!(constraints.iter().any(|inst| {
-            inst.def(&db) == effect_ref_trait && inst.args(&db).as_slice() == [provider_ty, evm_ty]
-        }));
-        assert!(constraints.iter().any(|inst| {
-            inst.def(&db) == effect_ref_mut_trait
-                && inst.args(&db).as_slice() == [provider_ty, evm_ty]
-        }));
-    }
-
-    #[test]
     fn effect_constraints_canonicalize_omitted_const_expr_defaults() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
@@ -909,16 +812,6 @@ where
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], TyId::u256(&db));
         assert!(matches!(args[1].data(&db), TyData::ConstTy(_)));
-
-        let effect_ref_trait = resolve_core_trait(&db, func.scope(), &["EffectRef"]).unwrap();
-        let constraints = collect_constraints(&db, func.into()).instantiate_identity();
-        let effect_ref = constraints
-            .list(&db)
-            .iter()
-            .copied()
-            .find(|inst| inst.def(&db) == effect_ref_trait && inst.args(&db)[1] == key_ty)
-            .expect("missing EffectRef constraint for slot effect");
-        assert_eq!(effect_ref.args(&db)[1], key_ty);
 
         let provider_names: Vec<_> = CallableDef::Func(func)
             .params(&db)
