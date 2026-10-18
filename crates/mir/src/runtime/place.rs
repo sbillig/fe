@@ -251,9 +251,7 @@ pub(crate) fn runtime_place_lane<'db>(
 }
 
 /// The lane field `field` of a value of class `parent` in `space` occupies:
-/// a scalar packed into a storage word with other fields, or placed anywhere
-/// but at its word's start. A packed scalar alone at the start of its word is
-/// the whole word.
+/// a packed scalar that is not its whole word (`StorageLane::is_whole_slot`).
 pub(crate) fn storage_field_lane<'db>(
     db: &'db dyn MirDb,
     parent: &RuntimeClass<'db>,
@@ -267,7 +265,7 @@ pub(crate) fn storage_field_lane<'db>(
         .field_placement(parent, field)
         .ok()?;
     let lane = placement.lane?;
-    (placement.shared || lane.byte_offset != 0).then_some(StorageLaneView {
+    (!lane.is_whole_slot(placement.shared)).then_some(StorageLaneView {
         byte_offset: lane.byte_offset as u8,
         byte_width: lane.byte_width as u8,
         shared: placement.shared,

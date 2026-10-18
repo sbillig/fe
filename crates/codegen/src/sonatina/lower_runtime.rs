@@ -981,12 +981,6 @@ impl PackedLane {
             shared: placement.shared,
         })
     }
-
-    /// Whether a reference to the whole word reaches the same scalar: a
-    /// scalar alone at the start of its word.
-    fn is_whole_word(self) -> bool {
-        !self.shared && self.lane.byte_offset == 0
-    }
 }
 
 enum Lowered<T> {
@@ -4155,7 +4149,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             PlaceTerminal::Ptr {
                 lane: Some(lane), ..
-            } if !lane.is_whole_word() => Err(LowerError::Internal(
+            } if !lane.lane.is_whole_slot(lane.shared) => Err(LowerError::Internal(
                 "a storage field packed into a word with other fields has no address".to_string(),
             )),
             PlaceTerminal::StackPtr { addr, .. } | PlaceTerminal::Ptr { addr, .. } => {

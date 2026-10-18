@@ -59,6 +59,13 @@ impl StorageLane {
     pub fn bit_width(self) -> u32 {
         self.byte_width * 8
     }
+
+    /// Whether a scalar in this lane is its whole slot: alone in the slot
+    /// (not `shared`) and at its low end, so a reference to the slot reaches
+    /// it. Any other lane has no address of its own.
+    pub fn is_whole_slot(self, shared: bool) -> bool {
+        !shared && self.byte_offset == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

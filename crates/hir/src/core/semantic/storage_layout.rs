@@ -562,7 +562,6 @@ impl<'db> FieldWalker<'db> {
             }
         // A contract value is its address, a word, as MIR lays it out.
         } else if ty.is_never(self.db)
-            || ty.is_zero_sized(self.db)
             || matches!(
                 ty.base_ty(self.db).data(self.db),
                 TyData::TyBase(TyBase::Func(_))
@@ -1012,9 +1011,9 @@ pub(crate) fn storage_slot_span<'db>(
 }
 
 /// Which fields of struct or tuple `ty` are lanes where a value of `ty` lies
-/// in storage or transient storage: packed scalars that share their word or
-/// lie above its low byte, as MIR's `storage_field_lane` decides. A retained
-/// grant to a lane is a memory copy.
+/// in storage or transient storage: packed scalars that are not their whole
+/// slot (`StorageLane::is_whole_slot`). A retained grant to a lane is a
+/// memory copy.
 #[salsa::tracked(return_ref)]
 pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
     if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
@@ -1046,7 +1045,7 @@ pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
         .map(|placement| {
             placement
                 .lane
-                .is_some_and(|lane| placement.shared || lane.byte_offset != 0)
+                .is_some_and(|lane| !lane.is_whole_slot(placement.shared))
         })
         .collect()
 }
