@@ -229,9 +229,13 @@ impl<'db> RuntimeClass<'db> {
                 false
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(db) {
-                // A pinned type takes a slot even without fields.
+                // A pinned type takes a storage slot even without fields. The
+                // slots alone do not decide the rest: a reference to a
+                // zero-sized value takes none, but is a word.
                 Layout::Struct(data) => {
-                    data.storage.as_ref().is_none_or(|storage| storage.slots == 0)
+                    data.storage
+                        .as_ref()
+                        .is_none_or(|storage| storage.slots == 0)
                         && data.fields.iter().all(|field| field.is_zero_sized(db))
                 }
                 Layout::Array(data) => data.len == 0 || data.elem.is_zero_sized(db),

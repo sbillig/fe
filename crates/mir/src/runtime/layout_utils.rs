@@ -7,7 +7,7 @@ use crate::{
     db::MirDb,
     runtime::{
         ArrayLayout, ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, LowerError,
-        RuntimeClass, ScalarClass, ScalarRepr, ScalarRole, StructLayout, VariantId,
+        RuntimeClass, ScalarClass, ScalarRepr, StructLayout, VariantId,
     },
 };
 
@@ -39,15 +39,6 @@ pub struct FieldPlacement {
     /// Whether the word at `offset` also holds other fields, so a write must
     /// preserve the rest of it.
     pub shared: bool,
-}
-
-impl FieldPlacement {
-    /// Whether the field is a lane of its storage word (see
-    /// `common::layout::StorageFieldPlacement::is_lane`).
-    pub fn is_lane(self) -> bool {
-        self.lane
-            .is_some_and(|lane| self.shared || lane.byte_offset != 0)
-    }
 }
 
 impl From<RuntimeMemoryLayoutError> for LowerError {
@@ -238,11 +229,11 @@ impl<'db> RuntimeMemoryLayout<'db> {
         let size = match layout.data(self.db) {
             Layout::Struct(data) => match self.unit {
                 RuntimeMemoryUnit::Byte => self.class_sizes_sum(&data.fields, visiting),
-                RuntimeMemoryUnit::Word => data
-                    .storage
-                    .as_ref()
-                    .map(|storage| storage.slots)
-                    .ok_or(RuntimeMemoryLayoutError::InvalidProjection("storage struct")),
+                RuntimeMemoryUnit::Word => {
+                    data.storage.as_ref().map(|storage| storage.slots).ok_or(
+                        RuntimeMemoryLayoutError::InvalidProjection("storage struct"),
+                    )
+                }
             },
             Layout::Array(data) => self
                 .class_size_inner(&data.elem, visiting)?
@@ -686,6 +677,7 @@ fn enum_tag_scalar(node: ConstNode<'_>) -> Result<ConstScalar, LowerError> {
 
 #[cfg(test)]
 mod tests {
+    use common::layout::{StorageFieldShape, storage_fields_layout};
     use driver::DriverDataBase;
 
     use super::*;
@@ -726,9 +718,9 @@ mod tests {
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256)].into_boxed_slice(),
             storage: Some(
-                common::layout::storage_fields_layout([
-                    common::layout::StorageFieldShape::Scalar { bytes: 1 },
-                    common::layout::StorageFieldShape::Scalar { bytes: 32 },
+                storage_fields_layout([
+                    StorageFieldShape::Scalar { bytes: 1 },
+                    StorageFieldShape::Scalar { bytes: 32 },
                 ])
                 .unwrap(),
             ),

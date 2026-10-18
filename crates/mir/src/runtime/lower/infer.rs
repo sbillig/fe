@@ -1392,7 +1392,8 @@ fn merge_layouts<'db>(
             ))
         }
         (Layout::Struct(current), Layout::Struct(desired))
-            if current.fields.len() == desired.fields.len() && current.storage == desired.storage =>
+            if current.fields.len() == desired.fields.len()
+                && current.storage == desired.storage =>
         {
             Some(LayoutId::new(
                 db,
