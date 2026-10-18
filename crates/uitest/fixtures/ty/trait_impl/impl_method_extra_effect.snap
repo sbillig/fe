@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_impl/impl_method_extra_effect.fe
+---
+error[6-0024]: method `f` has incompatible effects
+   ┌─ impl_method_extra_effect.fe:10:8
+   │
+ 6 │     fn f() uses (cap: Cap)
+   │        - trait requires these effects
+   ·
+10 │     fn f() uses (cap: Cap, extra: Cap) {}
+   │        ^ expected 1 effects, found 2
+
+error[6-0024]: method `bump` has incompatible effects
+   ┌─ impl_method_extra_effect.fe:28:8
+   │
+22 │     fn bump(mut self)
+   │        ---- trait requires these effects
+   ·
+28 │     fn bump(mut self) uses (store: mut Store) {
+   │        ^^^^ expected 0 effects, found 1
+
+error[6-0024]: method `bump` has incompatible effects
+   ┌─ impl_method_extra_effect.fe:37:8
+   │
+22 │     fn bump(mut self)
+   │        ---- trait requires these effects
+   ·
+37 │     fn bump(mut self) uses (any: Anything) {}
+   │        ^^^^ expected 0 effects, found 1
