@@ -1,6 +1,8 @@
 use common::{
     indexmap::IndexMap,
-    layout::{StorageFieldShape, StorageFieldsLayout, StorageLane, storage_fields_layout},
+    layout::{
+        StorageFieldShape, StorageFieldsLayout, StorageLane, enum_tag_bits, storage_fields_layout,
+    },
 };
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
@@ -257,6 +259,7 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     declared: TyId<'db>,
     /// The slot `#[slot(e)]` places the field at.
     explicit_slot: Option<U256>,
+    /// The slots the field spans, or the bytes for a code field.
     slot_count: usize,
     /// The spaces the field's slot numbers are taken in: its own, when a
     /// part of it lies outside a pinned type, and those its pinned types are
@@ -274,8 +277,9 @@ pub struct FieldStorageLayout<'db> {
     pub address_space: AddressSpace,
     /// The field's declared type.
     pub declared: TyId<'db>,
-    /// The field's first slot, or for a code field its first word.
+    /// The field's first slot, or for a code field its first byte.
     pub slot_offset: U256,
+    /// The slots the field spans, or the bytes for a code field.
     pub slot_count: usize,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
@@ -283,8 +287,8 @@ pub struct FieldStorageLayout<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct AllocatedContractStorageLayout<'db> {
     pub fields: IndexMap<IdentId<'db>, FieldStorageLayout<'db>>,
-    /// The words the code fields take.
-    pub code_slot_count: usize,
+    /// The bytes the code fields take.
+    pub code_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -417,9 +421,10 @@ impl<'db> WalkOutput<'db> {
         path: &[ContractLayoutPathSegment<'db>],
         dimensions: &[usize],
         kind: InlineLayoutLeafKind,
+        span: usize,
     ) -> Self {
         Self {
-            span: 1,
+            span,
             leaves: vec![InlineLayoutLeaf {
                 path: path.to_vec(),
                 ty,
@@ -437,10 +442,19 @@ impl<'db> WalkOutput<'db> {
     }
 }
 
-/// Lays out one contract field's value: the slots each part takes, from
-/// the field's first.
+/// What a layout counts: storage slots, or bytes for a code field, whose
+/// value lies in code as it lies in memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayoutUnit {
+    Slots,
+    Bytes,
+}
+
+/// Lays out one contract field's value: the slots (or bytes) each part
+/// takes, from the field's first.
 struct FieldWalker<'db> {
     db: &'db dyn HirAnalysisDb,
+    unit: LayoutUnit,
     errors: Vec<ContractLayoutError<'db>>,
 }
 
@@ -547,16 +561,14 @@ impl<'db> FieldWalker<'db> {
             // slots, at least one even without fields: its root number derives
             // its region, so siblings need distinct ones.
             if ty.pin(self.db).is_some() {
-                WalkOutput {
-                    span: output.span.max(1),
-                    ..WalkOutput::leaf(
-                        self.db,
-                        ty,
-                        path,
-                        dimensions,
-                        InlineLayoutLeafKind::Collection,
-                    )
-                }
+                WalkOutput::leaf(
+                    self.db,
+                    ty,
+                    path,
+                    dimensions,
+                    InlineLayoutLeafKind::Collection,
+                    output.span.max(1),
+                )
             } else {
                 output
             }
@@ -569,13 +581,32 @@ impl<'db> FieldWalker<'db> {
         {
             WalkOutput::empty()
         } else {
-            WalkOutput::leaf(self.db, ty, path, dimensions, InlineLayoutLeafKind::Field)
+            let span = match self.unit {
+                LayoutUnit::Slots => Some(1),
+                LayoutUnit::Bytes => runtime_size_bytes_with_source(self.db, views)
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| usize::try_from(bytes).ok()),
+            };
+            let Some(span) = span else {
+                self.push_error(ContractLayoutError::InvalidFieldType);
+                return WalkOutput::empty();
+            };
+            WalkOutput::leaf(
+                self.db,
+                ty,
+                path,
+                dimensions,
+                InlineLayoutLeafKind::Field,
+                span,
+            )
         }
     }
 
     /// Lays out a struct's or tuple's fields (`packed`) or an enum payload.
-    /// Packed sequences place narrow scalars like Solidity places struct
-    /// members, see `common::layout::storage_fields_layout`.
+    /// Packed sequences in slots place narrow scalars like Solidity places
+    /// struct members, see `common::layout::storage_fields_layout`; in bytes
+    /// every sequence lies end to end, as in memory.
     fn walk_sequence(
         &mut self,
         items: Vec<(ConcreteTypeView<'db>, ContractLayoutPathSegment<'db>)>,
@@ -591,7 +622,7 @@ impl<'db> FieldWalker<'db> {
                 self.walk_ty(views, &item_path, dimensions)
             })
             .collect();
-        let placements = if packed {
+        let placements = if packed && self.unit == LayoutUnit::Slots {
             let shapes = outputs.iter().map(|output| match output.packable_bytes {
                 Some(bytes) => StorageFieldShape::Scalar { bytes },
                 None => StorageFieldShape::Aggregate {
@@ -787,12 +818,19 @@ impl<'db> FieldWalker<'db> {
             AdtRef::Enum(enum_) => {
                 let mut tag_path = path.to_vec();
                 tag_path.push(ContractLayoutPathSegment::EnumTag);
+                let tag_span = match self.unit {
+                    LayoutUnit::Slots => 1,
+                    LayoutUnit::Bytes => {
+                        usize::from(enum_tag_bits(adt.fields(self.db).len()).div_ceil(8))
+                    }
+                };
                 let mut leaves = WalkOutput::leaf(
                     self.db,
                     ty,
                     &tag_path,
                     dimensions,
                     InlineLayoutLeafKind::EnumTag,
+                    tag_span,
                 )
                 .leaves;
                 let mut max_payload = 0usize;
@@ -829,11 +867,11 @@ impl<'db> FieldWalker<'db> {
                         items.push((field(variant_idx, field_idx), segment));
                     }
                     // Enum payloads are not packed: runtime lowering offsets
-                    // payload fields by whole words.
+                    // payload fields by whole words in storage.
                     let mut output = self.walk_sequence(items, &variant_path, dimensions, false);
                     max_payload = max_payload.max(output.span);
                     for leaf in &mut output.leaves {
-                        let Some(offset) = leaf.offset.checked_add(1) else {
+                        let Some(offset) = leaf.offset.checked_add(tag_span) else {
                             self.push_error(ContractLayoutError::LayoutExtentOverflow);
                             continue;
                         };
@@ -841,7 +879,7 @@ impl<'db> FieldWalker<'db> {
                     }
                     leaves.extend(output.leaves);
                 }
-                let span = max_payload.checked_add(1).unwrap_or_else(|| {
+                let span = max_payload.checked_add(tag_span).unwrap_or_else(|| {
                     self.push_error(ContractLayoutError::LayoutExtentOverflow);
                     0
                 });
@@ -922,8 +960,14 @@ fn collect_field_plan<'db>(
         },
         None => None,
     };
+    // A code field's value lies in code as it lies in memory.
     let mut walker = FieldWalker {
         db,
+        unit: if address_space == AddressSpace::Code {
+            LayoutUnit::Bytes
+        } else {
+            LayoutUnit::Slots
+        },
         errors: Vec::new(),
     };
     let output = walker.walk_ty(ConcreteTypeView::identity(declared), &[], &[]);
@@ -1001,6 +1045,7 @@ pub(crate) fn storage_slot_span<'db>(
 ) -> Result<usize, ContractLayoutError<'db>> {
     let mut walker = FieldWalker {
         db,
+        unit: LayoutUnit::Slots,
         errors: Vec::new(),
     };
     let output = walker.walk_ty(ConcreteTypeView::identity(ty), &[], &[]);
@@ -1027,6 +1072,7 @@ pub fn storage_struct_layout<'db>(
     }
     let mut walker = FieldWalker {
         db,
+        unit: LayoutUnit::Slots,
         errors: Vec::new(),
     };
     let shapes: Vec<_> = ty
@@ -1272,7 +1318,9 @@ fn entry_layout_error<'db>(
 /// placed before the fields that lie only in transient storage, which fit
 /// around them: a transient field never moves a persistent one. A field
 /// that mixes spaces takes its whole range in each, since one number roots
-/// all of it.
+/// all of it. Code is numbered in bytes, the other spaces in slots; no
+/// field mixes code with another space, since an immutable field holds no
+/// state-only type.
 fn allocate_contract<'db>(
     field_results: &[ContractFieldLayoutResult<'db>],
 ) -> Result<AllocatedContractStorageLayout<'db>, (ContractFieldId<'db>, ContractLayoutError<'db>)> {
@@ -1313,7 +1361,7 @@ fn allocate_contract<'db>(
     let transient_only =
         |plan: &ValidatedFieldLayoutPlan<'db>| plan.spaces.as_slice() == [AddressSpace::Transient];
     let mut counters: FxHashMap<AddressSpace, U256> = FxHashMap::default();
-    let mut code_slot_count = 0;
+    let mut code_bytes = 0;
     let mut offsets = vec![U256::ZERO; plans.len()];
     for transient_pass in [false, true] {
         for (idx, plan) in plans.iter().enumerate() {
@@ -1356,10 +1404,8 @@ fn allocate_contract<'db>(
                 }
             }
             if space == AddressSpace::Code {
-                code_slot_count = usize::try_from(end)
-                    .ok()
-                    .filter(|end| end.checked_mul(32).is_some())
-                    .ok_or((plan.field, ContractLayoutError::LayoutExtentOverflow))?;
+                code_bytes = usize::try_from(end)
+                    .map_err(|_| (plan.field, ContractLayoutError::LayoutExtentOverflow))?;
             }
             offsets[idx] = start;
         }
@@ -1383,10 +1429,7 @@ fn allocate_contract<'db>(
             )
         })
         .collect();
-    Ok(AllocatedContractStorageLayout {
-        fields,
-        code_slot_count,
-    })
+    Ok(AllocatedContractStorageLayout { fields, code_bytes })
 }
 
 fn layout_integer<'db>(db: &'db dyn HirAnalysisDb, value: U256) -> IntegerId<'db> {

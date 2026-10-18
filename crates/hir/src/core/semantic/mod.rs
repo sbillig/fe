@@ -1831,14 +1831,14 @@ impl<'db> Contract<'db> {
         storage_layout::build_contract_layout_report(db, self).as_ref()
     }
 
-    /// Total code-address-space high-water mark. Invalid contracts publish no
-    /// provisional allocation and therefore have no deployable immutable
-    /// buffer size.
-    pub fn code_address_space_slot_count(self, db: &'db dyn HirAnalysisDb) -> usize {
+    /// The bytes the code fields take: the immutable data deployment
+    /// appends to the runtime code. Invalid contracts publish no provisional
+    /// allocation and therefore have no deployable immutable data.
+    pub fn code_address_space_bytes(self, db: &'db dyn HirAnalysisDb) -> usize {
         self.storage_layout(db)
             .allocated
             .as_ref()
-            .map_or(0, |layout| layout.code_slot_count)
+            .map_or(0, |layout| layout.code_bytes)
     }
 
     #[salsa::tracked(return_ref)]

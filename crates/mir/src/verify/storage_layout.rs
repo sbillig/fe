@@ -186,7 +186,7 @@ fn verify_contract_field_binding<'db>(
                 field: binding.field,
                 class: binding.class.clone(),
             })?;
-    let mir_span = RuntimeMemoryLayout::for_space(db, AddressSpace::Storage)
+    let mir_span = RuntimeMemoryLayout::for_space(db, field.address_space)
         .class_size(&pointee)
         .map_err(|_| VerifyError::InvalidContractFieldLayout(binding.field))?;
     if u64::try_from(field.slot_count).ok() != Some(mir_span) {
@@ -205,15 +205,18 @@ fn expected_contract_field_slot<'db>(
     field: &FieldStorageLayout<'db>,
     is_init: bool,
 ) -> Option<ContractFieldSlot> {
-    if field.address_space == AddressSpace::Code && !is_init {
-        let field_slot = i128::try_from(field.slot_offset).ok()?;
-        let high_water = i128::try_from(contract.code_address_space_slot_count(db)).ok()?;
-        field_slot
-            .checked_sub(high_water)?
-            .checked_mul(32)
-            .map(ContractFieldSlot::CodeTailBytes)
-    } else {
-        Some(ContractFieldSlot::Words(field.slot_offset))
+    match (field.address_space, is_init) {
+        (AddressSpace::Code, true) => usize::try_from(field.slot_offset)
+            .ok()
+            .map(ContractFieldSlot::ImmutableBytes),
+        (AddressSpace::Code, false) => {
+            let field_bytes = i128::try_from(field.slot_offset).ok()?;
+            let high_water = i128::try_from(contract.code_address_space_bytes(db)).ok()?;
+            field_bytes
+                .checked_sub(high_water)
+                .map(ContractFieldSlot::CodeTailBytes)
+        }
+        _ => Some(ContractFieldSlot::Words(field.slot_offset)),
     }
 }
 
@@ -518,7 +521,8 @@ pub contract Other {
                 (words, AddressSpace::Storage, 4),
                 (maps, AddressSpace::Storage, 1),
                 (temp, AddressSpace::Storage, 1),
-                (fixed, AddressSpace::Code, 1),
+                // A code field counts bytes, as memory does.
+                (fixed, AddressSpace::Code, 32),
             ] {
                 let hir = contract
                     .storage_layout(db)
@@ -529,7 +533,7 @@ pub contract Other {
                 assert_eq!(hir.address_space, space);
                 assert_eq!(hir.slot_count, span);
                 assert_eq!(
-                    RuntimeMemoryLayout::for_space(db, AddressSpace::Storage)
+                    RuntimeMemoryLayout::for_space(db, space)
                         .class_size(&binding.class.deref_target(db).unwrap())
                         .unwrap(),
                     span as u64
@@ -539,7 +543,10 @@ pub contract Other {
             let (_, mut init) = wrapper_spec(db, package, contract, EntryKind::Init);
             let init_binding = field_binding(entry_args_mut(&mut init, EntryKind::Init), fixed);
             assert!(init_binding.init_immutable);
-            assert!(matches!(init_binding.slot, ContractFieldSlot::Words(_)));
+            assert!(matches!(
+                init_binding.slot,
+                ContractFieldSlot::ImmutableBytes(_)
+            ));
             let recv_binding = field_binding(&recv_args, fixed);
             assert!(!recv_binding.init_immutable);
             assert!(matches!(

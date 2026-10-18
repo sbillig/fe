@@ -1,0 +1,124 @@
+// Code (immutable) fields lie in the deployed code as values lie in memory:
+// a byte holds a `u8`, so narrow fields and arrays of them take their bytes
+// rather than a word each.
+use std::evm::{Address, Evm}
+
+struct Header {
+    flag: bool,
+    count: u16,
+}
+
+enum Mode {
+    Off,
+    Level(u8),
+}
+
+msg Query {
+    #[selector = 1]
+    Byte { i: usize } -> u8,
+    #[selector = 2]
+    Count -> u16,
+    #[selector = 3]
+    Flag -> bool,
+    #[selector = 4]
+    Wide -> u256,
+    #[selector = 5]
+    Level -> u8,
+    #[selector = 6]
+    Owner -> Address,
+    #[selector = 7]
+    Last -> u8,
+}
+
+pub contract Table {
+    table: [u8; 64],
+    header: Header,
+    wide: u256,
+    mode: Mode,
+    owner: Address,
+    last: u8,
+
+    init() uses (mut table, mut header, mut wide, mut mode, mut owner, mut last) {
+        var values: [u8; 64] = [0; 64]
+        var i: u8 = 0
+        while i < 64 {
+            values[i as usize] = i * 3
+            i += 1
+        }
+        table = values
+        header = Header { flag: true, count: 0x1234 }
+        wide = 0xabcdef
+        mode = Mode::Level(9)
+        owner = Address { inner: 0x55 }
+        last = 0xee
+    }
+
+    recv Query {
+        Byte { i } -> u8 uses (table) {
+            table[i]
+        }
+        Count -> u16 uses (header) {
+            header.count
+        }
+        Flag -> bool uses (header) {
+            header.flag
+        }
+        Wide -> u256 uses (wide) {
+            wide
+        }
+        Level -> u8 uses (mode) {
+            match mode {
+                Mode::Off => 0
+                Mode::Level(level) => level
+            }
+        }
+        Owner -> Address uses (owner) {
+            owner
+        }
+        Last -> u8 uses (last) {
+            last
+        }
+    }
+}
+
+msg NarrowQuery {
+    #[selector = 1]
+    Byte { i: usize } -> u8,
+}
+
+pub contract Narrow {
+    table: [u8; 2],
+
+    init() uses (mut table) {
+        table = [1, 2]
+    }
+
+    recv NarrowQuery {
+        Byte { i } -> u8 uses (table) {
+            table[i]
+        }
+    }
+}
+
+#[test]
+fn immutable_fields_read_back() uses (evm: mut Evm) {
+    let c = evm.create2<Table>(value: 0, args: (), salt: 0)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Byte { i: 0 }) == 0)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Byte { i: 1 }) == 3)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Byte { i: 63 }) == 189)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Count {}) == 0x1234)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Flag {}))
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Wide {}) == 0xabcdef)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Level {}) == 9)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Owner {}).inner == 0x55)
+    assert(evm.call(addr: c, gas: 200000, value: 0, message: Query::Last {}) == 0xee)
+}
+
+// 62 more bytes of table take 62 more bytes of code, not 62 words.
+#[test]
+fn immutable_bytes_take_bytes_of_code() uses (evm: mut Evm) {
+    let wide = evm.create2<Table>(value: 0, args: (), salt: 1)
+    let narrow = evm.create2<Narrow>(value: 0, args: (), salt: 1)
+    assert(evm.call(addr: narrow, gas: 200000, value: 0, message: NarrowQuery::Byte { i: 1 }) == 2)
+    assert(evm.extcodesize(wide) < evm.extcodesize(narrow) + 32 * 16)
+}

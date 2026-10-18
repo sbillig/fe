@@ -88,6 +88,9 @@ contract C {
     mut temporary: TSlot<u256>,
     mut later: u256,
     immutable: u256,
+    small: u8,
+    bytes: [u8; 3],
+    after: u256,
 }
 "#,
     );
@@ -99,7 +102,10 @@ contract C {
         // the storage numbering alone.
         ("temporary", AddressSpace::Transient, "0"),
         ("later", AddressSpace::Storage, "1"),
+        // Code is numbered in bytes, as memory lays a value out.
         ("immutable", AddressSpace::Code, "0"),
+        ("small", AddressSpace::Code, "32"),
+        ("after", AddressSpace::Code, "36"),
     ] {
         let entry = entry(&db, &report.entries, path);
         assert_eq!(entry.address_space, space, "{path}");

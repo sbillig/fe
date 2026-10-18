@@ -1,0 +1,1 @@
+Immutable contract fields are laid out in the deployed code byte by byte, as values are laid out in memory, instead of taking a 32-byte word for every scalar: an immutable `[u8; 64]` adds 64 bytes of code rather than 2 KiB.

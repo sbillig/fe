@@ -45,7 +45,7 @@ pub(crate) fn entry_semantic_args_plan<'db>(
     semantic: SemanticInstance<'db>,
 ) -> Result<EntrySemanticArgsPlan<'db>, LowerError> {
     let owner = semantic.key(db).owner(db);
-    let (contract_fields, total_code_slots) = if let Some(contract) = context.contract() {
+    let (contract_fields, total_code_bytes) = if let Some(contract) = context.contract() {
         (
             Some(
                 contract
@@ -55,7 +55,7 @@ pub(crate) fn entry_semantic_args_plan<'db>(
                     .map(|field| (field.field, field))
                     .collect::<FxHashMap<_, _>>(),
             ),
-            contract.code_address_space_slot_count(db),
+            contract.code_address_space_bytes(db),
         )
     } else {
         (None, 0)
@@ -77,7 +77,7 @@ pub(crate) fn entry_semantic_args_plan<'db>(
                 *binding,
                 provider.clone(),
                 contract_fields.as_ref(),
-                total_code_slots,
+                total_code_bytes,
             )
             .transpose()
         })
@@ -120,7 +120,7 @@ fn entry_effect_arg_plan_for_binding<'db>(
     binding: LocalBinding<'db>,
     provider: ProviderBinding<'db>,
     contract_fields: Option<&FxHashMap<ContractFieldId<'db>, FieldStorageLayout<'db>>>,
-    total_code_slots: usize,
+    total_code_bytes: usize,
 ) -> Result<Option<EntryEffectArgPlan<'db>>, LowerError> {
     match provider.source.clone() {
         ProviderSource::ContractField { field: field_id } => {
@@ -146,7 +146,7 @@ fn entry_effect_arg_plan_for_binding<'db>(
                 ))
             })?;
             Ok(Some(EntryEffectArgPlan::ContractField(
-                contract_field_binding(db, context, field, semantic, binding, total_code_slots)?,
+                contract_field_binding(db, context, field, semantic, binding, total_code_bytes)?,
             )))
         }
         ProviderSource::RootProvider { .. } => {
@@ -201,7 +201,7 @@ fn contract_field_binding<'db>(
     field: &FieldStorageLayout<'db>,
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
-    total_code_slots: usize,
+    total_code_bytes: usize,
 ) -> Result<ContractFieldBinding<'db>, LowerError> {
     let binding_ty = semantic.binding_ty(db, binding);
     let field_space = field.address_space;
@@ -230,31 +230,22 @@ fn contract_field_binding<'db>(
             )));
         }
     };
+    let code_offset_overflow = || {
+        LowerError::Unsupported(format!(
+            "code-backed field offset overflow for `{}` in {}",
+            field.name.data(db),
+            context.label(db),
+        ))
+    };
     let slot = match &kind {
         RefKind::Provider {
             space: AddressSpace::Code,
             ..
         } => {
-            let total_bytes = i128::try_from(total_code_slots)
-                .ok()
-                .and_then(|slots| slots.checked_mul(32))
-                .ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "code-backed layout extent overflow for field `{}` in {}",
-                        field.name.data(db),
-                        context.label(db),
-                    ))
-                })?;
-            let field_bytes = i128::try_from(field.slot_offset)
-                .ok()
-                .and_then(|slots| slots.checked_mul(32))
-                .ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "code-backed field offset overflow for `{}` in {}",
-                        field.name.data(db),
-                        context.label(db),
-                    ))
-                })?;
+            let total_bytes =
+                i128::try_from(total_code_bytes).map_err(|_| code_offset_overflow())?;
+            let field_bytes =
+                i128::try_from(field.slot_offset).map_err(|_| code_offset_overflow())?;
             ContractFieldSlot::CodeTailBytes(field_bytes.checked_sub(total_bytes).ok_or_else(
                 || {
                     LowerError::Unsupported(format!(
@@ -265,6 +256,9 @@ fn contract_field_binding<'db>(
                 },
             )?)
         }
+        _ if init_immutable => ContractFieldSlot::ImmutableBytes(
+            usize::try_from(field.slot_offset).map_err(|_| code_offset_overflow())?,
+        ),
         _ => ContractFieldSlot::Words(field.slot_offset),
     };
     Ok(ContractFieldBinding {

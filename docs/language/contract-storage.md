@@ -5,7 +5,8 @@ Storage, transient storage and code each number their own fields, so a
 transient field never moves a persistent one. A field takes as many
 consecutive slots as its type needs. Struct fields narrower than a word are
 packed into shared slots the way Solidity packs struct members. Immutable
-fields live in the contract's code.
+fields live in the contract's code, numbered in bytes: a value lies there as
+it lies in memory, so a `[u8; 64]` takes 64 bytes.
 
 A field that mixes spaces, such as a `Mutex<T>` (a transient lock beside a
 storage value), has one root slot that both spaces read: it takes its whole

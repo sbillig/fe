@@ -975,9 +975,11 @@ pub enum EntryEffectArgPlan<'db> {
 /// Location of a contract field within its backing address space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub enum ContractFieldSlot {
-    /// Word offset within the field's address space (storage, transient, or
-    /// the init-time memory immutables buffer).
+    /// Slot number in storage or transient storage.
     Words(U256),
+    /// Byte offset within the immutable data an init writes, which
+    /// deployment appends to the runtime bytecode.
+    ImmutableBytes(usize),
     /// Byte offset relative to the end of the deployed code (always
     /// negative), addressing the immutable data section appended after the
     /// runtime bytecode.
@@ -988,6 +990,7 @@ impl std::fmt::Display for ContractFieldSlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Words(words) => write!(f, "words:{words}"),
+            Self::ImmutableBytes(bytes) => write!(f, "immutable_bytes:{bytes}"),
             Self::CodeTailBytes(bytes) => write!(f, "code_tail_bytes:{bytes}"),
         }
     }

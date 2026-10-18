@@ -425,16 +425,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
         // If the contract has code-backed (immutable) fields, allocate a contiguous buffer for
         // their init-time values; the contract init root appends it to the returned runtime
         // bytecode.
-        let immut_slots = self.contract_code_address_space_slots(plan.contract);
-        let immut_ptr = if immut_slots == 0 {
+        let immut_bytes = plan.contract.code_address_space_bytes(self.db);
+        let immut_ptr = if immut_bytes == 0 {
             None
         } else {
-            let immut_len = self.push_const_word(
-                cont_bb,
-                immut_slots
-                    .checked_mul(32)
-                    .expect("code-space byte extent was validated by contract layout"),
-            );
+            let immut_len = self.push_const_word(cont_bb, immut_bytes);
             Some(self.push_malloc_bytes(cont_bb, immut_len))
         };
 
@@ -576,8 +571,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
             },
         );
 
-        let immut_slots = self.contract_code_address_space_slots(contract);
-        if immut_slots == 0 {
+        let immut_bytes = contract.code_address_space_bytes(self.db);
+        if immut_bytes == 0 {
             self.push_side_effect_builtin(
                 entry,
                 RuntimeBuiltin::CodeCopy {
@@ -599,12 +594,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             RuntimeClass::Scalar(word_scalar_class()),
             RuntimeBuiltin::Mload { addr: zero },
         );
-        let immut_len = self.push_const_word(
-            entry,
-            immut_slots
-                .checked_mul(32)
-                .expect("code-space byte extent was validated by contract layout"),
-        );
+        let immut_len = self.push_const_word(entry, immut_bytes);
 
         let out_len = self.push_binary_word(entry, ArithBinOp::Add, runtime_len, immut_len);
         let out_ptr = self.push_malloc_bytes(entry, out_len);
@@ -631,10 +621,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
     }
 
-    fn contract_code_address_space_slots(&self, contract: Contract<'db>) -> usize {
-        contract.code_address_space_slot_count(self.db)
-    }
-
     fn serialize_init_immutables_into_buffer(
         &mut self,
         bb: RBlockId,
@@ -647,7 +633,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             args.len(),
             "entry effect args should be in one-to-one correspondence with binding plans"
         );
-        let thirty_two = self.push_const_word(bb, 32);
         for (binding, arg) in bindings.iter().zip(args.iter().copied()) {
             let EntryEffectArgPlan::ContractField(binding) = binding else {
                 continue;
@@ -676,14 +661,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 },
             );
 
-            let ContractFieldSlot::Words(slot_words) = binding.slot else {
-                panic!("init-time immutable field binding should carry a word slot offset");
+            let ContractFieldSlot::ImmutableBytes(offset) = binding.slot else {
+                panic!("init-time immutable field binding should carry an immutable byte offset");
             };
-            let slot_words = usize::try_from(slot_words)
-                .expect("a code field's word offset is within the code-space layout");
-            let slot_words = self.push_const_word(bb, slot_words);
-            let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
-            let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
+            let offset = self.push_const_word(bb, offset);
+            let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, offset);
             let dst_raw_class =
                 RuntimeClass::raw_addr(self.db, AddressSpace::Memory, pointee_class.clone());
             let dst_raw_addr = self.push_local(
