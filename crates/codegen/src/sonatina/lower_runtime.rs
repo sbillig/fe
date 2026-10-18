@@ -1787,16 +1787,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             },
                         ..
                     } => self.export_object_reference(value)?,
-                    RuntimeClass::Ref {
-                        kind: RefKind::Provider { space, .. },
+                    RuntimeClass::RawAddr {
+                        space: AddressSpace::Memory,
                         ..
-                    }
-                    | RuntimeClass::RawAddr { space, .. } => {
-                        self.store_raw_reference(value, space)?
-                    }
+                    } => self.store_raw_memory_reference(value)?,
                     _ => {
                         return Err(LowerError::Internal(
-                            "native reference requires a materialized source".into(),
+                            "native reference requires a materialized memory source".into(),
                         ));
                     }
                 }
