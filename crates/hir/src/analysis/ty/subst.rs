@@ -4,7 +4,7 @@ use super::{
     const_ty::ConstCaptureEnv,
     fold::{TyFoldable, TyFolder},
     ty_def::TyId,
-    ty_lower::{CompleteSubst, ParamSchemaId, SubstError},
+    ty_lower::{CompleteSubst, SubstError},
 };
 use crate::{
     analysis::HirAnalysisDb,
@@ -27,18 +27,6 @@ where
     folder.error.map_or(Ok(value), Err)
 }
 
-/// Whether `ty` is a non-effect parameter owned by `schema`'s declaration.
-/// Such an occurrence that does not resolve through the schema belongs to
-/// another basis of the same declaration and must not pass through unchanged.
-pub(crate) fn is_owned_by_schema<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    schema: ParamSchemaId<'db>,
-) -> bool {
-    ty.as_generic_param(db)
-        .is_some_and(|param| param.owner == schema.owner(db).scope() && !param.is_effect())
-}
-
 struct SubstFolder<'a, 'db> {
     subst: &'a CompleteSubst<'db>,
     error: Option<SubstError<'db>>,
@@ -54,14 +42,6 @@ impl<'db> TyFolder<'db> for SubstFolder<'_, 'db> {
             self.error.get_or_insert(SubstError::MissingArgument {
                 domain: self.subst.domain(),
                 key,
-            });
-            return ty;
-        }
-
-        if is_owned_by_schema(db, ty, schema) {
-            self.error.get_or_insert(SubstError::WrongBasis {
-                schema,
-                occurrence: ty,
             });
             return ty;
         }
@@ -167,7 +147,7 @@ mod tests {
             generic_defaults::{GenericDefault, generic_default},
             trait_def::TraitInstId,
             ty_def::TyData,
-            ty_lower::{ParamBasis, ParamDomainId, PartialSubst, SourceParamIndex, param_schema},
+            ty_lower::{ParamDomainId, PartialSubst, SourceParamIndex, param_schema},
         },
         hir_def::{CallableDef, IdentId},
         test_db::{HirAnalysisTestDb, find_func},
@@ -185,7 +165,7 @@ mod tests {
         let func = find_func(&db, module, "f");
         let params = CallableDef::Func(func).params(&db);
         let foreign = CallableDef::Func(find_func(&db, module, "g")).params(&db)[0];
-        let schema = param_schema(&db, func.into(), ParamBasis::Full);
+        let schema = param_schema(&db, func.into());
         let domain = ParamDomainId::full(&db, schema);
         let original = vec![params[0], params[1], params[2], params[3], foreign];
         let identity = CompleteSubst::new(domain, &db, params.to_vec()).unwrap();
@@ -238,7 +218,7 @@ mod tests {
         db.assert_no_diags(module);
         let func = find_func(&db, module, "f");
         let params = CallableDef::Func(func).params(&db);
-        let schema = param_schema(&db, func.into(), ParamBasis::Full);
+        let schema = param_schema(&db, func.into());
         let t_key = schema.source_key(&db, SourceParamIndex(0)).unwrap();
         let u_key = schema.source_key(&db, SourceParamIndex(1)).unwrap();
         let domain = schema
@@ -263,43 +243,6 @@ mod tests {
     }
 
     #[test]
-    fn full_substitution_rejects_source_basis_occurrences() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("subst_basis.fe"),
-            "struct K {}\ntrait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }",
-        );
-        let (module, _) = db.top_mod(file);
-        db.assert_no_diags(module);
-        let func = module
-            .all_funcs(&db)
-            .iter()
-            .copied()
-            .find(|func| {
-                func.name(&db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(&db) == "f")
-            })
-            .expect("missing trait method");
-        let source = param_schema(&db, func.into(), ParamBasis::Source);
-        let full = param_schema(&db, func.into(), ParamBasis::Full);
-        let own_key = source.source_key(&db, SourceParamIndex(0)).unwrap();
-        let source_formal = source
-            .formal_at(&db, source.slot_for(&db, own_key).unwrap())
-            .unwrap();
-        let domain = ParamDomainId::full(&db, full);
-        let values = domain
-            .slots(&db)
-            .map(|slot| full.formal_at(&db, slot).unwrap())
-            .collect();
-        let identity = CompleteSubst::new(domain, &db, values).unwrap();
-        assert!(matches!(
-            substitute_complete(&db, source_formal, &identity),
-            Err(SubstError::WrongBasis { .. })
-        ));
-    }
-
-    #[test]
     fn deferred_const_capture_composes_in_its_declared_domain() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
@@ -319,7 +262,7 @@ mod tests {
             panic!("expected type default")
         };
         let template = default.instantiate_identity();
-        let schema = param_schema(&db, func.into(), ParamBasis::Full);
+        let schema = param_schema(&db, func.into());
         let domain = schema
             .allowed_default_dependencies(&db, SourceParamIndex(2))
             .unwrap();

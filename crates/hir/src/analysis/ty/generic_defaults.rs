@@ -15,7 +15,7 @@ use super::{
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
     ty_error::{collect_hir_ty_diags_deferred, emit_invalid_ty_error, first_invalid_ty_cause},
     ty_lower::{
-        CompleteSubst, GenericParamTypeSet, ParamBasis, SourceParamIndex, collect_generic_params,
+        CompleteSubst, GenericParamTypeSet, SourceParamIndex, collect_generic_params,
         lower_hir_ty_with_lowering_cx, param_schema,
     },
     visitor::{TyVisitable, TyVisitor},
@@ -386,10 +386,6 @@ impl<'db> GenericParamTypeSet<'db> {
         let params = self.params(db);
         let owner = GenericParamOwner::from_item_opt(self.scope(db).item())
             .expect("generic parameter owner");
-        assert!(
-            !application.checks_default() || self.basis(db) == ParamBasis::Full,
-            "checked default completion requires the full parameter schema"
-        );
         if implicit.len() != offset {
             return Err(GenericArgError {
                 index: 0,
@@ -412,7 +408,7 @@ impl<'db> GenericParamTypeSet<'db> {
         let mut args = implicit.to_vec();
         for (source_param_idx, &formal) in params.iter().skip(offset).enumerate() {
             let index = SourceParamIndex(source_param_idx);
-            let domain = param_schema(db, owner, self.basis(db))
+            let domain = param_schema(db, owner)
                 .allowed_default_dependencies(db, index)
                 .expect("default prefix must name a source parameter");
             let subst = CompleteSubst::new(domain, db, args.clone())
@@ -601,12 +597,12 @@ impl<'db> Visitor<'db> for DefaultDependencies<'db> {
 mod tests {
     use camino::Utf8PathBuf;
 
-    use crate::analysis::ty::ty_lower::{ParamSchemaId, SubstError};
+    use crate::analysis::ty::ty_lower::{SubstError, param_schema};
 
     use super::*;
     use crate::{
         analysis::semantic::runtime_size_bytes,
-        analysis::ty::{const_ty::ConstTyData, ty_lower::collect_source_generic_params},
+        analysis::ty::const_ty::ConstTyData,
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -716,10 +712,10 @@ fn valid<T = u256>() {}
             let owner = func.into();
             let validation = if checked_first {
                 let checked = checked_generic_default(&db, owner, SourceParamIndex(1)).clone();
-                collect_source_generic_params(&db, owner);
+                collect_generic_params(&db, owner);
                 checked
             } else {
-                collect_source_generic_params(&db, owner);
+                collect_generic_params(&db, owner);
                 checked_generic_default(&db, owner, SourceParamIndex(1)).clone()
             };
             assert!(
@@ -749,7 +745,7 @@ fn valid<T = u256>() {}
         else {
             panic!("type default")
         };
-        let domain = ParamSchemaId::full(&db, f.into())
+        let domain = param_schema(&db, f.into())
             .allowed_default_dependencies(&db, SourceParamIndex(1))
             .unwrap();
         let valid = CompleteSubst::new(domain, &db, vec![TyId::bool(&db)]).unwrap();
@@ -758,7 +754,7 @@ fn valid<T = u256>() {}
             TyId::bool(&db)
         );
 
-        let foreign_domain = ParamSchemaId::full(&db, g.into())
+        let foreign_domain = param_schema(&db, g.into())
             .allowed_default_dependencies(&db, SourceParamIndex(1))
             .unwrap();
         let foreign = CompleteSubst::new(foreign_domain, &db, vec![TyId::bool(&db)]).unwrap();

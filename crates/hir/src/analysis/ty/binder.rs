@@ -2,7 +2,7 @@ use super::{
     fold::TyFoldable,
     subst::substitute_complete,
     ty_def::TyId,
-    ty_lower::{CompleteSubst, ParamSchemaId, SubstError},
+    ty_lower::{CompleteSubst, SubstError, param_schema},
 };
 use crate::{analysis::HirAnalysisDb, hir_def::GenericParamOwner};
 
@@ -79,8 +79,7 @@ where
         db: &'db dyn HirAnalysisDb,
         subst: &CompleteSubst<'db>,
     ) -> Result<T, SubstError<'db>> {
-        if self.owner.map(|owner| ParamSchemaId::full(db, owner)) != Some(subst.domain().schema(db))
-        {
+        if self.owner.map(|owner| param_schema(db, owner)) != Some(subst.domain().schema(db)) {
             return Err(SubstError::InvalidDomain(subst.domain()));
         }
         substitute_complete(db, self.value, subst)

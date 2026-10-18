@@ -21,7 +21,7 @@ use super::{
     },
     ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
     ty_lower::{
-        CompleteSubst, GenericParamTypeSet, ParamDomainId, ParamSchemaId, lower_hir_ty_in_mode,
+        CompleteSubst, GenericParamTypeSet, ParamDomainId, lower_hir_ty_in_mode, param_schema,
     },
     unify::UnificationTable,
 };
@@ -497,7 +497,7 @@ fn instantiate_adt_field_shape_in_mode<'db>(
     explicit_args: &[TyId<'db>],
     const_bodies: ConstBodyLowering,
 ) -> TyId<'db> {
-    let domain = ParamDomainId::full(db, ParamSchemaId::full(db, adt.as_generic_param_owner(db)));
+    let domain = ParamDomainId::full(db, param_schema(db, adt.as_generic_param_owner(db)));
     adt.fields(db)
         .get(variant_idx)
         .filter(|variant| field_idx < variant.num_types() && explicit_args.len() <= domain.len(db))

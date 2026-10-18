@@ -36,7 +36,7 @@ use crate::{
                 ResolvedEffectArg,
             },
             ty_def::{TyFlags, TyId},
-            ty_lower::{ParamKey, ParamSchemaId},
+            ty_lower::{ParamKey, param_schema},
             visitor::{TyVisitable, TyVisitor, collect_flags},
         },
     },
@@ -159,7 +159,7 @@ fn instantiated_method_signature<'db>(
     trait_inst: TraitInstId<'db>,
     rebase_same_trait_uses: bool,
 ) -> Result<InstantiatedMethodSignature<'db>, MethodArgMapError<'db>> {
-    let schema = ParamSchemaId::full(db, func.into());
+    let schema = param_schema(db, func.into());
     let arg_tys = func.arg_tys(db);
     let params = func.params(db).collect::<Vec<_>>();
     if args.len() != schema.keys(db).len() || arg_tys.len() != params.len() {
@@ -414,11 +414,11 @@ pub fn generated_callee_key<'db>(
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
 ) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
-    let keys = ParamSchemaId::full(db, func.into()).keys(db);
+    let keys = param_schema(db, func.into()).keys(db);
     let inherited = trait_inst.map_or(&[][..], |inst| inst.args(db));
     let inherited_len = GenericParamOwner::Func(func)
         .parent(db)
-        .map_or(0, |parent| ParamSchemaId::full(db, parent).keys(db).len());
+        .map_or(0, |parent| param_schema(db, parent).keys(db).len());
     if inherited.len() != inherited_len || inherited_len + own_args.len() != keys.len() {
         return Err(MethodArgMapError::NominalArity {
             expected: keys.len(),

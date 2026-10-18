@@ -575,49 +575,12 @@ pub(crate) fn generic_param_owner_assumptions<'db>(
 }
 
 /// Collects the generic parameters of the given generic parameter owner.
-#[salsa::tracked(
-    cycle_initial=collect_generic_params_cycle_initial,
-    cycle_fn=collect_generic_params_cycle_recover
-)]
+#[salsa::tracked]
 pub(crate) fn collect_generic_params<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> GenericParamTypeSet<'db> {
-    GenericParamCollector::new(db, owner, true).finalize()
-}
-
-/// Stable declaration parameters for shape discovery. This query must never
-/// depend on the hidden slots whose number is being discovered.
-#[salsa::tracked]
-pub(crate) fn collect_source_generic_params<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: GenericParamOwner<'db>,
-) -> GenericParamTypeSet<'db> {
-    GenericParamCollector::new(db, owner, false).finalize()
-}
-
-fn collect_generic_params_cycle_initial<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: GenericParamOwner<'db>,
-) -> GenericParamTypeSet<'db> {
-    // Explicit parameters are available before signature-derived parameters.
-    // Retaining them lets anonymous signature constants resolve their binders
-    // while the implicit layout plan converges.
-    match owner {
-        GenericParamOwner::Func(func) if func.is_free_or_inherent(db) => {
-            GenericParamCollector::new(db, owner, false).finalize()
-        }
-        _ => GenericParamTypeSet::empty(db, owner.scope()),
-    }
-}
-
-fn collect_generic_params_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &GenericParamTypeSet<'db>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-) -> salsa::CycleRecoveryAction<GenericParamTypeSet<'db>> {
-    salsa::CycleRecoveryAction::Iterate
+    GenericParamCollector::new(db, owner).finalize()
 }
 
 /// The parameters a function adds after its inherited ones: one provider per
@@ -912,13 +875,6 @@ pub struct GenericParamTypeSet<'db> {
     pub(crate) params_precursor: Vec<TyParamPrecursor<'db>>,
     pub(crate) scope: ScopeId<'db>,
     offset_to_explicit: usize,
-    pub(crate) basis: ParamBasis,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum ParamBasis {
-    Source,
-    Full,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -940,31 +896,23 @@ pub enum ParamKey<'db> {
     },
 }
 
-/// A view of the existing structural parameter plan. Source and full bases
-/// share logical keys, while hidden slots appear only in the full view.
+/// The logical identity of each lowered parameter slot of a generic owner:
+/// its inherited parameters, effect providers and declared parameters.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ParamSchemaId<'db> {
     pub owner: GenericParamOwner<'db>,
-    pub basis: ParamBasis,
     #[return_ref]
     pub keys: Vec<ParamKey<'db>>,
 }
 
 impl<'db> ParamSchemaId<'db> {
-    pub fn full(db: &'db dyn HirAnalysisDb, owner: GenericParamOwner<'db>) -> Self {
-        param_schema(db, owner, ParamBasis::Full)
-    }
-
     pub fn callable(db: &'db dyn HirAnalysisDb, callable: CallableDef<'db>) -> Self {
-        Self::full(db, callable.generic_owner())
+        param_schema(db, callable.generic_owner())
     }
 
     fn param_set(self, db: &'db dyn HirAnalysisDb) -> GenericParamTypeSet<'db> {
-        match self.basis(db) {
-            ParamBasis::Source => collect_source_generic_params(db, self.owner(db)),
-            ParamBasis::Full => collect_generic_params(db, self.owner(db)),
-        }
+        collect_generic_params(db, self.owner(db))
     }
 
     pub fn slot_for(self, db: &'db dyn HirAnalysisDb, key: ParamKey<'db>) -> Option<LoweredSlot> {
@@ -994,9 +942,9 @@ impl<'db> ParamSchemaId<'db> {
         self.param_set(db).params(db).get(slot.0).copied()
     }
 
-    /// Resolves an original parameter occurrence in this schema's coordinate
-    /// basis. Associated methods can also refer to their parent's original
-    /// parameters, even though inherited formals are reminted in method scope.
+    /// Resolves an original parameter occurrence to its key. Associated
+    /// methods can also refer to their parent's original parameters, even
+    /// though inherited formals are reminted in method scope.
     pub fn original_key(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<ParamKey<'db>> {
         let param = ty.as_generic_param(db)?;
         let slot = LoweredSlot(param.idx);
@@ -1028,30 +976,10 @@ impl<'db> ParamSchemaId<'db> {
     fn parent_schema(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
         match self.owner(db) {
             GenericParamOwner::Func(func) if func.is_associated_func(db) => {
-                Some(Self::full(db, self.owner(db).parent(db)?))
+                Some(param_schema(db, self.owner(db).parent(db)?))
             }
             _ => None,
         }
-    }
-
-    /// Resolves a declared occurrence in an explicitly chosen source basis.
-    /// Source-only discovery must not query the full slot plan; only a full
-    /// mapping may rebase a source occurrence into its corresponding key.
-    pub fn original_key_in_basis(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        basis: ParamBasis,
-    ) -> Option<ParamKey<'db>> {
-        if self.basis(db) == basis {
-            return self.original_key(db, ty);
-        }
-        if self.basis(db) == ParamBasis::Full && basis == ParamBasis::Source {
-            let source = param_schema(db, self.owner(db), ParamBasis::Source);
-            let key = source.original_key(db, ty)?;
-            return self.slot_for(db, key).map(|_| key);
-        }
-        None
     }
 
     pub fn allowed_default_dependencies(
@@ -1137,10 +1065,6 @@ pub enum SubstError<'db> {
         domain: ParamDomainId<'db>,
         key: ParamKey<'db>,
     },
-    WrongBasis {
-        schema: ParamSchemaId<'db>,
-        occurrence: TyId<'db>,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -1223,17 +1147,13 @@ impl<'db> CompleteSubst<'db> {
         Ok(Self { domain, values })
     }
 
-    /// A substitution over `owner`'s full parameter schema.
+    /// A substitution over `owner`'s parameter schema.
     pub fn for_owner(
         db: &'db dyn HirAnalysisDb,
         owner: GenericParamOwner<'db>,
         values: Vec<TyId<'db>>,
     ) -> Result<Self, SubstError<'db>> {
-        Self::new(
-            ParamDomainId::full(db, ParamSchemaId::full(db, owner)),
-            db,
-            values,
-        )
+        Self::new(ParamDomainId::full(db, param_schema(db, owner)), db, values)
     }
 
     /// Binds the leading slots of `domain` to `prefix` and leaves the remaining
@@ -1300,19 +1220,14 @@ impl<'db> CompleteSubst<'db> {
 pub fn param_schema<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
-    basis: ParamBasis,
 ) -> ParamSchemaId<'db> {
-    let set = match basis {
-        ParamBasis::Source => collect_source_generic_params(db, owner),
-        ParamBasis::Full => collect_generic_params(db, owner),
-    };
-    debug_assert_eq!(set.basis(db), basis);
+    let set = collect_generic_params(db, owner);
     let mut keys = vec![None; set.params_precursor(db).len()];
     if let GenericParamOwner::Func(func) = owner
         && func.is_associated_func(db)
         && let Some(parent) = owner.parent(db)
     {
-        let parent_schema = param_schema(db, parent, ParamBasis::Full);
+        let parent_schema = param_schema(db, parent);
         for (slot, key) in parent_schema.keys(db).iter().copied().enumerate() {
             keys[slot] = Some(key);
         }
@@ -1322,7 +1237,7 @@ pub fn param_schema<'db>(
         *first = Some(ParamKey::TraitSelf(trait_));
     }
 
-    if let (GenericParamOwner::Func(func), ParamBasis::Full) = (owner, basis) {
+    if let GenericParamOwner::Func(func) = owner {
         let plan = func_implicit_param_plan(db, func);
         for (effect_idx, slot) in plan.provider_param_index_by_effect.iter().enumerate() {
             if let Some(slot) = slot {
@@ -1341,7 +1256,6 @@ pub fn param_schema<'db>(
     ParamSchemaId::new(
         db,
         owner,
-        basis,
         keys.into_iter()
             .map(|key| key.expect("structural parameter has no logical identity"))
             .collect::<Vec<_>>(),
@@ -1372,7 +1286,7 @@ impl<'db> GenericParamTypeSet<'db> {
     }
 
     pub(crate) fn empty(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
-        Self::new(db, Vec::new(), scope, 0, ParamBasis::Full)
+        Self::new(db, Vec::new(), scope, 0)
     }
 
     pub(crate) fn trait_self(&self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
@@ -1407,15 +1321,10 @@ struct GenericParamCollector<'db> {
     owner: GenericParamOwner<'db>,
     params: Vec<TyParamPrecursor<'db>>,
     offset_to_original: usize,
-    basis: ParamBasis,
 }
 
 impl<'db> GenericParamCollector<'db> {
-    fn new(
-        db: &'db dyn HirAnalysisDb,
-        owner: GenericParamOwner<'db>,
-        include_func_implicit_params: bool,
-    ) -> Self {
+    fn new(db: &'db dyn HirAnalysisDb, owner: GenericParamOwner<'db>) -> Self {
         let mut params = match owner {
             GenericParamOwner::Trait(_) => {
                 vec![TyParamPrecursor::trait_self(db, None)]
@@ -1428,7 +1337,7 @@ impl<'db> GenericParamCollector<'db> {
             _ => vec![],
         };
 
-        if include_func_implicit_params && let GenericParamOwner::Func(func) = owner {
+        if let GenericParamOwner::Func(func) = owner {
             params.extend(func_implicit_param_plan(db, func).implicit_precursors);
         }
 
@@ -1438,11 +1347,6 @@ impl<'db> GenericParamCollector<'db> {
             owner,
             params,
             offset_to_original,
-            basis: if include_func_implicit_params {
-                ParamBasis::Full
-            } else {
-                ParamBasis::Source
-            },
         }
     }
 
@@ -1516,7 +1420,6 @@ impl<'db> GenericParamCollector<'db> {
             self.params,
             self.owner.scope(),
             self.offset_to_original,
-            self.basis,
         )
     }
 

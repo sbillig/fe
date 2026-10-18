@@ -1764,7 +1764,8 @@ pub struct TyParam<'db> {
     // ```
     // The `foo`'s type parameter list is lowered to [`T`, `U`, `V`], so the index of `V` is 2.
     pub idx: usize,
-    /// Source declaration index, independent of the source/full lowering basis.
+    /// Source declaration index, independent of the inherited and effect
+    /// provider slots before it.
     pub(super) declared_index: Option<usize>,
     pub kind: Kind,
     variant: Variant,

@@ -27,8 +27,8 @@ use super::{
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
-        CompleteSubst, ParamBasis, ParamDomainId, SourceParamIndex, SubstError,
-        collect_generic_params, param_schema,
+        CompleteSubst, ParamDomainId, SourceParamIndex, SubstError, collect_generic_params,
+        param_schema,
     },
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
@@ -3006,29 +3006,26 @@ pub enum ConstCaptureEnv<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConstCaptureDomain<'db> {
     owner: GenericParamOwner<'db>,
-    basis: ParamBasis,
     before: Option<SourceParamIndex>,
 }
 
 impl<'db> ConstCaptureDomain<'db> {
-    fn full(owner: GenericParamOwner<'db>, basis: ParamBasis) -> Self {
+    fn full(owner: GenericParamOwner<'db>) -> Self {
         Self {
             owner,
-            basis,
             before: None,
         }
     }
 
-    fn before(owner: GenericParamOwner<'db>, basis: ParamBasis, index: SourceParamIndex) -> Self {
+    fn before(owner: GenericParamOwner<'db>, index: SourceParamIndex) -> Self {
         Self {
             owner,
-            basis,
             before: Some(index),
         }
     }
 
     fn materialize(self, db: &'db dyn HirAnalysisDb) -> ParamDomainId<'db> {
-        let schema = param_schema(db, self.owner, self.basis);
+        let schema = param_schema(db, self.owner);
         self.before.map_or_else(
             || ParamDomainId::full(db, schema),
             |index| {
@@ -3110,7 +3107,6 @@ impl<'db> ConstCaptureEnv<'db> {
             if let Some(before) = before {
                 let identity = Self::Identity(ConstCaptureDomain {
                     owner: schema.owner(db),
-                    basis: schema.basis(db),
                     before,
                 });
                 if identity.complete(db).as_ref() == Some(&subst) {
@@ -3127,16 +3123,12 @@ impl<'db> ConstCaptureEnv<'db> {
         context: Option<&LoweringContext<'db>>,
     ) -> Self {
         if let Some((owner, param_idx)) = context.and_then(LoweringContext::default_capture) {
-            return Self::Identity(ConstCaptureDomain::before(
-                owner,
-                ParamBasis::Full,
-                param_idx,
-            ));
+            return Self::Identity(ConstCaptureDomain::before(owner, param_idx));
         }
         let Some(owner) = lexical_const_body_owner(db, body) else {
             return Self::Empty;
         };
-        Self::Identity(ConstCaptureDomain::full(owner, ParamBasis::Full))
+        Self::Identity(ConstCaptureDomain::full(owner))
     }
 
     pub(crate) fn bound(
@@ -3145,11 +3137,7 @@ impl<'db> ConstCaptureEnv<'db> {
         before: Option<SourceParamIndex>,
         values: Vec<TyId<'db>>,
     ) -> Self {
-        let domain = ConstCaptureDomain {
-            owner,
-            basis: ParamBasis::Full,
-            before,
-        };
+        let domain = ConstCaptureDomain { owner, before };
         Self::from_subst(
             db,
             CompleteSubst::new(domain.materialize(db), db, values).expect("complete const capture"),
@@ -3281,6 +3269,7 @@ mod tests {
         analysis::ty::{
             generic_defaults::{GenericDefault, generic_default},
             ty_def::PrimTy,
+            ty_lower::ParamKey,
         },
         test_db::{HirAnalysisTestDb, find_func},
     };
@@ -3510,10 +3499,10 @@ mod tests {
     }
 
     #[test]
-    fn source_capture_binds_by_key_across_hidden_full_slots() {
+    fn identity_capture_binds_by_key_across_hidden_provider_slots() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("source_capture_full_slots.fe"),
+            Utf8PathBuf::from("identity_capture_provider_slots.fe"),
             "struct K {}\ntrait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }",
         );
         let (module, _) = db.top_mod(file);
@@ -3528,36 +3517,32 @@ mod tests {
                     .is_some_and(|name| name.data(&db) == "f")
             })
             .expect("missing trait method");
-        let source = param_schema(&db, func.into(), ParamBasis::Source);
-        let full = param_schema(&db, func.into(), ParamBasis::Full);
-        assert!(full.keys(&db).len() > source.keys(&db).len());
-        let own_key = source.source_key(&db, SourceParamIndex(0)).unwrap();
-        let domain = ParamDomainId::full(&db, full);
+        let schema = param_schema(&db, func.into());
+        let own_key = schema.source_key(&db, SourceParamIndex(0)).unwrap();
+        let provider_slot = schema
+            .keys(&db)
+            .iter()
+            .position(|key| matches!(key, ParamKey::EffectProvider { .. }))
+            .expect("missing hidden provider slot");
+        assert!(provider_slot < schema.slot_for(&db, own_key).unwrap().0);
+        let domain = ParamDomainId::full(&db, schema);
         let values = domain
             .slots(&db)
             .map(|slot| {
-                if full.key_at(&db, slot) == Some(own_key) {
+                if schema.key_at(&db, slot) == Some(own_key) {
                     TyId::bool(&db)
                 } else {
-                    full.formal_at(&db, slot).unwrap()
+                    schema.formal_at(&db, slot).unwrap()
                 }
             })
             .collect();
         let subst = CompleteSubst::new(domain, &db, values).unwrap();
-        let source_formal = source
-            .formal_at(&db, source.slot_for(&db, own_key).unwrap())
-            .unwrap();
-        let full_formal = full
-            .formal_at(&db, full.slot_for(&db, own_key).unwrap())
-            .unwrap();
-        assert_ne!(source_formal, full_formal);
-        let capture =
-            ConstCaptureEnv::Identity(ConstCaptureDomain::full(func.into(), ParamBasis::Source));
+        let capture = ConstCaptureEnv::Identity(ConstCaptureDomain::full(func.into()));
         let bound = capture.bind_identity_with(&db, &subst).unwrap().unwrap();
         let ConstCaptureEnv::Bound(bound) = bound else {
             panic!("expected bound capture")
         };
-        assert_eq!(bound.domain().schema(&db), source);
+        assert_eq!(bound.domain().schema(&db), schema);
         assert_eq!(bound.get(&db, own_key), Some(TyId::bool(&db)));
     }
 
@@ -3582,18 +3567,17 @@ mod tests {
             })
             .expect("missing impl method");
         let foreign = find_func(&db, module, "g");
-        let capture =
-            ConstCaptureEnv::Identity(ConstCaptureDomain::full(impl_.into(), ParamBasis::Full));
+        let capture = ConstCaptureEnv::Identity(ConstCaptureDomain::full(impl_.into()));
         let [n, m] =
             [2, 3].map(|len| TyId::array_with_len(&db, TyId::u8(&db), len).generic_args(&db)[1]);
         let method_subst = CompleteSubst::new(
-            ParamDomainId::full(&db, param_schema(&db, method.into(), ParamBasis::Full)),
+            ParamDomainId::full(&db, param_schema(&db, method.into())),
             &db,
             vec![n, m],
         )
         .unwrap();
         let foreign_subst = CompleteSubst::new(
-            ParamDomainId::full(&db, param_schema(&db, foreign.into(), ParamBasis::Full)),
+            ParamDomainId::full(&db, param_schema(&db, foreign.into())),
             &db,
             vec![n, m],
         )

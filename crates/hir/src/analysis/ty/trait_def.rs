@@ -32,7 +32,7 @@ use super::{
         normalize_trait_inst_preserving_validity,
     },
     ty_def::{TyBase, TyData, TyId},
-    ty_lower::{CompleteSubst, ParamBasis, ParamDomainId, ParamKey, PartialSubst, param_schema},
+    ty_lower::{CompleteSubst, ParamDomainId, ParamKey, PartialSubst, param_schema},
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
@@ -516,19 +516,17 @@ impl<'db> ResolvedMethodInstance<'db> {
         nominal_args: &[TyId<'db>],
     ) -> Result<CompleteSubst<'db>, MethodArgMapError<'db>> {
         let body = self.body.ok_or(MethodArgMapError::MissingBody)?;
-        let nominal_schema = param_schema(db, self.declaration.into(), ParamBasis::Full);
+        let nominal_schema = param_schema(db, self.declaration.into());
         if nominal_args.len() != nominal_schema.keys(db).len() {
             return Err(MethodArgMapError::NominalArity {
                 expected: nominal_schema.keys(db).len(),
                 given: nominal_args.len(),
             });
         }
-        let body_schema = param_schema(db, body.into(), ParamBasis::Full);
+        let body_schema = param_schema(db, body.into());
         let inherited_len = GenericParamOwner::Func(body)
             .parent(db)
-            .map_or(0, |parent| {
-                param_schema(db, parent, ParamBasis::Full).keys(db).len()
-            });
+            .map_or(0, |parent| param_schema(db, parent).keys(db).len());
         if self.body_args.len() != inherited_len {
             return Err(MethodArgMapError::SelectedPrefixArity {
                 expected: inherited_len,
@@ -589,9 +587,7 @@ pub fn resolve_trait_method_instance<'db>(
         |body| {
             if body == declaration {
                 (
-                    (0..param_schema(db, body.into(), ParamBasis::Full)
-                        .keys(db)
-                        .len())
+                    (0..param_schema(db, body.into()).keys(db).len())
                         .map(Some)
                         .collect(),
                     None,

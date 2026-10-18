@@ -14,8 +14,7 @@ use fe_hir::{
             ty_check::BodyOwner,
             ty_def::{Kind, TyData, TyId, TyVarSort},
             ty_lower::{
-                CompleteSubst, LoweredSlot, ParamBasis, ParamDomainId, ParamKey, SourceParamIndex,
-                param_schema,
+                CompleteSubst, LoweredSlot, ParamDomainId, ParamKey, SourceParamIndex, param_schema,
             },
             unify::{InferenceKey, UnificationTableBase},
         },
@@ -206,117 +205,78 @@ fn root_callee_sharing_preserves_the_callers_ingot() {
 }
 
 #[test]
-fn source_and_full_method_schemas_keep_inherited_keys_in_both_query_orders() {
-    for source_first in [true, false] {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
-            Utf8PathBuf::from("method_schema_basis.fe"),
-            r#"
+fn method_schema_keeps_inherited_keys_around_hidden_provider_slots() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("method_schema_keys.fe"),
+        r#"
 struct K {}
 trait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }
 fn foreign<Z>() {}
 "#,
-        );
-        let (module, _) = db.top_mod(file);
-        db.assert_no_diags(module);
-        let func = module
-            .all_funcs(&db)
-            .iter()
-            .copied()
-            .find(|func| {
-                func.name(&db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(&db) == "f")
-            })
-            .expect("missing trait method");
-        let (source, full) = if source_first {
-            (
-                param_schema(&db, func.into(), ParamBasis::Source),
-                param_schema(&db, func.into(), ParamBasis::Full),
-            )
-        } else {
-            let full = param_schema(&db, func.into(), ParamBasis::Full);
-            let source = param_schema(&db, func.into(), ParamBasis::Source);
-            (source, full)
-        };
-        assert_eq!(source.basis(&db), ParamBasis::Source);
-        assert_eq!(full.basis(&db), ParamBasis::Full);
-        assert!(
-            full.keys(&db)
-                .iter()
-                .any(|key| matches!(key, ParamKey::EffectProvider { .. })),
-            "method signature did not reserve a hidden provider slot"
-        );
-        let own_key = source
-            .source_key(&db, SourceParamIndex(0))
-            .expect("missing method source parameter");
-        assert_eq!(full.source_key(&db, SourceParamIndex(0)), Some(own_key));
-        assert!(
-            full.slot_for(&db, own_key).expect("missing full slot").0
-                > source
-                    .slot_for(&db, own_key)
-                    .expect("missing source slot")
-                    .0
-        );
-        assert_eq!(&source.keys(&db)[..2], &full.keys(&db)[..2]);
-        let inherited = source.key_at(&db, LoweredSlot(0)).unwrap();
-        let inherited_formal = source.formal_at(&db, LoweredSlot(0)).unwrap();
-        assert_eq!(source.original_key(&db, inherited_formal), Some(inherited));
-        assert_eq!(full.original_key(&db, inherited_formal), Some(inherited));
-        let ParamKey::TraitSelf(trait_) = inherited else {
-            panic!("first inherited key should be trait Self");
-        };
-        let parent = param_schema(&db, trait_.into(), ParamBasis::Full);
-        let parent_formal = parent.formal_at(&db, LoweredSlot(0)).unwrap();
-        assert_ne!(parent_formal, inherited_formal);
-        assert_eq!(full.original_key(&db, parent_formal), Some(inherited));
-        let TyData::TyParam(param) = inherited_formal.data(&db) else {
-            panic!("trait Self should be a parameter");
-        };
-        assert_eq!(param.owner, func.scope());
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let func = module
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "f")
+        })
+        .expect("missing trait method");
+    let schema = param_schema(&db, func.into());
+    let own_key = schema
+        .source_key(&db, SourceParamIndex(0))
+        .expect("missing method source parameter");
+    let hidden_key = schema.key_at(&db, LoweredSlot(2)).unwrap();
+    assert!(
+        matches!(hidden_key, ParamKey::EffectProvider { .. }),
+        "method signature did not reserve a hidden provider slot"
+    );
+    assert_eq!(schema.slot_for(&db, own_key), Some(LoweredSlot(3)));
 
-        let source_own = source
-            .formal_at(&db, source.slot_for(&db, own_key).unwrap())
-            .unwrap();
-        let full_own = full
-            .formal_at(&db, full.slot_for(&db, own_key).unwrap())
-            .unwrap();
-        assert_eq!(source.original_key(&db, source_own), Some(own_key));
-        assert_eq!(full.original_key(&db, full_own), Some(own_key));
-        assert_eq!(full.original_key(&db, source_own), None);
-        let hidden_key = full.key_at(&db, LoweredSlot(2)).unwrap();
-        assert!(matches!(hidden_key, ParamKey::EffectProvider { .. }));
-        let hidden = full.formal_at(&db, LoweredSlot(2)).unwrap();
-        assert_eq!(source.original_key(&db, hidden), None);
+    let inherited = schema.key_at(&db, LoweredSlot(0)).unwrap();
+    let inherited_formal = schema.formal_at(&db, LoweredSlot(0)).unwrap();
+    assert_eq!(schema.original_key(&db, inherited_formal), Some(inherited));
+    let ParamKey::TraitSelf(trait_) = inherited else {
+        panic!("first inherited key should be trait Self");
+    };
+    let parent = param_schema(&db, trait_.into());
+    let parent_formal = parent.formal_at(&db, LoweredSlot(0)).unwrap();
+    assert_ne!(parent_formal, inherited_formal);
+    assert_eq!(schema.original_key(&db, parent_formal), Some(inherited));
+    let TyData::TyParam(param) = inherited_formal.data(&db) else {
+        panic!("trait Self should be a parameter");
+    };
+    assert_eq!(param.owner, func.scope());
 
-        let foreign = module
-            .all_funcs(&db)
-            .iter()
-            .copied()
-            .find(|candidate| {
-                candidate
-                    .name(&db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(&db) == "foreign")
-            })
-            .expect("missing foreign function");
-        let foreign_param = CallableDef::Func(foreign).params(&db)[0];
-        assert_eq!(source.original_key(&db, foreign_param), None);
-        assert_eq!(full.original_key(&db, foreign_param), None);
+    let own = schema
+        .formal_at(&db, schema.slot_for(&db, own_key).unwrap())
+        .unwrap();
+    assert_eq!(schema.original_key(&db, own), Some(own_key));
+    let hidden = schema.formal_at(&db, LoweredSlot(2)).unwrap();
+    assert_eq!(schema.original_key(&db, hidden), Some(hidden_key));
 
-        let domain = ParamDomainId::full(&db, full);
-        let values = domain
-            .slots(&db)
-            .map(|slot| full.formal_at(&db, slot).unwrap())
-            .collect();
-        let subst = CompleteSubst::new(domain, &db, values).unwrap();
-        assert_eq!(subst.get(&db, own_key), Some(full_own));
-        let prefix = source
-            .allowed_default_dependencies(&db, SourceParamIndex(0))
-            .unwrap();
-        assert!(prefix.position_for(&db, inherited).is_some());
-        assert_eq!(prefix.position_for(&db, own_key), None);
-    }
+    let foreign = find_func(&db, module, "foreign");
+    let foreign_param = CallableDef::Func(foreign).params(&db)[0];
+    assert_eq!(schema.original_key(&db, foreign_param), None);
+
+    let domain = ParamDomainId::full(&db, schema);
+    let values = domain
+        .slots(&db)
+        .map(|slot| schema.formal_at(&db, slot).unwrap())
+        .collect();
+    let subst = CompleteSubst::new(domain, &db, values).unwrap();
+    assert_eq!(subst.get(&db, own_key), Some(own));
+    let prefix = schema
+        .allowed_default_dependencies(&db, SourceParamIndex(0))
+        .unwrap();
+    assert!(prefix.position_for(&db, inherited).is_some());
+    assert!(prefix.position_for(&db, hidden_key).is_some());
+    assert_eq!(prefix.position_for(&db, own_key), None);
 }
 
 #[test]
