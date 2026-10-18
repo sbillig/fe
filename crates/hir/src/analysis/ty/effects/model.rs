@@ -491,7 +491,7 @@ fn value_is_well_formed_with<'db>(
     !finder.invalid
 }
 
-pub fn stored_value_contains_implicit_layout_params<'db>(
+pub fn stored_value_contains_implicit_params<'db>(
     db: &'db dyn HirAnalysisDb,
     value: impl TyVisitable<'db>,
 ) -> bool {

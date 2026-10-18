@@ -9,12 +9,11 @@ use hir::{
             same_owner_effect_binding,
         },
         ty::{
-            const_ty::ConstTyData,
             corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
             trait_def::{MethodArgMapError, TraitInstId},
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, EffectParamSite, LocalBinding},
-            ty_def::{TyData, TyId},
+            ty_def::TyId,
         },
     },
     hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
@@ -1476,14 +1475,6 @@ fn format_root_semantic_instance_rejection<'db>(
             offending_ty,
             param_idx,
             ..
-        } if is_implicit_layout_const_param(db, *offending_ty) => format!(
-            "function `{func_name}` cannot be used as a standalone runtime root because an effect provider type contains an inferred layout const parameter `{}` at generic parameter {param_idx}; roots cannot declare wildcard effect providers because there is no caller to supply a concrete provider. Move the effectful logic into a helper and call it from `{func_name}` with a concrete provider using `with (...)`, or use a contract field/provider context",
-            offending_ty.pretty_print(db),
-        ),
-        RootSemanticInstanceError::UnsupportedGenericParam {
-            offending_ty,
-            param_idx,
-            ..
         } => format!(
             "function `{func_name}` cannot be used as a standalone runtime root because generic parameter {param_idx} is not supported for root instantiation: {}",
             offending_ty.pretty_print(db),
@@ -1495,15 +1486,6 @@ fn format_root_semantic_instance_rejection<'db>(
             "function `{func_name}` cannot be used as a standalone runtime root because its effect environment is not fully concrete"
         ),
     }
-}
-
-fn is_implicit_layout_const_param<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
-    if let TyData::ConstTy(const_ty) = ty.data(db)
-        && let ConstTyData::TyParam(param, _) = const_ty.data(db)
-    {
-        return param.is_implicit();
-    }
-    false
 }
 
 pub(crate) fn runtime_instance_for_semantic<'db>(

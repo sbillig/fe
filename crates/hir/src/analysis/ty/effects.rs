@@ -32,9 +32,9 @@ pub use model::{
     PatternSlotId, PatternSlotKind, PatternSlots, StoredEffectKey, StoredTraitKey, StoredTypeKey,
     TraitKeySchema, TraitPatternKey, TypeKeySchema, TypePatternKey, effect_family_for_trait,
     effect_family_for_type, forwarded_trait_key_is_well_formed, forwarded_type_key_is_well_formed,
-    stored_trait_key_is_rigid, stored_type_key_is_rigid,
-    stored_value_contains_implicit_layout_params, stored_value_contains_out_of_scope_params,
-    stored_value_is_storage_rigid, trait_key_schema_is_well_formed, type_key_schema_is_well_formed,
+    stored_trait_key_is_rigid, stored_type_key_is_rigid, stored_value_contains_implicit_params,
+    stored_value_contains_out_of_scope_params, stored_value_is_storage_rigid,
+    trait_key_schema_is_well_formed, type_key_schema_is_well_formed,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

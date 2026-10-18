@@ -64,7 +64,7 @@ use crate::analysis::ty::{
         },
         normalize_effect_identity_trait, place_effect_provider_param_index_map,
         rows::{RowExpansion, RowKey, RowPath, expand_rows},
-        stored_value_contains_implicit_layout_params, stored_value_contains_out_of_scope_params,
+        stored_value_contains_implicit_params, stored_value_contains_out_of_scope_params,
     },
     fold::{TyFoldable as _, TyFolder},
     normalize::normalize_with_trait_evidence,
@@ -3304,7 +3304,7 @@ impl<'db> TyChecker<'db> {
                     !matches!(
                         (mode, key),
                         (WitnessBuildMode::ExplicitKeyedWith, StoredEffectKey::Type(stored))
-                            if stored_value_contains_implicit_layout_params(
+                            if stored_value_contains_implicit_params(
                                 self.db,
                                 stored.carrier,
                             ) || stored_value_contains_out_of_scope_params(
@@ -3439,7 +3439,7 @@ impl<'db> TyChecker<'db> {
                     &slot_bindings,
                 );
                 let specialized = if matches!(mode, WitnessBuildMode::SeededRequirement)
-                    && (stored_value_contains_implicit_layout_params(self.db, solved_inst)
+                    && (stored_value_contains_implicit_params(self.db, solved_inst)
                         || stored_value_contains_out_of_scope_params(self.db, scope, solved_inst))
                 {
                     instantiated
