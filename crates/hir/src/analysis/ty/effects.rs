@@ -1,7 +1,7 @@
 use common::indexmap::IndexMap;
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{PathRes, resolve_path_with_minter};
+use crate::analysis::name_resolution::{PathRes, resolve_path_with_lowering_cx};
 use crate::analysis::ty::const_ty::{
     ConstCanonEnv, ConstCanonMode, LoweringContext, canonicalize_trait_inst_for_mode,
     canonicalize_ty_for_mode,
@@ -15,7 +15,7 @@ use crate::analysis::ty::ty_check::Callable;
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::ty_lower::{
     CompleteSubst, LoweredSlot, ParamDomainId, ParamSchemaId, func_implicit_param_plan,
-    lower_hir_ty_with_minter,
+    lower_hir_ty_with_lowering_cx,
 };
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{Func, Partial, PathId, TypeId as HirTypeId, TypeKind};
@@ -230,7 +230,7 @@ pub(crate) fn lower_effect_key_schema<'db>(
     let TypeKind::Path(path) = key_ty.data(db) else {
         let carrier = normalize_from_assumptions(
             db,
-            lower_hir_ty_with_minter(db, key_ty, scope, assumptions, lowering_cx),
+            lower_hir_ty_with_lowering_cx(db, key_ty, scope, assumptions, lowering_cx),
             scope,
             assumptions,
         );
@@ -243,7 +243,7 @@ pub(crate) fn lower_effect_key_schema<'db>(
     let Some(key_path) = path.to_opt() else {
         return ResolvedEffectKey::Other;
     };
-    match resolve_path_with_minter(db, key_path, scope, assumptions, false, lowering_cx) {
+    match resolve_path_with_lowering_cx(db, key_path, scope, assumptions, false, lowering_cx) {
         Ok(PathRes::Ty(ty)) if ty.is_star_kind(db) => {
             let ty = normalize_from_assumptions(db, ty, scope, assumptions);
             ResolvedEffectKey::Type(TypeKeySchema { carrier: ty })

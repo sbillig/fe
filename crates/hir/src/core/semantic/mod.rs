@@ -106,8 +106,9 @@ use crate::analysis::ty::{
     ty_def::{InvalidCause, PrimTy, TyId},
     ty_error::{collect_ty_lower_errors, demanded_ground_const_cause, diag_from_invalid_cause},
     ty_lower::{
-        TyAlias, lower_hir_ty, lower_hir_ty_deferred, lower_hir_ty_with_minter, lower_opt_hir_ty,
-        lower_type_alias, lower_type_alias_from_hir, lower_type_alias_from_hir_deferred,
+        TyAlias, lower_hir_ty, lower_hir_ty_deferred, lower_hir_ty_with_lowering_cx,
+        lower_opt_hir_ty, lower_type_alias, lower_type_alias_from_hir,
+        lower_type_alias_from_hir_deferred,
     },
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
@@ -4786,7 +4787,7 @@ impl<'db> ImplAssocTypeView<'db> {
         let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
         let assumptions = constraints_for(db, self.owner.into());
         let lowering_cx = LoweringContext::new().for_impl_assoc_type(self.owner);
-        Some(lower_hir_ty_with_minter(
+        Some(lower_hir_ty_with_lowering_cx(
             db,
             hir,
             self.owner.scope(),
@@ -4800,7 +4801,7 @@ impl<'db> ImplAssocTypeView<'db> {
         let assumptions =
             collect_candidate_constraints(db, self.owner.into()).instantiate_identity();
         let lowering_cx = LoweringContext::deferred().for_impl_assoc_type(self.owner);
-        Some(lower_hir_ty_with_minter(
+        Some(lower_hir_ty_with_lowering_cx(
             db,
             hir,
             self.owner.scope(),

@@ -16,7 +16,7 @@ use super::{
     ty_error::{collect_hir_ty_diags_deferred, emit_invalid_ty_error, first_invalid_ty_cause},
     ty_lower::{
         CompleteSubst, GenericParamTypeSet, ParamBasis, SourceParamIndex, collect_generic_params,
-        lower_hir_ty_with_minter, param_schema,
+        lower_hir_ty_with_lowering_cx, param_schema,
     },
     visitor::{TyVisitable, TyVisitor},
 };
@@ -136,7 +136,7 @@ pub(crate) fn generic_default<'db>(
             };
             let lowering_cx = LoweringContext::deferred()
                 .with_default_capture(owner, SourceParamIndex(param_idx));
-            let ty = lower_hir_ty_with_minter(
+            let ty = lower_hir_ty_with_lowering_cx(
                 db,
                 hir_ty,
                 owner.scope(),

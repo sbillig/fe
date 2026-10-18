@@ -27,7 +27,8 @@ use super::{
 };
 use crate::analysis::name_resolution::{
     NameDomain, NameResKind, PathRes, TypePosition, path_resolver::PathResolutionResult,
-    resolve_ident_to_bucket, resolve_path_with_minter, resolve_type_position_path_with_minter,
+    resolve_ident_to_bucket, resolve_path_with_lowering_cx,
+    resolve_type_position_path_with_lowering_cx,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -127,7 +128,7 @@ pub(crate) fn lower_hir_ty_with_resolutions<'db>(
 
 /// Lowers `ty` with the caller's lowering context, which sets how const
 /// bodies lower and can record the paths the lowering resolves.
-pub(crate) fn lower_hir_ty_with_minter<'db>(
+pub(crate) fn lower_hir_ty_with_lowering_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
@@ -163,7 +164,7 @@ pub(crate) fn lower_hir_ty_in_mode<'db>(
     }
 }
 
-pub(crate) fn lower_opt_hir_ty_with_minter<'db>(
+pub(crate) fn lower_opt_hir_ty_with_lowering_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: Partial<HirTyId<'db>>,
     scope: ScopeId<'db>,
@@ -280,7 +281,7 @@ pub(crate) fn lower_opt_const_body<'db>(
                 Ok(NameResKind::Scope(ScopeId::GenericParam(..)))
             )
             && let Ok(PathRes::Ty(ty)) =
-                resolve_path_with_minter(db, path, scope, assumptions, true, lowering_cx)
+                resolve_path_with_lowering_cx(db, path, scope, assumptions, true, lowering_cx)
             && let TyData::ConstTy(const_ty) = ty.data(db)
         {
             return *const_ty;
@@ -325,7 +326,7 @@ pub(crate) fn lower_const_body_path<'db>(
     let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     Some(
         match lowering_cx.without_recording(|| {
-            resolve_path_with_minter(db, path, scope, assumptions, true, lowering_cx)
+            resolve_path_with_lowering_cx(db, path, scope, assumptions, true, lowering_cx)
         }) {
             Ok(PathRes::Const(const_def, ty)) => {
                 if let Some(body) = const_def.body(db).to_opt() {
@@ -393,7 +394,7 @@ fn lower_path_impl<'db>(
 }
 
 /// Lowers `path`, written in a type `position`, from its single resolution
-/// ([`resolve_type_position_path_with_minter`]): to the type or constant it
+/// ([`resolve_type_position_path_with_lowering_cx`]): to the type or constant it
 /// names, or to `NotAType` for anything else. The error is why `path` does
 /// not resolve.
 pub(crate) fn lower_type_position_path<'db>(
@@ -405,7 +406,7 @@ pub(crate) fn lower_type_position_path<'db>(
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
-    let res = resolve_type_position_path_with_minter(
+    let res = resolve_type_position_path_with_lowering_cx(
         db,
         path,
         scope,

@@ -90,7 +90,7 @@ use crate::analysis::{
             AmbiguousTraitMethods, MethodCandidate, MethodSelectionError,
             select_callable_value_method, select_method_candidate, select_trait_method_candidates,
         },
-        resolve_name_res_with_minter, resolve_query,
+        resolve_name_res_with_lowering_cx, resolve_query,
     },
     place::resolve_place_field,
     semantic::{
@@ -5410,7 +5410,7 @@ fn resolve_ident_expr<'db>(
         let Ok(res) = bucket.pick_any(&[NameDomain::VALUE, NameDomain::TYPE]) else {
             return ResolvedPathInBody::Invalid;
         };
-        let Ok(reso) = resolve_name_res_with_minter(
+        let Ok(reso) = resolve_name_res_with_lowering_cx(
             db,
             res,
             None,

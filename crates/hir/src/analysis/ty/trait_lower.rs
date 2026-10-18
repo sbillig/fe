@@ -21,13 +21,15 @@ use super::{
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, PrimTy, TyBase, TyId},
-    ty_lower::{lower_hir_ty_with_minter, lower_opt_const_body, lower_opt_hir_ty_with_minter},
+    ty_lower::{
+        lower_hir_ty_with_lowering_cx, lower_opt_const_body, lower_opt_hir_ty_with_lowering_cx,
+    },
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
         NameResKind, PathRes, PathResError, PathResErrorKind,
-        resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
+        resolve_trait_path_with_observer_and_lowering_cx, resolve_type_path_definition,
     },
     ty::ty_def::{Kind, TyData},
 };
@@ -434,7 +436,7 @@ fn lower_trait_ref_inner<'db>(
 
     let lowering_cx = LoweringContext::for_const_bodies(const_bodies);
 
-    lower_trait_ref_with_minter(
+    lower_trait_ref_with_lowering_cx(
         db,
         self_ty,
         trait_ref,
@@ -445,7 +447,7 @@ fn lower_trait_ref_inner<'db>(
     )
 }
 
-pub(crate) fn lower_trait_ref_with_minter<'db>(
+pub(crate) fn lower_trait_ref_with_lowering_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     self_ty: TyId<'db>,
     trait_ref: TraitRefId<'db>,
@@ -457,7 +459,7 @@ pub(crate) fn lower_trait_ref_with_minter<'db>(
     let Partial::Present(path) = trait_ref.path(db) else {
         return Err(TraitRefLowerError::Ignored);
     };
-    match resolve_trait_path_with_observer_and_minter(
+    match resolve_trait_path_with_observer_and_lowering_cx(
         db,
         path,
         scope,
@@ -569,7 +571,7 @@ impl<'db> From<TraitArgError<'db>> for PathResErrorKind<'db> {
     }
 }
 
-pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
+pub(crate) fn lower_trait_ref_impl_with_lowering_cx<'db>(
     db: &'db (dyn HirAnalysisDb + 'static),
     path: PathId<'db>,
     scope: ScopeId<'db>,
@@ -584,8 +586,13 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     for arg in args {
         match arg {
             GenericArg::Type(ty_arg) => {
-                let ty =
-                    lower_opt_hir_ty_with_minter(db, ty_arg.ty, scope, assumptions, lowering_cx);
+                let ty = lower_opt_hir_ty_with_lowering_cx(
+                    db,
+                    ty_arg.ty,
+                    scope,
+                    assumptions,
+                    lowering_cx,
+                );
                 provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => {
@@ -595,7 +602,7 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
             }
             GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
                 if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
-                    let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, lowering_cx);
+                    let ty = lower_hir_ty_with_lowering_cx(db, ty, scope, assumptions, lowering_cx);
                     assoc_bindings.insert(name, ty);
                 }
             }

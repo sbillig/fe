@@ -123,7 +123,7 @@ use crate::analysis::ty::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer_and_minter,
+        PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer_and_lowering_cx,
     },
     ty::{
         ty_def::{TyFlags, inference_keys},
@@ -3631,7 +3631,7 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let res = match resolve_path_with_observer_and_minter(
+        let res = match resolve_path_with_observer_and_lowering_cx(
             self.db,
             path,
             scope,

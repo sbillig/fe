@@ -24,9 +24,9 @@ pub use path_resolver::{
     resolve_name_res, resolve_path,
 };
 pub(crate) use path_resolver::{
-    TypePosition, resolve_name_res_with_minter, resolve_path_with_minter,
-    resolve_path_with_observer_and_minter, resolve_trait_path_with_observer_and_minter,
-    resolve_type_position_path_with_minter,
+    TypePosition, resolve_name_res_with_lowering_cx, resolve_path_with_lowering_cx,
+    resolve_path_with_observer_and_lowering_cx, resolve_trait_path_with_observer_and_lowering_cx,
+    resolve_type_position_path_with_lowering_cx,
 };
 pub(crate) use path_resolver::{
     earliest_conflicting_inherent_const_impl, shadowed_inherent_fn_for_const,

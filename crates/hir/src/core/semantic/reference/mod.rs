@@ -19,7 +19,7 @@ use crate::{
     analysis::HirAnalysisDb,
     analysis::name_resolution::{
         EarlyNameQueryId, PathRes, PathResError, PathResErrorKind, QueryDirective, resolve_path,
-        resolve_query, resolve_trait_path_with_observer_and_minter,
+        resolve_query, resolve_trait_path_with_observer_and_lowering_cx,
     },
     analysis::ty::{
         const_ty::LoweringContext,
@@ -411,7 +411,7 @@ impl<'db> PathView<'db> {
             return scope.into_iter().collect();
         }
         if self.trait_ref && seg_path == self.path {
-            let res = resolve_trait_path_with_observer_and_minter(
+            let res = resolve_trait_path_with_observer_and_lowering_cx(
                 db,
                 seg_path,
                 self.scope,

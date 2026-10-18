@@ -40,7 +40,7 @@ use crate::analysis::{
         trait_lower::{
             TraitRefLowerError, complete_candidate_impl_assoc_ty, complete_impl_assoc_ty,
             lower_candidate_impl_assoc_ty, lower_checked_impl_assoc_ty, lower_trait_ref,
-            lower_trait_ref_impl_with_minter, lower_trait_ref_with_minter,
+            lower_trait_ref_impl_with_lowering_cx, lower_trait_ref_with_lowering_cx,
         },
         trait_resolution::{
             GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
@@ -48,7 +48,7 @@ use crate::analysis::{
         },
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
         ty_lower::{
-            TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty_with_minter,
+            TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty_with_lowering_cx,
             lower_type_alias, lower_type_alias_deferred, lower_type_position_path,
         },
         unify::UnificationTable,
@@ -751,7 +751,7 @@ pub fn resolve_path<'db>(
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     let lowering_cx = LoweringContext::new();
-    resolve_path_with_minter(
+    resolve_path_with_lowering_cx(
         db,
         path,
         scope,
@@ -764,7 +764,7 @@ pub fn resolve_path<'db>(
 /// Like [`resolve_path`], but resolves with the caller's lowering context, so
 /// const bodies follow its mode. Each resolved segment is also reported to
 /// the context, which keeps it when its lowering records resolutions.
-pub(crate) fn resolve_path_with_minter<'db>(
+pub(crate) fn resolve_path_with_lowering_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
@@ -786,7 +786,7 @@ pub(crate) fn resolve_path_with_minter<'db>(
     )
 }
 
-pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
+pub(crate) fn resolve_path_with_observer_and_lowering_cx<'db, F>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
@@ -826,7 +826,7 @@ where
 /// the trait's own generic params. A path naming anything else that isn't a
 /// trait is resolved without its generic args, so it's reported as not being
 /// a trait rather than for the args that thing doesn't take.
-pub(crate) fn resolve_trait_path_with_observer_and_minter<'db, F>(
+pub(crate) fn resolve_trait_path_with_observer_and_lowering_cx<'db, F>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
@@ -847,8 +847,15 @@ where
         && let Ok(outer) = resolve_ident_to_bucket(db, path, outer_scope).pick(NameDomain::TYPE)
         && is_trait(outer.kind)
     {
-        let res =
-            resolve_name_res_with_minter(db, outer, None, path, scope, assumptions, lowering_cx)?;
+        let res = resolve_name_res_with_lowering_cx(
+            db,
+            outer,
+            None,
+            path,
+            scope,
+            assumptions,
+            lowering_cx,
+        )?;
         lowering_cx.record_resolution(path, &res);
         observer(path, &res);
         return Ok(res);
@@ -865,7 +872,7 @@ where
         ),
         _ => path,
     };
-    resolve_path_with_observer_and_minter(
+    resolve_path_with_observer_and_lowering_cx(
         db,
         path,
         scope,
@@ -891,7 +898,7 @@ pub(crate) enum TypePosition {
 /// are resolved a single time and only its last segment is tried in each
 /// namespace: resolving the whole path again would lower every generic
 /// argument nested in it again, doubling the work at each nesting level.
-pub(crate) fn resolve_type_position_path_with_minter<'db>(
+pub(crate) fn resolve_type_position_path_with_lowering_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
@@ -1067,7 +1074,7 @@ where
                 kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
                 failed_at: path,
             })?,
-            _ => lower_hir_ty_with_minter(db, type_, scope, assumptions, lowering_cx),
+            _ => lower_hir_ty_with_lowering_cx(db, type_, scope, assumptions, lowering_cx),
         };
         if let Some(InvalidCause::NotAType(res)) = ty.invalid_cause(db) {
             return Err(PathResError::new(
@@ -1077,9 +1084,15 @@ where
         }
         let trait_inst_result = match lowering_cx.const_bodies() {
             ConstBodyLowering::Eager => lower_trait_ref(db, ty, trait_, scope, assumptions, None),
-            ConstBodyLowering::Deferred => {
-                lower_trait_ref_with_minter(db, ty, trait_, scope, assumptions, None, lowering_cx)
-            }
+            ConstBodyLowering::Deferred => lower_trait_ref_with_lowering_cx(
+                db,
+                ty,
+                trait_,
+                scope,
+                assumptions,
+                None,
+                lowering_cx,
+            ),
         };
         let trait_inst = match trait_inst_result {
             Ok(inst) => inst,
@@ -1457,8 +1470,15 @@ where
         pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
     };
 
-    let r =
-        resolve_name_res_with_minter(db, &res, parent_ty, path, scope, assumptions, lowering_cx)?;
+    let r = resolve_name_res_with_lowering_cx(
+        db,
+        &res,
+        parent_ty,
+        path,
+        scope,
+        assumptions,
+        lowering_cx,
+    )?;
     observer(path, &r);
     Ok(r)
 }
@@ -2136,7 +2156,7 @@ pub fn resolve_name_res<'db>(
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     let lowering_cx = LoweringContext::new();
-    resolve_name_res_with_minter(
+    resolve_name_res_with_lowering_cx(
         db,
         nameres,
         parent_ty,
@@ -2147,7 +2167,7 @@ pub fn resolve_name_res<'db>(
     )
 }
 
-pub(crate) fn resolve_name_res_with_minter<'db>(
+pub(crate) fn resolve_name_res_with_lowering_cx<'db>(
     db: &'db dyn HirAnalysisDb,
     nameres: &NameRes<'db>,
     parent_ty: Option<TyId<'db>>,
@@ -2244,7 +2264,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                     && let TypeKind::Path(p) = hir_ty.data(db)
                                     && let Some(arg_path) = p.to_opt()
                                 {
-                                    match resolve_path_with_minter(
+                                    match resolve_path_with_lowering_cx(
                                         db,
                                         arg_path,
                                         scope,
@@ -2278,7 +2298,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                 }
                             }
                         }
-                        let lowered = lower_trait_ref_impl_with_minter(
+                        let lowered = lower_trait_ref_impl_with_lowering_cx(
                             db,
                             path,
                             scope,

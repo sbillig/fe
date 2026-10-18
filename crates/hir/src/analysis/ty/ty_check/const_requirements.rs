@@ -7,7 +7,7 @@
 use super::*;
 use crate::analysis::name_resolution::{
     method_selection::{MethodCandidate, select_method_candidate},
-    resolve_path_with_minter,
+    resolve_path_with_lowering_cx,
 };
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::{
@@ -1181,7 +1181,7 @@ fn expression_const_bodies<'db>(
         let definition = match expr.data(db, body).borrowed().to_opt()? {
             Expr::Path(Partial::Present(path)) => {
                 let lowering_cx = LoweringContext::deferred();
-                match resolve_path_with_minter(
+                match resolve_path_with_lowering_cx(
                     db,
                     *path,
                     body.scope(),
@@ -1266,7 +1266,7 @@ fn expression_const_bodies<'db>(
         }
         let lowering_cx = LoweringContext::deferred().recording_resolutions();
         let resolve = |value| {
-            resolve_path_with_minter(
+            resolve_path_with_lowering_cx(
                 db,
                 path,
                 body.scope(),
@@ -2070,7 +2070,7 @@ fn trait_ref_const_args<'db>(
         return Vec::new();
     }
     let lowering_cx = LoweringContext::deferred().recording_resolutions();
-    let _ = resolve_path_with_minter(db, path, scope, assumptions, false, &lowering_cx);
+    let _ = resolve_path_with_lowering_cx(db, path, scope, assumptions, false, &lowering_cx);
     segment_const_args(db, path, &lowering_cx.into_resolutions())
 }
 

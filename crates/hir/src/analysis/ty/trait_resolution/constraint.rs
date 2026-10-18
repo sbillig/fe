@@ -18,10 +18,10 @@ use crate::analysis::{
         },
         fold::TyFoldable,
         trait_def::TraitInstId,
-        trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_with_minter},
+        trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_with_lowering_cx},
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
-        ty_lower::{collect_generic_params, lower_hir_ty, lower_hir_ty_with_minter},
+        ty_lower::{collect_generic_params, lower_hir_ty, lower_hir_ty_with_lowering_cx},
         unify::InferenceKey,
     },
 };
@@ -588,7 +588,13 @@ fn try_resolve_type_bound<'db>(
                 ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, deferred.scope, assumptions),
                 ConstBodyLowering::Deferred => {
                     let lowering_cx = LoweringContext::deferred();
-                    lower_hir_ty_with_minter(db, hir_ty, deferred.scope, assumptions, &lowering_cx)
+                    lower_hir_ty_with_lowering_cx(
+                        db,
+                        hir_ty,
+                        deferred.scope,
+                        assumptions,
+                        &lowering_cx,
+                    )
                 }
             };
             if ty.has_invalid(db) {
@@ -610,7 +616,7 @@ fn try_resolve_type_bound<'db>(
         ),
         ConstBodyLowering::Deferred => {
             let lowering_cx = LoweringContext::deferred();
-            lower_trait_ref_with_minter(
+            lower_trait_ref_with_lowering_cx(
                 db,
                 ty,
                 deferred.trait_ref,

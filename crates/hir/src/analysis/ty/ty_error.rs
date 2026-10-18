@@ -7,8 +7,9 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_with_minter,
-        resolve_path_with_observer_and_minter, resolve_trait_path_with_observer_and_minter,
+        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_with_lowering_cx,
+        resolve_path_with_observer_and_lowering_cx,
+        resolve_trait_path_with_observer_and_lowering_cx,
     },
     ty::visitor::{TyVisitor, walk_ty},
 };
@@ -175,7 +176,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Some(hir_ty) = type_arg.ty.to_opt()
             && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
             && let Some(path) = path_partial.to_opt()
-            && let Ok(resolved) = resolve_path_with_minter(
+            && let Ok(resolved) = resolve_path_with_lowering_cx(
                 self.db,
                 path,
                 ctxt.scope(),
@@ -211,7 +212,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                         }
                     };
 
-                    let resolved = resolve_path_with_observer_and_minter(
+                    let resolved = resolve_path_with_observer_and_lowering_cx(
                         self.db,
                         path,
                         scope,
@@ -331,7 +332,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             }
         };
 
-        let resolved = resolve_path_with_observer_and_minter(
+        let resolved = resolve_path_with_observer_and_lowering_cx(
             self.db,
             path,
             scope,
@@ -395,7 +396,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // TODO(diags): In the future, refine this to walk only generic args
         // under the trait ref and surface kind/arg mismatches with precise
         // spans when available from semantic lowering.
-        let resolved = resolve_trait_path_with_observer_and_minter(
+        let resolved = resolve_trait_path_with_observer_and_lowering_cx(
             self.db,
             path,
             scope,
