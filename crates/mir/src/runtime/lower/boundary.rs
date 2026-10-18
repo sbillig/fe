@@ -1,5 +1,4 @@
 use hir::analysis::ty::AddressSpace;
-use std::borrow::Cow;
 
 use common::indexmap::IndexSet;
 use hir::analysis::{
@@ -11,7 +10,6 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::scope_graph::ScopeId;
-use rustc_hash::FxHashMap;
 
 use crate::{
     db::MirDb,
@@ -30,69 +28,20 @@ use super::{
     },
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct BoundarySiteId(u32);
-
+/// A boundary with the matcher for the shapes it accepts, built once per
+/// call plan.
 #[derive(Clone, Debug)]
 pub(super) struct StagedBoundary<'db> {
-    site: BoundarySiteId,
     pub(super) boundary: RuntimeBoundarySpec<'db>,
     matcher: BoundaryShapeMatcher<'db>,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct BoundaryRef<'a, 'db> {
-    site: Option<BoundarySiteId>,
-    boundary: &'a RuntimeBoundarySpec<'db>,
-    matcher: Option<&'a BoundaryShapeMatcher<'db>>,
-}
-
-impl<'a, 'db> BoundaryRef<'a, 'db> {
-    pub(super) fn staged(boundary: &'a StagedBoundary<'db>) -> Self {
-        Self {
-            site: Some(boundary.site),
-            boundary: &boundary.boundary,
-            matcher: Some(&boundary.matcher),
-        }
-    }
-}
-
-#[derive(Default)]
-pub(super) struct BoundarySiteAllocator {
-    next: u32,
-}
-
-impl BoundarySiteAllocator {
-    pub(super) fn stage<'db>(&mut self, boundary: RuntimeBoundarySpec<'db>) -> StagedBoundary<'db> {
-        let site = BoundarySiteId(self.next);
-        self.next += 1;
+impl<'db> StagedBoundary<'db> {
+    pub(super) fn new(boundary: RuntimeBoundarySpec<'db>) -> Self {
         let matcher = BoundaryShapeMatcher::for_boundary(&boundary);
-        StagedBoundary {
-            site,
-            boundary,
-            matcher,
-        }
+        Self { boundary, matcher }
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) struct BoundarySpecializationCacheKey<'db> {
-    local: SLocalId,
-    site: BoundarySiteId,
-    aggregate_layout: Option<LayoutId<'db>>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum BoundarySpecializationCacheValue<'db> {
-    Unchanged,
-    Specialized {
-        boundary: RuntimeBoundarySpec<'db>,
-        matcher: BoundaryShapeMatcher<'db>,
-    },
-}
-
-pub(super) type BoundarySpecializationCache<'db> =
-    FxHashMap<BoundarySpecializationCacheKey<'db>, BoundarySpecializationCacheValue<'db>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum RuntimeClassShape<'db> {
@@ -286,215 +235,18 @@ fn raw_target_shape<'db>(db: &'db dyn MirDb, pointee: RawPointeeId<'db>) -> Runt
     RuntimeClassShape::from_class(pointee.target(db))
 }
 
-pub(super) struct SpecializedBoundary<'a, 'db> {
-    pub(super) boundary: Cow<'a, RuntimeBoundarySpec<'db>>,
-    matcher: BoundaryShapeMatcher<'db>,
-}
-
-pub(super) fn specialize_boundary_for_runtime_source_in_context<'a, 'db>(
+/// `boundary` for the value of `local`: an exact-shape boundary whose shape
+/// the source's actual class has takes that class, as the boundary accepts
+/// it.
+pub(super) fn boundary_for_runtime_source<'db>(
     env: BodyEnv<'_, 'db>,
     local: SLocalId,
-    boundary: BoundaryRef<'a, 'db>,
-    carriers: &[RuntimeCarrier<'db>],
-    mut class_cache: Option<&mut InferClassCache<'db>>,
-) -> SpecializedBoundary<'a, 'db> {
-    let aggregate_layout = class_cache
-        .as_deref_mut()
-        .and_then(|cache| cache.local_dynamic_facts(env, local, carriers))
-        .and_then(|facts| facts.aggregate_layout)
-        .or_else(|| {
-            env.boundary_source_transport_sensitive(local)
-                .then(|| env.actual_aggregate_class_for_source(carriers, local))
-                .flatten()
-                .and_then(|class| class.aggregate_layout())
-        });
-    if let (Some(site), Some(cache)) = (
-        boundary.site,
-        class_cache
-            .as_deref_mut()
-            .map(|cache| &mut cache.boundary_specializations),
-    ) {
-        let key = BoundarySpecializationCacheKey {
-            local,
-            site,
-            aggregate_layout,
-        };
-        if let Some(cached) = cache.get(&key) {
-            let specialized = match cached {
-                BoundarySpecializationCacheValue::Unchanged => SpecializedBoundary {
-                    boundary: Cow::Borrowed(boundary.boundary),
-                    matcher: boundary
-                        .matcher
-                        .cloned()
-                        .unwrap_or_else(|| BoundaryShapeMatcher::for_boundary(boundary.boundary)),
-                },
-                BoundarySpecializationCacheValue::Specialized { boundary, matcher } => {
-                    SpecializedBoundary {
-                        boundary: Cow::Owned(boundary.clone()),
-                        matcher: matcher.clone(),
-                    }
-                }
-            };
-            return preserve_actual_shape_boundary_for_runtime_source(
-                env,
-                local,
-                specialized,
-                carriers,
-                class_cache,
-            );
-        }
-        let specialized_boundary =
-            specialize_boundary_for_aggregate_layout(env.db(), boundary.boundary, aggregate_layout);
-        let specialized_matcher = match &specialized_boundary {
-            Cow::Borrowed(_) => boundary
-                .matcher
-                .cloned()
-                .unwrap_or_else(|| BoundaryShapeMatcher::for_boundary(boundary.boundary)),
-            Cow::Owned(boundary) => BoundaryShapeMatcher::for_boundary(boundary),
-        };
-        cache.insert(
-            key,
-            match &specialized_boundary {
-                Cow::Borrowed(_) => BoundarySpecializationCacheValue::Unchanged,
-                Cow::Owned(boundary) => BoundarySpecializationCacheValue::Specialized {
-                    boundary: boundary.clone(),
-                    matcher: specialized_matcher.clone(),
-                },
-            },
-        );
-        return preserve_actual_shape_boundary_for_runtime_source(
-            env,
-            local,
-            SpecializedBoundary {
-                boundary: specialized_boundary,
-                matcher: specialized_matcher,
-            },
-            carriers,
-            class_cache,
-        );
-    }
-    preserve_actual_shape_boundary_for_runtime_source(
-        env,
-        local,
-        SpecializedBoundary {
-            matcher: boundary
-                .matcher
-                .cloned()
-                .unwrap_or_else(|| BoundaryShapeMatcher::for_boundary(boundary.boundary)),
-            boundary: specialize_boundary_for_aggregate_layout(
-                env.db(),
-                boundary.boundary,
-                aggregate_layout,
-            ),
-        },
-        carriers,
-        class_cache,
-    )
-}
-
-pub(super) fn specialize_boundary_for_aggregate_layout<'a, 'db>(
-    db: &'db dyn MirDb,
-    boundary: &'a RuntimeBoundarySpec<'db>,
-    aggregate_layout: Option<LayoutId<'db>>,
-) -> Cow<'a, RuntimeBoundarySpec<'db>> {
-    match boundary {
-        RuntimeBoundarySpec::ExactTransport(desired) => {
-            match specialize_exact_boundary_for_aggregate_layout(db, desired, aggregate_layout) {
-                Cow::Borrowed(_) => Cow::Borrowed(boundary),
-                Cow::Owned(class) => Cow::Owned(RuntimeBoundarySpec::ExactTransport(class)),
-            }
-        }
-        RuntimeBoundarySpec::ExactShape(desired) => {
-            match specialize_exact_boundary_for_aggregate_layout(db, desired, aggregate_layout) {
-                Cow::Borrowed(_) => Cow::Borrowed(boundary),
-                Cow::Owned(class) => Cow::Owned(RuntimeBoundarySpec::ExactShape(class)),
-            }
-        }
-        RuntimeBoundarySpec::BorrowLike {
-            pointee:
-                RuntimeClass::AggregateValue {
-                    layout: desired_layout,
-                },
-            access,
-            allow,
-        } => match aggregate_layout {
-            Some(layout) if layout != *desired_layout => {
-                Cow::Owned(RuntimeBoundarySpec::BorrowLike {
-                    pointee: RuntimeClass::AggregateValue { layout },
-                    access: *access,
-                    allow: allow.clone(),
-                })
-            }
-            Some(_) | None => Cow::Borrowed(boundary),
-        },
-        RuntimeBoundarySpec::BorrowLike { .. } => Cow::Borrowed(boundary),
-    }
-}
-
-fn specialize_exact_boundary_for_aggregate_layout<'a, 'db>(
-    db: &'db dyn MirDb,
-    desired: &'a RuntimeClass<'db>,
-    aggregate_layout: Option<LayoutId<'db>>,
-) -> Cow<'a, RuntimeClass<'db>> {
-    match (desired, aggregate_layout) {
-        (_, None) => Cow::Borrowed(desired),
-        (
-            RuntimeClass::AggregateValue {
-                layout: desired_layout,
-            },
-            Some(layout),
-        ) if layout == *desired_layout => Cow::Borrowed(desired),
-        (RuntimeClass::AggregateValue { .. }, Some(layout)) => {
-            Cow::Owned(RuntimeClass::AggregateValue { layout })
-        }
-        (
-            RuntimeClass::Ref {
-                pointee,
-                kind,
-                view,
-            },
-            Some(layout),
-        ) if pointee.aggregate_layout().is_some() && pointee.aggregate_layout() != Some(layout) => {
-            Cow::Owned(RuntimeClass::Ref {
-                pointee: Box::new(RuntimeClass::AggregateValue { layout }),
-                kind: kind.clone(),
-                view: view.clone(),
-            })
-        }
-        (RuntimeClass::Ref { .. }, Some(_)) => Cow::Borrowed(desired),
-        (
-            RuntimeClass::RawAddr {
-                space,
-                pointee: Some(pointee),
-            },
-            Some(layout),
-        ) if pointee
-            .target(db)
-            .aggregate_layout()
-            .is_some_and(|target| target != layout) =>
-        {
-            Cow::Owned(RuntimeClass::raw_addr(
-                db,
-                *space,
-                RuntimeClass::AggregateValue { layout },
-            ))
-        }
-        (RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }, Some(_)) => Cow::Borrowed(desired),
-    }
-}
-
-fn preserve_actual_shape_boundary_for_runtime_source<'a, 'db>(
-    env: BodyEnv<'_, 'db>,
-    local: SLocalId,
-    boundary: SpecializedBoundary<'a, 'db>,
+    boundary: &StagedBoundary<'db>,
     carriers: &[RuntimeCarrier<'db>],
     class_cache: Option<&mut InferClassCache<'db>>,
-) -> SpecializedBoundary<'a, 'db> {
-    if !matches!(
-        boundary.boundary.as_ref(),
-        RuntimeBoundarySpec::ExactShape(_)
-    ) {
-        return boundary;
+) -> RuntimeBoundarySpec<'db> {
+    if !matches!(boundary.boundary, RuntimeBoundarySpec::ExactShape(_)) {
+        return boundary.boundary.clone();
     }
     let actual_matches = if let Some(class_cache) = class_cache {
         class_cache
@@ -511,24 +263,21 @@ fn preserve_actual_shape_boundary_for_runtime_source<'a, 'db>(
             .map(RuntimeClassShape::from_class)
             .is_some_and(|shape| boundary.matcher.matches_shape(env.db(), &shape))
     };
-    if !actual_matches {
-        return boundary;
-    }
-    let actual = if let Some(actual) = carrier_value_class_ref(local, carriers) {
-        actual.clone()
-    } else {
-        let Some(actual) = env.semantic_value_class(carriers, local) else {
-            return boundary;
-        };
-        actual
+    let actual = actual_matches
+        .then(|| {
+            carrier_value_class_ref(local, carriers)
+                .cloned()
+                .or_else(|| env.semantic_value_class(carriers, local))
+        })
+        .flatten();
+    let Some(actual) = actual else {
+        return boundary.boundary.clone();
     };
-    let actual = BoundaryMatcher::retarget_accepted_class(env.db(), &actual, &boundary.boundary);
-    SpecializedBoundary {
-        matcher: BoundaryShapeMatcher::for_boundary(&RuntimeBoundarySpec::ExactShape(
-            actual.clone(),
-        )),
-        boundary: Cow::Owned(RuntimeBoundarySpec::ExactShape(actual)),
-    }
+    RuntimeBoundarySpec::ExactShape(BoundaryMatcher::retarget_accepted_class(
+        env.db(),
+        &actual,
+        &boundary.boundary,
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

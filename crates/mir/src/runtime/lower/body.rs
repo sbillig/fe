@@ -63,7 +63,7 @@ use crate::{
 use super::{
     abi::{runtime_body_signature, runtime_declaration_signature},
     arg_selector::RuntimeArgSelector,
-    boundary::{BoundarySiteAllocator, RuntimeValueUsePlan, boundary_spec_for_ty_in_env},
+    boundary::{RuntimeValueUsePlan, boundary_spec_for_ty_in_env},
     call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
     classify::{
         BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
@@ -3012,9 +3012,7 @@ impl<'db> RmirEmitter<'db> {
         let ret_ty = semantic_return_ty(self.db, semantic);
         let kind = core_primitive_wrapper_call_kind(self.db, func, ret_ty)?;
         let checked = self.current_arithmetic_mode() == ArithmeticMode::Checked;
-        let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan =
-            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
+        let call_input_plan = compile_call_input_plan_for_semantic(self.db, semantic, &[]);
         let (runtime_args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
 
         match kind {
@@ -3174,13 +3172,7 @@ impl<'db> RmirEmitter<'db> {
         if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
             return ret;
         }
-        let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            semantic,
-            effect_args,
-            &mut boundary_sites,
-        );
+        let call_input_plan = compile_call_input_plan_for_semantic(self.db, semantic, effect_args);
         let (runtime_args, runtime_classes) =
             self.lower_runtime_call_inputs(bb, args, effect_args, &call_input_plan);
         // A lane a `mut` effect argument provides is passed as a copy, which
@@ -3357,10 +3349,7 @@ impl<'db> RmirEmitter<'db> {
             return Some(ret);
         }
         let kind = runtime_builtin_func_kind(self.db, func)?;
-
-        let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan =
-            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
+        let call_input_plan = compile_call_input_plan_for_semantic(self.db, semantic, &[]);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         if kind == RuntimeBuiltinFuncKind::PanicWithValue {
             let [value] = args.as_slice() else {
@@ -3524,9 +3513,7 @@ impl<'db> RmirEmitter<'db> {
             return None;
         }
         let name = func.name(self.db).to_opt()?.data(self.db);
-        let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan =
-            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
+        let call_input_plan = compile_call_input_plan_for_semantic(self.db, semantic, &[]);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         let ret_ty = semantic_return_ty(self.db, semantic);
         let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
@@ -4878,10 +4865,8 @@ impl<'db> RmirEmitter<'db> {
                 return true;
             };
             let semantic = get_or_build_semantic_instance(self.db, callee.key);
-            let mut sites = BoundarySiteAllocator::default();
             let plan = compile_call_input_plan_for_semantic(
-                self.db, semantic, effect_args, &mut sites,
-            );
+                self.db, semantic, effect_args);
             self.with_current_body_cx(|cx| {
                 RuntimeArgSelector::new(cx.env, cx.carriers, None)
                     .with_concrete_roots(&roots)

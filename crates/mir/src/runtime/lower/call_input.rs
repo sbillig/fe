@@ -11,10 +11,7 @@ use crate::{
     runtime::{RuntimeBoundarySpec, RuntimeClass, RuntimeParamPlan},
 };
 
-use super::{
-    boundary::{BoundarySiteAllocator, StagedBoundary},
-    classify::runtime_effect_binding_plan_for_binding_idx,
-};
+use super::{boundary::StagedBoundary, classify::runtime_effect_binding_plan_for_binding_idx};
 
 #[derive(Clone, Debug)]
 pub(super) enum CompiledMaterializationPlan<'db> {
@@ -53,14 +50,13 @@ pub(super) struct CompiledCallInputPlan<'db> {
 
 pub(super) fn compile_value_pass_plan<'db>(
     plan: RuntimeParamPlan<'db>,
-    boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledValuePassPlan<'db> {
     match plan {
         RuntimeParamPlan::Erased => CompiledValuePassPlan::Erased,
         RuntimeParamPlan::PassActual => CompiledValuePassPlan::VisibleValue,
         RuntimeParamPlan::ReadOnlyView { value, borrow } => CompiledValuePassPlan::ReadOnlyView {
             value,
-            borrow: boundary_sites.stage(borrow),
+            borrow: StagedBoundary::new(borrow),
         },
         RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactTransport(exact)) => {
             CompiledValuePassPlan::ExactTransport(exact)
@@ -72,12 +68,12 @@ pub(super) fn compile_value_pass_plan<'db>(
             boundary @ RuntimeBoundarySpec::ExactShape(
                 RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. },
             ),
-        ) => CompiledValuePassPlan::ExactShapeRefLike(boundary_sites.stage(boundary)),
+        ) => CompiledValuePassPlan::ExactShapeRefLike(StagedBoundary::new(boundary)),
         RuntimeParamPlan::Boundary(RuntimeBoundarySpec::ExactShape(exact)) => {
             CompiledValuePassPlan::ExactTransport(exact)
         }
         RuntimeParamPlan::Boundary(boundary @ RuntimeBoundarySpec::BorrowLike { .. }) => {
-            CompiledValuePassPlan::BorrowLike(boundary_sites.stage(boundary))
+            CompiledValuePassPlan::BorrowLike(StagedBoundary::new(boundary))
         }
     }
 }
@@ -86,17 +82,16 @@ pub(super) fn compile_call_input_plan_for_semantic<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
     effect_args: &[NEffectArg<'db>],
-    boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledCallInputPlan<'db> {
     let param_plans = super::interface::runtime_param_plans(db, semantic)
         .iter()
         .cloned()
-        .map(|plan| compile_value_pass_plan(plan, boundary_sites))
+        .map(compile_value_pass_plan)
         .collect::<Vec<_>>()
         .into_boxed_slice();
     let effect_plans = effect_args
         .iter()
-        .map(|arg| compile_effect_arg_plan(db, semantic, arg, boundary_sites))
+        .map(|arg| compile_effect_arg_plan(db, semantic, arg))
         .collect::<Vec<_>>()
         .into_boxed_slice();
     CompiledCallInputPlan {
@@ -109,7 +104,6 @@ fn compile_effect_arg_plan<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
     arg: &NEffectArg<'db>,
-    boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledEffectArgPlan<'db> {
     let Some(binding_plan) =
         runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx)
@@ -118,16 +112,15 @@ fn compile_effect_arg_plan<'db>(
     };
     match (&arg.pass_mode, &arg.arg) {
         (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
-            CompiledEffectArgPlan::Value(compile_value_pass_plan(
-                RuntimeParamPlan::Boundary(binding_plan.boundary),
-                boundary_sites,
-            ))
+            CompiledEffectArgPlan::Value(compile_value_pass_plan(RuntimeParamPlan::Boundary(
+                binding_plan.boundary,
+            )))
         }
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
             panic!("borrowed effect argument must already have a stable provider place: {arg:?}")
         }
         (_, NEffectArgValue::Place(_)) => {
-            CompiledEffectArgPlan::Place(boundary_sites.stage(binding_plan.boundary))
+            CompiledEffectArgPlan::Place(StagedBoundary::new(binding_plan.boundary))
         }
     }
 }

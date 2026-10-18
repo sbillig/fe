@@ -17,9 +17,7 @@ use crate::runtime::{
 
 use super::{
     boundary::{
-        BoundaryMatcher, BoundaryRef, BoundarySiteAllocator, RuntimeValueMaterialization,
-        StagedBoundary, specialize_boundary_for_aggregate_layout,
-        specialize_boundary_for_runtime_source_in_context,
+        BoundaryMatcher, RuntimeValueMaterialization, StagedBoundary, boundary_for_runtime_source,
     },
     call_input::{
         CompiledCallInputPlan, CompiledEffectArgPlan, CompiledMaterializationPlan,
@@ -95,13 +93,9 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         let Some(boundary) = boundary else {
             return self.selected_materialized_operand(field);
         };
-        let mut boundary_sites = BoundarySiteAllocator::default();
         self.selected_value_pass_plan(
             field,
-            &compile_value_pass_plan(
-                RuntimeParamPlan::Boundary(boundary.clone()),
-                &mut boundary_sites,
-            ),
+            &compile_value_pass_plan(RuntimeParamPlan::Boundary(boundary.clone())),
         )
     }
 
@@ -734,7 +728,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 self.selected_value_pass_plan(value, plan)
             }
             (EffectArgInput::Place(place), CompiledEffectArgPlan::Place(boundary)) => {
-                Some(self.select_effect_place_for_boundary(arg, place, boundary.boundary.clone()))
+                Some(self.select_effect_place_for_boundary(arg, place, &boundary.boundary))
             }
             (EffectArgInput::Value(_), CompiledEffectArgPlan::Place(_))
             | (EffectArgInput::Place(_), CompiledEffectArgPlan::Value(_)) => {
@@ -793,17 +787,8 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         &self,
         arg: &NEffectArg<'db>,
         place: &NPlace<'db>,
-        boundary: RuntimeBoundarySpec<'db>,
+        boundary: &RuntimeBoundarySpec<'db>,
     ) -> SelectedRuntimeArg<'db> {
-        // Like value arguments, place arguments carry their actual aggregate
-        // layout. Project the whole place: a field or indexed provider need not
-        // have the same layout as its containing root.
-        let layout = self
-            .env
-            .normalized_place_class(self.carriers, place)
-            .and_then(|class| class.aggregate_layout());
-        let boundary =
-            specialize_boundary_for_aggregate_layout(self.env.db(), &boundary, layout).into_owned();
         self.select_place_for_boundary(
             place.clone(),
             self.effect_arg_target_ty(arg),
@@ -827,15 +812,13 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         local: SLocalId,
         boundary: &StagedBoundary<'db>,
     ) -> RuntimeBoundarySpec<'db> {
-        specialize_boundary_for_runtime_source_in_context(
+        boundary_for_runtime_source(
             self.env,
             local,
-            BoundaryRef::staged(boundary),
+            boundary,
             self.carriers,
             self.class_cache.as_deref_mut(),
         )
-        .boundary
-        .into_owned()
     }
 
     fn operand_value_class(&self, arg: RuntimeOperand) -> Option<RuntimeClass<'db>> {

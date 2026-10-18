@@ -33,7 +33,7 @@ use crate::{
         place_reference_class, project_field_class, project_index_class, storage_field_lane,
     },
     runtime::{
-        BorrowAccess, Layout, LayoutId, RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass,
+        BorrowAccess, Layout, RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass,
         RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp, ScalarClass,
         ScalarRepr, ScalarRole,
     },
@@ -42,10 +42,9 @@ use crate::{
 use super::{
     arg_selector::RuntimeArgSelector,
     boundary::{
-        BoundarySiteAllocator, BoundarySpecializationCache, RuntimeClassShape, StagedBoundary,
-        aggregate_transport_depends_on_runtime_source,
+        RuntimeClassShape, StagedBoundary, aggregate_transport_depends_on_runtime_source,
         boundary_source_uses_transport_sensitive_aggregate, boundary_spec_for_ty_in_env,
-        default_borrow_transport_set, specialize_boundary_for_aggregate_layout,
+        default_borrow_transport_set,
     },
     call_input::{
         CompiledCallInputPlan, CompiledMaterializationPlan, compile_call_input_plan_for_semantic,
@@ -120,7 +119,6 @@ pub(super) struct AssignStaticFacts<'db> {
 
 #[derive(Default)]
 pub(super) struct InferClassCache<'db> {
-    pub(super) boundary_specializations: BoundarySpecializationCache<'db>,
     local_versions: Vec<u32>,
     local_dynamic_facts: Vec<CachedLocalDynamicFacts<'db>>,
 }
@@ -128,7 +126,6 @@ pub(super) struct InferClassCache<'db> {
 impl<'db> InferClassCache<'db> {
     pub(super) fn new(local_count: usize) -> Self {
         Self {
-            boundary_specializations: BoundarySpecializationCache::default(),
             local_versions: vec![0; local_count],
             local_dynamic_facts: vec![CachedLocalDynamicFacts::default(); local_count],
         }
@@ -179,24 +176,18 @@ impl<'db> InferClassCache<'db> {
             .iter()
             .map(|dep| self.local_versions[dep.index()])
             .collect();
-        entry.facts = facts.clone();
-        facts
+        entry.facts = Some(facts.clone());
+        Some(facts)
     }
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct LocalDynamicFacts<'db> {
     pub(super) exact_source_shape: Option<RuntimeClassShape<'db>>,
-    pub(super) aggregate_layout: Option<LayoutId<'db>>,
 }
 
 impl<'db> LocalDynamicFacts<'db> {
-    fn compute(
-        env: BodyEnv<'_, 'db>,
-        local: SLocalId,
-        carriers: &[RuntimeCarrier<'db>],
-    ) -> Option<Self> {
-        let local_static = env.local_facts(local)?;
+    fn compute(env: BodyEnv<'_, 'db>, local: SLocalId, carriers: &[RuntimeCarrier<'db>]) -> Self {
         let exact_source_shape = carrier_value_class_ref(local, carriers)
             .map(RuntimeClassShape::from_class)
             .or_else(|| {
@@ -204,15 +195,7 @@ impl<'db> LocalDynamicFacts<'db> {
                     .as_ref()
                     .map(RuntimeClassShape::from_class)
             });
-        let aggregate_layout = local_static
-            .boundary_source_transport_sensitive
-            .then(|| env.actual_aggregate_class_for_source(carriers, local))
-            .flatten()
-            .and_then(|class| class.aggregate_layout());
-        Some(Self {
-            exact_source_shape,
-            aggregate_layout,
-        })
+        Self { exact_source_shape }
     }
 }
 
@@ -284,7 +267,6 @@ impl<'db> BodyStaticFacts<'db> {
         body: &RuntimeSemanticBody<'db>,
         type_env: RuntimeTypeEnv<'db>,
     ) -> Self {
-        let mut boundary_sites = BoundarySiteAllocator::default();
         let expr_facts_builder = ExprStaticFactsBuilder { db, body, type_env };
         let local_facts: Vec<_> = body
             .locals
@@ -325,8 +307,7 @@ impl<'db> BodyStaticFacts<'db> {
                     .ty;
                 let uses = runtime_expr_source_locals(body, expr);
                 let dynamic_indices = runtime_expr_dynamic_index_locals(body, expr);
-                let expr_facts =
-                    expr_facts_builder.build(expr, dst, result_ty, &mut boundary_sites);
+                let expr_facts = expr_facts_builder.build(expr, dst, result_ty);
                 let assignment = assignments.push(AssignStaticFacts {
                     block_idx,
                     stmt_idx,
@@ -1336,7 +1317,6 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
         expr: &NExpr<'db>,
         dst: SLocalId,
         result_ty: TyId<'db>,
-        boundary_sites: &mut BoundarySiteAllocator,
     ) -> Option<ExprStaticFacts<'db>> {
         let db = self.db;
         let body = self.body;
@@ -1399,7 +1379,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                         elem_ty,
                         AddressSpace::Memory,
                     )
-                    .map(|boundary| boundary_sites.stage(boundary)),
+                    .map(StagedBoundary::new),
                     stored_class: stored_class_for_ty_in_env(db, type_env, elem_ty),
                 };
                 ExprStaticFacts::AggregateMake(AggregateMakeStaticFacts {
@@ -1438,7 +1418,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                             field_ty,
                             AddressSpace::Memory,
                         )
-                        .map(|boundary| boundary_sites.stage(boundary)),
+                        .map(StagedBoundary::new),
                         stored_class: stored_class_for_ty_in_env(db, type_env, field_ty),
                     })
                     .collect();
@@ -1475,7 +1455,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                             field_ty,
                             AddressSpace::Memory,
                         )
-                        .map(|boundary| boundary_sites.stage(boundary)),
+                        .map(StagedBoundary::new),
                         stored_class: stored_class_for_ty_in_env(db, type_env, field_ty),
                     })
                     .collect();
@@ -1562,14 +1542,8 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                     semantic,
                     builtin_return_class,
                     return_decision,
-                    input_plan: needs_input_plan.then(|| {
-                        compile_call_input_plan_for_semantic(
-                            db,
-                            semantic,
-                            effect_args,
-                            boundary_sites,
-                        )
-                    }),
+                    input_plan: needs_input_plan
+                        .then(|| compile_call_input_plan_for_semantic(db, semantic, effect_args)),
                 })
             }
         })
@@ -1725,14 +1699,6 @@ fn effect_binding_borrow_boundary<'db>(
     }
 }
 
-fn specialize_effect_binding_boundary_for_class<'db>(
-    db: &'db dyn MirDb,
-    boundary: RuntimeBoundarySpec<'db>,
-    class: &RuntimeClass<'db>,
-) -> RuntimeBoundarySpec<'db> {
-    specialize_boundary_for_aggregate_layout(db, &boundary, class.aggregate_layout()).into_owned()
-}
-
 pub(crate) fn runtime_zero_sized_effect_value_is_inert<'db>(
     db: &'db dyn MirDb,
     ty: TyId<'db>,
@@ -1829,7 +1795,6 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             }
             let boundary =
                 effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions);
-            let boundary = specialize_effect_binding_boundary_for_class(db, boundary, &class);
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
         SemanticLocalRole::DirectValue { .. } => {
@@ -1859,7 +1824,6 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             }
             let boundary =
                 effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions);
-            let boundary = specialize_effect_binding_boundary_for_class(db, boundary, &class);
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
         SemanticLocalRole::PlaceCarrier {
@@ -1889,7 +1853,6 @@ pub(crate) fn runtime_effect_binding_plan<'db>(
             }
             let boundary =
                 effect_binding_borrow_boundary(db, binding, value_ty, env.scope, env.assumptions);
-            let boundary = specialize_effect_binding_boundary_for_class(db, boundary, &class);
             Some(RuntimeEffectBindingPlan { class, boundary })
         }
         SemanticLocalRole::PlaceBoundValue {
@@ -2158,16 +2121,10 @@ pub(super) fn selected_visible_return_for_operand<'db>(
         RuntimeVisibleReturnPlan::Exact(class) => {
             Some(evaluator.selected_semantic_operand_for_class(operand, class))
         }
-        RuntimeVisibleReturnPlan::Constrained(boundary) => {
-            let mut boundary_sites = BoundarySiteAllocator::default();
-            evaluator.selected_value_pass_plan(
-                operand,
-                &compile_value_pass_plan(
-                    RuntimeParamPlan::Boundary(boundary.clone()),
-                    &mut boundary_sites,
-                ),
-            )
-        }
+        RuntimeVisibleReturnPlan::Constrained(boundary) => evaluator.selected_value_pass_plan(
+            operand,
+            &compile_value_pass_plan(RuntimeParamPlan::Boundary(boundary.clone())),
+        ),
         RuntimeVisibleReturnPlan::PassActual => evaluator.selected_actual_operand(operand),
     }
 }
@@ -2902,7 +2859,6 @@ mod tests {
         abi::runtime_declaration_signature,
         arg_selector::RuntimeArgSelector,
         body::check_runtime_body_supported,
-        boundary::BoundarySiteAllocator,
         call_input::{CompiledCallInputPlan, compile_call_input_plan_for_semantic},
     };
     use super::*;
@@ -2933,13 +2889,7 @@ mod tests {
         effect_args: &[NEffectArg<'db>],
     ) -> CompiledCallInputPlan<'db> {
         call_facts.input_plan.clone().unwrap_or_else(|| {
-            let mut boundary_sites = BoundarySiteAllocator::default();
-            compile_call_input_plan_for_semantic(
-                db,
-                call_facts.semantic,
-                effect_args,
-                &mut boundary_sites,
-            )
+            compile_call_input_plan_for_semantic(db, call_facts.semantic, effect_args)
         })
     }
 
