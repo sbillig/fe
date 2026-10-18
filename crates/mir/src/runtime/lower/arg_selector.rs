@@ -22,9 +22,8 @@ use super::{
         specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
-        CompiledCallInputPlan, CompiledEffectArgPlan, CompiledEffectPlacePlan,
-        CompiledEffectValuePlan, CompiledMaterializationPlan, CompiledValuePassPlan,
-        compile_value_pass_plan,
+        CompiledCallInputPlan, CompiledEffectArgPlan, CompiledMaterializationPlan,
+        CompiledValuePassPlan, compile_value_pass_plan,
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
@@ -272,7 +271,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             CompiledValuePassPlan::VisibleValue => {
                 self.select_materialized_operand_value(local, arg)
             }
-            CompiledValuePassPlan::ActualValue => self.select_actual_operand_value(local, arg),
             CompiledValuePassPlan::ExactTransport(exact) => {
                 Some(self.selected_semantic_operand_for_class(arg, exact))
             }
@@ -720,10 +718,11 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         match (EffectArgInput::new(arg), plan) {
             (_, CompiledEffectArgPlan::Erased) => None,
             (EffectArgInput::Value(value), CompiledEffectArgPlan::Value(plan)) => {
-                self.select_value_effect_arg(value, plan)
+                let value = self.env.body().runtime_operand(value)?;
+                self.selected_value_pass_plan(value, plan)
             }
-            (EffectArgInput::Place(place), CompiledEffectArgPlan::Place(plan)) => {
-                Some(self.select_place_effect_arg(arg, place, plan))
+            (EffectArgInput::Place(place), CompiledEffectArgPlan::Place(boundary)) => {
+                Some(self.select_effect_place_for_boundary(arg, place, boundary.boundary.clone()))
             }
             (EffectArgInput::Value(_), CompiledEffectArgPlan::Place(_))
             | (EffectArgInput::Place(_), CompiledEffectArgPlan::Value(_)) => {
@@ -736,29 +735,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                         .owner(self.env.db()),
                 )
             }
-        }
-    }
-
-    fn select_value_effect_arg(
-        &mut self,
-        value: SemanticOperand,
-        plan: &CompiledEffectValuePlan<'db>,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        let value = self.env.body().runtime_operand(value)?;
-        match plan {
-            CompiledEffectValuePlan::ErasedPlainValue => {
-                self.select_materialized_operand_value(value.local, value)
-            }
-            CompiledEffectValuePlan::ByValue(plan) => self.selected_value_pass_plan(value, plan),
-            CompiledEffectValuePlan::ByValueFallback(fallback) => self
-                .try_selected_semantic_operand_for_class(value, fallback)
-                .or_else(|| self.select_actual_operand_value(value.local, value))
-                .or_else(|| {
-                    Some(SelectedRuntimeArg::placeholder(
-                        self.env.body().locals[value.local.index()].ty,
-                        fallback.clone(),
-                    ))
-                }),
         }
     }
 
@@ -799,24 +775,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             None => SelectedRuntimeArg::materialized_semantic_operand(arg, materialization),
         };
         Some(selected)
-    }
-
-    fn select_place_effect_arg(
-        &self,
-        arg: &NEffectArg<'db>,
-        place: &NPlace<'db>,
-        plan: &CompiledEffectPlacePlan<'db>,
-    ) -> SelectedRuntimeArg<'db> {
-        match plan {
-            CompiledEffectPlacePlan::Boundary(boundary) => {
-                self.select_effect_place_for_boundary(arg, place, boundary.boundary.clone())
-            }
-            CompiledEffectPlacePlan::Fallback(fallback) => self.select_effect_place_for_boundary(
-                arg,
-                place,
-                RuntimeBoundarySpec::ExactTransport(fallback.clone()),
-            ),
-        }
     }
 
     fn select_effect_place_for_boundary(
