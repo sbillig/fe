@@ -25,6 +25,7 @@ use crate::{
                 const_ty_or_abstract_from_inherent_const_use,
             },
             normalize::normalize_ty,
+            provider::state_index_lanes,
             shape::{Shape, SumKind, sum_kind},
             ty_check::{
                 BodyOwner, Callable, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef,
@@ -1976,12 +1977,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 Ok(Some(size)) => Some(BigInt::from(size)),
                 Ok(None) | Err(_) => None,
             },
-            ConstIntrinsicKind::StorageSlots if ty.has_param(self.db) || ty.has_var(self.db) => {
+            ConstIntrinsicKind::StorageSlots | ConstIntrinsicKind::EntryLaneBits
+                if ty.has_param(self.db) || ty.has_var(self.db) =>
+            {
                 None
             }
             ConstIntrinsicKind::StorageSlots => {
                 storage_slot_span(self.db, ty).ok().map(BigInt::from)
             }
+            ConstIntrinsicKind::EntryLaneBits => Some(BigInt::from(
+                state_index_lanes(self.db, self.body.scope(), self.assumptions, ty)
+                    .map_or(0, |lanes| lanes.bits),
+            )),
         };
         let Some(size) = size else {
             let caller = self.instance.key(self.db);

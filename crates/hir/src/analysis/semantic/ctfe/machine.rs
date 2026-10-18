@@ -32,7 +32,8 @@ use crate::{
                 SaturatingArithmetic, core_primitive_wrapper_call_kind, ctfe_extern_intrinsic_kind,
             },
             normalize::normalize_ty,
-            provider::AddressSpace,
+            provider::{AddressSpace, state_index_lanes},
+            trait_resolution::PredicateListId,
             ty_check::{
                 BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, infer_body,
                 inference_met_lowering_cycle,
@@ -42,7 +43,7 @@ use crate::{
     },
     core::hir_def::expr::LogicalBinOp,
     core::semantic::storage_slot_span,
-    hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp, attr::ArithmeticMode},
+    hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp, attr::ArithmeticMode, scope_graph::ScopeId},
     projection::{IndexSource, Projection},
 };
 
@@ -1944,6 +1945,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             Some(CtfeExternIntrinsic::StorageSlots) => {
                 self.eval_intrinsic_storage_slots(instance, result_ty, args, origin)
             }
+            Some(CtfeExternIntrinsic::EntryLaneBits) => {
+                self.eval_intrinsic_entry_lane_bits(instance, result_ty, args, origin)
+            }
             Some(CtfeExternIntrinsic::AsBytes) => {
                 self.eval_intrinsic_as_bytes(result_ty, args, origin)
             }
@@ -2370,13 +2374,14 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }
 
-    fn eval_intrinsic_storage_slots(
+    /// The type argument of a layout intrinsic, normalized in the instance
+    /// it is evaluated in, with that instance's scope and assumptions.
+    fn layout_intrinsic_arg(
         &self,
         instance: SemanticInstance<'db>,
-        result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+    ) -> Result<(TyId<'db>, ScopeId<'db>, PredicateListId<'db>), CtfeError<'db>> {
         if !args.is_empty() {
             return Err(CtfeError::NotConstEvaluable { origin });
         }
@@ -2386,17 +2391,40 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             .generic_args(self.db)
             .first()
             .ok_or(CtfeError::NotConstEvaluable { origin })?;
-        let ty = normalize_ty(
-            self.db,
-            ty,
-            key.owner(self.db).scope(),
-            key.instantiate_typed_body(self.db).assumptions(),
-        );
+        let scope = key.owner(self.db).scope();
+        let assumptions = key.instantiate_typed_body(self.db).assumptions();
+        Ok((
+            normalize_ty(self.db, ty, scope, assumptions),
+            scope,
+            assumptions,
+        ))
+    }
+
+    fn eval_intrinsic_storage_slots(
+        &self,
+        instance: SemanticInstance<'db>,
+        result_ty: TyId<'db>,
+        args: &[CtfeConstValue<'db>],
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        let (ty, ..) = self.layout_intrinsic_arg(instance, args, origin)?;
         let slots = storage_slot_span(self.db, ty).map_err(|_| CtfeError::InvalidOperation {
             origin,
             message: format!("`{}` has no storage layout", ty.pretty_print(self.db)),
         })?;
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(slots)))
+    }
+
+    fn eval_intrinsic_entry_lane_bits(
+        &self,
+        instance: SemanticInstance<'db>,
+        result_ty: TyId<'db>,
+        args: &[CtfeConstValue<'db>],
+        origin: SemOrigin<'db>,
+    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+        let (ty, scope, assumptions) = self.layout_intrinsic_arg(instance, args, origin)?;
+        let bits = state_index_lanes(self.db, scope, assumptions, ty).map_or(0, |lanes| lanes.bits);
+        Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(bits)))
     }
 
     fn eval_intrinsic_as_bytes(

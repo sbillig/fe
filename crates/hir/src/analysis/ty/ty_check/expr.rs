@@ -247,6 +247,8 @@ impl<'db> TyChecker<'db> {
             Some(ConstIntrinsicKind::SizeOf)
         } else if path("core::intrinsic::storage_slots") {
             Some(ConstIntrinsicKind::StorageSlots)
+        } else if path("core::intrinsic::entry_lane_bits") {
+            Some(ConstIntrinsicKind::EntryLaneBits)
         } else {
             None
         }

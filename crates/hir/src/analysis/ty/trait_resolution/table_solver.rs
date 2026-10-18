@@ -27,7 +27,6 @@ use crate::analysis::{
         clearable::clearable_implementor,
         closure::callable_implementor,
         fold::TyFoldable,
-        sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         ty_def::{TyData, TyId},
         unify::{PersistentUnificationTable, UnificationError, UnificationResult},
@@ -159,9 +158,6 @@ enum Clause<'db> {
     /// The compiler's `Clearable` implementation for the goal's self type
     /// (`ty::clearable`), proved through its component types.
     Clearable,
-    /// The compiler's `LaneCodec<T>` implementation for std's Solidity codec
-    /// and a `T` without a `SolPacked` encoding (`ty::sol_codec`).
-    SolCodec,
 }
 
 #[derive(Clone)]
@@ -399,16 +395,6 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         if clearable_implementor(self.db, prepared.normalized_goal).is_some() {
             clauses.push(Clause::Clearable);
         }
-        if sol_codec_implementor(
-            self.db,
-            prepared.normalized_goal,
-            prepared.scope,
-            prepared.query.assumptions,
-        )
-        .is_some()
-        {
-            clauses.push(Clause::SolCodec);
-        }
         if !prepared.query.require_impl && self.goal_can_use_assumptions(prepared.normalized_goal) {
             clauses.extend(
                 (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
@@ -499,14 +485,6 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     selected_impl,
                 };
                 return Ok(self.continue_branch(key, branch, query.assumptions));
-            }
-            Clause::SolCodec => {
-                let Some(implementor) =
-                    sol_codec_implementor(self.db, normalized_goal, scope, query.assumptions)
-                else {
-                    return Ok(Transition::Reject);
-                };
-                implementor
             }
             Clause::Callable => {
                 let Some(implementor) = callable_implementor(self.db, normalized_goal) else {

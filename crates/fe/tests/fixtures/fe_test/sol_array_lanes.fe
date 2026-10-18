@@ -2,9 +2,9 @@
 // reference can point at: a `mut` access to one works on a memory copy that
 // is stored back into the lane when the access ends, whether a binding, an
 // argument, a provided effect or a projection's grant.
-use core::ops::LaneCodec
+use core::intrinsic::{entry_lane_bits, storage_slots}
 use std::abi::sol::Uint24
-use std::evm::{Address, Evm, SolArray, SolLanes}
+use std::evm::{Address, Evm, SolArray}
 
 msg Msg {
     #[selector = 1]
@@ -124,20 +124,20 @@ struct Order {
     filled: u64,
 }
 
-const ORDER_BITS: u256 = <SolLanes as LaneCodec<Order>>::BITS
+const ORDER_BITS: u256 = entry_lane_bits<SolArray<Order>>()
 
 fn element_bits<T>() -> u256 {
-    <SolLanes as LaneCodec<T>>::BITS
+    entry_lane_bits<SolArray<T>>()
 }
 
-// A `SolPacked` element's width is its encoding's; any other element takes
-// the slots its storage layout gives it, 256 bits each.
+// A `SolPacked` element of at most 128 bits is a lane of its encoding's
+// width; any other element takes the slots its storage layout gives it.
 #[test]
 fn codec_widths() {
-    assert(ORDER_BITS == 512)
-    assert(element_bits<Order>() == 512)
+    assert(ORDER_BITS == 0 && storage_slots<Order>() == 2)
+    assert(element_bits<Order>() == 0)
     assert(element_bits<Uint24>() == 24)
-    assert(element_bits<Address>() == 160)
-    assert(element_bits<u256>() == 256)
-    assert(element_bits<[u8; 3]>() == 768)
+    assert(element_bits<Address>() == 0 && storage_slots<Address>() == 1)
+    assert(element_bits<u256>() == 0)
+    assert(element_bits<[u8; 3]>() == 0 && storage_slots<[u8; 3]>() == 3)
 }

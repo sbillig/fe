@@ -1784,6 +1784,7 @@ impl<'db> SemanticInstance<'db> {
                             ));
                         }
                     }
+                    ConstIntrinsicKind::EntryLaneBits => {}
                 }
             }
         }

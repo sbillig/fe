@@ -8,6 +8,12 @@ extern {
     /// keeps whole.
     pub const fn storage_slots<T>() -> u256
 
+    /// The width in bits of the lane an entry of the place-indexed collection
+    /// `C` takes, as the compiler packs entries by `C`'s
+    /// `core::ops::StateIndex::Lanes` codec, or 0 when `C` keeps its entries
+    /// at whole slots: what `locate` steps by within a slot.
+    pub const fn entry_lane_bits<C>() -> u256
+
     /// Converts a value into its byte representation.
     ///
     /// This is intended for compiler-generated code. Prefer using `core::AsBytes`.

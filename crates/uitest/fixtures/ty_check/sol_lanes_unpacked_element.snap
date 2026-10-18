@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/sol_lanes_unpacked_element.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ sol_lanes_unpacked_element.fe:12:5
+   │
+12 │     <SolLanes as LaneCodec<Order>>::get(word, offset: 0)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │     │
+   │     `SolLanes` doesn't implement `LaneCodec<Order>`
+   │     trait bound `Order: SolPacked` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ sol_lanes_unpacked_element.fe:16:5
+   │
+16 │     <SolLanes as LaneCodec<Order>>::BITS
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SolLanes` doesn't implement `LaneCodec<Order>`

@@ -57,7 +57,6 @@ pub mod provider;
 pub mod result_space;
 pub(crate) mod scratch;
 pub mod shape;
-pub(crate) mod sol_codec;
 pub(crate) mod subst;
 pub mod trait_def;
 pub mod trait_lower;

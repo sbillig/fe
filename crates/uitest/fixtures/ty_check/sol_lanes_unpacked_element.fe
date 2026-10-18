@@ -1,0 +1,17 @@
+use core::ops::LaneCodec
+use std::evm::SolLanes
+
+struct Order {
+    price: u128,
+    filled: u64,
+}
+
+// `SolLanes` codes only `SolPacked` elements: any other element has no lane
+// codec to call or read a width from.
+fn decode(_ word: u256) -> Order {
+    <SolLanes as LaneCodec<Order>>::get(word, offset: 0)
+}
+
+fn width() -> u256 {
+    <SolLanes as LaneCodec<Order>>::BITS
+}
