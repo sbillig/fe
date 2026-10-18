@@ -46,15 +46,4 @@ impl<T> Mutex<T> {
     pub fn value_mut(mut self) -> mut T @self.value {
         mut self.value
     }
-
-    /// Copies the protected value out without taking the lock, to keep
-    /// across an external call: an access of it cannot be held there. This
-    /// does not protect against observing intermediate state during
-    /// reentrancy.
-    pub fn peek(self) -> T
-    where
-        T: Copy,
-    {
-        self.value
-    }
 }

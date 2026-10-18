@@ -48,14 +48,14 @@ pub contract B {
     recv BMsg {
         Enter { a } -> u256 uses (mut guard, ctx: Ctx, call: mut Call) {
             guard.lock()
-            let pre = guard.peek()
+            let pre = guard.value()
             call.call(
                 addr: a,
                 gas: 200000,
                 value: 0,
                 message: AMsg::Callback { b: ctx.address() },
             )
-            let post = guard.peek()
+            let post = guard.value()
             assert!(post == pre)
             guard.unlock()
             post
@@ -63,15 +63,15 @@ pub contract B {
 
         Protected -> u256 uses (mut guard) {
             if !guard.try_lock() {
-                return guard.peek()
+                return guard.value()
             }
             guard.value_mut() += 1
             guard.unlock()
-            guard.peek()
+            guard.value()
         }
 
         Get -> u256 uses (guard) {
-            guard.peek()
+            guard.value()
         }
     }
 }
