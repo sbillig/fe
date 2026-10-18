@@ -795,7 +795,7 @@ mod tests {
             db,
             LayoutKey::Struct(StructLayout {
                 fields: vec![word_class()].into(),
-                pinned: false,
+                storage: None,
             }),
         )
     }

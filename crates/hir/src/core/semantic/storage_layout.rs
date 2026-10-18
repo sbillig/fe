@@ -1,6 +1,6 @@
 use common::{
     indexmap::IndexMap,
-    layout::{StorageFieldShape, StorageLane, storage_fields_layout},
+    layout::{StorageFieldShape, StorageFieldsLayout, StorageLane, storage_fields_layout},
 };
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
@@ -1010,14 +1010,20 @@ pub(crate) fn storage_slot_span<'db>(
     }
 }
 
-/// Which fields of struct or tuple `ty` are lanes where a value of `ty` lies
-/// in storage or transient storage: packed scalars that are not their whole
-/// slot (`StorageLane::is_whole_slot`). A retained grant to a lane is a
-/// memory copy.
+/// Where the fields of a struct, tuple or closure `ty` lie when a value of
+/// `ty` lies in storage or transient storage, and the slots it takes: at
+/// least one for a pinned type. `None` for any other type, or one with no
+/// storage layout. The layout every lowering of a storage place reads.
 #[salsa::tracked(return_ref)]
-pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
-    if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
-        return Vec::new();
+pub fn storage_struct_layout<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<StorageFieldsLayout> {
+    if !ty.is_tuple(db)
+        && ty.as_closure(db).is_none()
+        && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db))
+    {
+        return None;
     }
     let mut walker = FieldWalker {
         db,
@@ -1036,12 +1042,24 @@ pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
             }
         })
         .collect();
-    let Ok(layout) = storage_fields_layout(shapes) else {
-        return Vec::new();
-    };
-    layout
-        .placements
+    if !walker.errors.is_empty() {
+        return None;
+    }
+    let mut layout = storage_fields_layout(shapes).ok()?;
+    if ty.pin(db).is_some() {
+        layout.slots = layout.slots.max(1);
+    }
+    Some(layout)
+}
+
+/// Which fields of struct or tuple `ty` are lanes where a value of `ty` lies
+/// in storage or transient storage: packed scalars that are not their whole
+/// slot (`StorageLane::is_whole_slot`). A retained grant to a lane is a
+/// memory copy.
+pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
+    storage_struct_layout(db, ty)
         .iter()
+        .flat_map(|layout| &layout.placements)
         .map(|placement| {
             placement
                 .lane

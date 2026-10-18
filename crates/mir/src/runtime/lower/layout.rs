@@ -1,6 +1,7 @@
 use hir::{
     analysis::{semantic::FieldIndex, ty::ty_def::TyId},
     projection::IndexSource,
+    semantic::storage_struct_layout,
 };
 
 use crate::{
@@ -51,14 +52,9 @@ pub(crate) fn layout_for_ty_in_env<'db>(
                 .into_iter()
                 .map(|field| stored_class_for_ty_in_env(db, env, field))
                 .collect(),
-            pinned: is_pinned(db, ty),
+            storage: storage_struct_layout(db, ty).clone(),
         }),
     )
-}
-
-/// Whether `ty` is a pinned type, whose layout takes a slot of its own.
-fn is_pinned<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
-    ty.pin(db).is_some()
 }
 
 pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
@@ -110,7 +106,7 @@ pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
         db,
         LayoutKey::Struct(StructLayout {
             fields: field_classes.to_vec().into_boxed_slice(),
-            pinned: is_pinned(db, ty),
+            storage: storage_struct_layout(db, ty).clone(),
         }),
     )
 }

@@ -43,6 +43,7 @@ pub use reference::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, iter, ops::Range};
+pub use storage_layout::storage_struct_layout;
 pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,

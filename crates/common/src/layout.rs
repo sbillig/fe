@@ -80,7 +80,7 @@ pub struct StorageFieldPlacement {
     pub shared: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StorageFieldsLayout {
     pub placements: Vec<StorageFieldPlacement>,
     pub slots: u64,

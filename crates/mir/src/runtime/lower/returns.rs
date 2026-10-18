@@ -425,7 +425,7 @@ fn merged_built_class<'db>(
             let fields = all
                 .iter()
                 .map(|(layout, built)| match layout {
-                    Layout::Struct(data) if data.pinned == first.pinned => {
+                    Layout::Struct(data) if data.storage == first.storage => {
                         Some((&data.fields[..], *built))
                     }
                     _ => None,
@@ -433,7 +433,7 @@ fn merged_built_class<'db>(
                 .collect::<Option<Vec<_>>>()?;
             LayoutKey::Struct(StructLayout {
                 fields: merged_built_fields(db, &fields)?.into(),
-                pinned: first.pinned,
+                storage: first.storage.clone(),
             })
         }
         Some(all @ [(Layout::Enum(first), _), ..]) if known => {

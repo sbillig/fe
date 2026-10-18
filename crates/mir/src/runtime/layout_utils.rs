@@ -1,7 +1,4 @@
-use common::layout::{
-    StorageFieldShape, StorageFieldsLayout, StorageLane, StorageLayoutError, TargetDataLayout,
-    storage_fields_layout,
-};
+use common::layout::{StorageLane, StorageLayoutError, TargetDataLayout};
 use hir::analysis::semantic::FieldIndex;
 use hir::analysis::ty::AddressSpace;
 use rustc_hash::FxHashSet;
@@ -42,6 +39,15 @@ pub struct FieldPlacement {
     /// Whether the word at `offset` also holds other fields, so a write must
     /// preserve the rest of it.
     pub shared: bool,
+}
+
+impl FieldPlacement {
+    /// Whether the field is a lane of its storage word (see
+    /// `common::layout::StorageFieldPlacement::is_lane`).
+    pub fn is_lane(self) -> bool {
+        self.lane
+            .is_some_and(|lane| self.shared || lane.byte_offset != 0)
+    }
 }
 
 impl From<RuntimeMemoryLayoutError> for LowerError {
@@ -150,8 +156,10 @@ impl<'db> RuntimeMemoryLayout<'db> {
                 shared: false,
             }),
             RuntimeMemoryUnit::Word => {
-                let placement = self
-                    .storage_struct_layout(layout, &mut FxHashSet::default())?
+                let placement = layout
+                    .storage
+                    .as_ref()
+                    .ok_or(RuntimeMemoryLayoutError::InvalidProjection("storage field"))?
                     .placements[field];
                 Ok(FieldPlacement {
                     offset: placement.slot,
@@ -160,38 +168,6 @@ impl<'db> RuntimeMemoryLayout<'db> {
                 })
             }
         }
-    }
-
-    /// The packed storage layout of a struct's fields, like Solidity's.
-    fn storage_struct_layout(
-        self,
-        layout: &StructLayout<'db>,
-        visiting: &mut FxHashSet<LayoutId<'db>>,
-    ) -> Result<StorageFieldsLayout, RuntimeMemoryLayoutError> {
-        let shapes = layout
-            .fields
-            .iter()
-            .map(|field| self.storage_field_shape(field, visiting))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(storage_fields_layout(shapes)?)
-    }
-
-    fn storage_field_shape(
-        self,
-        class: &RuntimeClass<'db>,
-        visiting: &mut FxHashSet<LayoutId<'db>>,
-    ) -> Result<StorageFieldShape, RuntimeMemoryLayoutError> {
-        Ok(match class {
-            RuntimeClass::Scalar(scalar) => StorageFieldShape::Scalar {
-                bytes: storage_scalar_bytes(scalar),
-            },
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
-                StorageFieldShape::Scalar { bytes: 32 }
-            }
-            RuntimeClass::AggregateValue { layout } => StorageFieldShape::Aggregate {
-                slots: self.layout_size_inner(*layout, visiting)?,
-            },
-        })
     }
 
     pub fn array_element_offset(
@@ -262,9 +238,11 @@ impl<'db> RuntimeMemoryLayout<'db> {
         let size = match layout.data(self.db) {
             Layout::Struct(data) => match self.unit {
                 RuntimeMemoryUnit::Byte => self.class_sizes_sum(&data.fields, visiting),
-                RuntimeMemoryUnit::Word => self
-                    .storage_struct_layout(&data, visiting)
-                    .map(|layout| layout.slots.max(u64::from(data.pinned))),
+                RuntimeMemoryUnit::Word => data
+                    .storage
+                    .as_ref()
+                    .map(|storage| storage.slots)
+                    .ok_or(RuntimeMemoryLayoutError::InvalidProjection("storage struct")),
             },
             Layout::Array(data) => self
                 .class_size_inner(&data.elem, visiting)?
@@ -309,19 +287,6 @@ impl<'db> RuntimeMemoryLayout<'db> {
             RuntimeMemoryUnit::Byte => 32,
             RuntimeMemoryUnit::Word => 1,
         }
-    }
-}
-
-/// The bytes a scalar struct field takes in storage. Plain booleans and
-/// integers narrower than a word are packed with their neighbours, like
-/// Solidity's value types; everything else takes a whole slot.
-pub fn storage_scalar_bytes(scalar: &ScalarClass<'_>) -> u32 {
-    match (scalar.repr, &scalar.role) {
-        (ScalarRepr::Bool, ScalarRole::Plain) => 1,
-        (ScalarRepr::Int { bits, .. }, ScalarRole::Plain) if bits < 256 && bits % 8 == 0 => {
-            u32::from(bits / 8)
-        }
-        _ => 32,
     }
 }
 
@@ -760,7 +725,13 @@ mod tests {
         let db = DriverDataBase::default();
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256)].into_boxed_slice(),
-            pinned: false,
+            storage: Some(
+                common::layout::storage_fields_layout([
+                    common::layout::StorageFieldShape::Scalar { bytes: 1 },
+                    common::layout::StorageFieldShape::Scalar { bytes: 32 },
+                ])
+                .unwrap(),
+            ),
         };
         let array_layout = ArrayLayout {
             elem: scalar(16),

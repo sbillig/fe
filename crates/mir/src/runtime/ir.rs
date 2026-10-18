@@ -1,4 +1,4 @@
-use common::layout::enum_tag_bits;
+use common::layout::{StorageFieldsLayout, enum_tag_bits};
 use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::ty::AddressSpace;
 use hir::analysis::{
@@ -229,8 +229,10 @@ impl<'db> RuntimeClass<'db> {
                 false
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+                // A pinned type takes a slot even without fields.
                 Layout::Struct(data) => {
-                    !data.pinned && data.fields.iter().all(|field| field.is_zero_sized(db))
+                    data.storage.as_ref().is_none_or(|storage| storage.slots == 0)
+                        && data.fields.iter().all(|field| field.is_zero_sized(db))
                 }
                 Layout::Array(data) => data.len == 0 || data.elem.is_zero_sized(db),
                 Layout::Enum(_) => false,
@@ -479,10 +481,10 @@ pub enum Layout<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct StructLayout<'db> {
     pub fields: Box<[RuntimeClass<'db>]>,
-    /// The layout of a pinned type (a `core::marker::Pinned` implementor):
-    /// its root number identifies its region, so it takes at least
-    /// one storage slot and is never zero-sized, even without fields.
-    pub pinned: bool,
+    /// Where the fields lie in storage and the slots the struct takes, as the
+    /// frontend's layout (`hir::semantic::storage_struct_layout`) places a
+    /// value of its type. `None` for a layout no storage place has.
+    pub storage: Option<StorageFieldsLayout>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
