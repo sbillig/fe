@@ -1053,6 +1053,62 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_heap_array_initializes_updates_and_rejects_oversized_lengths() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("heap_array.fe");
+    fs::write(
+        &source,
+        r#"
+use core::Option
+use std::native::HeapArray
+struct Entry { key: u256, live: bool }
+impl Copy for Entry {}
+pub fn main() -> i32 {
+    var entries = match HeapArray<Entry>::try_filled(Entry { key: 7, live: false }, len: 1000) {
+        Option::Some(entries) => entries,
+        Option::None => return 1,
+    }
+    core::assert(entries.len() == 1000)
+    var i: u64 = 0
+    while i < 1000 {
+        let entry = entries.get(i)
+        core::assert(entry.key == 7 && !entry.live)
+        if i % 3 == 0 { entries.set(i, Entry { key: i as u256 * 11, live: true }) }
+        i += 1
+    }
+    i = 0
+    while i < 1000 {
+        let entry = entries.get(i)
+        core::assert(entry.live == (i % 3 == 0))
+        core::assert(entry.key == if i % 3 == 0 { i as u256 * 11 } else { 7 })
+        i += 1
+    }
+    entries.release()
+    match HeapArray<u8>::try_filled(0, len: 0) {
+        Option::Some(empty) => {
+            core::assert(empty.len() == 0)
+            empty.release()
+        },
+        Option::None => return 2,
+    }
+    match HeapArray<u256>::try_filled(0, len: 0x400000000000000) {
+        Option::Some(_) => return 3,
+        Option::None => {},
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("heap_array")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_byte_buffer_preserves_contents_and_reuses_zeroed_storage() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("byte_buffer.fe");

@@ -1,5 +1,6 @@
 /// Interfaces to the native host runtime.
 use core::ptr
+pub use array::HeapArray
 pub use bytes::ByteBuffer
 pub use stack::FixedStack
 

@@ -1,0 +1,65 @@
+use core::{Option, size_of}
+use core::ptr
+use ingot::native::bytes::{malloc, free, is_null}
+
+/// A native heap array of `Copy` elements whose length is chosen at run time,
+/// with explicit ownership and release. Every element is initialized when the
+/// array is allocated, and the array never grows: allocate a new one to resize.
+pub struct HeapArray<T> {
+    unsafe elements: Option<*T>,
+    unsafe len: u64,
+}
+
+impl<T> HeapArray<T> where T: Copy {
+    /// An empty array; it owns no allocation.
+    pub fn new() -> Self {
+        unsafe { Self { elements: Option::None, len: 0 } }
+    }
+
+    /// Allocate `len` copies of `value`. Returns None if the size overflows the
+    /// host object limit or allocation fails. A zero length allocates nothing.
+    pub fn try_filled(_ value: T, len: u64) -> Option<Self> {
+        if len == 0 { return Option::Some(Self::new()) }
+        let size = size_of<T>()
+        if size != 0 && len as u256 > 0x7fffffffffffffff / size { return Option::None }
+        let bytes = len as u256 * size
+        let address = malloc(size: if bytes == 0 { 1 } else { bytes.downcast_unchecked() })
+        if is_null(address) { return Option::None }
+        let elements = ptr::cast<u8, T>(address)
+        // The allocation holds `len` elements; each is written before it is read.
+        unsafe {
+            var index: u64 = 0
+            while index < len {
+                *ptr::offset(elements, index as u256) = value
+                index += 1
+            }
+            Option::Some(Self { elements: Option::Some(elements), len })
+        }
+    }
+
+    pub fn len(self) -> u64 { self.len }
+
+    fn element(self, _ index: u64) -> *T {
+        core::assert(index < self.len)
+        match self.elements {
+            Option::Some(elements) => ptr::offset(elements, index as u256),
+            Option::None => core::panic(),
+        }
+    }
+
+    pub fn get(self, _ index: u64) -> T {
+        unsafe { *self.element(index) }
+    }
+
+    pub fn set(mut self, _ index: u64, _ value: T) {
+        unsafe { *self.element(index) = value }
+    }
+
+    /// Release the allocation, if any, and consume the owner.
+    pub fn release(own self) {
+        match self.elements {
+            Option::Some(elements) => unsafe { free(ptr::cast<T, u8>(elements)) },
+            Option::None => {},
+        }
+    }
+}
