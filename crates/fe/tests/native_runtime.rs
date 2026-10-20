@@ -1057,7 +1057,7 @@ fn native_values_are_destroyed_once_in_scope_order() {
         assert!(result.status.success(), "O{level}: {result:?}");
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
-            "a.\n.a\n0123\nSs\nN\nA,B\n1;2\ny\nx\nx\ny\noi\nABC\nZ-[-\nH-KLJI\n-l\n!r\nA-B-C--Z\nc-c\n-e-ox\nq-k\nkQ\n-u\nU\nd\nk",
+            "a.\n.a\n0123\nSs\nN\nA,B\n1;2\ny\nx\nx\ny\noi\nABC\nZ-[-\nH-KLJI\n-l\n!r\nA-B-C--Z\nc-c\n-e-ox\nq-k\nkQ\n-Vv-\n-u\nU\nd\nk",
             "O{level}"
         );
 

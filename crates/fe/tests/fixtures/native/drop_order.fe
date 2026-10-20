@@ -213,6 +213,20 @@ fn unwrapped(_ value: own Option<Noisy>) {
     put(45)
 }
 
+fn held() -> ref Noisy {
+    let value = noisy(86)
+    ref value
+}
+
+// "-Vv-": a projection's local lives until the access it grants ends,
+// after its last read and before `put` prints what was read.
+fn projected() {
+    let value = ref held()
+    put(45)
+    put(value.tag + 32)
+    put(45)
+}
+
 fn checked(_ value: own Option<Noisy>) -> Option<Noisy> {
     let kept = noisy(107)
     let inner = value?
@@ -278,6 +292,8 @@ pub fn main() -> i32 {
     try_exit(false)
     put(10)
     try_exit(true)
+    put(10)
+    projected()
     put(10)
     unwrapped(Option::Some(noisy(117)))
     put(10)
