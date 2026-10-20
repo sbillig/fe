@@ -178,3 +178,21 @@ fn a_destroyed_temporary_does_not_hold_the_accesses_it_carries() {
         &["*", "-"],
     );
 }
+
+#[test]
+fn a_question_mark_exit_destroys_what_its_path_holds() {
+    check(
+        "fn half(_ x: u64) -> Option<u64> { if x == 0 { Option::None } else { Option::Some(x / 2) } }\nfn f(_ n: u64) -> Option<Buf> { let b = make(1)\n let h = half(n)?\n Option::Some(b) }",
+        "f",
+        // Only where `?` returns is `b` destroyed; elsewhere it moved.
+        &["-", "-", "-", "*"],
+    );
+    check(
+        "use core::Result\nfn f(_ r: own Result<Buf, u64>) -> Result<Buf, Buf> { let b = make(1)\n let v = r?\n Result::Ok(make(v + b.id)) }",
+        "f",
+        // `b` on both paths, and `r` whole only on the path that goes on:
+        // where `?` returns, its error moved out.
+        &["-", "-", "*", "*", "-", "*", "-"],
+    );
+}
+
