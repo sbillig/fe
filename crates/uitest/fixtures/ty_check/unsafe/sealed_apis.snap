@@ -1,19 +1,18 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/unsafe/sealed_apis.fe
 ---
 error[8-0097]: call to unsafe function `copy_raw` requires an `unsafe` block or function
-    ┌─ sealed_apis.fe:6:5
-    │
-  6 │     ptr::copy_raw(dest, source, 32)
-    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
-    │
-    ┌─ src/ptr.fe:885:15
-    │
-885 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
-    │               -------- callee defined here
+     ┌─ sealed_apis.fe:6:5
+     │
+   6 │     ptr::copy_raw(dest, source, 32)
+     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+     │
+     ┌─ src/ptr.fe:1246:15
+     │
+1246 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
+     │               -------- callee defined here
 
 error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` block or function
     ┌─ sealed_apis.fe:10:5
@@ -21,9 +20,9 @@ error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` blo
  10 │     MemSlice::from_raw_parts(ptr: p, len: 4)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/ptr.fe:387:19
+    ┌─ src/ptr.fe:548:19
     │
-387 │     pub unsafe fn from_raw_parts(ptr: *T, len: usize) -> mut? Self {
+548 │     pub unsafe fn from_raw_parts(ptr: *T, len: usize) -> mut? Self {
     │                   -------------- callee defined here
 
 error[8-0097]: call to unsafe function `store_word` requires an `unsafe` block or function
@@ -49,12 +48,12 @@ error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` blo
     │                   -------------- callee defined here
 
 error[8-0097]: call to unsafe function `alloc_array` requires an `unsafe` block or function
-    ┌─ sealed_apis.fe:22:17
-    │
- 22 │     let array = ptr::alloc_array<u256>(1)
-    │                 ^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
-    │
-    ┌─ src/ptr.fe:860:15
-    │
-860 │ pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
-    │               ----------- callee defined here
+     ┌─ sealed_apis.fe:22:17
+     │
+  22 │     let array = ptr::alloc_array<u256>(1)
+     │                 ^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+     │
+     ┌─ src/ptr.fe:1199:15
+     │
+1199 │ pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
+     │               ----------- callee defined here
