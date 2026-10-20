@@ -200,6 +200,19 @@ fn closures() {
     put(45)
 }
 
+// "-u" and "U": a `match` arm that returns destroys only what its path
+// holds.
+fn unwrapped(_ value: own Option<Noisy>) {
+    let n = match value {
+        Option::Some(n) => n
+        Option::None => {
+            put(85)
+            return
+        }
+    }
+    put(45)
+}
+
 fn checked(_ value: own Option<Noisy>) -> Option<Noisy> {
     let kept = noisy(107)
     let inner = value?
@@ -265,6 +278,10 @@ pub fn main() -> i32 {
     try_exit(false)
     put(10)
     try_exit(true)
+    put(10)
+    unwrapped(Option::Some(noisy(117)))
+    put(10)
+    unwrapped(Option::None)
     put(10)
     // "d" now, and "k" when `main` returns.
     let _kept = generic(noisy(107), true)
