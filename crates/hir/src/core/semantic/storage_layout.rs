@@ -741,7 +741,7 @@ impl<'db> FieldWalker<'db> {
             canonical: ty,
             source,
         } = views;
-        if adt.recursive_cycle(self.db).is_some() {
+        if adt.recursive_cycle_through_arguments(self.db).is_some() {
             self.push_error(ContractLayoutError::InvalidFieldType);
             return WalkOutput::empty();
         }
