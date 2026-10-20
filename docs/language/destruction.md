@@ -65,8 +65,8 @@ Writing or moving through a raw pointer dereference destroys nothing:
 `*p = v` initializes `*p` whatever it held, and `let v = *p` moves out
 without leaving a record. Raw memory is outside ownership, so unsafe code
 that fills uninitialized slots writes them through raw places
-(`*vec.ptr_at(i) = v`), not through `v[i] = x`, which would destroy the
-slot's previous, uninitialized contents. `core::ptr::drop_in_place(p)`
+(`*array.ptr_at(i) = v`), not through `array[i] = v`, which would destroy
+the slot's previous, uninitialized contents. `core::ptr::drop_in_place(p)`
 destroys the value at `p`.
 
 ## Memory owners
@@ -85,14 +85,18 @@ allocation when destroyed:
 `MemArray`, `MemVec` and `Box` also destroy the elements they hold.
 `MemSlice<T>` and `MemSpan` are views of an owner's memory and own nothing.
 
-Allocation reverts with `Panic(0x41)` on failure, as Solidity's does. Each
-allocating operation also has a fallible form that reports failure instead,
-leaving the owner as it was: `try_with_capacity`, `try_reserve`,
-`try_resize`, `try_push` (which hands the value back), `Box::try_new`.
+Allocation reverts with `Panic(0x41)` on failure, as Solidity's does. The
+operations that make or grow an owner have fallible forms that report
+failure instead, leaving the owner as it was: `try_with_capacity`,
+`try_reserve`, `try_resize`, `try_push` (which hands the value back),
+`try_from_fn`, `try_from_span` and `Box::try_new`. Others, such as
+`extend_from_slice`, allocate only when their owner lacks the room, so
+code that must not revert reserves the room first.
 
 A `Box` lets a type hold itself: a generic type that keeps its argument
 behind a pointer, as `Box<T>` and `MemVec<T>` do, does not hold that
-argument in place.
+argument in place. Destroying such a value recurses once per level, so a
+very deep one, such as a long list of boxed nodes, can exhaust the stack.
 
 ```fe
 struct Node { value: u256, next: Option<Box<Node>> }
