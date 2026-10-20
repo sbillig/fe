@@ -262,7 +262,8 @@ impl<'db> RmirEmitter<'db> {
             .collect()
     }
 
-    /// Reads, by value, the part at `path` of `source`.
+    /// Reads, by value, the part at `path` of `source`. A zero-sized part has
+    /// no runtime class and is read as an erased value, as a call passes one.
     fn read_part(
         &mut self,
         bb: RBlockId,
@@ -272,13 +273,12 @@ impl<'db> RmirEmitter<'db> {
     ) -> RLocalId {
         match source {
             DropSource::Value(value) => {
-                let class = self
-                    .value_class(*value)
-                    .cloned()
-                    .expect("a dropped value has a runtime class");
                 if path.is_empty() {
                     return *value;
                 }
+                let Some(class) = self.value_class(*value).cloned() else {
+                    return self.alloc_runtime_temp(ty, RuntimeCarrier::Erased);
+                };
                 let projected = project_class(self.db, class.clone(), path);
                 let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(projected));
                 assert!(
@@ -293,9 +293,11 @@ impl<'db> RmirEmitter<'db> {
                     part.path.push(*projection);
                 }
                 part.ty = ty;
-                let class = self
+                let Some(class) = self
                     .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, &part))
-                    .expect("a dropped place has a runtime class");
+                else {
+                    return self.alloc_runtime_temp(ty, RuntimeCarrier::Erased);
+                };
                 let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(class.clone()));
                 self.lower_semantic_place_read_into(bb, dst, &part, &class);
                 dst
