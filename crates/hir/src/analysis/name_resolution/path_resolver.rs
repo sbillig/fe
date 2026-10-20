@@ -387,42 +387,46 @@ impl<'db> PathResError<'db> {
                 )
             }
 
-            PathResErrorKind::QualifiedTypeType(result) => match *result {
-                Ok(res) => {
-                    if let PathKind::QualifiedType { type_, .. } = seg_path.kind(db)
-                        && let TypeKind::Path(type_path) = type_.data(db)
-                    {
-                        let type_ident = type_path.unwrap().ident(db).unwrap();
-                        let ty_span = seg_span.qualified_type().ty().into_path_type().path();
+            PathResErrorKind::QualifiedTypeType(result) => {
+                let ty_span = seg_span.qualified_type().ty().into_path_type().path();
+                match *result {
+                    Ok(res) => {
+                        let type_ident = if let PathKind::QualifiedType { type_, .. } =
+                            seg_path.kind(db)
+                            && let TypeKind::Path(type_path) = type_.data(db)
+                        {
+                            type_path.unwrap().ident(db).unwrap()
+                        } else {
+                            ident
+                        };
                         PathResDiag::ExpectedType(ty_span.into(), type_ident, res.kind_name())
-                    } else {
-                        let ty_span = seg_span.qualified_type().ty().into_path_type().path();
-                        PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name())
+                    }
+                    Err(inner) => {
+                        let failed = inner.failed_at;
+                        return inner.into_diag(db, failed, ty_span, ExpectedPathKind::Type);
                     }
                 }
-                Err(inner) => {
-                    let failed = inner.failed_at;
-                    let ty_span = seg_span.qualified_type().ty().into_path_type().path();
-                    return inner.into_diag(db, failed, ty_span, ExpectedPathKind::Type);
-                }
-            },
-            PathResErrorKind::QualifiedTypeTrait(result) => match *result {
-                Ok(res) => {
-                    if let PathKind::QualifiedType { trait_, .. } = seg_path.kind(db) {
-                        let trait_ident = trait_.path(db).unwrap().ident(db).unwrap();
-                        let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
-                        PathResDiag::ExpectedTrait(trait_span, trait_ident, res.kind_name())
-                    } else {
-                        let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
-                        PathResDiag::ExpectedTrait(trait_span, ident, res.kind_name())
+            }
+            PathResErrorKind::QualifiedTypeTrait(result) => {
+                let trait_span = seg_span.qualified_type().trait_qualifier();
+                match *result {
+                    Ok(res) => {
+                        let trait_ident = match seg_path.kind(db) {
+                            PathKind::QualifiedType { trait_, .. } => {
+                                trait_.path(db).unwrap().ident(db).unwrap()
+                            }
+                            PathKind::Ident { .. } => ident,
+                        };
+                        let span = trait_span.name().into();
+                        PathResDiag::ExpectedTrait(span, trait_ident, res.kind_name())
+                    }
+                    Err(inner) => {
+                        let failed = inner.failed_at;
+                        let span = trait_span.path();
+                        return inner.into_diag(db, failed, span, ExpectedPathKind::Trait);
                     }
                 }
-                Err(inner) => {
-                    let failed = inner.failed_at;
-                    let trait_span = seg_span.qualified_type().trait_qualifier().path();
-                    return inner.into_diag(db, failed, trait_span, ExpectedPathKind::Trait);
-                }
-            },
+            }
 
             PathResErrorKind::MethodSelection(err) => match err {
                 MethodSelectionError::ReceiverTypeMustBeKnown => PathResDiag::TypeMustBeKnown(span),
@@ -532,9 +536,7 @@ pub fn resolve_ident_to_bucket<'db>(
     scope: ScopeId<'db>,
 ) -> &'db NameResBucket<'db> {
     assert!(path.parent(db).is_none());
-    let directive = QueryDirective::for_scope(db, scope);
-    let query = make_query(db, path, scope, directive);
-    resolve_query(db, query)
+    resolve_query(db, make_query(db, path, scope))
 }
 
 /// Resolves only the definition named by a type-domain path, without lowering
@@ -555,9 +557,7 @@ pub(crate) fn resolve_type_path_definition<'db>(
         if !matches!(segment.kind(db), PathKind::Ident { .. }) {
             return None;
         }
-        let query_scope = parent_scope.unwrap_or(scope);
-        let directive = QueryDirective::for_scope(db, query_scope);
-        let query = make_query(db, segment, query_scope, directive);
+        let query = make_query(db, segment, parent_scope.unwrap_or(scope));
         let resolved = resolve_query(db, query)
             .pick(NameDomain::TYPE)
             .as_ref()
@@ -570,19 +570,18 @@ pub(crate) fn resolve_type_path_definition<'db>(
     None
 }
 
-/// Panics if path.ident is `Absent`
+/// Makes the query for the last segment of `path` in `scope`. Only a path's
+/// first segment is looked up in lexical parents and external ingots.
 fn make_query<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
-    base_directive: QueryDirective,
 ) -> EarlyNameQueryId<'db> {
-    let mut directive = base_directive;
-
-    if path.segment_index(db) != 0 {
-        directive = directive.disallow_external();
-        directive = directive.disallow_lex();
-    }
+    let directive = if path.segment_index(db) == 0 {
+        QueryDirective::new()
+    } else {
+        QueryDirective::new().disallow_external().disallow_lex()
+    };
 
     let name = path
         .ident(db)
@@ -677,32 +676,12 @@ impl<'db> PathRes<'db> {
                 // need to be imported as long as it's otherwise visible.
                 is_scope_visible_from(db, inst.def(db).scope(), from_scope)
             }
-            PathRes::InherentConst(..) => {
-                // The const's own scope carries its `pub` visibility. If the
-                // const can't be resolved to a scope (the name no longer exists
-                // on the impl), treat it as not visible rather than panicking.
-                match self.as_scope(db) {
-                    Some(scope) => is_scope_visible_from(db, scope, from_scope),
-                    None => false,
-                }
-            }
-            PathRes::TraitMethod(_inst, method) => {
-                // Trait method visibility depends on the method's defining scope,
-                // not on trait imports (the trait is explicitly referenced).
-                is_scope_visible_from(db, method.scope(), from_scope)
-            }
-            PathRes::Method(_, cand) => {
-                // Method visibility depends on the method's defining scope
-                // (function or trait method), not the receiver type.
-                let method_scope = match cand {
-                    MethodCandidate::InherentMethod(cand) => cand.def.scope(),
-                    MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
-                        c.method.scope()
-                    }
-                };
-                is_scope_visible_from(db, method_scope, from_scope)
-            }
-            r => is_scope_visible_from(db, r.as_scope(db).unwrap(), from_scope),
+            // Anything else is as visible as its own scope, which for a method is
+            // its definition, not its receiver type or trait. An inherent const
+            // whose impl no longer has the name has no scope and isn't visible.
+            r => r
+                .as_scope(db)
+                .is_some_and(|scope| is_scope_visible_from(db, scope, from_scope)),
         }
     }
 
@@ -721,13 +700,11 @@ impl<'db> PathRes<'db> {
 
         match self {
             PathRes::Ty(ty) | PathRes::Func(ty) => ty_path(*ty),
-            PathRes::TyAlias(alias, _) => alias.alias.scope().pretty_path(db),
             PathRes::EnumVariant(v) => Some(format!(
                 "{}::{}",
                 ty_path(v.ty).unwrap_or_else(|| "<missing>".into()),
                 v.variant.name(db)?
             )),
-            PathRes::Const(const_, _) => const_.scope().pretty_path(db),
             PathRes::TraitConst(ty, _, name) | PathRes::InherentConst(ty, _, name) => {
                 Some(format!(
                     "{}::{}",
@@ -735,10 +712,12 @@ impl<'db> PathRes<'db> {
                     name.data(db)
                 ))
             }
-            PathRes::TraitMethod(..) => self.as_scope(db)?.pretty_path(db),
-            r @ (PathRes::Trait(..) | PathRes::Mod(..) | PathRes::FuncParam(..)) => {
-                r.as_scope(db).unwrap().pretty_path(db)
-            }
+            PathRes::TyAlias(..)
+            | PathRes::Const(..)
+            | PathRes::TraitMethod(..)
+            | PathRes::Trait(..)
+            | PathRes::Mod(..)
+            | PathRes::FuncParam(..) => self.as_scope(db)?.pretty_path(db),
 
             PathRes::Method(ty, cand) => Some(format!(
                 "{}::{}",
@@ -844,16 +823,13 @@ pub(crate) fn resolve_path_with_minter<'db>(
     resolve_tail_as_value: bool,
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let directive = QueryDirective::for_scope(db, scope);
-    resolve_path_impl(
+    resolve_path_with_observer_and_minter(
         db,
         path,
         scope,
         assumptions,
         resolve_tail_as_value,
-        directive,
-        true,
-        &mut |path, res| lowering_cx.record_resolution(path, res),
+        &mut |_, _| {},
         lowering_cx,
     )
 }
@@ -870,14 +846,12 @@ pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
 {
-    let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
         path,
         scope,
         assumptions,
         resolve_tail_as_value,
-        directive,
         true,
         &mut |path, res| {
             lowering_cx.record_resolution(path, res);
@@ -939,8 +913,7 @@ where
     if let Some(outer) =
         definition.and_then(|definition| shadowed_trait(db, path, scope, definition))
     {
-        let res =
-            resolve_name_res_with_minter(db, outer, None, path, scope, assumptions, lowering_cx)?;
+        let res = resolve_name_res_with_minter(db, outer, path, scope, assumptions, lowering_cx)?;
         lowering_cx.record_resolution(path, &res);
         observer(path, &res);
         return Ok(res);
@@ -991,7 +964,6 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
     position: TypePosition,
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let directive = QueryDirective::for_scope(db, scope);
     let mut observer =
         |path: PathId<'db>, res: &PathRes<'db>| lowering_cx.record_resolution(path, res);
     let parent_res = path
@@ -1003,14 +975,13 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
                 scope,
                 assumptions,
                 false,
-                directive,
                 false,
                 &mut observer,
                 lowering_cx,
             )
         })
         .transpose()?;
-    let mut resolve_tail = |as_value, decided_by_value: &mut bool| {
+    let resolve_tail = |as_value, decided_by_value: &mut bool| {
         resolve_segment(
             db,
             path,
@@ -1018,12 +989,11 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
             scope,
             assumptions,
             as_value,
-            directive,
             true,
-            &mut observer,
             lowering_cx,
             decided_by_value,
         )
+        .inspect(|res| lowering_cx.record_resolution(path, res))
     };
     let not_found = |res: &PathResolutionResult<'db, PathRes<'db>>| {
         res.as_ref()
@@ -1228,7 +1198,6 @@ fn resolve_path_impl<'db, F>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
-    base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
     lowering_cx: &LoweringContext<'db>,
@@ -1245,48 +1214,42 @@ where
                 scope,
                 assumptions,
                 resolve_tail_as_value,
-                base_directive,
                 false,
                 observer,
                 lowering_cx,
             )
         })
         .transpose()?;
-    resolve_segment(
+    let res = resolve_segment(
         db,
         path,
         parent_res,
         scope,
         assumptions,
         resolve_tail_as_value,
-        base_directive,
         is_tail,
-        observer,
         lowering_cx,
         &mut false,
-    )
+    )?;
+    observer(path, &res);
+    Ok(res)
 }
 
 /// Resolves the last segment of `path`, given its parent's resolution. Sets
 /// `decided_by_value` when a branch that only the value namespace takes
 /// decides the outcome; otherwise the outcome is the type namespace's too.
 #[allow(clippy::too_many_arguments)]
-fn resolve_segment<'db, F>(
+fn resolve_segment<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     parent_res: Option<PathRes<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
-    base_directive: QueryDirective,
     is_tail: bool,
-    observer: &mut F,
     lowering_cx: &LoweringContext<'db>,
     decided_by_value: &mut bool,
-) -> PathResolutionResult<'db, PathRes<'db>>
-where
-    F: FnMut(PathId<'db>, &PathRes<'db>),
-{
+) -> PathResolutionResult<'db, PathRes<'db>> {
     if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
         if path.parent(db).is_some() {
             return Err(PathResError::new(
@@ -1353,9 +1316,7 @@ where
         };
 
         let qualified_ty = TyId::qualified_ty(db, trait_inst);
-        let r = PathRes::Ty(qualified_ty);
-        observer(path, &r);
-        return Ok(r);
+        return Ok(PathRes::Ty(qualified_ty));
     }
 
     let Some(ident) = path.ident(db).to_opt() else {
@@ -1378,9 +1339,7 @@ where
             if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
                 // Associated type projection
                 if let Some(assoc_ty) = trait_inst.project_assoc_ty(db, ident) {
-                    let r = PathRes::Ty(assoc_ty);
-                    observer(path, &r);
-                    return Ok(r);
+                    return Ok(PathRes::Ty(assoc_ty));
                 }
 
                 // Associated function on a specific trait instance
@@ -1389,18 +1348,18 @@ where
                     && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
                 {
                     *decided_by_value = true;
-                    let r = PathRes::TraitMethod(*trait_inst, method);
-                    observer(path, &r);
-                    return Ok(r);
+                    return Ok(PathRes::TraitMethod(*trait_inst, method));
                 }
 
                 // Associated const on a specific trait instance
                 if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
                     *decided_by_value = true;
                     reject_generic_args(db, path)?;
-                    let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
-                    observer(path, &r);
-                    return Ok(r);
+                    return Ok(PathRes::TraitConst(
+                        trait_inst.self_ty(db),
+                        *trait_inst,
+                        ident,
+                    ));
                 }
             }
 
@@ -1412,22 +1371,18 @@ where
                 // We need to use the concrete enum scope instead of
                 // parent_scope to resolve the variants in all cases,
                 // eg when parent is `Self`
-                let directive = QueryDirective::for_scope(db, enum_.scope());
-                let query = make_query(db, path, enum_.scope(), directive);
-                let bucket = resolve_query(db, query);
+                let bucket = resolve_query(db, make_query(db, path, enum_.scope()));
 
                 if let Ok(res) = bucket.pick(NameDomain::VALUE)
                     && let Some(var) = res.enum_variant()
                 {
                     // Generic arguments belong on the enum (`E<T>::V`).
                     reject_generic_args(db, path)?;
-                    let reso = PathRes::EnumVariant(ResolvedVariant {
+                    return Ok(PathRes::EnumVariant(ResolvedVariant {
                         ty,
                         variant: var,
                         path,
-                    });
-                    observer(path, &reso);
-                    return Ok(reso);
+                    }));
                 }
             }
 
@@ -1441,9 +1396,7 @@ where
                 {
                     *decided_by_value = true;
                     reject_generic_args(db, path)?;
-                    let r = PathRes::InherentConst(ty, impl_, ident);
-                    observer(path, &r);
-                    return Ok(r);
+                    return Ok(PathRes::InherentConst(ty, impl_, ident));
                 }
 
                 // Probe impls across both the call-site scope and the receiver type's ingot so
@@ -1452,9 +1405,7 @@ where
                     AssocConstSelection::Found(inst) => {
                         *decided_by_value = true;
                         reject_generic_args(db, path)?;
-                        let r = PathRes::TraitConst(ty, inst, ident);
-                        observer(path, &r);
-                        return Ok(r);
+                        return Ok(PathRes::TraitConst(ty, inst, ident));
                     }
                     AssocConstSelection::Ambiguous(traits) => {
                         *decided_by_value = true;
@@ -1488,9 +1439,7 @@ where
                 ) {
                     Ok(cand) => {
                         *decided_by_value = true;
-                        let r = PathRes::Method(ty, cand);
-                        observer(path, &r);
-                        return Ok(r);
+                        return Ok(PathRes::Method(ty, cand));
                     }
                     Err(MethodSelectionError::NotFound) => {}
                     Err(err) => {
@@ -1558,9 +1507,7 @@ where
                         path,
                     ));
                 }
-                let result = PathRes::Ty(assoc_ty);
-                observer(path, &result);
-                return Ok(result);
+                return Ok(PathRes::Ty(assoc_ty));
             }
 
             // Find raw associated types, then dedup by normalized result here.
@@ -1636,9 +1583,7 @@ where
                 0 => unreachable!(),
                 1 => {
                     let (_, (_, original_ty, _)) = dedup.first().unwrap();
-                    let r = PathRes::Ty(*original_ty);
-                    observer(path, &r);
-                    return Ok(r);
+                    return Ok(PathRes::Ty(*original_ty));
                 }
                 _ => {
                     // Build candidate list from deduped set for diagnostics
@@ -1676,22 +1621,13 @@ where
                 && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
             {
                 *decided_by_value = true;
-                let r = PathRes::TraitMethod(trait_inst, method);
-                observer(path, &r);
-                return Ok(r);
+                return Ok(PathRes::TraitMethod(trait_inst, method));
             }
         }
         Some(PathRes::Const(..) | PathRes::Mod(_)) | None => {}
     };
 
-    let query = make_query(db, path, parent_scope, base_directive);
-    let bucket = resolve_query(db, query);
-
-    let parent_ty = parent_res.as_ref().and_then(|res| match res {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(*ty),
-        _ => None,
-    });
-
+    let bucket = resolve_query(db, make_query(db, path, parent_scope));
     let res = if is_tail
         && resolve_tail_as_value
         && let Ok(res) = bucket.pick(NameDomain::VALUE)
@@ -1699,13 +1635,9 @@ where
         *decided_by_value = true;
         res.clone()
     } else {
-        pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
+        pick_type_domain_from_bucket(db, parent_res, bucket, path)?
     };
-
-    let r =
-        resolve_name_res_with_minter(db, &res, parent_ty, path, scope, assumptions, lowering_cx)?;
-    observer(path, &r);
-    Ok(r)
+    resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx)
 }
 
 enum AssocConstSelection<'db> {
@@ -2434,30 +2366,9 @@ fn find_associated_type_in_mode<'db>(
     Ok(candidates)
 }
 
-pub fn resolve_name_res<'db>(
-    db: &'db dyn HirAnalysisDb,
-    nameres: &NameRes<'db>,
-    parent_ty: Option<TyId<'db>>,
-    path: PathId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> PathResolutionResult<'db, PathRes<'db>> {
-    let lowering_cx = LoweringContext::new();
-    resolve_name_res_with_minter(
-        db,
-        nameres,
-        parent_ty,
-        path,
-        scope,
-        assumptions,
-        &lowering_cx,
-    )
-}
-
 pub(crate) fn resolve_name_res_with_minter<'db>(
     db: &'db dyn HirAnalysisDb,
     nameres: &NameRes<'db>,
-    parent_ty: Option<TyId<'db>>,
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -2611,17 +2522,12 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 PathRes::InherentConst(self_ty, impl_, const_name)
             }
 
+            // A variant named by its enum type is resolved with that type;
+            // here it was imported, so its enum takes default arguments.
             ScopeId::Variant(var) => {
                 reject_generic_args(db, path)?;
-                let enum_ty = if let Some(ty) = parent_ty {
-                    ty
-                } else {
-                    // The variant was imported via `use`.
-                    debug_assert!(path.parent(db).is_none());
-                    ty_from_adtref(db, path, var.enum_.into(), &[], lowering_cx)?
-                };
                 PathRes::EnumVariant(ResolvedVariant {
-                    ty: enum_ty,
+                    ty: ty_from_adtref(db, path, var.enum_.into(), &[], lowering_cx)?,
                     variant: var,
                     path,
                 })
@@ -2671,10 +2577,10 @@ fn ty_from_adtref<'db>(
 }
 
 fn pick_type_domain_from_bucket<'db>(
+    db: &'db dyn HirAnalysisDb,
     parent: Option<PathRes<'db>>,
     bucket: &NameResBucket<'db>,
     path: PathId<'db>,
-    parent_path: Option<PathId<'db>>,
 ) -> PathResolutionResult<'db, NameRes<'db>> {
     bucket
         .pick(NameDomain::TYPE)
@@ -2684,7 +2590,7 @@ fn pick_type_domain_from_bucket<'db>(
                 // If something was found in a different domain, mark the failure at
                 // the parent segment to surface an InvalidPathSegment diagnostic.
                 let failed_at = if bucket.iter_ok().next().is_some() {
-                    parent_path.unwrap_or(path)
+                    path.parent(db).unwrap_or(path)
                 } else {
                     path
                 };
