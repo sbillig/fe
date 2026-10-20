@@ -175,9 +175,10 @@ macro_rules! define_runtime_intrinsics {
 
 define_runtime_intrinsics! {
     Malloc => (Core, ["ptr", "alloc_raw"]),
+    TryMalloc => (Core, ["ptr", "try_alloc_raw"]),
+    Free => (Core, ["ptr", "dealloc_raw"]),
     PtrOffsetBytes => (Core, ["ptr", "offset_bytes"]),
     PtrEq => (Core, ["ptr", "addr_eq"]),
-    NativePtrIsNull => (Std, ["native", "bytes", "is_null"]),
     Mload => (Std, ["evm", "ops", "mload"]),
     Mstore => (Std, ["evm", "ops", "mstore"]),
     Mstore8 => (Std, ["evm", "ops", "mstore8"]),

@@ -1,14 +1,6 @@
 use core::Option
 use core::ptr
 
-// Native owners share these declarations so allocation and release use the
-// same host ABI. Raw addresses never leave their owning implementation.
-extern {
-    pub(ingot) fn malloc(size: u64) -> *u8
-    pub(ingot) unsafe fn free(_ address: *u8)
-    pub(ingot) fn is_null(_ address: *u8) -> bool
-}
-
 // Supported native hosts have 64-bit pointers. Keep each object within PTRDIFF_MAX.
 const MAX_CAPACITY: u64 = 0x7fffffffffffffff
 
@@ -53,13 +45,15 @@ impl ByteBuffer {
                     capacity *= 2
                 }
             }
-            let replacement = malloc(size: capacity)
-            if is_null(replacement) { return false }
+            let replacement = match ptr::try_alloc_bytes(capacity as u256) {
+                Option::Some(replacement) => replacement
+                Option::None => return false
+            }
             match self.allocation {
                 Option::Some(address) => {
                     unsafe {
                         ptr::copy_raw(dest: replacement, source: address, len: self.len as u256)
-                        free(address)
+                        ptr::dealloc(address)
                     }
                 }
                 Option::None => {}
@@ -132,7 +126,7 @@ impl ByteBuffer {
     /// Release the allocation and consume the owner.
     pub fn release(own self) {
         match self.allocation {
-            Option::Some(address) => unsafe { free(address) }
+            Option::Some(address) => unsafe { ptr::dealloc(address) }
             Option::None => {}
         }
     }
