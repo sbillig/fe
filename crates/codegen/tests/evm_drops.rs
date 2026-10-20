@@ -53,6 +53,13 @@ fn evm_ir(drop: &str) -> String {
 fn effect_free_drops_leave_evm_code_unchanged() {
     let none = evm_ir("");
     assert_eq!(evm_ir("impl Drop for Token { fn drop(own self) {} }"), none);
+    // A call is an effect only if its callee has one.
+    assert_eq!(
+        evm_ir(
+            "fn same(_ p: *u256) -> *u256 { p }\nimpl Drop for Token { fn drop(own self) { let _ = same(self.counter) } }"
+        ),
+        none
+    );
     let counted =
         evm_ir("impl Drop for Token { fn drop(own self) { unsafe { *self.counter += 1 } } }");
     assert_ne!(counted, none);
