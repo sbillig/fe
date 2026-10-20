@@ -3034,7 +3034,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::MissingEffect { primary, func, key } => {
+            Self::MissingEffect {
+                primary,
+                func,
+                key,
+                in_drop,
+            } => {
                 let func_name = func
                     .name(db)
                     .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
@@ -3050,20 +3055,35 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         ),
                         span: primary.resolve(db),
                     }],
-                    notes: vec![
-                        format!(
-                            "require it in this function's signature with `uses {}`, so that its callers provide it",
-                            effect_clause(db, *func, *key)
-                        ),
-                        format!(
-                            "or provide it to a block of this function with `with ({key_str} = value) {{ .. }}`"
-                        ),
-                    ],
+                    notes: if *in_drop {
+                        vec![
+                            "a `drop` declares no effects: it runs where no call is written, so no caller provides one"
+                                .to_string(),
+                            format!(
+                                "provide it to a block of this `drop` with `with ({key_str} = value) {{ .. }}`"
+                            ),
+                        ]
+                    } else {
+                        vec![
+                            format!(
+                                "require it in this function's signature with `uses {}`, so that its callers provide it",
+                                effect_clause(db, *func, *key)
+                            ),
+                            format!(
+                                "or provide it to a block of this function with `with ({key_str} = value) {{ .. }}`"
+                            ),
+                        ]
+                    },
                     error_code,
                 }
             }
 
-            Self::MissingRow { primary, func, row } => {
+            Self::MissingRow {
+                primary,
+                func,
+                row,
+                in_drop,
+            } => {
                 let func_name = func
                     .name(db)
                     .to_opt()
@@ -3081,9 +3101,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         message: format!("`{func_name}` requires the row `{row}`"),
                         span: primary.resolve(db),
                     }],
-                    notes: vec![format!(
-                        "a row whose implementation is not known here is forwarded: require it via `uses {row}`"
-                    )],
+                    notes: vec![if *in_drop {
+                        "a `drop` declares no effects: it runs where no call is written, so nothing provides a row whose implementation is not known here"
+                            .to_string()
+                    } else {
+                        format!(
+                            "a row whose implementation is not known here is forwarded: require it via `uses {row}`"
+                        )
+                    }],
                     error_code,
                 }
             }

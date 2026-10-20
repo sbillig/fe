@@ -520,10 +520,12 @@ pub enum BodyDiag<'db> {
         given: TyId<'db>,
     },
 
+    /// `in_drop`: the caller is a `drop`, which declares no effects.
     MissingEffect {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
         key: HirTypeId<'db>,
+        in_drop: bool,
     },
 
     /// A call needs an abstract row, which only the caller's own can supply.
@@ -531,6 +533,7 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
         row: RowKey<'db>,
+        in_drop: bool,
     },
 
     AmbiguousEffect {

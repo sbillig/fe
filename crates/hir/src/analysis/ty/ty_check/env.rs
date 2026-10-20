@@ -34,6 +34,7 @@ use crate::analysis::{
             CallableInputOrigin, ConstTyData, const_body_assumptions, const_ty_from_sem_const,
         },
         corelib::resolve_lib_type_path,
+        drop_glue::implements_drop,
         effects::{
             EffectKeyKind,
             elaborate::{build_pattern_from_requirement_decl, seed_forwarder_from_requirement},
@@ -1144,6 +1145,11 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn in_closure(&self) -> bool {
         !self.closure_stack.is_empty()
+    }
+
+    /// Whether the body is a `Drop::drop`, which declares no effects.
+    pub(super) fn in_drop(&self) -> bool {
+        matches!(self.owner, BodyOwner::Func(func, _) if implements_drop(self.db, func))
     }
 
     pub(super) fn record_access_capture(
