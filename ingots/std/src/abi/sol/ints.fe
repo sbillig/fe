@@ -1635,6 +1635,12 @@ impl<T: SolWordRepr + SolInt> StorageKey for T {
     unsafe fn write_key(ptr: *u8, self) {
         store_word(ptr: ptr, value: self.canonical_word())
     }
+
+    const IS_WORD: bool = true
+
+    fn key_word(self) -> u256 {
+        self.canonical_word()
+    }
 }
 
 // `abi.encodePacked` uses the type's exact byte width, e.g. 3 bytes for int24.

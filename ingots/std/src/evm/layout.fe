@@ -25,6 +25,9 @@ use super::storage_map::StorageKey
 /// rooted at that slot.
 #[inline(always)]
 pub fn mapping_slot<K: StorageKey>(_ root: u256, _ key: K) -> u256 {
+    if K::IS_WORD {
+        return keccak_words([K::key_word(key), root])
+    }
     // Reserve the entire preimage before encoding: key encoders may allocate.
     let key_len = K::encoded_len(key)
     let scratch = ptr::alloc_bytes(key_len + 32)
