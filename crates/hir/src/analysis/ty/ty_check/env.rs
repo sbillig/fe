@@ -91,7 +91,7 @@ pub(crate) fn func_declared_bounds<'db>(
         // row expands.
         let rows = expand_rows(
             db,
-            func.effect_requirements(db),
+            func.effect_requirements(db, mode),
             func.scope(),
             base.extend_all_bounds(db),
         );
@@ -395,7 +395,7 @@ impl<'db> TyCheckEnv<'db> {
 
     fn register_effect_bindings(&mut self, base_assumptions: PredicateListId<'db>) {
         match self.owner {
-            BodyOwner::Func(func, _) => self.register_func_effect_bindings(func),
+            BodyOwner::Func(func, mode) => self.register_func_effect_bindings(func, mode),
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
             BodyOwner::ContractInit { .. } => {
                 self.register_contract_effect_bindings(base_assumptions)
@@ -406,8 +406,8 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    fn register_func_effect_bindings(&mut self, func: Func<'db>) {
-        for binding in func.effect_requirements(self.db) {
+    fn register_func_effect_bindings(&mut self, func: Func<'db>, mode: Option<BorrowKind>) {
+        for binding in func.effect_requirements(self.db, mode) {
             if !matches!(
                 binding.key.kind(),
                 EffectKeyKind::Type | EffectKeyKind::Trait
@@ -416,7 +416,7 @@ impl<'db> TyCheckEnv<'db> {
             }
             let idx = binding.binding_idx as usize;
             let Some(resolved_binding) =
-                self.resolved_effect_binding(EffectParamSite::Func(func), idx)
+                self.resolved_effect_binding(EffectParamSite::Func(func, mode), idx)
             else {
                 continue;
             };
@@ -430,7 +430,7 @@ impl<'db> TyCheckEnv<'db> {
         // row expands.
         let rows = expand_rows(
             self.db,
-            func.effect_requirements(self.db),
+            func.effect_requirements(self.db, mode),
             func.scope(),
             self.base_assumptions,
         );
@@ -551,7 +551,7 @@ impl<'db> TyCheckEnv<'db> {
 
     fn effect_binding_scope(&self, site: EffectParamSite<'db>) -> ScopeId<'db> {
         match site {
-            EffectParamSite::Func(func) => func.scope(),
+            EffectParamSite::Func(func, _) => func.scope(),
             EffectParamSite::Contract(contract)
             | EffectParamSite::ContractInit { contract }
             | EffectParamSite::ContractRecvArm { contract, .. } => contract.scope(),
@@ -1010,6 +1010,13 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(crate) fn effect_env(&self) -> &keyed_effect_env::EffectEnv<'db> {
         &self.effect_env
+    }
+
+    pub(super) fn call_effect_args_mut(
+        &mut self,
+        call_expr: ExprId,
+    ) -> Option<&mut Vec<super::ResolvedEffectArg<'db>>> {
+        self.call_effect_args[call_expr].as_mut()
     }
 
     pub(super) fn push_call_effect_arg(
@@ -1596,7 +1603,7 @@ impl<'db> TyCheckEnv<'db> {
 impl<'db> TyChecker<'db> {
     pub(super) fn seed_effect_witnesses(&mut self) {
         match self.env.owner {
-            BodyOwner::Func(func, _) => self.seed_func_effect_witnesses(func),
+            BodyOwner::Func(func, mode) => self.seed_func_effect_witnesses(func, mode),
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 self.seed_contract_effect_witnesses();
@@ -1604,10 +1611,11 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    fn seed_func_effect_witnesses(&mut self, func: Func<'db>) {
+    fn seed_func_effect_witnesses(&mut self, func: Func<'db>, mode: Option<BorrowKind>) {
         let assumptions = self.env.base_assumptions();
+        let site = EffectParamSite::Func(func, mode);
 
-        for binding in func.effect_requirements(self.db) {
+        for binding in func.effect_requirements(self.db, mode) {
             if !matches!(
                 binding.key.kind(),
                 EffectKeyKind::Type | EffectKeyKind::Trait
@@ -1618,16 +1626,16 @@ impl<'db> TyChecker<'db> {
             let idx = binding.binding_idx as usize;
             let resolved_binding = self
                 .env
-                .resolved_effect_binding(EffectParamSite::Func(func), idx)
+                .resolved_effect_binding(site, idx)
                 .unwrap_or_else(|| panic!("missing provider binding for effect at index {idx}"));
             let local_binding = LocalBinding::effect_param(&resolved_binding);
             let provided = ProvidedEffect {
                 origin: EffectOrigin::Param {
-                    site: EffectParamSite::Func(func),
+                    site,
                     index: idx,
                     name: Some(resolved_binding.requirement.binding_name),
                 },
-                ty: EffectEnvView::new(EffectParamSite::Func(func))
+                ty: EffectEnvView::new(site)
                     .visible_effect_binding_ty(self.db, idx)
                     .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
                 is_mut: local_binding.is_mut(),
@@ -1649,7 +1657,7 @@ impl<'db> TyChecker<'db> {
             let local_binding = LocalBinding::effect_param(&component);
             let provided = ProvidedEffect {
                 origin: EffectOrigin::Param {
-                    site: EffectParamSite::Func(func),
+                    site,
                     index: requirement.binding_idx as usize,
                     name: Some(requirement.binding_name),
                 },
@@ -1729,10 +1737,7 @@ impl<'db> TyChecker<'db> {
             self.rollback_state(snapshot);
             return false;
         };
-        let span = match provider.origin {
-            EffectOrigin::Param { site, index, .. } => effect_param_span(self.db, site, index),
-            EffectOrigin::With { value_expr } => value_expr.span(self.body()).into(),
-        };
+        let span = provider.origin.span(self.db, self.body());
         let Some((witness, commit)) = self
             .build_keyed_witness_from_pattern_in_scope(
                 pattern,
@@ -1786,7 +1791,9 @@ impl<'db> BlockEnv<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum EffectParamSite<'db> {
-    Func(Func<'db>),
+    /// A function's effects, at the mode of the body that binds them (`None`
+    /// for a function without one).
+    Func(Func<'db>, Option<BorrowKind>),
     Contract(Contract<'db>),
     ContractInit {
         contract: Contract<'db>,
@@ -1960,7 +1967,7 @@ fn effect_param_name<'db>(
     idx: usize,
 ) -> Option<IdentId<'db>> {
     match site {
-        EffectParamSite::Func(func) => func.effect_params(db).nth(idx).and_then(|p| p.name(db)),
+        EffectParamSite::Func(func, _) => func.effect_params(db).nth(idx).and_then(|p| p.name(db)),
         EffectParamSite::Contract(contract) => {
             contract.effects(db).data(db).get(idx).and_then(|p| p.name)
         }
@@ -1992,7 +1999,7 @@ pub(super) fn effect_param_span<'db>(
     idx: usize,
 ) -> DynLazySpan<'db> {
     match site {
-        EffectParamSite::Func(func) => func
+        EffectParamSite::Func(func, _) => func
             .span()
             .effects()
             .param_idx(func.effect_origin(db, idx))
@@ -2035,6 +2042,16 @@ pub(crate) enum EffectOrigin<'db> {
     With {
         value_expr: ExprId,
     },
+}
+
+impl<'db> EffectOrigin<'db> {
+    /// Where the effect is given: a `with` value or an effect parameter.
+    pub(super) fn span(self, db: &'db dyn HirAnalysisDb, body: Body<'db>) -> DynLazySpan<'db> {
+        match self {
+            Self::Param { site, index, .. } => effect_param_span(db, site, index),
+            Self::With { value_expr } => value_expr.span(body).into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
