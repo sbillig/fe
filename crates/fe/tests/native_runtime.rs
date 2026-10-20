@@ -999,28 +999,52 @@ fn native_fallible_allocation_reports_failure_and_releases_blocks() {
     }
 }
 
+/// Runs a native fixture under an allocator that requires every allocation to
+/// be freed exactly once, and reports its counts on stderr.
+fn run_balanced(fixture: &str, out: &Path, level: &str) -> Output {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    let object = build_native_object(&fixtures.join(fixture), out, level);
+    let executable = out.join("balanced");
+    let linked = Command::new("cc")
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
+        .arg(&object)
+        .arg(fixtures.join("balanced_allocator.c"))
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(linked.status.success(), "{linked:?}");
+    let result = Command::new(&executable).output().unwrap();
+    assert!(result.status.success(), "O{level}: {result:?}");
+    result
+}
+
 #[test]
 fn native_owners_destroy_what_they_hold_and_free_it_once() {
     let temp = tempdir().unwrap();
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
     for level in ["0", "1", "2"] {
-        let out = temp.path().join(format!("out-{level}"));
-        let object = build_native_object(&fixtures.join("owners.fe"), &out, level);
-        let executable = out.join("balanced");
-        let linked = Command::new("cc")
-            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
-            .arg(&object)
-            .arg(fixtures.join("balanced_allocator.c"))
-            .arg("-o")
-            .arg(&executable)
-            .output()
-            .unwrap();
-        assert!(linked.status.success(), "{linked:?}");
-        let result = Command::new(&executable).output().unwrap();
-        assert!(result.status.success(), "O{level}: {result:?}");
+        let result = run_balanced(
+            "owners.fe",
+            &temp.path().join(format!("out-{level}")),
+            level,
+        );
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
             "de-ab-c-fg\nxy-ABC\n-b\nu-U\n123\n",
+            "O{level}"
+        );
+    }
+}
+
+#[test]
+fn native_empty_owners_take_nothing_from_the_host() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let result = run_balanced("empty_owners.fe", &out, level);
+        assert_eq!(
+            String::from_utf8_lossy(&result.stderr),
+            "allocations=1 releases=1\n",
             "O{level}"
         );
     }
