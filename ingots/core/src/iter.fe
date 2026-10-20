@@ -743,12 +743,13 @@ impl FromProducer for MemArray {
         // Each element is initialized below before anything reads it: a
         // second pass that yields more elements reverts at the bounds check,
         // and one that yields fewer, its producer having changed its own
-        // traversal, reverts before the uninitialized rest can be read.
-        var out = unsafe { MemArray<T>::new_uninit(len) }
+        // traversal, reverts before the uninitialized rest can be read. The
+        // raw writes initialize the elements, destroying nothing.
+        let out = unsafe { MemArray<T>::new_uninit(len) }
         var i: usize = 0
         s = p.start(base)
         while p.has(base, s) {
-            out[i] = p.produce(base, s)
+            unsafe { *out.ptr_at(i) = p.produce(base, s) }
             i += 1
             s = p.next(base, s)
         }

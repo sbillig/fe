@@ -449,12 +449,13 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
     // Dynamic elements: the canonical size is only known after decoding.
     // Encode each element's tail once while sizing and copy the tails into
     // place afterwards, instead of decoding every element a second time.
-    var tails = unsafe { ptr::alloc_array<MemBuffer>(count) }
+    let tails = unsafe { ptr::alloc_array<MemBuffer>(count) }
     var size = 32 + count as u256 * 32
     for i in 0..count {
         let encoded = encode_alloc<Sol, T>(values.get(i))
         size += encoded.len() as u256
-        tails[i] = encoded
+        // A raw write initializes the slot, destroying nothing.
+        unsafe { *tails.ptr_at(i) = encoded }
     }
     // The heads, then the tails back to back in index order.
     let data = ptr::alloc_bytes(size)
