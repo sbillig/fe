@@ -6247,6 +6247,21 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 diag
             }
 
+            Self::DropEffects { primary } => {
+                let mut diag = primary_diag(
+                    severity,
+                    "`drop` cannot declare effects".to_string(),
+                    "a drop runs where no call is written, so nothing provides these".to_string(),
+                    primary.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "a destructor may use only the value it destroys and what that value holds"
+                        .to_string(),
+                );
+                diag
+            }
+
             Self::DropOnCopy { primary, ty } => {
                 let ty = ty.pretty_print(db);
                 let mut diag = primary_diag(

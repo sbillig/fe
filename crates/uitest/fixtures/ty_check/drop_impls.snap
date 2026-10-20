@@ -4,22 +4,16 @@ expression: diags
 input_file: fixtures/ty_check/drop_impls.fe
 ---
 error[3-0059]: `Window` is a `#[view]` type
-    ┌─ drop_impls.fe:112:15
+    ┌─ drop_impls.fe:123:15
     │
-112 │ impl Drop for Window {
+123 │ impl Drop for Window {
     │               ^^^^^^ a `#[view]` type cannot be `Drop`
 
 error[3-0059]: `Window` is a `#[view]` type
-    ┌─ drop_impls.fe:113:13
+    ┌─ drop_impls.fe:124:13
     │
-113 │     fn drop(own self) {}
+124 │     fn drop(own self) {}
     │             ^^^^^^^^ a `#[view]` type cannot be an `own` parameter
-
-error[6-0009]: method has stricter bounds than trait
-   ┌─ drop_impls.fe:90:8
-   │
-90 │     fn drop(own self) uses (total: mut u256) {
-   │        ^^^^ method has stricter bounds than the declared method in the trait: `total: EffectRef<u256>`, `total: EffectRefMut<u256>`
 
 error[6-0037]: `Drop` cannot be implemented for `Wrap<u8>`
    ┌─ drop_impls.fe:27:15
@@ -61,26 +55,42 @@ error[6-0039]: `Conditional<T>` cannot implement both `Copy` and `Drop`
    │
    = a copy duplicates whatever the value owns, and each copy would destroy it again
 
-error[8-0152]: `Drop::drop` cannot be called directly
-    ┌─ drop_impls.fe:118:5
+error[6-0040]: `drop` cannot declare effects
+   ┌─ drop_impls.fe:90:23
+   │
+90 │     fn drop(own self) uses (total: mut u256) {
+   │                       ^^^^^^^^^^^^^^^^^^^^^^ a drop runs where no call is written, so nothing provides these
+   │
+   = a destructor may use only the value it destroys and what that value holds
+
+error[6-0040]: `drop` cannot declare effects
+    ┌─ drop_impls.fe:101:23
     │
-118 │     buf.drop()
+101 │     fn drop(own self) uses F::E {
+    │                       ^^^^^^^^^ a drop runs where no call is written, so nothing provides these
+    │
+    = a destructor may use only the value it destroys and what that value holds
+
+error[8-0152]: `Drop::drop` cannot be called directly
+    ┌─ drop_impls.fe:129:5
+    │
+129 │     buf.drop()
     │     ^^^^^^^^^^ a value is destroyed once, where its owner gives it up
     │
     = call `core::mem::drop` to destroy a value early
 
 error[8-0152]: `Drop::drop` cannot be called directly
-    ┌─ drop_impls.fe:122:5
+    ┌─ drop_impls.fe:133:5
     │
-122 │     Drop::drop(buf)
+133 │     Drop::drop(buf)
     │     ^^^^^^^^^^^^^^^ a value is destroyed once, where its owner gives it up
     │
     = call `core::mem::drop` to destroy a value early
 
 error[8-0152]: `Drop::drop` cannot be called directly
-    ┌─ drop_impls.fe:126:13
+    ┌─ drop_impls.fe:137:13
     │
-126 │     let f = Buf::drop
+137 │     let f = Buf::drop
     │             ^^^^^^^^^ a value is destroyed once, where its owner gives it up
     │
     = call `core::mem::drop` to destroy a value early
