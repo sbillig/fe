@@ -11,11 +11,12 @@ use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
         DropFlagPoint, DropPart, DropStep, FieldIndex, SemanticInstance, VariantIndex,
-        core_method_callee_key, drop_elaboration, get_or_build_semantic_instance,
+        core_method_callee_key, get_or_build_semantic_instance,
         normalized::{
             NDataProjection, NDropTarget, NIndex, NPlace, NPlaceBase, NRootKind, NStatementId,
             NStatementKind, NValueDefinition,
         },
+        runtime_drop_elaboration,
     },
     ty::{
         adt_def::AdtRef,
@@ -56,7 +57,7 @@ impl<'db> RmirEmitter<'db> {
     /// their entry values, and indexes where each changes.
     pub(super) fn prepare_drop_flags(&mut self) {
         let semantic = self.semantic_instance();
-        let Some(elaboration) = drop_elaboration(self.db, semantic) else {
+        let Some(elaboration) = runtime_drop_elaboration(self.db, semantic) else {
             return;
         };
         let mut used = vec![false; elaboration.flags.len()];
@@ -122,7 +123,7 @@ impl<'db> RmirEmitter<'db> {
         statement: NStatementId,
         target: &NDropTarget<'db>,
     ) -> RBlockId {
-        let Some(elaboration) = drop_elaboration(self.db, self.semantic_instance()) else {
+        let Some(elaboration) = runtime_drop_elaboration(self.db, self.semantic_instance()) else {
             return bb;
         };
         let ty = self.drop_target_ty(target);
