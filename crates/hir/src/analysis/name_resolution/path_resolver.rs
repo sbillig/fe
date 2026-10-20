@@ -1520,7 +1520,7 @@ fn resolve_segment<'db>(
             }
 
             // Find raw associated types, then dedup by normalized result here.
-            let assoc_tys = match find_associated_type_in_mode(
+            let assoc_tys = match find_associated_type(
                 db,
                 scope,
                 Canonicalized::new(db, ty),
@@ -1674,7 +1674,7 @@ enum AssocConstSelection<'db> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FindAssociatedTypeError {
+enum FindAssociatedTypeError {
     InfiniteBoundRecursion,
 }
 
@@ -2106,16 +2106,6 @@ fn is_enclosing_impl<'db>(
         if scope.is_transitive_child_of(db, impl_trait.scope()))
 }
 
-pub(crate) fn find_associated_type<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    ty: Canonicalized<'db, TyId<'db>>,
-    name: IdentId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
-    find_associated_type_in_mode(db, scope, ty, name, assumptions, ConstBodyLowering::Eager)
-}
-
 /// The bounds implied by a trait's own `Self: Trait` predicate.
 ///
 /// Header positions such as a trait method signature deliberately withhold the
@@ -2193,7 +2183,7 @@ fn assoc_at_mode_arg<'db>(
     })
 }
 
-fn find_associated_type_in_mode<'db>(
+fn find_associated_type<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: Canonicalized<'db, TyId<'db>>,
