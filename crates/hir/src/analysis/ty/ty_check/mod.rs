@@ -48,7 +48,7 @@ use crate::{
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
     },
-    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
+    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_type},
 };
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
@@ -87,7 +87,8 @@ use super::{
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
-        goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
+        WellFormedness, check_projection_wf, check_ty_wf, goal_query_has_no_distinct_solution,
+        is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_def::{
         BorrowKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback, TyId, TyVarSort,
@@ -169,6 +170,23 @@ pub fn check_const_body<'db>(
             diags.extend(
                 const_type_diag(db, const_.span().ty().into(), const_.ty(db)).map(Into::into),
             );
+            let assumptions = PredicateListId::empty_list(db);
+            let written = lower_hir_ty(db, hir_ty, const_.scope(), assumptions);
+            if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+                db,
+                TraitSolveCx::new(db, const_.scope()).with_assumptions(assumptions),
+                written,
+            ) {
+                diags.push(
+                    TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
+                        span: const_.span().ty().into(),
+                        primary_goal: goal,
+                        unsat_subgoal: subgoal,
+                        required_by: None,
+                    })
+                    .into(),
+                );
+            }
         }
         diags.extend(ty_diags.into_iter().map(Into::into));
     }
@@ -6425,6 +6443,36 @@ struct TyCheckerFinalizer<'db> {
 }
 
 impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
+    /// A type written in the body has the trait reference of each projection
+    /// it names checked where the projection is written: normalization
+    /// resolves a projection without proving it.
+    fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: HirTyId<'db>) {
+        if let Some(span) = ctxt.span() {
+            let scope = ctxt.scope();
+            let ty = lower_hir_ty(self.db, hir_ty, scope, self.assumptions);
+            if !ty.has_invalid(self.db)
+                && let WellFormedness::IllFormed { goal, subgoal } = check_projection_wf(
+                    self.db,
+                    TraitSolveCx::new(self.db, scope).with_assumptions(self.assumptions),
+                    ty,
+                )
+            {
+                let diag = FuncBodyDiag::from(TyDiagCollection::from(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: span.into(),
+                        primary_goal: goal,
+                        unsat_subgoal: subgoal,
+                        required_by: None,
+                    },
+                ));
+                if !self.diags.contains(&diag) {
+                    self.diags.push(diag);
+                }
+            }
+        }
+        walk_type(self, ctxt, hir_ty);
+    }
+
     fn visit_pat(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyPatSpan<'db>>,
@@ -6820,11 +6868,49 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope());
-        if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
-            self.diags.push(diag.into());
+        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope())
+            .with_assumptions(self.assumptions);
+        // The trait reference of a projection is checked where the projection
+        // is written (`visit_ty`), not again in each type it flows into.
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(self.db, solve_cx, ty)
+            && !projection_trait_insts(self.db, ty).contains(&goal)
+        {
+            let diag = TraitConstraintDiag::TraitBoundNotSat {
+                span,
+                primary_goal: goal,
+                unsat_subgoal: subgoal,
+                required_by: None,
+            };
+            self.diags.push(TyDiagCollection::from(diag).into());
         }
     }
+}
+
+/// The trait references of the projections in `ty`.
+fn projection_trait_insts<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TraitInstId<'db>> {
+    struct Projections<'db> {
+        db: &'db dyn HirAnalysisDb,
+        insts: Vec<TraitInstId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Projections<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            match ty.data(self.db) {
+                TyData::AssocTy(assoc) => self.insts.push(assoc.trait_.as_predicate(self.db)),
+                TyData::QualifiedTy(inst) => self.insts.push(*inst),
+                _ => {}
+            }
+            walk_ty(self, ty);
+        }
+    }
+    let mut projections = Projections {
+        db,
+        insts: Vec::new(),
+    };
+    ty.visit_with(&mut projections);
+    projections.insts
 }
 
 /// The provider two joined accesses share, if any. Accesses backed by

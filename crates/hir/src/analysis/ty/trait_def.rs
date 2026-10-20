@@ -637,33 +637,75 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
-    impls_with_constraint_mode(db, ingot, &mut table, ty, None, assumptions, false)
+    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
+    impls_matching(db, ingot, &mut table, ty, None, |table, inst| {
+        inst.constraints(db).list(db).iter().all(|&constraint| {
+            matches!(
+                is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, table)),
+                GoalSatisfiability::Satisfied(_)
+            )
+        })
+    })
 }
 
-/// Returns implementors of `inst`'s trait that can apply to `inst` and whose
-/// constraints, under `inst`'s arguments, are not known to be unsatisfied.
-pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
+/// Returns the implementors of `inst`'s trait whose header, the self type and
+/// every trait argument, unifies with `inst`. Nothing is proved: an impl's
+/// where clauses only choose between impls whose headers both match (see
+/// [`impl_where_clause_refuted`]), and the trait reference of a projection
+/// is checked where its type is written.
+#[salsa::tracked(return_ref)]
+pub(crate) fn impls_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     inst: Canonical<TraitInstId<'db>>,
-    assumptions: PredicateListId<'db>,
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let inst = inst.extract_identity(&mut table);
-    let ty = inst.self_ty(db);
-    impls_with_constraint_mode(db, ingot, &mut table, ty, Some(inst), assumptions, true)
+    impls_matching(
+        db,
+        ingot,
+        &mut table,
+        inst.self_ty(db),
+        Some(inst),
+        |_, _| true,
+    )
 }
 
-fn impls_with_constraint_mode<'db>(
+/// Whether some where clause of `implementor`, with its header unified with
+/// `inst`, is known not to hold.
+pub(crate) fn impl_where_clause_refuted<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    implementor: ImplementorId<'db>,
+    inst: Canonical<TraitInstId<'db>>,
+) -> bool {
+    let mut table = UnificationTable::new(db);
+    let inst = inst.extract_identity(&mut table);
+    let instantiated = table.instantiate_with_fresh_vars(implementor);
+    !header_unifies(db, &mut table, instantiated, inst.self_ty(db), Some(inst))
+        || instantiated
+            .constraints(db)
+            .list(db)
+            .iter()
+            .any(|&constraint| {
+                matches!(
+                    is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, &mut table)),
+                    GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                )
+            })
+}
+
+/// The implementors in `ingot` whose self type unifies with `ty` and, with a
+/// `trait_inst`, whose trait arguments unify with its arguments, and that
+/// `applies` accepts, given each instantiated in `table`.
+fn impls_matching<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     table: &mut UnificationTable<'db>,
     ty: TyId<'db>,
     trait_inst: Option<TraitInstId<'db>>,
-    assumptions: PredicateListId<'db>,
-    allow_needs_confirmation: bool,
+    mut applies: impl FnMut(&mut UnificationTable<'db>, ImplementorId<'db>) -> bool,
 ) -> Vec<ImplementorId<'db>> {
-    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
@@ -687,51 +729,38 @@ fn impls_with_constraint_mode<'db>(
                 return false;
             }
             let snapshot = table.snapshot();
-
             let inst = table.instantiate_with_fresh_vars(*impl_);
-            let impl_ty = table.instantiate_to_term(inst.self_ty(db));
-            let ty_term = table.instantiate_to_term(ty);
-            // The constraints are checked under the target's arguments too:
-            // `impl<B, D: Driver<B>> Driver<B> for Filter<D>` needs its `B`.
-            let unifies =
-                table.unify(impl_ty, ty_term).is_ok()
-                    && trait_inst.is_none_or(|target| {
-                        inst.trait_(db).args(db).iter().zip(target.args(db)).all(
-                            |(&impl_arg, &arg)| {
-                                let arg = table.instantiate_to_term(arg);
-                                table.unify(impl_arg, arg).is_ok()
-                            },
-                        )
-                    });
-
-            if unifies {
-                let impl_constraints = inst.constraints(db);
-                if impl_constraints.is_empty(db) {
-                    table.rollback_to(snapshot);
-                    return true;
-                }
-
-                for &constraint in impl_constraints.list(db) {
-                    let constraint = constraint.fold_with(db, table);
-                    let satisfiability = is_goal_satisfiable(db, solve_cx, constraint);
-                    let constraint_holds =
-                        matches!(satisfiability, GoalSatisfiability::Satisfied(_))
-                            || (allow_needs_confirmation
-                                && matches!(
-                                    satisfiability,
-                                    GoalSatisfiability::NeedsConfirmation { .. }
-                                ));
-                    if !constraint_holds {
-                        table.rollback_to(snapshot);
-                        return false;
-                    }
-                }
-            }
-
+            let matches = header_unifies(db, table, inst, ty, trait_inst) && applies(table, inst);
             table.rollback_to(snapshot);
-            unifies
+            matches
         })
         .collect()
+}
+
+/// Unifies the header of `inst`, an instantiated implementor, with `ty` and,
+/// with a `trait_inst`, with its trait arguments: the constraints are checked
+/// under the target's arguments too, as `impl<B, D: Driver<B>> Driver<B> for
+/// Filter<D>` needs its `B`.
+fn header_unifies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+    inst: ImplementorId<'db>,
+    ty: TyId<'db>,
+    trait_inst: Option<TraitInstId<'db>>,
+) -> bool {
+    let impl_ty = table.instantiate_to_term(inst.self_ty(db));
+    let ty = table.instantiate_to_term(ty);
+    table.unify(impl_ty, ty).is_ok()
+        && trait_inst.is_none_or(|target| {
+            inst.trait_(db)
+                .args(db)
+                .iter()
+                .zip(target.args(db))
+                .all(|(&impl_arg, &arg)| {
+                    let arg = table.instantiate_to_term(arg);
+                    table.unify(impl_arg, arg).is_ok()
+                })
+        })
 }
 
 /// Returns all implementors for the given `ty`.
