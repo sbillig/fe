@@ -2170,6 +2170,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }
                         _ => self.bind_pattern(*pat, value),
                     }
+                    // A temporary a binding's access borrows lives as long
+                    // as the binding.
+                    if self.pattern_holds_access(*pat) {
+                        self.extend_temporaries();
+                    }
                 }
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),

@@ -167,3 +167,14 @@ fn a_let_else_drops_its_bindings_only_where_they_are_bound() {
         &["*", "-", "*"],
     );
 }
+
+#[test]
+fn a_destroyed_temporary_does_not_hold_the_accesses_it_carries() {
+    // The tuple lives as long as `n`, but its access ends at `n`'s last use.
+    check(
+        "struct Cell { n: u64 }\nimpl Cell { fn peek(mut? self) -> (Buf, mut? u64) { (make(1), mut? self.n) } }\nfn f() -> u64 { var cell = Cell { n: 1 }\n let (_, ref n) = cell.peek()\n let m = n + 1\n cell.n = 5\n m }",
+        "f",
+        // The tuple at the end, and the moved `make(1)`.
+        &["*", "-"],
+    );
+}

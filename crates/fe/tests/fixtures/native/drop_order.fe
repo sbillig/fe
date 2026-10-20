@@ -103,6 +103,20 @@ fn early(_ first: bool) -> Noisy {
     y
 }
 
+impl Outer {
+    fn inner(self) -> ref Noisy {
+        ref self.inner
+    }
+}
+
+// "-e-ox": a temporary lives as long as the binding borrowing it.
+fn extended() {
+    let inner = ref Outer { inner: noisy(120), n: 111 }.inner()
+    put(45)
+    put(inner.tag - 19)
+    put(45)
+}
+
 // "oi"
 fn outer() {
     let _value = Outer { inner: noisy(105), n: 111 }
@@ -228,6 +242,8 @@ pub fn main() -> i32 {
     methods()
     put(10)
     closures()
+    put(10)
+    extended()
     put(10)
     // "d" now, and "k" when `main` returns.
     let _kept = generic(noisy(107), true)
