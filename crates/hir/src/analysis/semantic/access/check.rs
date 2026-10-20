@@ -2355,17 +2355,26 @@ impl<'a, 'db> Analysis<'a, 'db> {
             ));
         }
         if let Some(key) = key {
+            // A write initializes what it names again. At a dynamic index it
+            // names no definite element, yet the drop before it destroys the
+            // one it reaches, which may have been moved out.
+            let dynamic = path.contains(&Step::Index(None));
             let found = state.moved.iter().find(|(moved, moved_path)| {
                 *moved == key
-                    && if kind == MemoryAccessKind::Write {
+                    && if kind == MemoryAccessKind::Write && !dynamic {
                         moved_path.len() < path.len() && path.starts_with(moved_path)
                     } else {
                         paths_overlap(moved_path, &path)
                     }
             });
-            if let Some(found) = found {
-                let message = if kind == MemoryAccessKind::Write {
+            if let Some(found @ (_, moved_path)) = found {
+                let message = if kind == MemoryAccessKind::Write
+                    && moved_path.len() < path.len()
+                    && path.starts_with(moved_path)
+                {
                     "cannot assign to part of a moved value"
+                } else if kind == MemoryAccessKind::Write {
+                    "cannot assign at a dynamic index while an element may be moved out"
                 } else if self.moved_at.contains_key(found) {
                     "cannot use a value after it was moved"
                 } else {

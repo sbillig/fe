@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/dynamic_index_writes.fe
+---
+error[16-0002]: move conflict in `fn write`
+   ┌─ dynamic_index_writes.fe:16:5
+   │
+15 │     let _moved = tokens[0]
+   │                  --------- value is moved here
+16 │     tokens[i] = Token { id: 2 }
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot assign at a dynamic index while an element may be moved out
+
+error[16-0002]: move conflict in `fn write_field`
+   ┌─ dynamic_index_writes.fe:23:5
+   │
+22 │     let _moved = pairs[0].a
+   │                  ---------- value is moved here
+23 │     pairs[i].a = Token { id: 2 }
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot assign at a dynamic index while an element may be moved out
