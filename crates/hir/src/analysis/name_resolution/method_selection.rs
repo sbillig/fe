@@ -5,7 +5,10 @@ use thin_vec::ThinVec;
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{is_scope_visible_from, traits_in_scope::traits_available_for_selection},
+    name_resolution::{
+        is_scope_visible_from,
+        traits_in_scope::{traits_available_for_selection, visible_candidates},
+    },
     ty::{
         canonical::{Canonical, Canonicalized, Solution},
         closure::{CallableShape, callable_shape_insts},
@@ -506,34 +509,21 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             .map(|cand| (cand, self.check_trait_cand(cand)))
             .collect();
         let checked = self.prune_inapplicable_trait_checks(checked);
-
-        if checked.len() == 1 {
-            return Self::finalize_sole_check(checked[0].1);
-        }
-
-        let available_traits = self.available_traits();
-        let visible: Vec<_> = checked
-            .iter()
-            .copied()
-            .filter(|(cand, _)| {
-                self.filter == TraitFilter::CallableShapes
-                    || available_traits.contains(&cand.trait_def(self.db))
-            })
-            .collect();
-
-        match visible.len() {
-            0 => {
-                if checked.is_empty() {
-                    Err(MethodSelectionError::NotFound)
-                } else {
-                    // Suggests trait imports.
-                    let traits = checked
+        let visible = match visible_candidates(checked, || self.trait_visible()) {
+            Ok(visible) => visible,
+            // Suggests trait imports.
+            Err(invisible) => {
+                return Err(MethodSelectionError::InvisibleTraitMethod(
+                    invisible
                         .iter()
                         .map(|(cand, _)| cand.trait_def(self.db))
-                        .collect();
-                    Err(MethodSelectionError::InvisibleTraitMethod(traits))
-                }
+                        .collect(),
+                ));
             }
+        };
+
+        match visible.len() {
+            0 => Err(MethodSelectionError::NotFound),
 
             1 => Self::finalize_sole_check(visible[0].1),
 
@@ -654,29 +644,19 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     fn select_visible_trait_method_candidates(
         &self,
     ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
-        let traits = &self.candidates.traits;
-
-        if traits.len() == 1 {
-            return Ok(self.trait_method_candidates(traits.iter().copied()));
-        }
-
-        let available_traits = self.available_traits();
-        let visible_traits: Vec<_> = traits
-            .iter()
-            .copied()
-            .filter(|cand| available_traits.contains(&cand.trait_def(self.db)))
-            .collect();
-
-        match visible_traits.len() {
-            0 => {
-                if traits.is_empty() {
-                    Err(MethodSelectionError::NotFound)
-                } else {
-                    let traits = traits.iter().map(|cand| cand.trait_def(self.db)).collect();
-                    Err(MethodSelectionError::InvisibleTraitMethod(traits))
-                }
-            }
-            _ => Ok(self.trait_method_candidates(visible_traits)),
+        let visible = || {
+            let available = self.available_traits();
+            move |cand: &AssembledTraitMethodCand<'db>| available.contains(&cand.trait_def(self.db))
+        };
+        match visible_candidates(self.candidates.traits.iter().copied().collect(), visible) {
+            Ok(visible) if visible.is_empty() => Err(MethodSelectionError::NotFound),
+            Ok(visible) => Ok(self.trait_method_candidates(visible)),
+            Err(invisible) => Err(MethodSelectionError::InvisibleTraitMethod(
+                invisible
+                    .iter()
+                    .map(|cand| cand.trait_def(self.db))
+                    .collect(),
+            )),
         }
     }
 
@@ -927,6 +907,16 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
 
     fn is_inherent_method_visible(&self, def: CallableDef) -> bool {
         is_scope_visible_from(self.db, def.scope(), self.scope)
+    }
+
+    /// Which trait candidates count among several: those of a trait in
+    /// scope, or every one when only callable shapes are asked for.
+    fn trait_visible(
+        &self,
+    ) -> impl Fn(&(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)) -> bool {
+        let available = self.available_traits();
+        let shapes = self.filter == TraitFilter::CallableShapes;
+        move |(cand, _)| shapes || available.contains(&cand.trait_def(self.db))
     }
 
     fn available_traits(&self) -> IndexSet<Trait<'db>> {
