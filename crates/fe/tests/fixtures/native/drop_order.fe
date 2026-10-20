@@ -265,6 +265,53 @@ fn folded() {
     put(45)
 }
 
+struct Unit {}
+
+impl Drop for Unit {
+    fn drop(own self) {
+        put(117)
+    }
+}
+
+struct Wrap<T> {
+    value: T,
+}
+
+struct Guard<F> {
+    f: F,
+}
+
+impl<F> Drop for Guard<F> {
+    fn drop(own self) {
+        put(103)
+    }
+}
+
+fn unit() -> Unit {
+    Unit {}
+}
+
+fn take(_ unit: own Unit) {}
+
+// "u1u2u3u4guuuu": zero-sized values are destroyed like any other. A
+// temporary, an `own` parameter, a discarded result and a reassigned value
+// go where they end; then a guard holding a closure, a wrapper, an array's
+// elements and the binding go with the scope.
+fn zero_sized() {
+    Unit {}
+    put(49)
+    take(Unit {})
+    put(50)
+    unit()
+    put(51)
+    var reassigned = unit()
+    reassigned = unit()
+    put(52)
+    let _pair = [Unit {}, Unit {}]
+    let _wrapped = Wrap { value: Unit {} }
+    let _guard = Guard { f: || {} }
+}
+
 fn generic<T>(_ value: own T, _ keep: bool) -> Option<T> {
     if keep { Option::Some(value) } else { Option::None }
 }
@@ -321,6 +368,8 @@ pub fn main() -> i32 {
     unwrapped(Option::None)
     put(10)
     folded()
+    put(10)
+    zero_sized()
     put(10)
     // "d" now, and "k" when `main` returns.
     let _kept = generic(noisy(107), true)
