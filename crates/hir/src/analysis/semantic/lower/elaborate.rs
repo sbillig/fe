@@ -217,7 +217,15 @@ fn transfer(stmt: &SStmt<'_>, live: &mut FxHashSet<SLocalId>) {
             live.extend(dst.used_locals());
             live.insert(src.value);
         }
-        SStmtKind::Drop { place } => live.extend(place.used_locals()),
+        // Destruction reads none of the accesses a value carries: an access
+        // has no drop glue, and a `#[view]` type implements no `Drop`. A
+        // store follows each drop through an access, and keeps it live.
+        SStmtKind::Drop { place } => live.extend(
+            place
+                .used_locals()
+                .into_iter()
+                .filter(|local| *local != place.local),
+        ),
         SStmtKind::End { .. } => {}
     }
 }

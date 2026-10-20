@@ -14,10 +14,11 @@ use super::body::SmirLowerCtxt;
 use crate::analysis::{
     semantic::{
         SBlockId, SExpr, SLocalId, SPlace, SStmtKind, STerminatorKind, SemanticLocalRole,
-        ValueProvenance,
+        ValueProvenance, capability::semantics::holds_carrier,
     },
     ty::{drop_glue::ty_has_drop_glue, ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
 };
+use crate::hir_def::{Partial, Pat, PatId};
 use crate::projection::Projection;
 
 pub(super) struct DropScope {
@@ -72,6 +73,45 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
             .filter(|owner| Some(*owner) != value)
             .collect();
         self.destroy(&owners);
+    }
+
+    /// Whether a binding of `pat` holds an access, which may borrow the
+    /// statement's temporaries.
+    pub(super) fn pattern_holds_access(&self, pat: PatId) -> bool {
+        if let Some(binding) = self.typed_body.pat_binding(pat)
+            && let Some(local) = self.binding_locals.get(&binding)
+            && holds_carrier(self.db, self.locals[local.index()].ty)
+        {
+            return true;
+        }
+        match pat.data(self.db, self.body) {
+            Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                pats.iter().any(|pat| self.pattern_holds_access(*pat))
+            }
+            Partial::Present(Pat::Record(_, fields)) => fields
+                .iter()
+                .any(|field| self.pattern_holds_access(field.pat)),
+            Partial::Present(Pat::Or(lhs, rhs)) => {
+                self.pattern_holds_access(*lhs) || self.pattern_holds_access(*rhs)
+            }
+            _ => false,
+        }
+    }
+
+    /// Hands what the innermost scope, a statement's, holds to the scope of
+    /// the statement's bindings: they live as long as the bindings that may
+    /// borrow them.
+    pub(super) fn extend_temporaries(&mut self) {
+        let owners = std::mem::take(
+            &mut self
+                .drop_scopes
+                .last_mut()
+                .expect("a statement has its scope")
+                .owners,
+        );
+        if let Some(depth) = self.drop_scopes.iter().rposition(|scope| scope.bindings) {
+            self.drop_scopes[depth].owners.extend(owners);
+        }
     }
 
     /// The owners each scope holds so far.
