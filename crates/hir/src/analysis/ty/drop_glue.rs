@@ -4,9 +4,20 @@ use super::{
     adt_def::AdtRef,
     corelib::resolve_core_trait,
     trait_def::{ImplementorId, impls_for_trait_def},
+    trait_lower::lower_impl_trait,
     ty_def::{PrimTy, TyBase, TyData, TyId},
 };
-use crate::analysis::HirAnalysisDb;
+use crate::{analysis::HirAnalysisDb, hir_def::Func};
+
+/// Whether `func` is an implementation's `Drop::drop`.
+pub fn implements_drop<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> bool {
+    func.containing_impl_trait(db).is_some_and(|impl_trait| {
+        lower_impl_trait(db, impl_trait).is_some_and(|implementor| {
+            Some(implementor.trait_def(db))
+                == resolve_core_trait(db, func.scope(), &["ops", "Drop"])
+        })
+    })
+}
 
 /// The `Drop` implementation of a struct or enum. It covers every value of
 /// the type, so it lies in the type's own ingot.

@@ -1047,6 +1047,30 @@ fn native_fallible_allocation_reports_failure_and_releases_blocks() {
 }
 
 #[test]
+fn native_values_are_destroyed_once_in_scope_order() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&fixtures.join("native/drop_order.fe"), &out, level, &[]);
+        let result = Command::new(out.join("drop_order")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            "a.\n.a\n0123\nSs\nN\nA,B\n1;2\ny\nx\nx\ny\noi\nABC\nZ-[-\nH-KLJI\n-l\n!r\nA-B-C--Z\nc-c\nd\nk",
+            "O{level}"
+        );
+
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(fixtures.join("fe_test/drops.fe"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_extern_declarations_cannot_claim_host_allocator_symbols() {
     let temp = tempdir().unwrap();
     for symbol in ["malloc", "free"] {

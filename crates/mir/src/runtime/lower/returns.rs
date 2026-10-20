@@ -1132,6 +1132,7 @@ impl<'db> AssignmentSpace<'db> for ReturnSliceSpace<'_, 'db> {
 
 #[cfg(test)]
 mod tests {
+    use crate::RuntimeTarget;
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::{
@@ -1231,7 +1232,7 @@ mod tests {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, name);
-        let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let key = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm).key(&db);
 
         assert!(
             matches!(
@@ -1269,7 +1270,7 @@ mod tests {
         let top_mod = db.top_mod(file);
         for &(name, exit) in expected {
             let semantic = semantic_instance_for_named_func(&db, top_mod, name);
-            let runtime = runtime_instance_for_semantic(&db, semantic);
+            let runtime = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
             assert_eq!(runtime.exit_behavior(&db), exit, "`{name}` exit behavior");
         }
     }
@@ -1392,7 +1393,7 @@ fn caller_pair_from_declared_pair() -> Pair {
             "caller_pair_from_declared_pair",
         ] {
             let caller = semantic_instance_for_named_func(&db, top_mod, caller_name);
-            let body = runtime_instance_for_semantic(&db, caller).body(&db);
+            let body = runtime_instance_for_semantic(&db, caller, RuntimeTarget::Evm).body(&db);
 
             assert!(
                 body.blocks
@@ -1467,7 +1468,7 @@ fn helper() {}
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "helper");
-        let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let key = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm).key(&db);
 
         assert_eq!(
             static_runtime_return_decision(&db, semantic),
@@ -1787,7 +1788,7 @@ fn first(_ arr: [u8; 4]) -> u8 {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "first");
-        let instance = runtime_instance_for_semantic(&db, semantic);
+        let instance = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
         let key = instance.key(&db);
         let semantic_body =
             RuntimeSemanticBody::admitted(&db, semantic).expect("semantic body should normalize");
@@ -1915,7 +1916,7 @@ fn first(_ a: mut [u256; 2]) -> mut u256 {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "first");
-        let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        let key = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm).key(&db);
         let ret = declaration_runtime_return_class(&db, key).expect("a projection's grant class");
 
         assert_eq!(
