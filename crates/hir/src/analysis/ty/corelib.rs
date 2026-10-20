@@ -216,6 +216,8 @@ define_runtime_intrinsics! {
     AddMod => (Core, ["num", "addmod"]),
     MulMod => (Core, ["num", "mulmod"]),
     LeadingZeros => (Core, ["num", "leading_zeros"]),
+    ToBigEndian => (Core, ["num", "to_be"]),
+    FromBigEndian => (Core, ["num", "from_be"]),
     BlackBox => (Core, ["hint", "black_box"]),
     Byte => (Std, ["evm", "ops", "byte"]),
     SignExtend => (Std, ["evm", "ops", "signextend"]),
