@@ -28,7 +28,7 @@ use rustc_hash::FxHashMap;
 use super::RmirEmitter;
 use crate::{
     db::MirDb,
-    instance::RuntimeTarget,
+    instance::{RuntimeInstance, RuntimeTarget, runtime::runtime_instance_lowered_body},
     runtime::{
         ConstScalar, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody,
         RuntimeCarrier, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole, VariantId,
@@ -557,7 +557,10 @@ pub(crate) fn runtime_needs_drop<'db>(
             return true;
         };
         let semantic = get_or_build_semantic_instance(db, key);
-        return has_effect(&runtime_instance_for_semantic(db, semantic, target).body(db));
+        return runtime_instance_has_effect(
+            db,
+            runtime_instance_for_semantic(db, semantic, target),
+        );
     }
     drop_glue_components(db, ty)
         .into_iter()
@@ -585,15 +588,52 @@ fn drop_glue_components<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Vec<TyId<'db>
     ty.field_types(db)
 }
 
-/// Whether running `body` can be observed: it calls, writes memory, checks
-/// something that can revert, or ends other than by returning.
-fn has_effect(body: &RuntimeBody<'_>) -> bool {
+fn runtime_instance_has_effect_cycle_initial<'db>(
+    _db: &'db dyn MirDb,
+    _instance: RuntimeInstance<'db>,
+) -> bool {
+    false
+}
+
+fn runtime_instance_has_effect_cycle_recover<'db>(
+    _db: &'db dyn MirDb,
+    _value: &bool,
+    _count: u32,
+    _instance: RuntimeInstance<'db>,
+) -> salsa::CycleRecoveryAction<bool> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+/// Whether running `instance` can be observed: it writes memory, calls
+/// something observable or outside the program, checks something that can
+/// revert, or ends other than by returning. Recursion adds no effect.
+#[salsa::tracked(cycle_fn = runtime_instance_has_effect_cycle_recover, cycle_initial = runtime_instance_has_effect_cycle_initial)]
+fn runtime_instance_has_effect<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> bool {
+    if instance.is_external_declaration(db) {
+        return true;
+    }
+    let Ok(lowered) = runtime_instance_lowered_body(db, instance) else {
+        return true;
+    };
+    has_effect(db, &lowered.body(db))
+}
+
+fn has_effect<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> bool {
     body.blocks.iter().any(|block| {
         !matches!(
             block.terminator,
-            RTerminator::Return(_) | RTerminator::Goto(_) | RTerminator::Branch { .. }
+            RTerminator::Return(_)
+                | RTerminator::Goto(_)
+                | RTerminator::Branch { .. }
+                | RTerminator::SwitchScalar { .. }
+                | RTerminator::MatchEnumTag { .. }
         ) || block.stmts.iter().any(|statement| match statement {
-            RStmt::Assign { expr, .. } => matches!(expr, RExpr::Call { .. } | RExpr::Builtin(_)),
+            RStmt::Assign { expr, .. } => match expr {
+                RExpr::Call { callee, .. } => runtime_instance_has_effect(db, *callee),
+                RExpr::Builtin(builtin) => builtin.has_effect(),
+                RExpr::EnumAssertVariantRef { .. } => true,
+                _ => false,
+            },
             RStmt::End { .. } => false,
             RStmt::AssertIndexInBounds { .. }
             | RStmt::EnumAssertVariant { .. }
