@@ -68,6 +68,12 @@ pub fn main() -> i32 {
     assert!(buffer.span().word_at(4) == 0x1234)
     assert!(buffer.span().word_at(36) == 0)
     assert!(buffer.span().word_at(68) == 0x5678)
+    // Words are big-endian, as in EVM memory.
+    assert!(buffer[34] == 0x12 && buffer[35] == 0x34 && buffer[4] == 0)
+    buffer[99] = 0x9a
+    assert!(buffer.read_word(68) == 0x569a && buffer.span().read_word(68) == 0x569a)
+    buffer.span().write_word(offset: 36, value: 0xbc << 248)
+    assert!(buffer[36] == 0xbc && buffer[67] == 0)
     0
 }
 "#,
