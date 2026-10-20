@@ -82,6 +82,11 @@ const MAX_DIRECT_CALL_ARGS: usize = 16;
 // claim these symbols.
 const HOST_SYMBOLS: &[&str] = &["memmove", "malloc", "free"];
 
+// The native address of every zero-size allocation, which takes nothing from
+// the host. It is aligned for any value and lies in the unmapped first page,
+// so no host allocation has it.
+const NATIVE_EMPTY_ALLOCATION: i64 = 16;
+
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
 
@@ -2059,6 +2064,51 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
+    /// Allocates `size` bytes from the native host. When the host is out of
+    /// memory, a `fallible` allocation is null and any other traps. A zero size
+    /// is `NATIVE_EMPTY_ALLOCATION` instead, so empty owners never reach the
+    /// host.
+    fn lower_native_allocation(
+        &mut self,
+        size: ValueId,
+        fallible: bool,
+    ) -> Result<ValueId, LowerError> {
+        let inst_set = self.module.inst_set();
+        let pointer = self.fb.ptr_type(Type::I8);
+        let entry = self
+            .fb
+            .current_block()
+            .expect("allocation requires a block");
+        let allocate = self.fb.append_block();
+        let done = self.fb.append_block();
+        let empty = self.fb.make_imm_value(NATIVE_EMPTY_ALLOCATION);
+        let empty = self.coerce_value_to_ty(empty, pointer)?;
+        let is_empty = self.fb.insert_inst(IsZero::new(inst_set, size), Type::I1);
+        self.fb
+            .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
+        self.fb.switch_to_block(allocate);
+        let allocated = if fallible {
+            let malloc = self.host_function(Signature::new_single(
+                "malloc",
+                Linkage::External,
+                &[Type::I64],
+                pointer,
+            ))?;
+            // Callers bound the size to 64 bits.
+            let size = self.coerce_value_to_ty(size, Type::I64)?;
+            self.fb
+                .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer)
+        } else {
+            self.allocate_bytes(size, Type::I8)?
+        };
+        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+        self.fb.switch_to_block(done);
+        Ok(self.fb.insert_inst(
+            Phi::new(inst_set, smallvec![(empty, entry), (allocated, allocate)]),
+            pointer,
+        ))
+    }
+
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
         Ok(match builtin {
             RuntimeBuiltin::Mload { addr } => {
@@ -2564,44 +2614,21 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.fb
                     .insert_inst(SymSize::new(self.module.inst_set(), symbol), Type::I256)
             }
-            RuntimeBuiltin::Malloc { size } => {
+            RuntimeBuiltin::Malloc { size } | RuntimeBuiltin::TryMalloc { size } => {
                 let size = self.local_value(*size)?;
-                self.allocate_bytes(size, Type::I8)?
-            }
-            RuntimeBuiltin::TryMalloc { size } => {
-                let size = self.local_value(*size)?;
-                if !self.module.is_native_target() {
-                    // EVM memory runs out only with the gas, never with a result.
-                    return self.allocate_bytes(size, Type::I8);
+                if self.module.is_native_target() {
+                    let fallible = matches!(builtin, RuntimeBuiltin::TryMalloc { .. });
+                    self.lower_native_allocation(size, fallible)?
+                } else {
+                    // EVM memory runs out only with the gas, so no allocation
+                    // fails with a result.
+                    self.allocate_bytes(size, Type::I8)?
                 }
-                let pointer = self.fb.ptr_type(Type::I8);
-                let malloc = self.host_function(Signature::new_single(
-                    "malloc",
-                    Linkage::External,
-                    &[Type::I64],
-                    pointer,
-                ))?;
-                // Callers bound the size to 64 bits. A zero size takes one byte,
-                // so that a null result always means the host is out of memory.
-                let size = self.coerce_value_to_ty(size, Type::I64)?;
-                let empty = self
-                    .fb
-                    .insert_inst(IsZero::new(self.module.inst_set(), size), Type::I1);
-                let empty = self.fb.insert_inst(
-                    Zext::new(self.module.inst_set(), empty, Type::I64),
-                    Type::I64,
-                );
-                let size = self
-                    .fb
-                    .insert_inst(Or::new(self.module.inst_set(), size, empty), Type::I64);
-                self.fb.insert_inst(
-                    Call::new(self.module.inst_set(), malloc, smallvec![size]),
-                    pointer,
-                )
             }
             RuntimeBuiltin::Free { ptr } => {
                 // EVM memory is never reclaimed.
                 if self.module.is_native_target() {
+                    let inst_set = self.module.inst_set();
                     let pointer = self.fb.ptr_type(Type::I8);
                     let free = self.host_function(Signature::new_unit(
                         "free",
@@ -2609,12 +2636,22 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         &[pointer],
                     ))?;
                     let ptr = self.local_value(*ptr)?;
+                    // A zero-size allocation took nothing from the host.
+                    let address = self.coerce_value_to_ty(ptr, Type::I64)?;
+                    let empty = self.fb.make_imm_value(NATIVE_EMPTY_ALLOCATION);
+                    let is_empty = self
+                        .fb
+                        .insert_inst(Eq::new(inst_set, address, empty), Type::I1);
+                    let release = self.fb.append_block();
+                    let done = self.fb.append_block();
+                    self.fb
+                        .insert_inst_no_result(Br::new(inst_set, is_empty, done, release));
+                    self.fb.switch_to_block(release);
                     let ptr = self.coerce_value_to_ty(ptr, pointer)?;
-                    self.fb.insert_inst_no_result(Call::new(
-                        self.module.inst_set(),
-                        free,
-                        smallvec![ptr],
-                    ));
+                    self.fb
+                        .insert_inst_no_result(Call::new(inst_set, free, smallvec![ptr]));
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    self.fb.switch_to_block(done);
                 }
                 zero_for_type(&mut self.fb, Type::Unit)
             }
