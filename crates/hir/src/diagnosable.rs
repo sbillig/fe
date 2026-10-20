@@ -20,7 +20,7 @@ use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
-use crate::analysis::ty::ty_error::{collect_ty_lower_errors, emit_invalid_ty_error};
+use crate::analysis::ty::ty_error::{collect_hir_ty_diags, emit_invalid_ty_error};
 use crate::analysis::ty::ty_lower::generic_param_owner_assumptions;
 use crate::hir_def::{
     Contract, Enum, EnumVariant, FieldParent, Func, FuncParamMode, GenericParam, GenericParamOwner,
@@ -327,48 +327,21 @@ impl<'db> Func<'db> {
         let mut diags = Vec::new();
         if self.has_explicit_return_ty(db) {
             // First, surface name-resolution/path-domain errors on the return type itself
-            let errs = self.ret_ty_errors(db);
-            if !errs.is_empty() {
-                return errs;
+            let checked = self.check_ret_ty(db);
+            if !checked.errors.is_empty() {
+                return checked.errors;
             }
 
-            // Then run kind/const checks on the lowered semantic type
+            // Then run kind/const checks on the lowered semantic type, and
+            // the well-formedness of each part where it is written.
             let ret = self.return_ty(db);
             let span: DynLazySpan<'db> = self.span().ret_ty().into();
-            let solve_cx = ty::trait_resolution::TraitSolveCx::new(db, self.scope())
-                .with_assumptions(param_env(db, self.into()));
-            if let Some(diag) = ty::ty_error::normalization_limit_diag(
-                db,
-                ret,
-                self.scope(),
-                self.assumptions(db),
-                span.clone(),
-            ) {
-                return vec![diag];
-            }
             if !ret.has_star_kind(db) {
                 diags.push(TyLowerDiag::ExpectedStarKind(span).into());
             } else if ret.is_const_ty(db) {
                 diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
-            } else if let ty::trait_resolution::WellFormedness::IllFormed { goal, subgoal } =
-                ty::trait_resolution::check_ty_wf(db, solve_cx, ret)
-            {
-                // Point at the written type inside a qualified path when that
-                // is what is ill-formed.
-                let precise = self.ret_ty_qualified_path_wf_diags(db, solve_cx);
-                if precise.is_empty() {
-                    diags.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span,
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                        }
-                        .into(),
-                    );
-                } else {
-                    diags.extend(precise);
-                }
+            } else {
+                diags.extend(checked.ill_formed);
             }
         }
         diags
@@ -1199,7 +1172,7 @@ impl<'db> ImplTrait<'db> {
             let assumptions = constraints_for(db, self.into());
             if impl_header_ty.has_invalid(db) {
                 let errs = impl_const.hir_ty(db).map(|hir_ty| {
-                    collect_ty_lower_errors(db, scope, hir_ty, impl_const.span().ty(), assumptions)
+                    collect_hir_ty_diags(db, scope, hir_ty, impl_const.span().ty(), assumptions)
                 });
                 match errs {
                     Some(errs) if !errs.is_empty() => diags.extend(errs),
@@ -1495,7 +1468,7 @@ impl<'db> VariantView<'db> {
     pub fn diags_tuple_elems_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use crate::hir_def::types::TypeKind as HirTyKind;
         use name_resolution::{PathRes, resolve_path};
-        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
+        use ty::trait_resolution::TraitSolveCx;
         use ty::ty_lower::lower_hir_ty;
 
         let mut out = Vec::new();
@@ -1530,18 +1503,18 @@ impl<'db> VariantView<'db> {
                 _ => false,
             };
 
-            if !is_const_path {
-                let mut errs = ty::ty_error::collect_ty_lower_errors(
-                    db,
-                    scope,
-                    hir_ty,
-                    span.clone(),
-                    assumptions,
-                );
-                if !errs.is_empty() {
-                    out.append(&mut errs);
-                    continue;
-                }
+            let checked = ty::ty_error::check_written_ty(
+                db,
+                scope,
+                hir_ty,
+                span.clone(),
+                assumptions,
+                ty::const_ty::ConstBodyLowering::Eager,
+                Some(TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enum_.into()))),
+            );
+            if !is_const_path && !checked.errors.is_empty() {
+                out.extend(checked.errors);
+                continue;
             }
 
             let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
@@ -1574,25 +1547,8 @@ impl<'db> VariantView<'db> {
                 continue;
             }
 
-            // Trait-bound well-formedness for element type.
-            match check_ty_wf(
-                db,
-                TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enum_.into())),
-                ty,
-            ) {
-                WellFormedness::WellFormed => {}
-                WellFormedness::IllFormed { goal, subgoal } => {
-                    out.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: span.clone().into(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                        }
-                        .into(),
-                    );
-                }
-            }
+            // Trait-bound well-formedness of each part of the element type.
+            out.extend(checked.ill_formed);
         }
 
         out
@@ -1730,7 +1686,7 @@ impl<'db> GenericParamOwner<'db> {
                 continue;
             };
             let span = view.span().into_const_param().ty();
-            let mut source_diags = collect_ty_lower_errors(
+            let mut source_diags = collect_hir_ty_diags(
                 db,
                 self.scope(),
                 hir_ty,

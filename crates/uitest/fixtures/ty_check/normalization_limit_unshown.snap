@@ -4,7 +4,7 @@ expression: diags
 input_file: fixtures/ty_check/normalization_limit_unshown.fe
 ---
 error[3-0058]: type normalization limit exceeded
-   ┌─ normalization_limit_unshown.fe:18:4
+   ┌─ normalization_limit_unshown.fe:24:4
    │
-18 │ fn caller() {
-   │    ^^^^^^ resolving `Tr::Out` while checking this reached the limit
+24 │ fn caller() {
+   │    ^^^^^^ resolving `Nest::Out` while checking this reached the limit

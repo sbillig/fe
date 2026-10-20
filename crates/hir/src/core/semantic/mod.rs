@@ -32,9 +32,9 @@ use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLow
 use crate::analysis::ty::effects::rows::RowKey;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::normalize::{normalize_from_assumptions, normalize_ty};
-use crate::analysis::ty::shape::{Shape, lower_return_shape, mentions_mode, return_shape_diags};
+use crate::analysis::ty::shape::{Shape, check_return_shape, lower_return_shape};
 use crate::analysis::ty::ty_def::{BorrowKind, Kind};
-use crate::analysis::ty::ty_error::{collect_hir_ty_diags, qualified_path_wf_diags};
+use crate::analysis::ty::ty_error::{WrittenTyDiags, check_written_ty, collect_hir_ty_diags};
 use crate::hir_def::params::{FuncParamMode, KindBound as HirKindBound};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::{HirDb, SpannedHirDb};
@@ -78,7 +78,7 @@ use crate::hir_def::*;
 // rather than exposing raw syntax.
 use crate::analysis::semantic::capability::array::ArrayLength;
 use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
-use crate::analysis::ty::const_ty::{ConstTyData, LoweringContext};
+use crate::analysis::ty::const_ty::{ConstBodyLowering, ConstTyData, LoweringContext};
 use crate::analysis::ty::effects::{
     EffectKeyKind, place_effect_provider_param_index_map, resolve_effect_key,
 };
@@ -105,7 +105,7 @@ use crate::analysis::ty::{
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
     ty_check::EffectParamSite,
     ty_def::{InvalidCause, PrimTy, TyId},
-    ty_error::{collect_ty_lower_errors, demanded_ground_const_cause, diag_from_invalid_cause},
+    ty_error::{demanded_ground_const_cause, diag_from_invalid_cause},
     ty_lower::{
         TyAlias, lower_hir_ty, lower_hir_ty_deferred, lower_hir_ty_with_minter, lower_opt_hir_ty,
         lower_type_alias, lower_type_alias_from_hir, lower_type_alias_from_hir_deferred,
@@ -723,46 +723,19 @@ impl<'db> Func<'db> {
         }
     }
 
-    /// Ill-formed types written inside qualified paths in the return type.
-    pub(crate) fn ret_ty_qualified_path_wf_diags(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        solve_cx: TraitSolveCx<'db>,
-    ) -> Vec<TyDiagCollection<'db>> {
+    /// Checks the explicit return type where it is written (see
+    /// [`check_written_ty`]).
+    pub(crate) fn check_ret_ty(self, db: &'db dyn HirAnalysisDb) -> WrittenTyDiags<'db> {
         let Some(hir_ty) = self.ret_type_ref(db) else {
-            return Vec::new();
+            return WrittenTyDiags::default();
         };
-        qualified_path_wf_diags(
+        check_return_shape(
             db,
-            self.scope(),
             hir_ty,
+            self.scope(),
             self.span().sig().ret_ty(),
             self.assumptions(db),
-            solve_cx,
-        )
-    }
-
-    /// Return type lowering errors for functions with explicit return types.
-    pub fn ret_ty_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        let Some(hir_ty) = self.ret_type_ref(db) else {
-            return Vec::new();
-        };
-        let assumptions = self.assumptions(db);
-        if mentions_mode(db, hir_ty) {
-            return return_shape_diags(
-                db,
-                hir_ty,
-                self.scope(),
-                self.span().sig().ret_ty(),
-                assumptions,
-            );
-        }
-        collect_ty_lower_errors(
-            db,
-            self.scope(),
-            hir_ty,
-            self.span().sig().ret_ty(),
-            assumptions,
+            Some(TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into()))),
         )
     }
 
@@ -1309,9 +1282,19 @@ impl<'db> FuncParamView<'db> {
         let Some(inner_ty) = inner_ty.to_opt() else {
             return Vec::new();
         };
-        let errs = collect_hir_ty_diags(db, func.scope(), inner_ty, inner_span, assumptions);
-        if !errs.is_empty() {
-            return errs;
+        let solve_cx =
+            TraitSolveCx::new(db, func.scope()).with_assumptions(param_env(db, func.into()));
+        let checked = check_written_ty(
+            db,
+            func.scope(),
+            inner_ty,
+            inner_span,
+            assumptions,
+            ConstBodyLowering::Eager,
+            Some(solve_cx),
+        );
+        if !checked.errors.is_empty() {
+            return checked.errors;
         }
 
         let ty = self.ty(db);
@@ -1336,34 +1319,8 @@ impl<'db> FuncParamView<'db> {
             return out;
         }
 
-        // Well-formedness / trait-bound satisfaction for parameter type
-        let solve_cx =
-            TraitSolveCx::new(db, func.scope()).with_assumptions(param_env(db, func.into()));
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
-            // Point at the written type inside a qualified path when that is
-            // what is ill-formed.
-            let precise = qualified_path_wf_diags(
-                db,
-                func.scope(),
-                hir_ty,
-                self.lazy_ty_span(db),
-                assumptions,
-                solve_cx,
-            );
-            if precise.is_empty() {
-                out.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: ty_span.clone(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                    }
-                    .into(),
-                );
-            } else {
-                out.extend(precise);
-            }
-        }
+        // Trait-bound well-formedness of each part of the parameter type.
+        out.extend(checked.ill_formed);
 
         // Self-parameter type shape check
         if self.is_self_param(db)
@@ -3474,7 +3431,7 @@ impl<'db> TypeAlias<'db> {
         let assumptions = constraints_for(db, self.into());
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
         if ty.has_invalid(db) {
-            collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ty(), assumptions)
+            collect_hir_ty_diags(db, self.scope(), hir_ty, self.span().ty(), assumptions)
         } else if let Some(cause) = demanded_ground_const_cause(db, ty) {
             diag_from_invalid_cause(self.span().ty().into(), &cause)
                 .into_iter()
@@ -3484,30 +3441,22 @@ impl<'db> TypeAlias<'db> {
         }
     }
 
-    /// Well-formedness errors for the alias target type.
+    /// Well-formedness errors for the alias target type, each where it is
+    /// written.
     pub fn ty_wf_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let Some(hir_ty) = self.type_ref(db).to_opt() else {
             return Vec::new();
         };
-        let assumptions = constraints_for(db, self.into());
-        let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        check_written_ty(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
-            ty,
-        ) {
-            vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: self.span().ty().into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ]
-        } else {
-            Vec::new()
-        }
+            self.scope(),
+            hir_ty,
+            self.span().ty(),
+            constraints_for(db, self.into()),
+            ConstBodyLowering::Eager,
+            Some(TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into()))),
+        )
+        .ill_formed
     }
 }
 
@@ -4107,7 +4056,7 @@ impl<'db> Impl<'db> {
             return Vec::new();
         };
         let assumptions = constraints_for(db, self.into());
-        collect_ty_lower_errors(
+        collect_hir_ty_diags(
             db,
             self.scope(),
             hir_ty,
@@ -4270,7 +4219,7 @@ impl<'db> ImplTrait<'db> {
             return Vec::new();
         };
         let assumptions = constraints_for(db, self.into());
-        collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ty(), assumptions)
+        collect_hir_ty_diags(db, self.scope(), hir_ty, self.span().ty(), assumptions)
     }
 
     /// Lowers this impl-trait to a semantic implementor view, performing
@@ -4881,38 +4830,29 @@ impl<'db> ImplAssocTypeView<'db> {
         };
 
         let ty_span = self.span().ty();
-        let assumptions = constraints_for(db, self.owner.into());
-
-        let errs =
-            collect_ty_lower_errors(db, self.owner.scope(), hir, ty_span.clone(), assumptions);
-        if !errs.is_empty() {
-            return errs;
+        let checked = check_written_ty(
+            db,
+            self.owner.scope(),
+            hir,
+            ty_span.clone(),
+            constraints_for(db, self.owner.into()),
+            ConstBodyLowering::Eager,
+            Some(
+                TraitSolveCx::new(db, self.owner.scope())
+                    .with_assumptions(param_env(db, self.owner.into())),
+            ),
+        );
+        if !checked.errors.is_empty() {
+            return checked.errors;
         }
 
         let Some(ty) = self.ty(db) else {
             return Vec::new();
         };
-        if let Some(diag) = ty.emit_diag(db, ty_span.clone().into()) {
+        if let Some(diag) = ty.emit_diag(db, ty_span.into()) {
             return vec![diag];
         }
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
-            db,
-            TraitSolveCx::new(db, self.owner.scope())
-                .with_assumptions(param_env(db, self.owner.into())),
-            ty,
-        ) {
-            return vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ];
-        }
-
-        Vec::new()
+        checked.ill_formed
     }
 }
 
@@ -5571,21 +5511,30 @@ impl<'db> FieldView<'db> {
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use crate::analysis::name_resolution::{PathRes, resolve_path};
         use crate::analysis::ty::ty_def::TyData;
-        use crate::analysis::ty::ty_error::{
-            collect_hir_ty_diags, diag_from_invalid_cause, qualified_path_wf_diags,
-        };
+        use crate::analysis::ty::ty_error::diag_from_invalid_cause;
 
         let mut out = Vec::new();
 
         // First, surface name-resolution errors for the field's HIR type path.
+        let owner_item = self.owner_item();
+        let solve_cx =
+            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(param_env(db, owner_item));
         let hir_ty = self.parent.fields_list(db).data(db)[self.idx].type_ref;
-        if let Some(hir_ty) = hir_ty.to_opt() {
-            let assumptions = constraints_for(db, self.owner_item());
-            let errs =
-                collect_hir_ty_diags(db, self.scope(), hir_ty, self.lazy_ty_span(), assumptions);
-            if !errs.is_empty() {
-                return errs;
-            }
+        let checked = hir_ty
+            .to_opt()
+            .map_or_else(WrittenTyDiags::default, |hir_ty| {
+                check_written_ty(
+                    db,
+                    self.scope(),
+                    hir_ty,
+                    self.lazy_ty_span(),
+                    constraints_for(db, owner_item),
+                    ConstBodyLowering::Eager,
+                    Some(solve_cx),
+                )
+            });
+        if !checked.errors.is_empty() {
+            return checked.errors;
         }
 
         let ty = self.ty(db);
@@ -5634,36 +5583,9 @@ impl<'db> FieldView<'db> {
             return out;
         }
 
-        // Trait-bound well-formedness for field type.
-        let owner_item = self.owner_item();
-        let solve_cx =
-            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(param_env(db, owner_item));
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
-            // Point at the written type inside a qualified path when that is
-            // what is ill-formed.
-            let precise = hir_ty.to_opt().map_or_else(Vec::new, |hir_ty| {
-                qualified_path_wf_diags(
-                    db,
-                    self.scope(),
-                    hir_ty,
-                    self.lazy_ty_span(),
-                    constraints_for(db, owner_item),
-                    solve_cx,
-                )
-            });
-            if precise.is_empty() {
-                out.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: span.clone(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                    }
-                    .into(),
-                );
-            } else {
-                out.extend(precise);
-            }
+        // Trait-bound well-formedness of each part of the field type.
+        if !checked.ill_formed.is_empty() {
+            out.extend(checked.ill_formed);
             return out;
         }
 

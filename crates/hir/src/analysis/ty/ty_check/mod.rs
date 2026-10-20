@@ -48,7 +48,7 @@ use crate::{
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
     },
-    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_type},
+    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
@@ -87,7 +87,7 @@ use super::{
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
-        WellFormedness, check_projection_wf, check_ty_wf, goal_query_has_no_distinct_solution,
+        WellFormedness, check_ty_wf, goal_query_has_no_distinct_solution,
         is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_def::{
@@ -109,17 +109,14 @@ use crate::analysis::ty::ty_def::{ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
     closure::{CallableShape, CallableValue},
     const_ty::{
-        CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext,
+        CallableInputOrigin, ConstBodyLowering, ConstTyData, ConstTyId, LoweringContext,
         invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
     },
-    ty_error::{
-        collect_ty_lower_errors, diag_from_invalid_cause, normalization_limit_diag,
-        qualified_path_wf_diags,
-    },
+    ty_error::{check_written_ty, diag_from_invalid_cause},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -159,36 +156,23 @@ pub fn check_const_body<'db>(
     // An invalid declared type suppresses body/value checking. Diagnose the
     // declaration itself rather than passing an invalid constant to CTFE.
     if let Some(hir_ty) = const_.hir_ty(db) {
-        let ty_diags = super::ty_error::collect_hir_ty_diags(
+        let assumptions = PredicateListId::empty_list(db);
+        let checked = check_written_ty(
             db,
             const_.scope(),
             hir_ty,
             const_.span().ty(),
-            PredicateListId::empty_list(db),
+            assumptions,
+            ConstBodyLowering::Eager,
+            Some(TraitSolveCx::new(db, const_.scope()).with_assumptions(assumptions)),
         );
-        if ty_diags.is_empty() {
+        if checked.errors.is_empty() {
             diags.extend(
                 const_type_diag(db, const_.span().ty().into(), const_.ty(db)).map(Into::into),
             );
-            let assumptions = PredicateListId::empty_list(db);
-            let written = lower_hir_ty(db, hir_ty, const_.scope(), assumptions);
-            if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
-                db,
-                TraitSolveCx::new(db, const_.scope()).with_assumptions(assumptions),
-                written,
-            ) {
-                diags.push(
-                    TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
-                        span: const_.span().ty().into(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                    })
-                    .into(),
-                );
-            }
+            diags.extend(checked.ill_formed.into_iter().map(Into::into));
         }
-        diags.extend(ty_diags.into_iter().map(Into::into));
+        diags.extend(checked.errors.into_iter().map(Into::into));
     }
     (diags, body)
 }
@@ -2930,47 +2914,25 @@ impl<'db> TyChecker<'db> {
     ) -> TyId<'db> {
         let ty = lower_hir_ty(self.db, hir_ty, self.env.scope(), self.env.assumptions());
 
-        // If lowering failed, try to produce precise diagnostics (e.g., path resolution errors)
-        if ty.has_invalid(self.db) {
-            let diags = collect_ty_lower_errors(
-                self.db,
-                self.env.scope(),
-                hir_ty,
-                span.clone(),
-                self.env.assumptions(),
-            );
-            if !diags.is_empty() {
-                for d in diags {
-                    self.push_diag(d);
-                }
-                // Avoid cascading kind errors for already-invalid types
-                return TyId::invalid(self.db, InvalidCause::Other);
-            }
-        }
-
-        // A qualified path resolves to a type that no longer mentions the
-        // types written inside it, so check those where they are written.
-        for diag in qualified_path_wf_diags(
+        // The written type's errors; its well-formedness is checked with every
+        // other type written in the body (see `TyCheckerFinalizer`).
+        let errors = check_written_ty(
             self.db,
             self.env.scope(),
             hir_ty,
             span.clone(),
             self.env.assumptions(),
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions()),
-        ) {
+            ConstBodyLowering::Eager,
+            None,
+        )
+        .errors;
+        let reported = !errors.is_empty();
+        for diag in errors {
             self.push_diag(diag);
         }
-
-        if let Some(diag) = ty.emit_diag(self.db, span.clone().into()).or_else(|| {
-            normalization_limit_diag(
-                self.db,
-                ty,
-                self.env.scope(),
-                self.env.assumptions(),
-                span.clone().into(),
-            )
-        }) {
-            self.push_diag(diag)
+        // Avoid cascading kind errors for already-invalid types
+        if reported && ty.has_invalid(self.db) {
+            return TyId::invalid(self.db, InvalidCause::Other);
         }
 
         if star_kind_required && ty.is_star_kind(self.db) {
@@ -6439,40 +6401,13 @@ struct TyCheckerFinalizer<'db> {
     ty_vars: FxHashSet<InferenceKey<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     direct_call_callees: FxHashSet<ExprId>,
+    /// The bounds reported where a type is written in the body, which the
+    /// types of expressions are not reported for again.
+    written_goals: FxHashSet<TraitInstId<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
 impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
-    /// A type written in the body has the trait reference of each projection
-    /// it names checked where the projection is written: normalization
-    /// resolves a projection without proving it.
-    fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: HirTyId<'db>) {
-        if let Some(span) = ctxt.span() {
-            let scope = ctxt.scope();
-            let ty = lower_hir_ty(self.db, hir_ty, scope, self.assumptions);
-            if !ty.has_invalid(self.db)
-                && let WellFormedness::IllFormed { goal, subgoal } = check_projection_wf(
-                    self.db,
-                    TraitSolveCx::new(self.db, scope).with_assumptions(self.assumptions),
-                    ty,
-                )
-            {
-                let diag = FuncBodyDiag::from(TyDiagCollection::from(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: span.into(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                    },
-                ));
-                if !self.diags.contains(&diag) {
-                    self.diags.push(diag);
-                }
-            }
-        }
-        walk_type(self, ctxt, hir_ty);
-    }
-
     fn visit_pat(
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyPatSpan<'db>>,
@@ -6679,13 +6614,63 @@ impl<'db> TyCheckerFinalizer<'db> {
             ty_vars: FxHashSet::default(),
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,
+            written_goals: FxHashSet::default(),
             diags: checker.diags,
         }
     }
 
     fn finish(mut self) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+        self.check_written_tys();
         self.check_unknown_types();
         (self.diags, self.body)
+    }
+
+    /// Checks the well-formedness of each type written in the body where it is
+    /// written; its errors were reported when it was lowered.
+    fn check_written_tys(&mut self) {
+        struct WrittenTys<'db> {
+            tys: Vec<(HirTyId<'db>, ScopeId<'db>, LazyTySpan<'db>)>,
+        }
+        impl<'db> Visitor<'db> for WrittenTys<'db> {
+            fn visit_ty(
+                &mut self,
+                ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>,
+                hir_ty: HirTyId<'db>,
+            ) {
+                if let Some(span) = ctxt.span() {
+                    self.tys.push((hir_ty, ctxt.scope(), span));
+                }
+            }
+        }
+
+        let Some(body) = self.body.body() else {
+            return;
+        };
+        let mut written = WrittenTys { tys: Vec::new() };
+        written.visit_body(&mut VisitorCtxt::with_body(self.db, body), body);
+        for (hir_ty, scope, span) in written.tys {
+            let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(self.assumptions);
+            let ill_formed = check_written_ty(
+                self.db,
+                scope,
+                hir_ty,
+                span,
+                self.assumptions,
+                ConstBodyLowering::Eager,
+                Some(solve_cx),
+            )
+            .ill_formed;
+            for diag in ill_formed {
+                if let TyDiagCollection::Satisfiability(TraitConstraintDiag::TraitBoundNotSat {
+                    primary_goal,
+                    ..
+                }) = &diag
+                {
+                    self.written_goals.insert(*primary_goal);
+                }
+                self.diags.push(diag.into());
+            }
+        }
     }
 
     fn check_unknown_types(&mut self) {
@@ -6870,9 +6855,11 @@ impl<'db> TyCheckerFinalizer<'db> {
 
         let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope())
             .with_assumptions(self.assumptions);
-        // The trait reference of a projection is checked where the projection
-        // is written (`visit_ty`), not again in each type it flows into.
+        // A bound is reported where the type that has it is written, not again
+        // in each type it flows into: in the body (`check_written_tys`), or,
+        // for the trait of a projection, wherever the projection is written.
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(self.db, solve_cx, ty)
+            && !self.written_goals.contains(&goal)
             && !projection_trait_insts(self.db, ty).contains(&goal)
         {
             let diag = TraitConstraintDiag::TraitBoundNotSat {

@@ -9,12 +9,12 @@
 use salsa::Update;
 
 use super::{
+    const_ty::ConstBodyLowering,
     corelib::resolve_lib_type_path,
-    diagnostics::TyDiagCollection,
     fold::{TyFoldable, TyFolder},
-    trait_resolution::PredicateListId,
+    trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{BorrowKind, InvalidCause, TyId},
-    ty_error::collect_hir_ty_diags,
+    ty_error::{WrittenTyDiags, check_written_ty},
     ty_lower::lower_hir_ty,
     visitor::{TyVisitable, TyVisitor},
 };
@@ -487,35 +487,49 @@ fn sum_shape<'db>(
     })
 }
 
-/// Diagnostics for a written return type. Modes are accepted exactly where
-/// the shape grammar allows them; every other position is checked as a type.
-pub fn return_shape_diags<'db>(
+/// Checks a written return type (see [`check_written_ty`]). Modes are
+/// accepted exactly where the shape grammar allows them; every other position
+/// is checked as a type.
+pub(crate) fn check_return_shape<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
-) -> Vec<TyDiagCollection<'db>> {
-    let opt_diags = |ty: Partial<HirTyId<'db>>, span: LazyTySpan<'db>| {
-        ty.to_opt()
-            .map(|ty| return_shape_diags(db, ty, scope, span, assumptions))
-            .unwrap_or_default()
+    solve_cx: Option<TraitSolveCx<'db>>,
+) -> WrittenTyDiags<'db> {
+    let check = |ty: HirTyId<'db>, span: LazyTySpan<'db>| {
+        check_written_ty(
+            db,
+            scope,
+            ty,
+            span,
+            assumptions,
+            ConstBodyLowering::Eager,
+            solve_cx,
+        )
+    };
+    let shape = |ty: HirTyId<'db>, span: LazyTySpan<'db>| {
+        check_return_shape(db, ty, scope, span, assumptions, solve_cx)
     };
     if !mentions_mode(db, ty) {
-        return collect_hir_ty_diags(db, scope, ty, span, assumptions);
+        return check(ty, span);
     }
     match ty.data(db) {
         TypeKind::Mode(TypeMode::Mut | TypeMode::MaybeMut | TypeMode::Ref, inner) => inner
             .to_opt()
-            .map(|inner| {
-                collect_hir_ty_diags(db, scope, inner, span.into_mode_type().inner(), assumptions)
-            })
+            .map(|inner| check(inner, span.into_mode_type().inner()))
             .unwrap_or_default(),
         TypeKind::Tuple(elems) => elems
             .data(db)
             .iter()
             .enumerate()
-            .flat_map(|(idx, elem)| opt_diags(*elem, span.clone().into_tuple_type().elem_ty(idx)))
+            .filter_map(|(idx, elem)| {
+                Some(shape(
+                    elem.to_opt()?,
+                    span.clone().into_tuple_type().elem_ty(idx),
+                ))
+            })
             .collect(),
         TypeKind::Path(Partial::Present(path))
             if let Some((_, _, arg)) = sum_shape_slot(db, *path, scope, assumptions)
@@ -525,7 +539,7 @@ pub fn return_shape_diags<'db>(
             let segment = path.segment_index(db);
             args.iter()
                 .enumerate()
-                .flat_map(|(idx, &ty_arg)| {
+                .map(|(idx, &ty_arg)| {
                     let span = span
                         .clone()
                         .into_path_type()
@@ -536,13 +550,13 @@ pub fn return_shape_diags<'db>(
                         .into_type_arg()
                         .ty();
                     if idx == arg {
-                        return_shape_diags(db, ty_arg, scope, span, assumptions)
+                        shape(ty_arg, span)
                     } else {
-                        collect_hir_ty_diags(db, scope, ty_arg, span, assumptions)
+                        check(ty_arg, span)
                     }
                 })
                 .collect()
         }
-        _ => collect_hir_ty_diags(db, scope, ty, span, assumptions),
+        _ => check(ty, span),
     }
 }

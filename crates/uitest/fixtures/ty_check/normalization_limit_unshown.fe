@@ -1,20 +1,30 @@
 // A normalization limit is an error even where no type shows it: here it is
-// reached only while the trait solver compares `Out` with the bound's `u8`, and
-// the type that stands in for the projection matches any type.
-trait Tr {
+// reached only while the trait solver compares `Out` with the bound's `u8`,
+// on a projection nested more deeply than the limit allows, and the type that
+// stands in for the projection matches any type. Nothing written has a
+// projection past the limit, and the call's type is `()`.
+trait Nest {
     type Out
 }
 
-struct W<T> {
+struct N<T> {
     t: T,
 }
 
-impl<T> Tr for W<T> {
-    type Out = <W<(T, T)> as Tr>::Out
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
 }
 
-fn need<T: Tr<Out = u8>>() {}
+impl Nest for u8 {
+    type Out = u8
+}
+
+fn need<T: Nest<Out = u8>>() {}
 
 fn caller() {
-    need<W<u8>>()
+    need<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
+}
+
+fn shallow() {
+    need<N<N<N<u8>>>>()
 }

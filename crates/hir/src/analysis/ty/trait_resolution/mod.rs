@@ -700,23 +700,6 @@ fn check_projected_trait_use_wf<'db>(
     unsatisfied_goal(db, solve_cx, inst).unwrap_or(WellFormedness::WellFormed)
 }
 
-/// Whether the trait reference of the projection `ty` holds, when `ty` is a
-/// projection. Normalization resolves a projection through the impl whose
-/// header matches without proving it, so a projection is checked where it is
-/// written.
-pub(crate) fn check_projection_wf<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    ty: TyId<'db>,
-) -> WellFormedness<'db> {
-    let inst = match ty.base_ty(db).data(db) {
-        TyData::AssocTy(assoc) => assoc.trait_.as_predicate(db),
-        TyData::QualifiedTy(inst) => *inst,
-        _ => return WellFormedness::WellFormed,
-    };
-    unsatisfied_goal(db, solve_cx, inst).unwrap_or(WellFormedness::WellFormed)
-}
-
 fn unsatisfied_goal<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
