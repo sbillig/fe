@@ -1,0 +1,8 @@
+/// Destroys `value` here, ending its lifetime before its owner's scope does.
+pub fn drop<T>(_ value: own T) {}
+
+extern {
+    /// Consumes `value` without destroying it, so whatever it owns stays
+    /// allocated. Leaking is memory-safe, so this is safe.
+    pub fn forget<T>(_ value: own T)
+}
