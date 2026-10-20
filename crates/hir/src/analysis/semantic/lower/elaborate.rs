@@ -158,7 +158,7 @@ fn access_families<'db>(
                 (*dst, expr.used_locals())
             }
             SStmtKind::Store { dst, src } => (dst.local, vec![src.value]),
-            SStmtKind::End { .. } => continue,
+            SStmtKind::End { .. } | SStmtKind::Drop { .. } => continue,
         };
         if holds_carrier(db, body.locals[dst.index()].ty) {
             for local in used {
@@ -217,6 +217,7 @@ fn transfer(stmt: &SStmt<'_>, live: &mut FxHashSet<SLocalId>) {
             live.extend(dst.used_locals());
             live.insert(src.value);
         }
+        SStmtKind::Drop { place } => live.extend(place.used_locals()),
         SStmtKind::End { .. } => {}
     }
 }

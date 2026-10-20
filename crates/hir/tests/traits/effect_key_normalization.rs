@@ -2933,7 +2933,8 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
             } => Some(args),
             fe_hir::analysis::semantic::SStmtKind::Assign { .. }
             | fe_hir::analysis::semantic::SStmtKind::Store { .. }
-            | fe_hir::analysis::semantic::SStmtKind::End { .. } => None,
+            | fe_hir::analysis::semantic::SStmtKind::End { .. }
+            | fe_hir::analysis::semantic::SStmtKind::Drop { .. } => None,
         })
         .unwrap_or_else(|| panic!("{body:#?}"));
     assert_eq!(args.len(), 1);
@@ -3117,7 +3118,8 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
                 } => local.value != fe_hir::analysis::semantic::SLocalId::from_u32(0),
                 fe_hir::analysis::semantic::SStmtKind::Assign { .. }
                 | fe_hir::analysis::semantic::SStmtKind::Store { .. }
-                | fe_hir::analysis::semantic::SStmtKind::End { .. } => true,
+                | fe_hir::analysis::semantic::SStmtKind::End { .. }
+                | fe_hir::analysis::semantic::SStmtKind::Drop { .. } => true,
             }),
         "{body:#?}"
     );
