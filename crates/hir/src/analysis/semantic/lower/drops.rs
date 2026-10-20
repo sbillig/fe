@@ -1,7 +1,7 @@
 //! Lexical destruction: each scope destroys the owners it holds where control
 //! leaves it.
 //!
-//! A binding belongs to the block or arm that binds it, and a temporary to
+//! A binding belongs to the block or arm that declares it, and a temporary to
 //! the scope it is allocated in: the statement, the block tail, a condition
 //! or an arm. A scope ends where its code falls through, or where `break`,
 //! `continue`, `return`, `?` or a failed condition leaves it; the value a
@@ -95,6 +95,37 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
                 self.pattern_holds_access(*lhs) || self.pattern_holds_access(*rhs)
             }
             _ => false,
+        }
+    }
+
+    /// Holds the `var` bindings `pat` declares without a value in the block
+    /// declaring them, in declaration order. An assignment in a nested scope
+    /// then gives a binding its value without making that scope its owner;
+    /// drop elaboration finds whether it has one at each exit. A `let`
+    /// declared without a value can never be given one.
+    pub(super) fn hold_declared(&mut self, pat: PatId) {
+        if let Some(binding) = self.typed_body.pat_binding(pat)
+            && binding.is_mut()
+            && let Some(&local) = self.binding_locals.get(&binding)
+        {
+            self.hold_defined(local);
+        }
+        match pat.data(self.db, self.body) {
+            Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                for &pat in pats {
+                    self.hold_declared(pat);
+                }
+            }
+            Partial::Present(Pat::Record(_, fields)) => {
+                for field in fields {
+                    self.hold_declared(field.pat);
+                }
+            }
+            Partial::Present(Pat::Or(lhs, rhs)) => {
+                self.hold_declared(*lhs);
+                self.hold_declared(*rhs);
+            }
+            _ => {}
         }
     }
 

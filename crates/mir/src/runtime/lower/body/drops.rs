@@ -34,7 +34,8 @@ use crate::{
     instance::{RuntimeInstance, RuntimeTarget, runtime::runtime_instance_lowered_body},
     runtime::{
         ConstScalar, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody,
-        RuntimeCarrier, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, ScalarClass, ScalarRepr, ScalarRole,
+        VariantId,
         package::runtime_instance_for_semantic,
         place::{project_field_class, project_index_class, project_variant_field_class},
     },
@@ -61,6 +62,7 @@ impl<'db> RmirEmitter<'db> {
             return;
         };
         let mut used = vec![false; elaboration.flags.len()];
+        let mut placeholders = Vec::new();
         let drops: Vec<_> = self
             .semantic_body
             .normalized
@@ -79,10 +81,35 @@ impl<'db> RmirEmitter<'db> {
                     for &flag in &part.flags {
                         used[flag as usize] = true;
                     }
+                    if !part.flags.is_empty()
+                        && let NDropTarget::Place(place) = target
+                        && let NPlaceBase::Root(root) = place.base
+                        && let Some(local) = self.semantic_body.root_local(root)
+                    {
+                        placeholders.push(self.runtime_value(local));
+                    }
                 }
             }
         }
         let entry = RBlockId::from_u32(self.semantic_body.normalized.entry.as_u32());
+        // A part only some executions initialize is read under its flags,
+        // perhaps on a path that never assigned its root. A root kept as a
+        // value needs a definition on every path: this one, never read.
+        placeholders.sort_unstable();
+        placeholders.dedup();
+        for local in placeholders {
+            if matches!(self.locals[local.index()].root, RuntimeLocalRoot::None)
+                && let Some(class) = self.value_class(local).cloned()
+            {
+                self.push_stmt(
+                    entry,
+                    RStmt::Assign {
+                        dst: local,
+                        expr: RExpr::Placeholder { class },
+                    },
+                );
+            }
+        }
         self.drop_flags = elaboration
             .flags
             .iter()

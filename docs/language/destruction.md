@@ -8,7 +8,9 @@ value's lifetime ends, and a type that holds a resource releases it in its
 ## When values are destroyed
 
 - A binding is destroyed at the end of the block that binds it, after the
-  bindings declared after it.
+  bindings declared after it. A `var` declared without a value belongs to
+  the block declaring it, wherever an assignment gives it one, and is
+  destroyed there if it has one.
 - A parameter taken `own` is destroyed when the function returns.
 - A temporary is destroyed at the end of its statement. A `let` that binds
   an access (`let s = ref make().span()`) keeps the statement's temporaries
