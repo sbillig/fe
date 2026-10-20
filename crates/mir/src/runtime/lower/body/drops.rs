@@ -36,6 +36,7 @@ use crate::{
         ConstScalar, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody,
         RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, ScalarClass, ScalarRepr, ScalarRole,
         VariantId,
+        lower::type_info::runtime_zero_sized_ty,
         package::runtime_instance_for_semantic,
         place::{project_field_class, project_index_class, project_variant_field_class},
     },
@@ -304,7 +305,7 @@ impl<'db> RmirEmitter<'db> {
                     return *value;
                 }
                 let Some(class) = self.value_class(*value).cloned() else {
-                    return self.alloc_runtime_temp(ty, RuntimeCarrier::Erased);
+                    return self.erased_part(ty);
                 };
                 let projected = project_class(self.db, class.clone(), path);
                 let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(projected));
@@ -323,13 +324,27 @@ impl<'db> RmirEmitter<'db> {
                 let Some(class) = self
                     .with_current_body_cx(|cx| cx.env.normalized_place_class(cx.carriers, &part))
                 else {
-                    return self.alloc_runtime_temp(ty, RuntimeCarrier::Erased);
+                    return self.erased_part(ty);
                 };
                 let dst = self.alloc_runtime_temp(ty, RuntimeCarrier::Value(class.clone()));
                 self.lower_semantic_place_read_into(bb, dst, &part, &class);
                 dst
             }
         }
+    }
+
+    /// A part with no runtime class, which only a zero-sized part lacks.
+    fn erased_part(&mut self, ty: TyId<'db>) -> RLocalId {
+        debug_assert!(
+            self.with_current_body_cx(|cx| runtime_zero_sized_ty(
+                self.db,
+                ty,
+                cx.env.scope(),
+                cx.env.assumptions()
+            )),
+            "a part without a runtime class is zero-sized"
+        );
+        self.alloc_runtime_temp(ty, RuntimeCarrier::Erased)
     }
 
     /// Whether the enum at `path` of `source` holds `variant`.
