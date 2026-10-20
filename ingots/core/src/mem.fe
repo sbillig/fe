@@ -5,4 +5,9 @@ extern {
     /// Consumes `value` without destroying it, so whatever it owns stays
     /// allocated. Leaking is memory-safe, so this is safe.
     pub fn forget<T>(_ value: own T)
+
+    /// Whether destroying a `T` does anything on the target being compiled.
+    /// Code that destroys values in bulk, such as a collection's elements,
+    /// skips the work when it does not.
+    pub fn needs_drop<T>() -> bool
 }
