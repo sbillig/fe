@@ -1137,6 +1137,12 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         name: IdentId<'db>,
     },
+
+    /// A call of `Drop::drop`, or the function used as a value: only the
+    /// compiler runs it, once per value.
+    DropCalledDirectly {
+        primary: DynLazySpan<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1292,6 +1298,7 @@ impl<'db> BodyDiag<'db> {
             Self::MaybeMutWithoutMode { .. } => 130,
             Self::ClosureInMaybeMutFunc { .. } => 131,
             Self::MaybeMutEffect { .. } => 132,
+            Self::DropCalledDirectly { .. } => 133,
             Self::InitializerMarker { .. } => 124,
             Self::VarOfNoValue { .. } => 125,
             Self::UnsafeFieldRequiresUnsafe { .. } => 126,
@@ -1634,6 +1641,26 @@ pub enum ImplDiag<'db> {
     /// whose fields, views and state the checks of a `Copy` type never see.
     BlanketCopy { primary: DynLazySpan<'db> },
 
+    /// A `Drop` implementation for anything but a struct or enum applied to
+    /// distinct generic parameters of the implementation.
+    DropImplNotGeneric {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// A `Drop` implementation with bounds its type does not declare.
+    DropStricterBound {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        stricter_bounds: ThinVec<TraitInstId<'db>>,
+    },
+
+    /// A `Drop` implementation for a `Copy` type.
+    DropOnCopy {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
     /// An effect row whose components, expanded through the rows they name,
     /// come back to it.
     CyclicEffectRow {
@@ -1676,6 +1703,9 @@ impl ImplDiag<'_> {
             Self::UnsafeImplMismatch { .. } => 30,
             Self::CopyFieldNotCopy { .. } => 31,
             Self::BlanketCopy { .. } => 32,
+            Self::DropImplNotGeneric { .. } => 37,
+            Self::DropStricterBound { .. } => 38,
+            Self::DropOnCopy { .. } => 39,
             Self::CyclicEffectRow { .. } => 34,
             Self::MethodMaybeMutMismatch { .. } => 35,
             Self::PartialMutImpl { .. } => 36,

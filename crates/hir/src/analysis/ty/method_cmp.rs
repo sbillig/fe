@@ -1036,13 +1036,15 @@ pub(crate) fn normalize_compare_assoc_consts<'db>(
 /// constraints.
 /// Returns `false` if the comparison fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConstraintEntailment {
+pub(crate) enum ConstraintEntailment {
     Proven,
     Disproven,
     Incomplete,
 }
 
-fn classify_constraint_entailment(result: GoalSatisfiability<'_>) -> ConstraintEntailment {
+pub(crate) fn classify_constraint_entailment(
+    result: GoalSatisfiability<'_>,
+) -> ConstraintEntailment {
     match result {
         GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {
             ConstraintEntailment::Proven
