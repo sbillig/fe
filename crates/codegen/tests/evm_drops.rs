@@ -120,3 +120,41 @@ fn needs_drop_skips_destruction_that_does_nothing_on_evm() {
     let counted = "impl Drop for Token { fn drop(own self) { unsafe { *self.counter += 1 } } }";
     assert_ne!(ir(counted, true), ir(counted, false));
 }
+
+#[test]
+fn memory_owners_of_plain_values_are_not_destroyed_on_evm() {
+    let ir = emit_evm_ir(
+        r#"
+use core::{Box, MemArray, MemBuffer, MemVec}
+
+fn run(_ n: usize) -> u256 {
+    var values: MemVec<u256> = MemVec::new()
+    for i in 0..n {
+        values.push(i as u256)
+    }
+    values.truncate(1)
+    let boxed = Box::new(values[0])
+    let array = MemArray<u256>::new_zeroed(n)
+    var buffer = MemBuffer::with_capacity(n)
+    buffer.resize(n)
+    boxed.get() + array.len() as u256 + buffer.len() as u256
+}
+
+msg Msg {
+    #[selector = 0]
+    Run { n: usize } -> u256,
+}
+
+contract C {
+    recv Msg {
+        Run { n } -> u256 {
+            run(n)
+        }
+    }
+}
+"#
+        .to_string(),
+    );
+    // The library's own calls remain at O0, but no `Drop::drop` is emitted.
+    assert!(!ir.contains("__drop"), "{ir}");
+}
