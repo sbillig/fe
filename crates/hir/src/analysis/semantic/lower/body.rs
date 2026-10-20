@@ -1229,7 +1229,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let src = self.take_expr_operand(*src);
                 if self.typed_body.semantic_expr_lowering(*dst).is_some() {
                     let dst = SPlace::new(self.lower_access(*dst));
-                    self.drop_before_write(&dst, self.locals[src.value.index()].ty);
+                    self.drop_before_write(origin, &dst, self.locals[src.value.index()].ty);
                     self.push_stmt(origin, SStmtKind::Store { dst, src });
                 } else {
                     let dst = self.lower_place(*dst);
@@ -2760,7 +2760,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace<'db>, src: SOperand) {
-        self.drop_before_write(&dst, self.locals[src.value.index()].ty);
+        self.drop_before_write(origin, &dst, self.locals[src.value.index()].ty);
         let kind = if self.place_can_assign_directly(&dst) {
             SStmtKind::Assign {
                 dst: dst.local,
