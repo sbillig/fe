@@ -108,9 +108,11 @@ buffer.span().copy_within(source: 0, dest: 5, len: 33)
 
 ## Targets
 
-Native targets free memory with the host's `free`. EVM memory is never
-reclaimed, so there freeing does nothing, and a destruction that does
-nothing is not emitted: values of types whose `drop` has no effect on EVM,
-such as the memory owners of plain values, compile to the same code as if
-they had none. `core::mem::needs_drop<T>()` tells code that destroys values
-in bulk whether destroying a `T` does anything on the target being compiled.
+Native targets free memory with the host's `free`. An empty owner, such as
+`MemVec::new()` or `MemBuffer::empty()`, takes no memory from the host until
+it grows. EVM memory is never reclaimed, so there freeing does nothing, and a
+destruction that does nothing is not emitted: values of types whose `drop`
+has no effect on EVM, such as the memory owners of plain values, compile to
+the same code as if they had none. `core::mem::needs_drop<T>()` tells code
+that destroys values in bulk whether destroying a `T` does anything on the
+target being compiled.
