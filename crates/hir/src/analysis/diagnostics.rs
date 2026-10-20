@@ -6080,7 +6080,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 let mut diag = primary_diag(
                     severity,
                     format!("`{ty}` cannot implement both `Copy` and `Drop`"),
-                    format!("`{ty}` is `Copy`"),
+                    format!("`{ty}` has a `Copy` implementation"),
                     primary.resolve(db),
                     error_code,
                 );

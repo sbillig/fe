@@ -69,6 +69,18 @@ impl Drop for Copied {
     fn drop(own self) {}
 }
 
+// Rejected: `Conditional<u64>` is `Copy`, and a `Copy` value is never
+// destroyed directly, but an owner holding one would destroy each copy.
+struct Conditional<T> {
+    x: T,
+}
+
+impl<T: Copy> Copy for Conditional<T> {}
+
+impl<T> Drop for Conditional<T> {
+    fn drop(own self) {}
+}
+
 // Rejected: a drop runs where no call is written, so it has no effects.
 struct Effectful {
     n: u64,

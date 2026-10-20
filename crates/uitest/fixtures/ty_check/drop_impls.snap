@@ -1,25 +1,24 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/drop_impls.fe
 ---
 error[3-0059]: `Window` is a `#[view]` type
-    ┌─ drop_impls.fe:100:15
+    ┌─ drop_impls.fe:112:15
     │
-100 │ impl Drop for Window {
+112 │ impl Drop for Window {
     │               ^^^^^^ a `#[view]` type cannot be `Drop`
 
 error[3-0059]: `Window` is a `#[view]` type
-    ┌─ drop_impls.fe:101:13
+    ┌─ drop_impls.fe:113:13
     │
-101 │     fn drop(own self) {}
+113 │     fn drop(own self) {}
     │             ^^^^^^^^ a `#[view]` type cannot be an `own` parameter
 
 error[6-0009]: method has stricter bounds than trait
-   ┌─ drop_impls.fe:78:8
+   ┌─ drop_impls.fe:90:8
    │
-78 │     fn drop(own self) uses (total: mut u256) {
+90 │     fn drop(own self) uses (total: mut u256) {
    │        ^^^^ method has stricter bounds than the declared method in the trait: `total: EffectRef<u256>`, `total: EffectRefMut<u256>`
 
 error[6-0037]: `Drop` cannot be implemented for `Wrap<u8>`
@@ -50,30 +49,38 @@ error[6-0039]: `Copied` cannot implement both `Copy` and `Drop`
    ┌─ drop_impls.fe:68:15
    │
 68 │ impl Drop for Copied {
-   │               ^^^^^^ `Copied` is `Copy`
+   │               ^^^^^^ `Copied` has a `Copy` implementation
+   │
+   = a copy duplicates whatever the value owns, and each copy would destroy it again
+
+error[6-0039]: `Conditional<T>` cannot implement both `Copy` and `Drop`
+   ┌─ drop_impls.fe:80:18
+   │
+80 │ impl<T> Drop for Conditional<T> {
+   │                  ^^^^^^^^^^^^^^ `Conditional<T>` has a `Copy` implementation
    │
    = a copy duplicates whatever the value owns, and each copy would destroy it again
 
 error[8-0133]: `Drop::drop` cannot be called directly
-    ┌─ drop_impls.fe:106:5
+    ┌─ drop_impls.fe:118:5
     │
-106 │     buf.drop()
+118 │     buf.drop()
     │     ^^^^^^^^^^ a value is destroyed once, where its owner gives it up
     │
     = call `core::mem::drop` to destroy a value early
 
 error[8-0133]: `Drop::drop` cannot be called directly
-    ┌─ drop_impls.fe:110:5
+    ┌─ drop_impls.fe:122:5
     │
-110 │     Drop::drop(buf)
+122 │     Drop::drop(buf)
     │     ^^^^^^^^^^^^^^^ a value is destroyed once, where its owner gives it up
     │
     = call `core::mem::drop` to destroy a value early
 
 error[8-0133]: `Drop::drop` cannot be called directly
-    ┌─ drop_impls.fe:114:13
+    ┌─ drop_impls.fe:126:13
     │
-114 │     let f = Buf::drop
+126 │     let f = Buf::drop
     │             ^^^^^^^^^ a value is destroyed once, where its owner gives it up
     │
     = call `core::mem::drop` to destroy a value early

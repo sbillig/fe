@@ -38,7 +38,7 @@ use crate::span::DynLazySpan;
 
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::trait_def::ImplementorId;
+use crate::analysis::ty::trait_def::{ImplementorId, impls_for_trait_def};
 use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, VariantView,
     WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
@@ -1027,8 +1027,15 @@ impl<'db> ImplTrait<'db> {
         let Some(adt) = ty.adt_def(db).filter(|_| distinct_params) else {
             return Some(ty::diagnostics::ImplDiag::DropImplNotGeneric { primary, ty }.into());
         };
-        let assumptions = constraints_for(db, self.into());
-        if ty::ty_is_copy(db, self.scope(), ty, assumptions) {
+        // Any `Copy` implementation counts, whatever its bounds: a conditional
+        // one would still make some instances both copied and destroyed. Only
+        // the type's own ingot can implement a core trait for it.
+        let copy = ty::corelib::resolve_core_trait(db, self.scope(), &["marker", "Copy"])?;
+        let adt_ty = ty.base_ty(db);
+        if impls_for_trait_def(db, adt.ingot(db), copy)
+            .iter()
+            .any(|implementor| implementor.self_ty(db).base_ty(db) == adt_ty)
+        {
             return Some(ty::diagnostics::ImplDiag::DropOnCopy { primary, ty }.into());
         }
         let declared =
