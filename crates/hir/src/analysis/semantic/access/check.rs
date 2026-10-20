@@ -16,6 +16,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::{
+    DropElaboration, DropFlagPoint, DropFlagUpdate, DropPart, DropStep,
     domain::Domains,
     place::{AbsPlace, Base, Path, Step, path_of, paths_overlap},
     space::{PathSpace, PlaceStep},
@@ -24,7 +25,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SemOrigin, SemanticInstance, SemanticInstanceKey,
+            SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex,
             access::{control::semantic_may_return, projection_result_spaces},
             definite_assignment::literal_index,
             diagnostics::{
@@ -33,23 +34,26 @@ use crate::{
             effect_param_site, get_or_build_semantic_instance,
             instance::row_expansion_for_key,
             normalized::{
-                NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NOperand,
-                NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind, NStructuralPath,
-                NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, ReadMode,
-                access::AccessTarget,
+                NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue,
+                NExpr, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
+                NStatementKind, NStructuralPath, NTerminatorKind, NValueDefinition, NValueId,
+                NormalizedBody, ReadMode, access::AccessTarget,
             },
         },
         ty::{
+            adt_def::AdtRef,
             corelib::{
                 MemoryAccessKind, bounded_by_sealed_capabilities, effect_key_state_access,
-                external_call_state_access, is_sealed_evm_capability,
+                external_call_state_access, is_sealed_evm_capability, resolve_core_trait,
             },
+            drop_glue::{adt_drop_impl, ty_has_drop_glue},
             provider::{AddressSpace, provider_semantics},
             shape::Shape,
+            trait_lower::lower_impl_trait,
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding, infer_body},
             ty_def::{BorrowKind, CapabilityKind, TyId},
-            ty_is_snapshot,
+            ty_is_copy, ty_is_snapshot,
         },
     },
     hir_def::{CallableDef, FuncParamMode, Partial, Stmt, scope_graph::ScopeId},
@@ -110,14 +114,38 @@ struct State {
     open: BTreeSet<TokenId>,
     /// Possibly moved (or uninitialized) values, roots and parameter paths.
     moved: BTreeSet<(MoveKey, Path)>,
+    /// The entries of `moved` moved on every path, which a drop skips.
+    definitely_moved: BTreeSet<(MoveKey, Path)>,
 }
 
 impl State {
     fn join(&mut self, other: &Self) -> bool {
-        let before = (self.open.len(), self.moved.len());
+        let before = (
+            self.open.len(),
+            self.moved.len(),
+            self.definitely_moved.len(),
+        );
         self.open.extend(other.open.iter().copied());
         self.moved.extend(other.moved.iter().cloned());
-        before != (self.open.len(), self.moved.len())
+        self.definitely_moved
+            .retain(|entry| other.definitely_moved.contains(entry));
+        before
+            != (
+                self.open.len(),
+                self.moved.len(),
+                self.definitely_moved.len(),
+            )
+    }
+
+    fn record_move(&mut self, entry: (MoveKey, Path)) {
+        self.definitely_moved.insert(entry.clone());
+        self.moved.insert(entry);
+    }
+
+    /// Initializes the entries `initialized` selects.
+    fn initialize(&mut self, initialized: impl Fn(&(MoveKey, Path)) -> bool) {
+        self.moved.retain(|entry| !initialized(entry));
+        self.definitely_moved.retain(|entry| !initialized(entry));
     }
 }
 
@@ -181,6 +209,10 @@ pub(super) struct Analysis<'a, 'db> {
     divergence: Vec<Option<usize>>,
     /// Whether transfer functions report violations.
     checking: bool,
+    /// The parts each drop destroys, as the check finds them.
+    drop_parts: Vec<(NStatementId, Vec<DropPart>)>,
+    /// The paths whose initialization a flag tracks, by flag.
+    drop_flags: Vec<(MoveKey, Path)>,
 }
 
 impl<'a, 'db> Analysis<'a, 'db> {
@@ -237,6 +269,8 @@ impl<'a, 'db> Analysis<'a, 'db> {
             moved_at: FxHashMap::default(),
             divergence: vec![None; body.blocks.len()],
             checking: false,
+            drop_parts: Vec::new(),
+            drop_flags: Vec::new(),
         };
         if divergence {
             for (block, data) in body.blocks.iter().enumerate() {
@@ -360,9 +394,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             if let NRootKind::LocalSlot { binding } = &root.kind
                 && !binding.is_some_and(|binding| entry_bindings.contains(&binding))
             {
-                state
-                    .moved
-                    .insert((MoveKey::Root(index as u32), Path::new()));
+                state.record_move((MoveKey::Root(index as u32), Path::new()));
             }
         }
         self.entry[body.entry.index()] = Some(state);
@@ -663,7 +695,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
 
     fn flow(&mut self, statement: &NStatement<'db>, changed: &mut bool) {
         match &statement.kind {
-            NStatementKind::End { .. } => {}
+            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
             NStatementKind::Store { destination, value } => {
                 let held = self.values[value.value.index()].clone();
                 if held.is_empty() {
@@ -1140,9 +1172,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     fn block_entry(&self, block: NBlockId) -> Option<State> {
         let mut state = self.entry[block.index()].clone()?;
         for param in &self.body.blocks[block.index()].params {
-            state
-                .moved
-                .retain(|(key, _)| *key != MoveKey::Value(*param));
+            state.initialize(|(key, _)| *key == MoveKey::Value(*param));
         }
         Some(state)
     }
@@ -1219,15 +1249,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
             && let AccessTarget::Value { operand, .. } = access.target
             && access.kind == MemoryAccessKind::Move
         {
-            moved
-                .moved
-                .insert((MoveKey::Value(operand.value), Path::new()));
+            moved.record_move((MoveKey::Value(operand.value), Path::new()));
         }
         for successor in kind.successors() {
             let mut edge = moved.clone();
             for arg in &successor.args {
                 if arg.mode == ReadMode::Move {
-                    edge.moved.insert((MoveKey::Value(arg.value), Path::new()));
+                    edge.record_move((MoveKey::Value(arg.value), Path::new()));
                 }
             }
             match &mut self.entry[successor.block.index()] {
@@ -1280,7 +1308,10 @@ impl<'a, 'db> Analysis<'a, 'db> {
         };
         let mut unknown = None;
         match &statement.kind {
-            NStatementKind::Store { destination, .. } if !known(destination) => {
+            NStatementKind::Store { destination, .. }
+            | NStatementKind::Drop {
+                target: NDropTarget::Place(destination),
+            } if !known(destination) => {
                 unknown = Some(destination.origin);
             }
             NStatementKind::Define { expr, .. } => expr.for_each_place_operand(|place| {
@@ -1288,7 +1319,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     unknown = Some(place.origin);
                 }
             }),
-            NStatementKind::Store { .. } | NStatementKind::End { .. } => {}
+            NStatementKind::Store { .. }
+            | NStatementKind::End { .. }
+            | NStatementKind::Drop { .. } => {}
         }
         match unknown {
             Some(origin) => Err(self.diag(
@@ -1608,9 +1641,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
             let hole = ended.iter().find_map(|token| {
                 Some((*token, self.hole(state, MoveKey::Access(*token))?.clone()))
             });
-            state
-                .moved
-                .retain(|(key, _)| !matches!(key, MoveKey::Access(token) if ended.contains(token)));
+            state.initialize(
+                |(key, _)| matches!(key, MoveKey::Access(token) if ended.contains(token)),
+            );
             return match hole {
                 Some((token, hole)) => {
                     let mut diag = self.moved_diag(
@@ -1666,15 +1699,24 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 if let Some(key) = key
                     && !path.contains(&Step::Index(None))
                 {
-                    state.moved.retain(|(moved, moved_path)| {
-                        *moved != key || !moved_path.starts_with(&path)
+                    state.initialize(|(moved, moved_path)| {
+                        *moved == key && moved_path.starts_with(&path)
                     });
                 }
             }
             NStatementKind::Define { result, expr } => {
-                state
-                    .moved
-                    .retain(|(key, _)| *key != MoveKey::Value(*result));
+                state.initialize(|(key, _)| *key == MoveKey::Value(*result));
+                // A value forwarded by copy is handed on when it owns
+                // something to destroy: two owners would destroy it twice. An
+                // inspection reads it in place.
+                if let NExpr::Forward { src } = expr
+                    && src.mode == ReadMode::Copy
+                    && self.owns_drop_glue(self.body.values[src.value.index()].ty)
+                {
+                    let moved = (MoveKey::Value(src.value), Path::new());
+                    self.moved_at.entry(moved.clone()).or_insert(origin);
+                    state.record_move(moved);
+                }
                 if let NExpr::Call {
                     callee,
                     args,
@@ -1712,9 +1754,442 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 }
                 state.open.extend(opened);
             }
+            NStatementKind::Drop { target } => {
+                let result = self.drop_target(statement.id, target, state, origin);
+                self.report(result)?;
+            }
             NStatementKind::End { .. } => {}
         }
         Ok(())
+    }
+
+    /// Whether a value of `ty` may own something to destroy. A `Copy` value
+    /// owns nothing.
+    fn owns_drop_glue(&self, ty: TyId<'db>) -> bool {
+        ty_has_drop_glue(self.db, ty) && !ty_is_copy(self.db, self.scope, ty, self.assumptions)
+    }
+
+    /// A value whose type implements `Drop` is destroyed whole, so no part
+    /// of it moves out; its own `drop` destroys `self` field by field, and
+    /// never moves it whole. `prefix_ty` is the type after a path prefix of
+    /// a length.
+    fn check_drop_move(
+        &self,
+        key: MoveKey,
+        prefix_ty: impl Fn(usize) -> Option<TyId<'db>>,
+        len: usize,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), Diag<'db>> {
+        let in_own_drop = self.is_drop_self(key);
+        if in_own_drop && len == 0 {
+            return Err(self.diag(
+                SemanticDiagnosticKind::MoveConflict,
+                origin,
+                "`drop` cannot move `self` whole: it is destroyed field by field".into(),
+            ));
+        }
+        let skip = usize::from(in_own_drop);
+        for ty in (skip..len).filter_map(prefix_ty) {
+            if ty
+                .adt_def(self.db)
+                .is_some_and(|adt| adt_drop_impl(self.db, adt.adt_ref(self.db)).is_some())
+            {
+                return Err(self.diag(
+                    SemanticDiagnosticKind::MoveConflict,
+                    origin,
+                    format!(
+                        "cannot move out of `{}`, which implements `Drop`",
+                        ty.pretty_print(self.db)
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `key` is the `self` of the `Drop::drop` being checked.
+    fn is_drop_self(&self, key: MoveKey) -> bool {
+        let BodyOwner::Func(func, _) = self.instance.key(self.db).owner(self.db) else {
+            return false;
+        };
+        let self_param = match key {
+            MoveKey::Value(value) => matches!(
+                self.body.values[value.index()].definition,
+                NValueDefinition::EntryParam { param: 0 }
+            ),
+            MoveKey::Root(root) => matches!(
+                self.body.roots[root as usize].kind,
+                NRootKind::ParamPlace { param: 0 }
+            ),
+            MoveKey::Param(_) | MoveKey::Access(_) => false,
+        };
+        self_param
+            && func
+                .containing_impl_trait(self.db)
+                .is_some_and(|impl_trait| {
+                    lower_impl_trait(self.db, impl_trait).is_some_and(|implementor| {
+                        Some(implementor.trait_def(self.db))
+                            == resolve_core_trait(self.db, self.scope, &["ops", "Drop"])
+                    })
+                })
+    }
+
+    /// Whether `value` owns what it holds, rather than reading a place or
+    /// a value in place.
+    fn value_owns(&self, value: NValueId) -> bool {
+        !matches!(
+            self.body.defining_expr(value),
+            Some((
+                _,
+                NExpr::Load {
+                    mode: ReadMode::Read,
+                    ..
+                } | NExpr::Forward {
+                    src: NOperand {
+                        mode: ReadMode::Read,
+                        ..
+                    },
+                } | NExpr::ProjectValue {
+                    value: NOperand {
+                        mode: ReadMode::Read,
+                        ..
+                    },
+                    ..
+                }
+            ))
+        )
+    }
+
+    /// The parts of what `key` holds at `path` that a drop destroys: those
+    /// initialized on some path, each with the flags of the paths on its way
+    /// that only some paths move. A place no key tracks is initialized.
+    fn drop_parts(
+        &mut self,
+        key: Option<MoveKey>,
+        path: &Path,
+        ty: TyId<'db>,
+        state: &State,
+    ) -> Vec<DropPart> {
+        let Some(key) = key else {
+            return vec![DropPart {
+                path: Vec::new(),
+                flags: Vec::new(),
+            }];
+        };
+        let mut flags = Vec::new();
+        for len in 0..path.len() {
+            let enclosing = (key, path[..len].iter().copied().collect());
+            if state.definitely_moved.contains(&enclosing) {
+                return Vec::new();
+            }
+            if state.moved.contains(&enclosing) {
+                flags.push(self.drop_flag(enclosing));
+            }
+        }
+        let mut parts = Vec::new();
+        self.collect_drop_parts(key, path, path.len(), ty, flags, state, &mut parts);
+        parts
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_drop_parts(
+        &mut self,
+        key: MoveKey,
+        path: &Path,
+        base: usize,
+        ty: TyId<'db>,
+        mut flags: Vec<u32>,
+        state: &State,
+        parts: &mut Vec<DropPart>,
+    ) {
+        let entry = (key, path.clone());
+        if !self.owns_drop_glue(ty) || state.definitely_moved.contains(&entry) {
+            return;
+        }
+        if state.moved.contains(&entry) {
+            flags.push(self.drop_flag(entry));
+        }
+        let partly_moved = state.moved.iter().any(|(moved, moved_path)| {
+            *moved == key && moved_path.len() > path.len() && moved_path.starts_with(path)
+        });
+        if !partly_moved {
+            parts.push(DropPart {
+                path: path[base..].iter().map(|step| drop_step(*step)).collect(),
+                flags,
+            });
+            return;
+        }
+        for (step, component_ty) in self.drop_components(ty) {
+            let mut component = path.clone();
+            component.push(step);
+            self.collect_drop_parts(
+                key,
+                &component,
+                base,
+                component_ty,
+                flags.clone(),
+                state,
+                parts,
+            );
+        }
+    }
+
+    /// The components of a value of `ty` its drop destroys one by one when
+    /// some are moved out: fields, every variant's fields, or elements.
+    fn drop_components(&self, ty: TyId<'db>) -> Vec<(Step, TyId<'db>)> {
+        let (db, instance) = (self.db, self.instance);
+        if let Some(adt) = ty.adt_def(db)
+            && matches!(adt.adt_ref(db), AdtRef::Enum(_))
+        {
+            return (0..adt.fields(db).len() as u16)
+                .flat_map(|variant| {
+                    instance
+                        .normalized_enum_variant_field_tys(db, ty, VariantIndex(variant))
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(field, &ty)| {
+                            (
+                                Step::Variant {
+                                    variant,
+                                    field: field as u16,
+                                },
+                                ty,
+                            )
+                        })
+                })
+                .collect();
+        }
+        if ty.is_array(db)
+            && let Some(len) = ty.array_len(db)
+        {
+            let element = instance.normalized_ty(db, ty.generic_args(db)[0]);
+            return (0..len)
+                .map(|index| (Step::Index(Some(index)), element))
+                .collect();
+        }
+        instance
+            .normalized_field_types(db, ty)
+            .iter()
+            .enumerate()
+            .map(|(field, &ty)| (Step::Field(field as u16), ty))
+            .collect()
+    }
+
+    /// The flag tracking whether `entry` is initialized.
+    fn drop_flag(&mut self, entry: (MoveKey, Path)) -> u32 {
+        let index = self
+            .drop_flags
+            .iter()
+            .position(|flag| *flag == entry)
+            .unwrap_or_else(|| {
+                self.drop_flags.push(entry);
+                self.drop_flags.len() - 1
+            });
+        index as u32
+    }
+
+    /// What the body's drops destroy, with the flags they consult set where
+    /// the flow moves or initializes each flagged path.
+    fn drop_elaboration(&mut self) -> Result<DropElaboration, Diag<'db>> {
+        let mut drops = std::mem::take(&mut self.drop_parts);
+        drops.sort_by_key(|(statement, _)| *statement);
+        let entry = self.entry[self.body.entry.index()]
+            .clone()
+            .unwrap_or_default();
+        let flags = self
+            .drop_flags
+            .iter()
+            .map(|flag| !self.flag_moved(&entry.moved, flag))
+            .collect();
+        let flag_updates = if self.drop_flags.is_empty() {
+            Vec::new()
+        } else {
+            self.drop_flag_updates()?
+        };
+        Ok(DropElaboration {
+            drops,
+            flags,
+            flag_updates,
+        })
+    }
+
+    /// Whether an entry of `moved` covers the flagged path.
+    fn flag_moved(&self, moved: &BTreeSet<(MoveKey, Path)>, flag: &(MoveKey, Path)) -> bool {
+        moved
+            .iter()
+            .any(|(key, path)| *key == flag.0 && flag.1.starts_with(path))
+    }
+
+    /// Replays the solved flow, recording where each flagged path is moved
+    /// or initialized.
+    fn drop_flag_updates(&mut self) -> Result<Vec<DropFlagUpdate>, Diag<'db>> {
+        self.checking = false;
+        let mut updates = Vec::new();
+        for block in self.reverse_postorder() {
+            let Some(before) = self.entry[block.index()].clone() else {
+                continue;
+            };
+            let mut state = self
+                .block_entry(block)
+                .expect("a reached block has an entry state");
+            self.record_flag_updates(
+                &before,
+                &state,
+                DropFlagPoint::BlockStart(block),
+                &mut updates,
+            );
+            let statements: Vec<_> = self.statements(block).collect();
+            for (_, statement) in statements {
+                let before = state.clone();
+                let _ = self.transfer(statement, &mut state);
+                self.record_flag_updates(
+                    &before,
+                    &state,
+                    DropFlagPoint::After(statement.id),
+                    &mut updates,
+                );
+            }
+            if self.diverges(block) {
+                continue;
+            }
+            // A terminator's moves happen on its way out.
+            let kind = &self.body.blocks[block.index()].terminator.kind;
+            let successors = kind.successors();
+            let mut after = state.clone();
+            if let Some(access) = kind.access(self.db, self.body)
+                && let AccessTarget::Value { operand, .. } = access.target
+                && access.kind == MemoryAccessKind::Move
+            {
+                after.record_move((MoveKey::Value(operand.value), Path::new()));
+            }
+            for successor in &successors {
+                let mut edge = after.clone();
+                for arg in &successor.args {
+                    if arg.mode == ReadMode::Move {
+                        edge.record_move((MoveKey::Value(arg.value), Path::new()));
+                    }
+                }
+                let mut moves = Vec::new();
+                self.record_flag_updates(
+                    &state,
+                    &edge,
+                    DropFlagPoint::BeforeTerminator(block),
+                    &mut moves,
+                );
+                let mut everywhere = Vec::new();
+                self.record_flag_updates(
+                    &state,
+                    &after,
+                    DropFlagPoint::BeforeTerminator(block),
+                    &mut everywhere,
+                );
+                if moves.len() != everywhere.len() && successors.len() > 1 {
+                    return Err(self.diag(
+                        SemanticDiagnosticKind::Internal,
+                        self.body.blocks[block.index()].terminator.origin,
+                        "a value is moved into one branch only and destroyed after it".into(),
+                    ));
+                }
+                if successor.block == successors[0].block {
+                    updates.extend(moves);
+                }
+            }
+        }
+        self.checking = true;
+        Ok(updates)
+    }
+
+    fn record_flag_updates(
+        &self,
+        before: &State,
+        after: &State,
+        at: DropFlagPoint,
+        updates: &mut Vec<DropFlagUpdate>,
+    ) {
+        for (flag, tracked) in self.drop_flags.iter().enumerate() {
+            let covers =
+                |entry: &(MoveKey, Path)| entry.0 == tracked.0 && tracked.1.starts_with(&entry.1);
+            let moved = after
+                .definitely_moved
+                .iter()
+                .any(|entry| covers(entry) && !before.definitely_moved.contains(entry));
+            let initialized = before
+                .moved
+                .iter()
+                .any(|entry| covers(entry) && !after.moved.contains(entry));
+            if moved || initialized {
+                updates.push(DropFlagUpdate {
+                    at,
+                    flag: flag as u32,
+                    initialized: !moved,
+                });
+            }
+        }
+    }
+
+    /// A drop destroys whatever of its target is initialized, so a part
+    /// moved out is no error. Destroying a place writes it: no other access
+    /// may be open on it.
+    fn drop_target(
+        &mut self,
+        statement: NStatementId,
+        target: &NDropTarget<'db>,
+        state: &mut State,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), Diag<'db>> {
+        let place = match target {
+            NDropTarget::Value(value) => {
+                let entry = (MoveKey::Value(*value), Path::new());
+                if self.checking {
+                    let parts = if self.value_owns(*value) {
+                        self.drop_parts(
+                            Some(entry.0),
+                            &entry.1,
+                            self.body.values[value.index()].ty,
+                            state,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    self.drop_parts.push((statement, parts));
+                }
+                state.record_move(entry);
+                return Ok(());
+            }
+            NDropTarget::Place(place) => place,
+        };
+        let resolved = self.resolve(place);
+        let path = self.path(&place.path);
+        let key = match place.base {
+            NPlaceBase::Root(root) if self.root_domain[root.index()].is_none() => {
+                Some(MoveKey::Root(root.index() as u32))
+            }
+            NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
+            NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
+        };
+        if self.checking {
+            let parts = self.drop_parts(key, &path, place.ty, state);
+            self.drop_parts.push((statement, parts));
+        }
+        // `[*]` names no definite element; the store a drop precedes
+        // initializes it again.
+        if let Some(key) = key
+            && !path.contains(&Step::Index(None))
+        {
+            state.record_move((key, path));
+        }
+        if self.holds_nothing(place.ty) {
+            return Ok(());
+        }
+        self.check_conflicts(
+            state,
+            &resolved.regions,
+            BorrowKind::Mut,
+            &resolved.authority,
+            &[],
+            MemoryAccessKind::Write,
+            origin,
+        )
     }
 
     /// What tracks the initialization of a carrier's referent: the data
@@ -1750,12 +2225,14 @@ impl<'a, 'db> Analysis<'a, 'db> {
     fn use_value(
         &mut self,
         operand: NOperand,
-        path: Option<&NStructuralPath>,
+        structural: Option<&NStructuralPath>,
         state: &mut State,
         consume: bool,
         origin: SemOrigin<'db>,
     ) -> Result<(), Diag<'db>> {
-        let path = path.map(|path| self.path(&path.0)).unwrap_or_default();
+        let path = structural
+            .map(|path| self.path(&path.0))
+            .unwrap_or_default();
         let key = MoveKey::Value(operand.value);
         if let Some(found) = state
             .moved
@@ -1774,10 +2251,22 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 .as_capability(self.db)
                 .is_none()
         {
+            let body = self.body;
+            self.check_drop_move(
+                key,
+                |len| match structural {
+                    Some(structural) => {
+                        body.value_prefix_ty(self.db, operand.value, &structural.0, len)
+                    }
+                    None => body.value(operand.value).map(|value| value.ty),
+                },
+                path.len(),
+                operand_origin(operand, origin),
+            )?;
             self.moved_at
                 .entry((key, path.clone()))
                 .or_insert(operand_origin(operand, origin));
-            state.moved.insert((key, path));
+            state.record_move((key, path));
         }
         Ok(())
     }
@@ -1862,6 +2351,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 return Err(self.moved_diag(message, origin, found));
             }
             if kind == MemoryAccessKind::Move {
+                let body = self.body;
+                self.check_drop_move(
+                    key,
+                    |len| body.place_prefix_ty(self.db, place, len),
+                    path.len(),
+                    origin,
+                )?;
                 // `[*]` names no definite element to restore.
                 if path.contains(&Step::Index(None)) {
                     return Err(self.diag(
@@ -1883,7 +2379,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     ));
                 }
                 self.moved_at.entry((key, path.clone())).or_insert(origin);
-                state.moved.insert((key, path));
+                state.record_move((key, path));
             }
         }
         let writes = kind != MemoryAccessKind::Read;
@@ -2544,15 +3040,29 @@ fn specific_origin<'db>(first: SemOrigin<'db>, second: SemOrigin<'db>) -> SemOri
 }
 
 /// Checks a body, returning its warnings and its result spaces.
+/// What checking a body establishes for its callers and for runtime
+/// lowering.
+pub(super) struct CheckedBody<'db> {
+    pub warnings: Vec<Diag<'db>>,
+    /// A projection's result space per access component.
+    pub spaces: Vec<Option<AddressSpace>>,
+    pub drops: DropElaboration,
+}
+
 pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
-) -> Result<(Vec<Diag<'db>>, Vec<Option<AddressSpace>>), Diag<'db>> {
+) -> Result<CheckedBody<'db>, Diag<'db>> {
     let mut analysis = Analysis::new(db, instance, body, true);
     analysis.solve();
     let spaces = analysis.check()?;
-    Ok((analysis.discarded_writes(), spaces))
+    let drops = analysis.drop_elaboration()?;
+    Ok(CheckedBody {
+        warnings: analysis.discarded_writes(),
+        spaces,
+        drops,
+    })
 }
 
 /// Adds `extra` to `parents`, once each.
@@ -2560,6 +3070,16 @@ fn add_parents(parents: &mut TokenSet, extra: &[TokenId]) {
     for &token in extra {
         if !parents.contains(&token) {
             parents.push(token);
+        }
+    }
+}
+
+fn drop_step(step: Step) -> DropStep {
+    match step {
+        Step::Field(field) => DropStep::Field(field),
+        Step::Variant { variant, field } => DropStep::Variant { variant, field },
+        Step::Index(index) => {
+            DropStep::Index(index.expect("a part of a drop lies at constant indices"))
         }
     }
 }

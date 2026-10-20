@@ -180,11 +180,18 @@ pub fn verify_normalized_body<'db>(
                     }
                     verify_mutation(db, body, destination, true)?;
                 }
-                NStatementKind::End { access } => {
+                NStatementKind::End { access }
+                | NStatementKind::Drop {
+                    target: NDropTarget::Value(access),
+                } => {
                     if body.value(*access).is_none() {
                         return Err(NormalizedBodyVerifyError::MissingValue(*access));
                     }
                 }
+                // Destroying an immutable binding's value is no mutation.
+                NStatementKind::Drop {
+                    target: NDropTarget::Place(place),
+                } => verify_place(db, body, place)?,
             }
         }
         verify_terminator(db, body, &block.terminator.kind)?;
@@ -1067,7 +1074,13 @@ fn verify_value_dominance(body: &NormalizedBody<'_>) -> Result<(), NormalizedBod
                     uses.push(value.value);
                     uses.extend(body.place_values(destination));
                 }
-                NStatementKind::End { access } => uses.push(*access),
+                NStatementKind::End { access }
+                | NStatementKind::Drop {
+                    target: NDropTarget::Value(access),
+                } => uses.push(*access),
+                NStatementKind::Drop {
+                    target: NDropTarget::Place(place),
+                } => uses.extend(body.place_values(place)),
             }
             for value in uses {
                 verify_value_dominates_use(body, &dominators, value, block_id, statement_index)?;
