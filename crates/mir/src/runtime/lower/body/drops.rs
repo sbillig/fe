@@ -516,7 +516,7 @@ fn runtime_needs_drop_cycle_initial<'db>(
     _ty: TyId<'db>,
     _target: RuntimeTarget,
 ) -> bool {
-    true
+    false
 }
 
 fn runtime_needs_drop_cycle_recover<'db>(
@@ -531,8 +531,9 @@ fn runtime_needs_drop_cycle_recover<'db>(
 
 /// Whether destroying a value of `ty` does anything on `target`. Natively,
 /// every value with drop glue is destroyed. On EVM, a part is destroyed when
-/// its `drop` has an effect there; a type that recursively holds itself is
-/// assumed to have one.
+/// its `drop` has an effect there. As for effects, recursion adds nothing: a
+/// type that holds itself, such as a list of boxed nodes, needs destroying
+/// only if something it holds does.
 #[salsa::tracked(cycle_fn = runtime_needs_drop_cycle_recover, cycle_initial = runtime_needs_drop_cycle_initial)]
 pub(crate) fn runtime_needs_drop<'db>(
     db: &'db dyn MirDb,
