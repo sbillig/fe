@@ -98,23 +98,33 @@ error[8-0037]: effect `Pair` must be mutable when calling `items`
     │
     = use a mutable binding or pass a mutable reference in the `with` block
 
-error[8-0037]: effect `Store` must be mutable when calling `needs_mut`
-    ┌─ maybe_mut_effects.fe:116:5
+error[8-0037]: effect `RawStorage` must be mutable when calling `pair_at`
+    ┌─ maybe_mut_effects.fe:117:37
     │
-115 │ fn pass_on_in_ref_body(_ s: mut? Store) -> mut? u256 uses (store: mut? Store) {
+116 │ fn nested_split_with_read() uses (storage: RawStorage) {
+    │                                   ------------------- effect `RawStorage` is provided here
+117 │     let ((mut a, b), c) = unsafe { (pair_at(0), storage_at<u256>(2)) }
+    │                                     ^^^^^^^^^^ `pair_at` requires `mut RawStorage`
+    │
+    = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `Store` must be mutable when calling `needs_mut`
+    ┌─ maybe_mut_effects.fe:128:5
+    │
+127 │ fn pass_on_in_ref_body(_ s: mut? Store) -> mut? u256 uses (store: mut? Store) {
     │                                                            ----------------- effect `Store` is provided here
-116 │     needs_mut()
+128 │     needs_mut()
     │     ^^^^^^^^^^^ `needs_mut` requires `mut Store`
     │
     = `store` is `mut?`, which a `mut?` function's `ref` body only reads
 
 error[8-0066]: mutable borrow requires a mutable place
-    ┌─ maybe_mut_effects.fe:117:15
+    ┌─ maybe_mut_effects.fe:129:15
     │
-115 │ fn pass_on_in_ref_body(_ s: mut? Store) -> mut? u256 uses (store: mut? Store) {
+127 │ fn pass_on_in_ref_body(_ s: mut? Store) -> mut? u256 uses (store: mut? Store) {
     │                          - `s` does not provide mutable access
-116 │     needs_mut()
-117 │     takes_mut(mut s)
+128 │     needs_mut()
+129 │     takes_mut(mut s)
     │               ^^^^^ cannot borrow as `mut`
     │
     = `s` is `mut?`, which a `mut?` function's `ref` body only reads
