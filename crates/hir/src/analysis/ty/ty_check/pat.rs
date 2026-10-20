@@ -32,7 +32,6 @@ enum TupleVariantResolution<'db> {
     /// A tuple struct type, e.g. `Month` in `Month(m)`.
     TupleStruct(TyId<'db>),
     Invalid,
-    UnresolvedPath,
 }
 
 struct UnpackedRestPat<'db> {
@@ -672,127 +671,103 @@ impl<'db> TyChecker<'db> {
             );
         };
 
-        let (variant, expected_elems) = match self.resolve_tuple_variant_pat(pat, *path) {
-            TupleVariantResolution::Resolved(variant, expected_elems) => (variant, expected_elems),
-            TupleVariantResolution::TupleStruct(ty) => {
-                return self.check_tuple_struct_pat(pat, ty, elems, expected);
+        let pat_span: crate::span::DynLazySpan<'db> = pat.span(self.body()).into();
+        match self.resolve_tuple_variant_pat(pat, *path) {
+            TupleVariantResolution::Resolved(variant, expected_elems) => {
+                let (semantic_ty, variant_ty) =
+                    self.equate_nominal_pat_ty(variant.ty, expected, pat_span);
+                let elem_tys =
+                    self.instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems);
+                let ctor = ConstructorKind::Variant(variant.variant, semantic_ty);
+                self.check_tuple_like_pat_fields(
+                    pat,
+                    elems,
+                    expected,
+                    (semantic_ty, variant_ty),
+                    elem_tys,
+                    ctor,
+                    true,
+                )
+            }
+            TupleVariantResolution::TupleStruct(struct_ty) => {
+                let fields_visible =
+                    self.check_tuple_struct_fields_visible(struct_ty, pat_span.clone());
+                let (semantic_ty, struct_ty) =
+                    self.equate_nominal_pat_ty(struct_ty, expected, pat_span);
+                let ctor = self.type_constructor_kind(struct_ty, semantic_ty);
+                let elem_tys = ctor.field_types(self.db);
+                self.check_tuple_like_pat_fields(
+                    pat,
+                    elems,
+                    expected,
+                    (semantic_ty, struct_ty),
+                    elem_tys,
+                    ctor,
+                    fields_visible,
+                )
             }
             TupleVariantResolution::Invalid => {
                 self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
-                return self.finish_pat_check(
-                    pat,
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    PatternAnalysisStatus::Invalid,
-                );
+                let invalid = TyId::invalid(self.db, InvalidCause::Other);
+                self.finish_pat_check(pat, invalid, invalid, PatternAnalysisStatus::Invalid)
             }
-            TupleVariantResolution::UnresolvedPath => {
-                self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
-                return self.finish_pat_check(
-                    pat,
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    PatternAnalysisStatus::Invalid,
-                );
-            }
-        };
-
-        let semantic_ty = self.equate_ty(variant.ty, expected, pat.span(self.body()).into());
-        let semantic_ty = if semantic_ty.has_invalid(self.db) {
-            semantic_ty
-        } else {
-            self.canonical_nominal_ty_from_expected(semantic_ty, expected)
-        };
-        let variant_ty = if semantic_ty.has_invalid(self.db) {
-            self.canonical_nominal_ty_from_expected(variant.ty, expected)
-        } else {
-            semantic_ty
-        };
-        let expected_len = expected_elems.len(self.db);
-        let UnpackedRestPat {
-            elem_tys: actual_elems,
-            rest_range,
-            is_valid,
-        } = self.unpack_rest_pat(elems, Some(expected_len));
-        let elem_tys = self.instantiate_tuple_variant_elem_tys(variant, variant_ty, expected_elems);
-        let fields =
-            self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(variant_ty));
-        if actual_elems.len() != expected_len {
-            let diag = BodyDiag::MismatchedFieldCount {
-                primary: pat.span(self.body()).into(),
-                expected: expected_len,
-                given: actual_elems.len(),
-            };
-
-            self.push_diag(diag);
-            return self.finish_pat_check(
-                pat,
-                expected,
-                semantic_ty,
-                PatternAnalysisStatus::Invalid,
-            );
         }
-
-        let analysis = if semantic_ty.has_invalid(self.db) || !is_valid {
-            PatternAnalysisStatus::Invalid
-        } else {
-            self.ready_constructor(
-                semantic_ty,
-                ConstructorKind::Variant(variant.variant, semantic_ty),
-                fields,
-            )
-        };
-        self.finish_pat_check(pat, expected, semantic_ty, analysis)
     }
 
-    fn check_tuple_struct_pat(
+    /// The type a pattern of the nominal type `nominal_ty` has against
+    /// `expected`, and the nominal type its fields are instantiated from:
+    /// both the canonical unified type, or `nominal_ty` canonicalized alone
+    /// when it doesn't unify.
+    fn equate_nominal_pat_ty(
         &mut self,
-        pat: PatId,
-        struct_ty: TyId<'db>,
-        elems: &[PatId],
+        nominal_ty: TyId<'db>,
         expected: TyId<'db>,
-    ) -> PatCheckResult<'db> {
-        let pat_span: crate::span::DynLazySpan<'db> = pat.span(self.body()).into();
-        let fields_visible = self.check_tuple_struct_fields_visible(struct_ty, pat_span.clone());
-
-        let semantic_ty = self.equate_ty(struct_ty, expected, pat_span.clone());
+        span: crate::span::DynLazySpan<'db>,
+    ) -> (TyId<'db>, TyId<'db>) {
+        let semantic_ty = self.equate_ty(nominal_ty, expected, span);
         let semantic_ty = if semantic_ty.has_invalid(self.db) {
             semantic_ty
         } else {
             self.canonical_nominal_ty_from_expected(semantic_ty, expected)
         };
-        let struct_ty = if semantic_ty.has_invalid(self.db) {
-            self.canonical_nominal_ty_from_expected(struct_ty, expected)
+        if semantic_ty.has_invalid(self.db) {
+            let nominal_ty = self.canonical_nominal_ty_from_expected(nominal_ty, expected);
+            (semantic_ty, nominal_ty)
         } else {
-            semantic_ty
-        };
-        let ctor = self.type_constructor_kind(struct_ty, semantic_ty);
-        let elem_tys = ctor.field_types(self.db);
-        let expected_len = elem_tys.len();
-        let UnpackedRestPat {
-            elem_tys: actual_elems,
-            rest_range,
-            is_valid,
-        } = self.unpack_rest_pat(elems, Some(expected_len));
-        let fields =
-            self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(struct_ty));
-        if actual_elems.len() != expected_len {
-            let diag = BodyDiag::MismatchedFieldCount {
-                primary: pat_span,
-                expected: expected_len,
-                given: actual_elems.len(),
-            };
-
-            self.push_diag(diag);
-            return self.finish_pat_check(
-                pat,
-                expected,
-                semantic_ty,
-                PatternAnalysisStatus::Invalid,
-            );
+            (semantic_ty, semantic_ty)
         }
+    }
 
-        let analysis = if semantic_ty.has_invalid(self.db) || !is_valid || !fields_visible {
+    /// Checks the elements `elems` of a tuple variant or tuple struct pattern
+    /// of type `semantic_ty` against its fields `elem_tys`.
+    #[allow(clippy::too_many_arguments)]
+    fn check_tuple_like_pat_fields(
+        &mut self,
+        pat: PatId,
+        elems: &[PatId],
+        expected: TyId<'db>,
+        (semantic_ty, nominal_ty): (TyId<'db>, TyId<'db>),
+        elem_tys: Vec<TyId<'db>>,
+        ctor: ConstructorKind<'db>,
+        is_valid: bool,
+    ) -> PatCheckResult<'db> {
+        let expected_len = elem_tys.len();
+        let unpacked = self.unpack_rest_pat(elems, Some(expected_len));
+        let fields = self.check_tuple_like_pattern_elems(
+            elems,
+            &elem_tys,
+            unpacked.rest_range,
+            Some(nominal_ty),
+        );
+        let given = unpacked.elem_tys.len();
+        let analysis = if given != expected_len {
+            self.push_diag(BodyDiag::MismatchedFieldCount {
+                primary: pat.span(self.body()).into(),
+                expected: expected_len,
+                given,
+            });
+            PatternAnalysisStatus::Invalid
+        } else if semantic_ty.has_invalid(self.db) || !unpacked.is_valid || !is_valid {
             PatternAnalysisStatus::Invalid
         } else {
             self.ready_constructor(semantic_ty, ctor, fields)
@@ -863,13 +838,13 @@ impl<'db> TyChecker<'db> {
                 }
             },
             Err(err) => {
-                if !path.is_bare_ident(self.db)
+                if !self.is_named_recv_arm_pat(pat)
                     && let Some(diag) =
                         err.into_diag(self.db, path, span.clone().path(), ExpectedPathKind::Pat)
                 {
                     self.push_diag(diag);
                 }
-                TupleVariantResolution::UnresolvedPath
+                TupleVariantResolution::Invalid
             }
         }
     }
@@ -962,175 +937,130 @@ impl<'db> TyChecker<'db> {
         };
 
         let span = pat.span(self.body()).into_record_pat();
+        let pat_span: crate::span::DynLazySpan<'db> = pat.span(self.body()).into();
+        let invalid = TyId::invalid(self.db, InvalidCause::Other);
 
-        if let Some(expected) = self.expected_msg_variant_for_named_recv_pat(pat, *path, expected) {
+        // The record the pattern names, with its type, or the diagnostic for
+        // a path that names no record.
+        let (actual, record_like) = if let Some(expected) =
+            self.expected_msg_variant_for_named_recv_pat(pat, *path, expected)
+        {
             let record_like = RecordLike::from_ty(expected);
             if record_like.is_record(self.db) {
-                let analysis = self.check_record_pat_fields(record_like, pat, expected);
-                return self.finish_pat_check(pat, expected, expected, analysis);
+                (expected, Some(record_like))
+            } else {
+                let diag = BodyDiag::record_expected(self.db, pat_span, Some(record_like));
+                self.push_diag(diag);
+                (invalid, None)
             }
-
-            let diag =
-                BodyDiag::record_expected(self.db, pat.span(self.body()).into(), Some(record_like));
-            self.push_diag(diag);
-            return self.finish_pat_check(
-                pat,
-                expected,
-                TyId::invalid(self.db, InvalidCause::Other),
-                PatternAnalysisStatus::Invalid,
-            );
-        }
-
-        let lowering_cx = LoweringContext::new();
-        let (actual, analysis) = match self.resolve_path(
-            *path,
-            true,
-            span.clone().path(),
-            span.clone().into(),
-            &lowering_cx,
-        ) {
-            Ok(reso) => match reso {
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
+        } else {
+            let lowering_cx = LoweringContext::new();
+            match self.resolve_path(
+                *path,
+                true,
+                span.clone().path(),
+                span.clone().into(),
+                &lowering_cx,
+            ) {
+                Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty))
                     if RecordLike::from_ty(ty).is_record(self.db) =>
                 {
-                    let semantic_ty = self.equate_ty(ty, expected, pat.span(self.body()).into());
-                    let semantic_ty = if semantic_ty.has_invalid(self.db) {
+                    let (semantic_ty, _) = self.equate_nominal_pat_ty(ty, expected, pat_span);
+                    let record_ty = if semantic_ty.has_invalid(self.db) {
+                        ty
+                    } else {
                         semantic_ty
-                    } else {
-                        self.canonical_nominal_ty_from_expected(semantic_ty, expected)
                     };
-                    let record_like = if semantic_ty.has_invalid(self.db) {
-                        RecordLike::Type(ty)
-                    } else {
-                        RecordLike::Type(semantic_ty)
-                    };
-                    (
-                        semantic_ty,
-                        self.check_record_pat_fields(record_like, pat, semantic_ty),
-                    )
+                    (semantic_ty, Some(RecordLike::Type(record_ty)))
                 }
-
-                PathRes::Ty(ty)
-                | PathRes::TyAlias(_, ty)
-                | PathRes::Func(ty)
-                | PathRes::Const(_, ty)
-                | PathRes::TraitConst(ty, ..)
-                | PathRes::InherentConst(ty, ..) => {
-                    let diag = BodyDiag::record_expected(
-                        self.db,
-                        pat.span(self.body()).into(),
-                        Some(RecordLike::Type(ty)),
-                    );
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-
-                PathRes::Trait(trait_) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: span.into(),
-                        given: Either::Left(trait_.def(self.db).into()),
-                    };
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-
-                PathRes::EnumVariant(variant) => {
-                    let ty = variant.ty;
-                    let record_like = RecordLike::from_variant(variant);
-                    if record_like.is_record(self.db) {
-                        let semantic_ty =
-                            self.equate_ty(ty, expected, pat.span(self.body()).into());
-                        let semantic_ty = if semantic_ty.has_invalid(self.db) {
-                            semantic_ty
-                        } else {
-                            self.canonical_nominal_ty_from_expected(semantic_ty, expected)
-                        };
-                        let record_like = if semantic_ty.has_invalid(self.db) {
-                            record_like
-                        } else {
-                            RecordLike::EnumVariant(ResolvedVariant {
-                                ty: semantic_ty,
-                                ..variant
-                            })
-                        };
-                        (
-                            semantic_ty,
-                            self.check_record_pat_fields(record_like, pat, semantic_ty),
-                        )
-                    } else {
-                        let diag = BodyDiag::record_expected(
-                            self.db,
-                            pat.span(self.body()).into(),
-                            Some(record_like),
-                        );
-                        self.push_diag(diag);
-                        (
-                            TyId::invalid(self.db, InvalidCause::Other),
-                            PatternAnalysisStatus::Invalid,
-                        )
-                    }
-                }
-                PathRes::Mod(scope) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: span.into(),
-                        given: Either::Left(scope.item()),
-                    };
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-
-                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
-                    let diag =
-                        BodyDiag::record_expected(self.db, pat.span(self.body()).into(), None);
-                    self.push_diag(diag);
-                    (
-                        TyId::invalid(self.db, InvalidCause::Other),
-                        PatternAnalysisStatus::Invalid,
-                    )
-                }
-            },
-            Err(err) => {
-                // Check if expected type is a struct from a desugared msg module
-                // that matches the pattern path
-                if let Some(adt_def) = expected.adt_def(self.db)
-                    && let AdtRef::Struct(struct_) = adt_def.adt_ref(self.db)
+                Ok(PathRes::EnumVariant(variant))
+                    if RecordLike::from_variant(variant).is_record(self.db) =>
                 {
-                    // Check if the path matches the struct name
-                    if let Some(struct_name) = struct_.name(self.db).to_opt()
-                        && path.as_ident(self.db) == Some(struct_name)
-                    {
-                        // The pattern matches the expected struct type
-                        let record_like = RecordLike::from_ty(expected);
-                        if record_like.is_record(self.db) {
-                            let analysis = self.check_record_pat_fields(record_like, pat, expected);
-                            return self.finish_pat_check(pat, expected, expected, analysis);
+                    let (semantic_ty, _) =
+                        self.equate_nominal_pat_ty(variant.ty, expected, pat_span);
+                    let variant = if semantic_ty.has_invalid(self.db) {
+                        variant
+                    } else {
+                        ResolvedVariant {
+                            ty: semantic_ty,
+                            ..variant
                         }
-                    }
+                    };
+                    (semantic_ty, Some(RecordLike::EnumVariant(variant)))
                 }
-
-                if !path.is_bare_ident(self.db)
-                    && let Some(diag) =
-                        err.into_diag(self.db, *path, span.clone().path(), ExpectedPathKind::Pat)
-                {
+                Ok(reso) => {
+                    let diag = match reso {
+                        PathRes::Trait(trait_) => BodyDiag::NotValue {
+                            primary: span.into(),
+                            given: Either::Left(trait_.def(self.db).into()),
+                        },
+                        PathRes::Mod(scope) => BodyDiag::NotValue {
+                            primary: span.into(),
+                            given: Either::Left(scope.item()),
+                        },
+                        PathRes::EnumVariant(variant) => BodyDiag::record_expected(
+                            self.db,
+                            pat_span,
+                            Some(RecordLike::from_variant(variant)),
+                        ),
+                        PathRes::Ty(ty)
+                        | PathRes::TyAlias(_, ty)
+                        | PathRes::Func(ty)
+                        | PathRes::Const(_, ty)
+                        | PathRes::TraitConst(ty, ..)
+                        | PathRes::InherentConst(ty, ..) => {
+                            BodyDiag::record_expected(self.db, pat_span, Some(RecordLike::Type(ty)))
+                        }
+                        PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
+                            BodyDiag::record_expected(self.db, pat_span, None)
+                        }
+                    };
                     self.push_diag(diag);
+                    (invalid, None)
                 }
-                (
-                    TyId::invalid(self.db, InvalidCause::Other),
-                    PatternAnalysisStatus::Invalid,
-                )
+                Err(err) => {
+                    if !self.is_named_recv_arm_pat(pat)
+                        && let Some(diag) = err.into_diag(
+                            self.db,
+                            *path,
+                            span.clone().path(),
+                            ExpectedPathKind::Pat,
+                        )
+                    {
+                        self.push_diag(diag);
+                    }
+                    (invalid, None)
+                }
             }
         };
 
+        let analysis = match record_like {
+            Some(record_like) => self.check_record_pat_fields(record_like, pat, actual),
+            None => {
+                // The fields still bind their names, as values of an
+                // unknown type.
+                let Partial::Present(Pat::Record(_, fields)) = pat.data(self.db, self.body())
+                else {
+                    unreachable!()
+                };
+                for field in fields {
+                    if field.pat.is_rest(self.db, self.body()) {
+                        self.consume_rest_pat(field.pat, invalid);
+                    } else {
+                        self.check_pat(field.pat, invalid);
+                    }
+                }
+                PatternAnalysisStatus::Invalid
+            }
+        };
         self.finish_pat_check(pat, expected, actual, analysis)
+    }
+
+    /// Whether `pat` is an arm's pattern in a `recv` block that names its msg
+    /// type. Checking the block reports such a pattern that names no variant.
+    fn is_named_recv_arm_pat(&self, pat: PatId) -> bool {
+        matches!(self.env.owner().recv_arm(self.db), Some(arm) if arm.pat == pat)
+            && self.env.owner().recv_msg_path(self.db).is_some()
     }
 
     fn expected_msg_variant_for_named_recv_pat(
@@ -1139,10 +1069,9 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
         expected: TyId<'db>,
     ) -> Option<TyId<'db>> {
-        if !matches!(self.env.owner().recv_arm(self.db), Some(arm) if arm.pat == pat) {
+        if !self.is_named_recv_arm_pat(pat) {
             return None;
         }
-        self.env.owner().recv_msg_path(self.db)?;
         let path_ident = path.as_ident(self.db)?;
         let adt_def = expected.adt_def(self.db)?;
         let AdtRef::Struct(struct_) = adt_def.adt_ref(self.db) else {
