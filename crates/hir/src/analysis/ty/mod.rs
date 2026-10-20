@@ -277,7 +277,20 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             if cycle_participants.contains(&adt) {
                 continue;
             }
-            if let Some(cycle) = adt.recursive_cycle(db) {
+            // An `#[abi]` struct's ABI type holds its fields' wherever their
+            // values keep them.
+            let cycle = match adt_ref {
+                AdtRef::Struct(struct_)
+                    if matches!(
+                        struct_.origin(db),
+                        HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_))
+                    ) =>
+                {
+                    adt.recursive_cycle_through_arguments(db)
+                }
+                _ => adt.recursive_cycle(db),
+            };
+            if let Some(cycle) = cycle {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
             } else if let Some(cycle) = growing.get(&adt) {
@@ -502,7 +515,7 @@ pub(crate) fn abi_struct_field_checks<'db>(
         }
         if AdtRef::from(struct_)
             .as_adt(db)
-            .recursive_cycle(db)
+            .recursive_cycle_through_arguments(db)
             .is_some()
         {
             checks.reported_at_source.push(origin.clone());
