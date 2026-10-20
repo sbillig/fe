@@ -1,0 +1,29 @@
+use core::{Box, MemVec, Option}
+
+struct Node {
+    value: u256,
+    next: Option<Box<Node>>,
+}
+
+struct Tree {
+    value: u256,
+    children: MemVec<Tree>,
+}
+
+// On EVM, freeing does nothing, and holding itself adds no effect, so
+// destroying these owners of plain values compiles away.
+#[test]
+fn plain_recursive_types_need_no_drop_on_evm() {
+    assert(!core::mem::needs_drop<Node>())
+    assert(!core::mem::needs_drop<Tree>())
+}
+
+#[test]
+fn a_400_node_list_can_be_destroyed() {
+    var head: Option<Box<Node>> = Option::None
+    var i: u256 = 0
+    while i < 400 {
+        head = Option::Some(Box::new(Node { value: i, next: head }))
+        i += 1
+    }
+}
