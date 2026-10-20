@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/import_unsettled.fe
+---
+error[2-0004]: `X` is ambiguous
+  ┌─ import_unsettled.fe:8:9
+  │
+8 │     use X::N
+  │         ^ `X` is ambiguous
+
+error[2-0004]: `N` is ambiguous
+  ┌─ import_unsettled.fe:9:9
+  │
+9 │     use N::Y as X
+  │         ^ `N` is ambiguous
