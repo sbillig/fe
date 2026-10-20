@@ -1,0 +1,29 @@
+enum Shape {
+    Point,
+    Rect { wide: bool, tall: bool },
+}
+
+struct Flags {
+    on: bool,
+    big: bool,
+}
+
+fn rect(s: Shape) -> u8 {
+    match s {
+        Shape::Point => 0
+        Shape::Rect { wide: true, .. } => 1
+    }
+}
+
+fn flags(f: Flags) -> u8 {
+    match f {
+        Flags { on: true, big: true } => 0
+        Flags { on: false, .. } => 1
+    }
+}
+
+fn whole(s: Shape) -> u8 {
+    match s {
+        Shape::Point => 0
+    }
+}
