@@ -909,6 +909,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     },
                 )
             }
+            // The block's bindings belong to the enclosing scope: the access
+            // it evaluates to may view them, so they live as long as it may.
             Partial::Present(Expr::Block(stmts, _)) => {
                 let (tail, head) = stmts.split_last().expect("an access block has a tail");
                 for stmt in head {

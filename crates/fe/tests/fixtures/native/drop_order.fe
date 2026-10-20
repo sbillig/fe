@@ -1,4 +1,4 @@
-use core::Option
+use core::{MemBuffer, Option}
 use core::ops::Drop
 
 extern {
@@ -339,6 +339,18 @@ fn deferred_loop() {
     put(46)
 }
 
+// "-B": a block whose value is an access keeps its bindings until the end of
+// the enclosing block, so the access stays valid.
+fn access_block() {
+    let span = {
+        let buffer = MemBuffer::alloc(4)
+        let _tag = noisy(66)
+        buffer.span()
+    }
+    core::assert(span.len() == 4)
+    put(45)
+}
+
 // "ba": bindings are destroyed in reverse declaration order, whatever order
 // they are given values in.
 fn deferred_order() {
@@ -415,6 +427,8 @@ pub fn main() -> i32 {
     deferred_loop()
     put(10)
     deferred_order()
+    put(10)
+    access_block()
     put(10)
     // "d" now, and "k" when `main` returns.
     let _kept = generic(noisy(107), true)
