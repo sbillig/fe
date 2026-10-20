@@ -1348,9 +1348,10 @@ impl ContractHost for Evm {
         where T: Encode<A> + AbiSize
     {
         if !T::IS_DYNAMIC {
-            // Each fresh buffer is zeroed, and only the encoding writes it.
+            // A static encoding writes every byte of its heads, and only the
+            // encoding writes each fresh buffer.
             if T::HEAD_SIZE <= 32 {
-                let out = ptr::FixedMemBuffer<32>::alloc()
+                let out = unsafe { ptr::FixedMemBuffer<32>::alloc_uninit() }
                 unsafe {
                     value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
@@ -1358,7 +1359,7 @@ impl ContractHost for Evm {
                     )
                 }
             } else if T::HEAD_SIZE <= 64 {
-                let out = ptr::FixedMemBuffer<64>::alloc()
+                let out = unsafe { ptr::FixedMemBuffer<64>::alloc_uninit() }
                 unsafe {
                     value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
@@ -1366,7 +1367,7 @@ impl ContractHost for Evm {
                     )
                 }
             } else {
-                let out = MemBuffer::alloc(T::HEAD_SIZE as usize)
+                let out = unsafe { MemBuffer::alloc_uninit(T::HEAD_SIZE as usize) }
                 value.encode(unsafe { AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE) })
                 self.return_data(data: out.span())
             }
