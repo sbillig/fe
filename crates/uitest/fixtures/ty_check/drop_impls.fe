@@ -103,6 +103,34 @@ impl<F: Fn() -> ()> Drop for OnDrop<F> {
     }
 }
 
+// Rejected: a field's effect row has nothing to provide it in a drop.
+struct Guard<F: Fn() -> ()> {
+    f: F,
+}
+
+impl<F: Fn() -> ()> Drop for Guard<F> {
+    fn drop(own self) {
+        (self.f)()
+    }
+}
+
+struct Ctx {
+    n: u256,
+}
+
+fn needs_ctx() uses (ctx: Ctx) {}
+
+// Rejected: no caller provides an effect to a drop, but a block may.
+struct Logged {
+    n: u64,
+}
+
+impl Drop for Logged {
+    fn drop(own self) {
+        needs_ctx()
+    }
+}
+
 // Accepted: a mutable owned receiver.
 struct Counter {
     n: u64,

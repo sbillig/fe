@@ -2185,6 +2185,7 @@ impl<'db> TyChecker<'db> {
                                     primary: call_span.clone(),
                                     func,
                                     key: key_ty,
+                                    in_drop: self.env.in_drop(),
                                 };
                                 self.push_diag(diag);
                                 continue;
@@ -2217,6 +2218,7 @@ impl<'db> TyChecker<'db> {
                                     primary: call_span.clone(),
                                     func,
                                     key: key_ty,
+                                    in_drop: self.env.in_drop(),
                                 };
                                 self.push_diag(diag);
                                 continue;
@@ -2238,6 +2240,7 @@ impl<'db> TyChecker<'db> {
                                     primary: call_span.clone(),
                                     func,
                                     key: key_ty,
+                                    in_drop: self.env.in_drop(),
                                 };
                                 self.push_diag(diag);
                                 continue;
@@ -2282,6 +2285,7 @@ impl<'db> TyChecker<'db> {
                             primary: call_span.clone(),
                             func,
                             key: key_ty,
+                            in_drop: self.env.in_drop(),
                         };
                         self.push_diag(diag);
                         continue;
@@ -2394,6 +2398,7 @@ impl<'db> TyChecker<'db> {
                             primary: call_span.clone(),
                             func,
                             key: key_ty,
+                            in_drop: self.env.in_drop(),
                         },
                     });
                 }
@@ -2455,6 +2460,7 @@ impl<'db> TyChecker<'db> {
                         primary: call_span.clone(),
                         func,
                         row,
+                        in_drop: self.env.in_drop(),
                     },
                 }),
             }
