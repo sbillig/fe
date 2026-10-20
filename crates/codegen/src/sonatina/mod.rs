@@ -2263,7 +2263,7 @@ pub fn main(ptr: *u8, value: own u8) -> i32 {
     }
 
     #[test]
-    fn optimized_static_contract_return_exposes_a_scratch_allocation() {
+    fn optimized_static_contract_return_encodes_into_scratch() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("optimized_static_contract_return.fe");
         db.workspace().touch(
@@ -2295,12 +2295,11 @@ pub contract ReturnContract {
         let output = emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O1, None)
             .expect("static return contract should compile");
 
-        let returns_word = output
-            .lines()
-            .any(|line| line.contains("evm_return v") && line.ends_with(" 32.i256;"));
         assert!(
-            output.contains("evm_malloc 32.i256") && output.contains("mstore") && returns_word,
-            "optimized static return should expose one constant, non-escaping scratch allocation:\n{output}"
+            output.contains("mstore 0.i256 ")
+                && output.contains("evm_return 0.i256 32.i256;")
+                && !output.contains("evm_malloc"),
+            "optimized static return should encode into scratch memory without an allocation:\n{output}"
         );
         assert!(
             !output.contains("return_value") && !output.contains("encode_single_root_alloc"),
@@ -2360,11 +2359,7 @@ pub contract C uses (evm: mut Evm) {
 
         // The arms' root providers, module scopes, and effect provenance
         // differ, but none of them changes a helper's body.
-        for helper in [
-            &["bump"][..],
-            &["abi__store_word("],
-            &["MemBuffer", "__alloc("],
-        ] {
+        for helper in [&["bump"][..], &["abi__store_word("]] {
             let definitions = output
                 .lines()
                 .filter(|line| {
