@@ -1279,7 +1279,10 @@ pub fn revert_error<T>(_ error: own T) -> !
     unsafe { ops::revert(offset: buffer.ptr(), len: buffer.len() as u256) }
 }
 
-/// The bytes below every allocation, which an exit can overwrite.
+/// The bytes below every allocation, which an exit can overwrite. They cover
+/// the backend's free-pointer slot at 0x40, which a return or revert payload
+/// may overwrite only if nothing allocates before the exit, so encoding a
+/// payload here must not allocate.
 const SCRATCH_BYTES: u256 = 0x80
 
 extern {
