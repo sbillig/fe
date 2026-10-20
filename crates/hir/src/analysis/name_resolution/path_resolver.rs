@@ -1628,14 +1628,20 @@ fn resolve_segment<'db>(
     };
 
     let bucket = resolve_query(db, make_query(db, path, parent_scope));
-    let res = if is_tail
-        && resolve_tail_as_value
-        && let Ok(res) = bucket.pick(NameDomain::VALUE)
-    {
-        *decided_by_value = true;
-        res.clone()
-    } else {
-        pick_type_domain_from_bucket(parent_res, bucket, path)?
+    // A value that is found, or is ambiguous, decides a value tail; only one
+    // that isn't found leaves the tail to the type domain.
+    let res = match bucket.pick(NameDomain::VALUE) {
+        Ok(res) if is_tail && resolve_tail_as_value => {
+            *decided_by_value = true;
+            res.clone()
+        }
+        Err(err @ (NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)))
+            if is_tail && resolve_tail_as_value =>
+        {
+            *decided_by_value = true;
+            return Err(PathResError::from_name_res_error(err.clone(), path));
+        }
+        _ => pick_type_domain_from_bucket(parent_res, bucket, path)?,
     };
     resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx)
 }
