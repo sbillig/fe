@@ -3782,25 +3782,24 @@ impl<'db> RmirEmitter<'db> {
         });
         let builtin = |builtin, class| LoweredBuiltinCall::Expr { builtin, class };
         Some(match kind {
-            RuntimeBuiltinFuncKind::Malloc => {
+            RuntimeBuiltinFuncKind::Malloc | RuntimeBuiltinFuncKind::TryMalloc => {
                 let [size] = args else { return None };
+                let size = *size;
                 builtin(
-                    crate::runtime::RuntimeBuiltin::Malloc { size: *size },
+                    if kind == RuntimeBuiltinFuncKind::Malloc {
+                        crate::runtime::RuntimeBuiltin::Malloc { size }
+                    } else {
+                        crate::runtime::RuntimeBuiltin::TryMalloc { size }
+                    },
                     self.top_level_class_for_ty(
                         semantic_return_ty(self.db, semantic),
                         AddressSpace::Memory,
                     ),
                 )
             }
-            RuntimeBuiltinFuncKind::NativePtrIsNull => {
+            RuntimeBuiltinFuncKind::Free => {
                 let [ptr] = args else { return None };
-                builtin(
-                    crate::runtime::RuntimeBuiltin::NativePtrIsNull { ptr: *ptr },
-                    self.top_level_class_for_ty(
-                        semantic_return_ty(self.db, semantic),
-                        AddressSpace::Memory,
-                    ),
-                )
+                builtin(crate::runtime::RuntimeBuiltin::Free { ptr: *ptr }, None)
             }
             RuntimeBuiltinFuncKind::PtrOffsetBytes => {
                 let [ptr, offset] = args else { return None };
