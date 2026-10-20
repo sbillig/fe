@@ -1,4 +1,4 @@
-use core::{Box, MemArray, MemVec, Option}
+use core::{Box, MemArray, MemBuffer, MemVec, Option}
 use core::ops::Drop
 use core::ptr
 
@@ -35,6 +35,30 @@ fn values_are_destroyed_once() {
         assert(count(counter) == 1)
     }
     assert(count(counter) == 2)
+}
+
+#[test]
+fn a_deferred_binding_lives_until_its_block_ends() {
+    let counter = counter()
+    {
+        var value: Counted
+        {
+            value = Counted { counter }
+        }
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 1)
+}
+
+#[test]
+fn a_binding_given_a_value_on_every_branch_can_be_used_after() {
+    var buffer: MemBuffer
+    if true {
+        buffer = MemBuffer::alloc(8)
+    } else {
+        buffer = MemBuffer::alloc(9)
+    }
+    assert(buffer.len() == 8)
 }
 
 #[test]

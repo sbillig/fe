@@ -312,6 +312,41 @@ fn zero_sized() {
     let _guard = Guard { f: || {} }
 }
 
+// "1a", "-b" and "-", and "-0-1-.2": a binding declared without a value
+// belongs to the block declaring it, wherever an assignment gives it one.
+fn deferred_nested() {
+    var value: Noisy
+    {
+        value = noisy(97)
+    }
+    put(49)
+}
+
+fn deferred_branch(_ assign: bool) {
+    var value: Noisy
+    if assign {
+        value = noisy(98)
+    }
+    put(45)
+}
+
+fn deferred_loop() {
+    var value: Noisy
+    for tag in [48, 49, 50] {
+        value = noisy(tag)
+        put(45)
+    }
+    put(46)
+}
+
+// "ba": bindings are destroyed in reverse declaration order, whatever order
+// they are given values in.
+fn deferred_order() {
+    var first: Noisy
+    let _second = noisy(98)
+    first = noisy(97)
+}
+
 fn generic<T>(_ value: own T, _ keep: bool) -> Option<T> {
     if keep { Option::Some(value) } else { Option::None }
 }
@@ -370,6 +405,16 @@ pub fn main() -> i32 {
     folded()
     put(10)
     zero_sized()
+    put(10)
+    deferred_nested()
+    put(10)
+    deferred_branch(true)
+    put(10)
+    deferred_branch(false)
+    put(10)
+    deferred_loop()
+    put(10)
+    deferred_order()
     put(10)
     // "d" now, and "k" when `main` returns.
     let _kept = generic(noisy(107), true)

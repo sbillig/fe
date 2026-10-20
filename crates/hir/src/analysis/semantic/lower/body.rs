@@ -2179,6 +2179,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     if self.pattern_holds_access(*pat) {
                         self.extend_temporaries();
                     }
+                } else {
+                    self.hold_declared(*pat);
                 }
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
