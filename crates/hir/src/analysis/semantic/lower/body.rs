@@ -2160,9 +2160,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         Some(else_) if !self.pattern_is_irrefutable(*pat) => {
                             let then_bb = self.new_block();
                             let else_bb = self.new_block();
+                            let held = self.held_counts();
                             self.lower_pattern_branch(*pat, value, then_bb, else_bb);
                             self.switch_to(else_bb);
-                            let _ = self.lower_expr(*else_);
+                            self.without_held_since(&held, |this| {
+                                let _ = this.lower_expr(*else_);
+                            });
                             self.switch_to(then_bb);
                         }
                         _ => self.bind_pattern(*pat, value),

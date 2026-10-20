@@ -151,3 +151,19 @@ fn types_without_drop_glue_are_not_dropped() {
         &[],
     );
 }
+
+#[test]
+fn a_let_else_drops_its_bindings_only_where_they_are_bound() {
+    check(
+        "fn f(_ o: own Option<Buf>) -> u64 { let Option::Some(b) = o else { return 0 }\n consume(b) }",
+        "f",
+        // The argument, the moved `b` and `o` without its payload, then `o`
+        // whole where the `else` returns.
+        &["-", "-", "-", "*"],
+    );
+    check(
+        "fn f(_ o: own Option<Buf>) -> u64 { let Option::Some(b) = o else { return 0 }\n view(b) }",
+        "f",
+        &["*", "-", "*"],
+    );
+}

@@ -584,11 +584,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     }
                 }
                 SStmtKind::Drop { place } => {
-                    // A value this path never defined owns nothing.
                     let target = if place.path.is_empty() && !self.local_has_place(place.local) {
-                        self.current_values[place.local.index()]
-                            .last()
-                            .map(|&value| NDropTarget::Value(value))
+                        NDropTarget::Value(self.current_value(place.local)?)
                     } else {
                         let mut target =
                             self.normalize_place(raw_block, statement.origin, place)?;
@@ -600,18 +597,16 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 target,
                             )?;
                         }
-                        Some(NDropTarget::Place(target))
+                        NDropTarget::Place(target)
                     };
-                    if let Some(target) = target {
-                        let id = NStatementId::new(self.statement_count);
-                        self.statement_count += 1;
-                        self.blocks[block_index].statements.push(NStatement {
-                            id,
-                            source: Some(statement.id),
-                            origin: statement.origin,
-                            kind: NStatementKind::Drop { target },
-                        });
-                    }
+                    let id = NStatementId::new(self.statement_count);
+                    self.statement_count += 1;
+                    self.blocks[block_index].statements.push(NStatement {
+                        id,
+                        source: Some(statement.id),
+                        origin: statement.origin,
+                        kind: NStatementKind::Drop { target },
+                    });
                 }
                 SStmtKind::End { access } => {
                     // An access the normalization folded away has nothing to close.
