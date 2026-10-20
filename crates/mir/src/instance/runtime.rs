@@ -35,6 +35,15 @@ pub enum RuntimeInstanceSource<'db> {
     Synthetic(RuntimeSyntheticInstance<'db>),
 }
 
+/// The machine a runtime instance is lowered for. Destruction depends on it:
+/// EVM memory is never reclaimed, so destroying what only owns memory does
+/// nothing there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum RuntimeTarget {
+    Evm,
+    Native,
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct RuntimeInstanceKey<'db> {
@@ -52,10 +61,13 @@ impl<'db> RuntimeInstanceKey<'db> {
     }
 }
 
+/// A function lowered for a target: its interface depends only on `key`, its
+/// body and calls on the target too.
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct RuntimeInstance<'db> {
     pub key: RuntimeInstanceKey<'db>,
+    pub target: RuntimeTarget,
 }
 
 #[salsa::tracked]
@@ -118,8 +130,9 @@ impl<'db> RuntimeInstance<'db> {
 pub fn get_or_build_runtime_instance<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
+    target: RuntimeTarget,
 ) -> RuntimeInstance<'db> {
-    RuntimeInstance::new(db, key)
+    RuntimeInstance::new(db, key, target)
 }
 
 #[salsa::tracked]

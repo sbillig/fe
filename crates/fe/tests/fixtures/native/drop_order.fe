@@ -1,0 +1,237 @@
+use core::Option
+use core::ops::Drop
+
+extern {
+    fn putchar(_ c: i32) -> i32
+}
+
+fn put(_ c: i32) {
+    let _ = putchar(c)
+}
+
+// Prints its tag when destroyed.
+struct Noisy {
+    tag: i32,
+}
+
+impl Drop for Noisy {
+    fn drop(own self) {
+        put(self.tag)
+    }
+}
+
+struct Pair {
+    a: Noisy,
+    b: Noisy,
+}
+
+// Prints `n`, then its fields are destroyed.
+struct Outer {
+    inner: Noisy,
+    n: i32,
+}
+
+impl Drop for Outer {
+    fn drop(own self) {
+        put(self.n)
+    }
+}
+
+fn noisy(_ tag: i32) -> Noisy {
+    Noisy { tag }
+}
+
+fn consume(_ value: own Noisy) {}
+
+// "a." and ".a"
+fn conditional(_ moved: bool) {
+    let a = noisy(97)
+    if moved {
+        consume(a)
+    }
+    put(46)
+}
+
+// "0123": moved, left by `continue`, moved, left by `break`.
+fn looping() {
+    var i: i32 = 0
+    while i < 4 {
+        let n = noisy(48 + i)
+        if i == 1 {
+            i += 1
+            continue
+        }
+        if i == 3 {
+            break
+        }
+        consume(n)
+        i += 1
+    }
+}
+
+// "Ss" and "N"
+fn matching(_ value: own Option<Noisy>) {
+    match value {
+        Option::Some(n) => {
+            put(83)
+            consume(n)
+        }
+        Option::None => put(78)
+    }
+}
+
+// "A,B": the field left behind is destroyed at the end.
+fn partial(_ pair: own Pair) {
+    consume(pair.a)
+    put(44)
+}
+
+// "1;2"
+fn reassign() {
+    var x = noisy(49)
+    x = noisy(50)
+    put(59)
+}
+
+// Returns `x`, destroying `y`, or the reverse.
+fn early(_ first: bool) -> Noisy {
+    let x = noisy(120)
+    let y = noisy(121)
+    if first {
+        return x
+    }
+    y
+}
+
+// "oi"
+fn outer() {
+    let _value = Outer { inner: noisy(105), n: 111 }
+}
+
+// "ABC"
+fn array() {
+    let _values = [noisy(65), noisy(66), noisy(67)]
+}
+
+// "Z-[-": temporaries are destroyed at the end of their statement.
+fn temporaries() {
+    let _ = noisy(90)
+    put(45)
+    noisy(91)
+    put(45)
+}
+
+// "H-KLJI": the overwritten field, then locals in reverse, fields in order.
+fn tuple_and_field() {
+    var pair = Pair { a: noisy(72), b: noisy(73) }
+    pair.a = noisy(74)
+    let _tuple = (noisy(75), noisy(76))
+    put(45)
+}
+
+enum Either {
+    Left(Noisy),
+    Right(Noisy),
+}
+
+// "-l" and "!r": the `else` destroys the scrutinee, but no binding.
+fn let_else(_ value: own Either) {
+    let Either::Left(_x) = value else {
+        put(33)
+        return
+    }
+    put(45)
+}
+
+struct Counter {
+    held: Noisy,
+    n: i32,
+}
+
+impl Counter {
+    fn bump(mut self) {
+        self.held = noisy(self.n)
+        self.n += 1
+    }
+
+    fn swap(var own self, _ tag: i32) -> Counter {
+        self.held = noisy(tag)
+        self
+    }
+
+    fn into_held(own self) -> Noisy {
+        self.held
+    }
+}
+
+// "A-B-C--Z": receivers' fields are destroyed as they are overwritten.
+fn methods() {
+    var counter = Counter { held: noisy(65), n: 66 }
+    counter.bump()
+    put(45)
+    counter.bump()
+    put(45)
+    let swapped = counter.swap(90)
+    put(45)
+    let held = swapped.into_held()
+    put(45)
+    consume(held)
+}
+
+// "c-c": a closure's capture is destroyed once.
+fn closures() {
+    let n = noisy(99)
+    let tag = || n.tag
+    put(tag())
+    put(45)
+}
+
+fn generic<T>(_ value: own T, _ keep: bool) -> Option<T> {
+    if keep { Option::Some(value) } else { Option::None }
+}
+
+pub fn main() -> i32 {
+    conditional(true)
+    put(10)
+    conditional(false)
+    put(10)
+    looping()
+    put(10)
+    matching(Option::Some(noisy(115)))
+    put(10)
+    matching(Option::None)
+    put(10)
+    partial(Pair { a: noisy(65), b: noisy(66) })
+    put(10)
+    reassign()
+    put(10)
+    let e = early(true)
+    put(10)
+    consume(e)
+    put(10)
+    let f = early(false)
+    put(10)
+    consume(f)
+    put(10)
+    outer()
+    put(10)
+    array()
+    put(10)
+    temporaries()
+    put(10)
+    tuple_and_field()
+    put(10)
+    let_else(Either::Left(noisy(108)))
+    put(10)
+    let_else(Either::Right(noisy(114)))
+    put(10)
+    methods()
+    put(10)
+    closures()
+    put(10)
+    // "d" now, and "k" when `main` returns.
+    let _kept = generic(noisy(107), true)
+    let _dropped = generic(noisy(100), false)
+    put(10)
+    0
+}
