@@ -993,6 +993,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         );
 
         self.switch_to(failure_bb);
+        // The failure path's temporaries exist only on it, which leaves
+        // every scope.
+        self.push_drop_scope(false);
         let error = (kind == SumKind::Result).then(|| {
             SOperand::synthetic(self.emit_expr_with_origin(
                 origin,
@@ -1020,6 +1023,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             },
         );
         self.exit_empty(origin, SOperand::synthetic(exit));
+        self.take_drop_scope();
 
         self.switch_to(success_bb);
         VariantIndex(success)

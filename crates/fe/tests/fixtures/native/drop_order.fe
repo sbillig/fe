@@ -200,6 +200,23 @@ fn closures() {
     put(45)
 }
 
+fn checked(_ value: own Option<Noisy>) -> Option<Noisy> {
+    let kept = noisy(107)
+    let inner = value?
+    consume(inner)
+    put(45)
+    Option::Some(kept)
+}
+
+// "q-k" and "kQ": a failing `?` destroys what its scopes hold.
+fn try_exit(_ fail: bool) {
+    let value = if fail { Option::None } else { Option::Some(noisy(113)) }
+    match checked(value) {
+        Option::Some(_) => {}
+        Option::None => put(81)
+    }
+}
+
 fn generic<T>(_ value: own T, _ keep: bool) -> Option<T> {
     if keep { Option::Some(value) } else { Option::None }
 }
@@ -244,6 +261,10 @@ pub fn main() -> i32 {
     closures()
     put(10)
     extended()
+    put(10)
+    try_exit(false)
+    put(10)
+    try_exit(true)
     put(10)
     // "d" now, and "k" when `main` returns.
     let _kept = generic(noisy(107), true)
