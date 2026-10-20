@@ -74,6 +74,30 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         self.destroy(&owners);
     }
 
+    /// The owners each scope holds so far.
+    pub(super) fn held_counts(&self) -> Vec<usize> {
+        self.drop_scopes
+            .iter()
+            .map(|scope| scope.owners.len())
+            .collect()
+    }
+
+    /// Lowers `f` without the owners the scopes came to hold since `counts`:
+    /// it lowers a path they are not defined on, as a `let`'s `else` lies
+    /// outside the scope of the pattern's bindings.
+    pub(super) fn without_held_since(&mut self, counts: &[usize], f: impl FnOnce(&mut Self)) {
+        let held: Vec<_> = self
+            .drop_scopes
+            .iter_mut()
+            .zip(counts)
+            .map(|(scope, &count)| scope.owners.split_off(count))
+            .collect();
+        f(self);
+        for (scope, owners) in self.drop_scopes.iter_mut().zip(held) {
+            scope.owners.extend(owners);
+        }
+    }
+
     /// A block a failed condition takes on its way to `else_bb`, destroying
     /// `owners` and what the scope at `held` holds so far: the bindings and
     /// scrutinees of the conditions before it.
