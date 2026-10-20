@@ -72,7 +72,7 @@ use crate::analysis::ty::{
     provider::{ProviderTransport, provider_semantics_for_specialized_call},
     shape::{Shape, SumKind, is_param_product, sum_kind},
     trait_def::TraitInstId,
-    trait_lower::complete_impl_trait,
+    trait_lower::{complete_impl_trait, lower_impl_trait},
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
@@ -3851,6 +3851,7 @@ impl<'db> TyChecker<'db> {
     /// is a place granted by the call's session; its shape says which parts
     /// are accesses.
     fn finish_call(&mut self, expr: ExprId, callable: Callable<'db>) -> ExprProp<'db> {
+        self.check_drop_call(expr, callable.callable_def());
         let ret_ty = callable.ret_ty(self.db);
         let ret_ty = self.normalize_ty(ret_ty);
         self.report_instantiated_const_fault(&callable, ret_ty, expr);
@@ -3868,6 +3869,24 @@ impl<'db> TyChecker<'db> {
             is_mut: matches!(shape, None | Some(Shape::Access(BorrowKind::Mut, _))),
             shape,
             ..ExprProp::new(ret_ty, true)
+        }
+    }
+
+    /// `Drop::drop` runs only where the compiler destroys a value.
+    fn check_drop_call(&mut self, expr: ExprId, callee: CallableDef<'db>) {
+        let CallableDef::Func(func) = callee else {
+            return;
+        };
+        let trait_ = func.containing_trait(self.db).or_else(|| {
+            lower_impl_trait(self.db, func.containing_impl_trait(self.db)?)
+                .map(|implementor| implementor.trait_def(self.db))
+        });
+        if trait_.is_some()
+            && trait_ == resolve_core_trait(self.db, self.env.scope(), &["ops", "Drop"])
+        {
+            self.push_diag(BodyDiag::DropCalledDirectly {
+                primary: expr.span(self.body()).into(),
+            });
         }
     }
 
@@ -4035,6 +4054,10 @@ impl<'db> TyChecker<'db> {
                     if let CallableDef::Func(func) = callable.callable_def {
                         self.unify_row_provider_slots(&callable, func);
                     }
+                    // A call reports a direct `Drop::drop` as it finishes.
+                    if !is_call_callee {
+                        self.check_drop_call(expr, callable.callable_def);
+                    }
 
                     self.env
                         .register_value_path_ref(expr, ValuePathRef::FunctionItem);
@@ -4146,6 +4169,9 @@ impl<'db> TyChecker<'db> {
                     }
 
                     let method_ty = callable.ty(self.db);
+                    if !is_call_callee {
+                        self.check_drop_call(expr, callable.callable_def());
+                    }
                     self.env.register_callable(expr, callable);
                     self.env
                         .register_value_path_ref(expr, ValuePathRef::FunctionItem);
@@ -4229,6 +4255,9 @@ impl<'db> TyChecker<'db> {
                     }
 
                     let func_ty = callable.ty(self.db);
+                    if !is_call_callee {
+                        self.check_drop_call(expr, callable.callable_def());
+                    }
                     self.env.register_callable(expr, callable);
                     self.env
                         .register_value_path_ref(expr, ValuePathRef::FunctionItem);

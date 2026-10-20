@@ -5404,6 +5404,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            BodyDiag::DropCalledDirectly { primary } => CompleteDiagnostic {
+                severity,
+                message: "`Drop::drop` cannot be called directly".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "a value is destroyed once, where its owner gives it up".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec!["call `core::mem::drop` to destroy a value early".to_string()],
+                error_code,
+            },
+
             BodyDiag::AccessCapture { primary, name } => CompleteDiagnostic {
                 severity,
                 message: format!("a closure cannot capture the access `{}`", name.data(db)),
@@ -6189,6 +6201,64 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 );
                 diag.notes.push(
                     "an effect row must end in effects, or in other rows that do".to_string(),
+                );
+                diag
+            }
+
+            Self::DropImplNotGeneric { primary, ty } => {
+                let ty = ty.pretty_print(db);
+                let mut diag = primary_diag(
+                    severity,
+                    format!("`Drop` cannot be implemented for `{ty}`"),
+                    "not a struct or enum applied to the implementation's own distinct parameters",
+                    primary.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "a drop runs for every value of a type, so its implementation covers the whole type, as `impl<T> Drop for Buf<T>` does"
+                        .to_string(),
+                );
+                diag
+            }
+
+            Self::DropStricterBound {
+                primary,
+                ty,
+                stricter_bounds,
+            } => {
+                let ty = ty.pretty_print(db);
+                let mut diag = primary_diag(
+                    severity,
+                    format!("`Drop` for `{ty}` has bounds `{ty}` does not declare"),
+                    format!(
+                        "not declared by `{ty}`: {}",
+                        stricter_bounds
+                            .iter()
+                            .map(|pred| format!("`{}`", pred.pretty_print(db, true)))
+                            .join(", ")
+                    ),
+                    primary.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "a drop runs for every value of a type, so its implementation needs only the type's own bounds"
+                        .to_string(),
+                );
+                diag
+            }
+
+            Self::DropOnCopy { primary, ty } => {
+                let ty = ty.pretty_print(db);
+                let mut diag = primary_diag(
+                    severity,
+                    format!("`{ty}` cannot implement both `Copy` and `Drop`"),
+                    format!("`{ty}` is `Copy`"),
+                    primary.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "a copy duplicates whatever the value owns, and each copy would destroy it again"
+                        .to_string(),
                 );
                 diag
             }
