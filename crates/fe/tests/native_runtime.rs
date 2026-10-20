@@ -1017,6 +1017,65 @@ fn native_memory_copy_preserves_overlaps_and_reserves_the_host_symbol() {
 }
 
 #[test]
+fn native_fallible_allocation_reports_failure_and_releases_blocks() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let source = fixtures.join("fe_test/fallible_allocation.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let object = build_native_object(&source, &out, level);
+        let ir = fs::read_to_string(out.join("fallible_allocation.native.sona")).unwrap();
+        for symbol in ["malloc", "free"] {
+            assert!(ir.contains(&format!("declare external %{symbol}")), "{ir}");
+            if level == "0" {
+                assert!(ir.contains(&format!("local__{symbol}")), "{ir}");
+            }
+        }
+        let executable = out.join("controlled_allocator");
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
+            .arg(&object)
+            .arg(fixtures.join("native/fallible_allocator.c"))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "{linked:?}");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_extern_declarations_cannot_claim_host_allocator_symbols() {
+    let temp = tempdir().unwrap();
+    for symbol in ["malloc", "free"] {
+        let source = temp.path().join(format!("{symbol}.fe"));
+        fs::write(
+            &source,
+            format!(
+                "extern {{\n    fn {symbol}(_ value: i64) -> i64\n}}\npub fn main() -> i32 {{\n    let _ = {symbol}(1)\n    0\n}}\n"
+            ),
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["build", "--backend", "native", "--out-dir"])
+            .arg(temp.path().join(format!("out-{symbol}")))
+            .arg(&source)
+            .output()
+            .unwrap();
+        let output = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "{result:?}");
+        assert!(
+            output.contains(&format!(
+                "native extern symbol `{symbol}` is reserved for core memory operations"
+            )),
+            "{output}"
+        );
+    }
+}
+
+#[test]
 fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("copy_range.fe");
