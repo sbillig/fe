@@ -244,6 +244,27 @@ fn try_exit(_ fail: bool) {
     }
 }
 
+struct Settings {
+    a: u256,
+    b: u256,
+}
+
+impl Copy for Settings {}
+
+fn paired(_ settings: Settings) -> Pair {
+    Pair { a: noisy(70), b: noisy(71) }
+}
+
+// "-GF": constant folding renumbers the body runtime code is lowered from,
+// whose drops still destroy what the checked body's do.
+fn folded() {
+    var settings = Settings { a: 1, b: 2 }
+    let pair = paired(settings)
+    let _right = pair.b
+    settings.a = 0
+    put(45)
+}
+
 fn generic<T>(_ value: own T, _ keep: bool) -> Option<T> {
     if keep { Option::Some(value) } else { Option::None }
 }
@@ -298,6 +319,8 @@ pub fn main() -> i32 {
     unwrapped(Option::Some(noisy(117)))
     put(10)
     unwrapped(Option::None)
+    put(10)
+    folded()
     put(10)
     // "d" now, and "k" when `main` returns.
     let _kept = generic(noisy(107), true)
