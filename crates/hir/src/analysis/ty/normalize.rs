@@ -4,8 +4,6 @@
 //! to concrete types when possible. This happens before type unification to ensure
 //! that types are in their most resolved form.
 
-use std::collections::hash_map::Entry;
-
 use crate::core::hir_def::{ImplTrait, scope_graph::ScopeId};
 use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
@@ -42,8 +40,7 @@ pub fn normalize_ty<'db, T>(
 where
     T: TyFoldable<'db>,
 {
-    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
-    ty.fold_with(db, &mut normalizer)
+    ty.fold_with(db, &mut TypeNormalizer::new(db, scope, assumptions, true))
 }
 
 /// Apply declared associated equalities without implementation selection.
@@ -58,9 +55,7 @@ pub fn normalize_from_assumptions<'db, T>(
 where
     T: TyFoldable<'db>,
 {
-    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
-    normalizer.resolve_impls = false;
-    value.fold_with(db, &mut normalizer)
+    value.fold_with(db, &mut TypeNormalizer::new(db, scope, assumptions, false))
 }
 
 /// Apply the associated equalities carried by a single trait predicate, as
@@ -77,67 +72,109 @@ where
     normalize_from_assumptions(db, value, scope, PredicateListId::new(db, vec![evidence]))
 }
 
-/// How many projections may be in the middle of being resolved at once, and
-/// how deeply the generic arguments of one instance may nest.
+/// How many projections may be resolved inside each other, and how deeply the
+/// generic arguments of one instance may nest.
 pub(crate) const PROJECTION_DEPTH_LIMIT: usize = 64;
 
-/// How many type nodes, counted as a tree, the projections resolved by one
-/// normalization may have in total, as may the generic arguments of one
-/// instance.
+/// How many type nodes, counted as a tree, a projection being resolved may
+/// have, as may the generic arguments of one instance.
 pub(crate) const PROJECTION_WORK_LIMIT: usize = 65536;
 
-pub struct TypeNormalizer<'db> {
+/// Folds a value, normalizing each projection in it with
+/// [`normalize_projection`].
+struct TypeNormalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    /// Whether impls, and not only the assumptions, resolve projections.
     resolve_impls: bool,
-    // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
-    cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
-    /// Projections currently being resolved, counted against
-    /// [`PROJECTION_DEPTH_LIMIT`].
-    projection_depth: usize,
-    /// Size of the projections resolved so far, counted against
-    /// [`PROJECTION_WORK_LIMIT`].
-    projection_work: usize,
+    /// How many projections may still be resolved inside each other.
+    budget: usize,
 }
 
 impl<'db> TypeNormalizer<'db> {
-    pub fn new(
+    fn new(
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
+        resolve_impls: bool,
     ) -> Self {
         Self {
             db,
             scope,
             assumptions,
-            resolve_impls: true,
-            cache: FxHashMap::default(),
-            projection_depth: 0,
-            projection_work: 0,
+            resolve_impls,
+            budget: PROJECTION_DEPTH_LIMIT,
         }
     }
+}
 
-    /// Starts resolving the projection `ty`, or returns an invalid type if
-    /// that would exceed the normalization limits.
-    ///
-    /// The cycle guard stops a projection that comes back to itself, but not
-    /// one whose impl defines it through a larger projection, such as
-    /// `type Out = <W<(T, T)> as Tr>::Out`: that chain never repeats. Its
-    /// types can also double at each step, staying small as interned values
-    /// while growing exponentially as trees, which is how resolution walks
-    /// them. So both the nesting and the total size are limited.
-    fn enter_projection(&mut self, ty: TyId<'db>) -> Result<(), TyId<'db>> {
-        let remaining = PROJECTION_WORK_LIMIT - self.projection_work;
-        match tree_size_within(self.db, ty, remaining) {
-            Some(size) if self.projection_depth < PROJECTION_DEPTH_LIMIT => {
-                self.projection_work += size;
-                self.projection_depth += 1;
-                Ok(())
-            }
-            _ => Err(TyId::invalid(self.db, InvalidCause::TypeNormalizationLimit)),
-        }
+/// A projection to normalize, with what normalizing it depends on.
+#[salsa::interned]
+#[derive(Debug)]
+struct ProjectionQuery<'db> {
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    resolve_impls: bool,
+    /// How many projections may be resolved inside each other, this one
+    /// included.
+    budget: usize,
+}
+
+/// The normalized form of a projection.
+///
+/// A cycle through an impl that defines a projection as itself is left
+/// unresolved; other repetitions reach the budget. A projection whose impl
+/// defines it through a larger one, such as `type Out = <W<(T, T)> as
+/// Tr>::Out`, never repeats, and its types can double at each step, staying
+/// small as interned values while growing exponentially as trees, which is how
+/// resolution walks them. So both the nesting and the size of each projection
+/// are limited. The limits depend only on the query, so a projection
+/// normalizes the same way wherever and in whichever order it is met.
+#[salsa::tracked(
+    cycle_fn = normalize_projection_cycle_recover,
+    cycle_initial = normalize_projection_cycle_initial
+)]
+fn normalize_projection<'db>(db: &'db dyn HirAnalysisDb, query: ProjectionQuery<'db>) -> TyId<'db> {
+    let (ty, budget) = (query.ty(db), query.budget(db));
+    let TyData::AssocTy(assoc) = ty.data(db) else {
+        unreachable!("only projections are normalized one at a time")
+    };
+    if budget == 0 || tree_size_within(db, ty, PROJECTION_WORK_LIMIT).is_none() {
+        return TyId::invalid(db, InvalidCause::TypeNormalizationLimit);
     }
+    let mut normalizer = TypeNormalizer {
+        db,
+        scope: query.scope(db),
+        assumptions: query.assumptions(db),
+        resolve_impls: query.resolve_impls(db),
+        budget: budget - 1,
+    };
+    match normalizer.try_resolve_assoc_ty(ty, assoc) {
+        Some(replacement) if replacement != ty => normalizer.fold_ty(db, replacement),
+        // Not resolved; still fold internals (e.g., normalize self type)
+        _ => ty.super_fold_with(db, &mut normalizer),
+    }
+}
+
+/// Resolving a projection can lower an impl's associated type, which can ask
+/// for the projection again through trait solving; within that cycle it is
+/// unresolved.
+fn normalize_projection_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    query: ProjectionQuery<'db>,
+) -> TyId<'db> {
+    query.ty(db)
+}
+
+fn normalize_projection_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &TyId<'db>,
+    _count: u32,
+    _query: ProjectionQuery<'db>,
+) -> salsa::CycleRecoveryAction<TyId<'db>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 /// The types `ty` is made of, one level down.
@@ -249,35 +286,17 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 }
                 ty
             }
-            TyData::AssocTy(assoc_ty) => {
-                match self.cache.entry(*assoc_ty) {
-                    Entry::Occupied(entry) => match entry.get() {
-                        Some(cached) => return *cached,
-                        None => return ty, // cycle: leave unresolved
-                    },
-                    Entry::Vacant(entry) => {
-                        entry.insert(None);
-                    }
-                }
-
-                if let Err(limit) = self.enter_projection(ty) {
-                    self.cache.insert(*assoc_ty, Some(limit));
-                    return limit;
-                }
-                let resolved = self
-                    .try_resolve_assoc_ty(ty, assoc_ty)
-                    .map(|replacement| self.fold_ty(db, replacement));
-                self.projection_depth -= 1;
-                if let Some(normalized) = resolved {
-                    self.cache.insert(*assoc_ty, Some(normalized));
-                    return normalized;
-                }
-
-                // Not resolved; still fold internals (e.g., normalize self type)
-                let folded = ty.super_fold_with(db, self);
-                self.cache.insert(*assoc_ty, Some(folded));
-                folded
-            }
+            TyData::AssocTy(_) => normalize_projection(
+                db,
+                ProjectionQuery::new(
+                    db,
+                    ty,
+                    self.scope,
+                    self.assumptions,
+                    self.resolve_impls,
+                    self.budget,
+                ),
+            ),
             _ => ty.super_fold_with(db, self),
         }
     }
