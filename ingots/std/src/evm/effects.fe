@@ -1264,7 +1264,7 @@ pub fn revert<T>(_ value: own T) -> !
 pub fn revert_error<T>(_ error: own T) -> !
     where T: ErrorVariant<Sol> + Encode<Sol>
 {
-    if !T::IS_DYNAMIC && T::HEAD_SIZE <= SCRATCH_ERROR_HEADS {
+    if !T::IS_DYNAMIC && 4 + T::HEAD_SIZE <= SCRATCH_BYTES {
         // The revert discards memory, and a static encoding reads only the
         // values of `error`'s fields, so the bytes below the heap can hold
         // the payload without an allocation, like a panic's.
@@ -1279,9 +1279,8 @@ pub fn revert_error<T>(_ error: own T) -> !
     unsafe { ops::revert(offset: buffer.ptr(), len: buffer.len() as u256) }
 }
 
-/// The most head bytes a scratch-encoded error payload may take: with its
-/// selector it ends at 0x80, below every allocation.
-const SCRATCH_ERROR_HEADS: u256 = 0x7c
+/// The bytes below every allocation, which an exit can overwrite.
+const SCRATCH_BYTES: u256 = 0x80
 
 extern {
     const fn __bitcast<From, To>(_: From) -> To
@@ -1372,23 +1371,14 @@ impl ContractHost for Evm {
         where T: Encode<A> + AbiSize
     {
         if !T::IS_DYNAMIC {
-            // A static encoding writes every byte of its heads, and only the
-            // encoding writes each fresh buffer.
-            if T::HEAD_SIZE <= 32 {
-                let out = unsafe { ptr::FixedMemBuffer<32>::alloc_uninit() }
+            // A static encoding writes every byte of its heads and reads only
+            // the values of `value`'s fields. Returning discards memory, so
+            // a small payload goes to the bytes below the heap.
+            if T::HEAD_SIZE <= SCRATCH_BYTES {
+                let base = scratch_ptr()
                 unsafe {
-                    value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
-                    self.return_data(
-                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE as usize),
-                    )
-                }
-            } else if T::HEAD_SIZE <= 64 {
-                let out = unsafe { ptr::FixedMemBuffer<64>::alloc_uninit() }
-                unsafe {
-                    value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
-                    self.return_data(
-                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE as usize),
-                    )
+                    value.encode(AbiFrame::from_raw_parts(ptr: base, len: T::HEAD_SIZE))
+                    self.return_data(data: MemSpan::from_raw_parts(ptr: base, len: T::HEAD_SIZE as usize))
                 }
             } else {
                 let out = unsafe { MemBuffer::alloc_uninit(T::HEAD_SIZE as usize) }
