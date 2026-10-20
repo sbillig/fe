@@ -276,7 +276,7 @@ impl<T> MemArray<T> {
         self.as_slice().replace(index, value)
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self.as_slice().set(index, value)
     }
@@ -366,7 +366,7 @@ impl<T> MemVec<T> {
         self.as_slice().replace(index, value)
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self.as_slice().set(index, value)
     }
@@ -672,7 +672,7 @@ impl<T> MemSlice<T> {
         old
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self[index] = value
     }
@@ -1203,7 +1203,7 @@ fn grown_capacity(_ capacity: usize, needed: usize, initial: usize, max: usize) 
 }
 
 /// Allocates an array without initializing its contents. The caller must
-/// initialize each element before it is read.
+/// initialize each element before it is read or the array is destroyed.
 pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
     MemArray::new_uninit(len)
 }
