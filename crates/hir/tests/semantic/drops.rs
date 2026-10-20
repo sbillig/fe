@@ -196,3 +196,18 @@ fn a_question_mark_exit_destroys_what_its_path_holds() {
     );
 }
 
+#[test]
+fn a_branch_that_leaves_does_not_destroy_the_value_of_its_siblings() {
+    check(
+        "fn f(_ o: own Option<Buf>) -> u64 { let b = match o { Option::Some(b) => b\n Option::None => return 0 }\n consume(b) }",
+        "f",
+        // Only `o` is initialized where the `None` arm returns.
+        &["-", "-", "-", "-", "-", "-", "*"],
+    );
+    check(
+        "fn f(_ c: bool) -> u64 { let b = if c { make(1) } else { return 0 }\n view(b) }",
+        "f",
+        // The `else` returns holding nothing; `b` lives to the end.
+        &["-", "-", "*"],
+    );
+}
