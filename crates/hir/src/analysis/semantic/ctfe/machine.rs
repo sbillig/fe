@@ -1504,7 +1504,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     self.finish_session(session)?;
                 }
             }
-            // TODO(owned-value-destruction 2g): run `Drop` implementations.
+            // Access checking rejects compile-time code whose drops may run a
+            // `Drop` implementation, so what a drop here destroys needs none.
             SStmtKind::Drop { .. } => {}
         }
         Ok(())
