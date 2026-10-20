@@ -32,7 +32,7 @@ pub enum FuncBodyDiag<'db> {
 }
 
 impl<'db> FuncBodyDiag<'db> {
-    pub(super) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
+    pub(crate) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
         match self {
             Self::Ty(diag) => diag.to_voucher(),
             Self::Body(diag) => Box::new(diag.clone()) as _,
@@ -51,7 +51,7 @@ pub enum TyDiagCollection<'db> {
 }
 
 impl<'db> TyDiagCollection<'db> {
-    pub(super) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
+    pub(crate) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
         match self.clone() {
             TyDiagCollection::Ty(diag) => Box::new(diag) as _,
             TyDiagCollection::PathRes(diag) => Box::new(diag) as _,
@@ -209,6 +209,12 @@ pub enum TyLowerDiag<'db> {
     ConstEvalRecursiveConst(DynLazySpan<'db>),
     TypeLoweringCycle(DynLazySpan<'db>),
     TypeNormalizationLimit(DynLazySpan<'db>),
+    /// A normalization that reached a limit without a type here showing it:
+    /// it was reached while checking the item at `span`.
+    TypeNormalizationLimitReached {
+        span: DynLazySpan<'db>,
+        projection: String,
+    },
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
@@ -323,7 +329,7 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalRecursionLimitExceeded(_) => 27,
             Self::ConstEvalRecursiveConst(_) => 37,
             Self::TypeLoweringCycle(_) => 38,
-            Self::TypeNormalizationLimit(_) => 58,
+            Self::TypeNormalizationLimit(_) | Self::TypeNormalizationLimitReached { .. } => 58,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidVarSelfWithExplicitType { .. } => 30,

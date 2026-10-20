@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/normalization_limit_unshown.fe
+---
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_limit_unshown.fe:18:4
+   │
+18 │ fn caller() {
+   │    ^^^^^^ resolving `Tr::Out` while checking this reached the limit

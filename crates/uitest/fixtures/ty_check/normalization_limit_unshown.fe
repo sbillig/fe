@@ -1,0 +1,20 @@
+// A normalization limit is an error even where no type shows it: here it is
+// reached only while the trait solver compares `Out` with the bound's `u8`, and
+// the type that stands in for the projection matches any type.
+trait Tr {
+    type Out
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl<T> Tr for W<T> {
+    type Out = <W<(T, T)> as Tr>::Out
+}
+
+fn need<T: Tr<Out = u8>>() {}
+
+fn caller() {
+    need<W<u8>>()
+}

@@ -7,6 +7,7 @@
 use crate::core::hir_def::{ImplTrait, scope_graph::ScopeId};
 use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
+use salsa::Accumulator;
 
 use super::{
     canonical::Canonical,
@@ -80,6 +81,20 @@ pub(crate) const PROJECTION_DEPTH_LIMIT: usize = 64;
 /// have, as may the generic arguments of one instance.
 pub(crate) const PROJECTION_WORK_LIMIT: usize = 65536;
 
+/// A normalization that reached a limit, named by the projection's trait and
+/// associated type.
+///
+/// It is accumulated where the limit is reached, and every analysis that
+/// depends on that normalization collects it (see
+/// [`crate::analysis::analyze_module`]), so a limit is always reported even
+/// where the type that stands in for the projection, which matches any type,
+/// is used without a check.
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NormalizationLimitReached {
+    pub projection: String,
+}
+
 /// Folds a value, normalizing each projection in it with
 /// [`normalize_projection`].
 struct TypeNormalizer<'db> {
@@ -142,6 +157,16 @@ fn normalize_projection<'db>(db: &'db dyn HirAnalysisDb, query: ProjectionQuery<
         unreachable!("only projections are normalized one at a time")
     };
     if budget == 0 || tree_size_within(db, ty, PROJECTION_WORK_LIMIT).is_none() {
+        // The projection itself may be too large to print.
+        let trait_name = assoc.trait_.def(db).name(db).to_opt();
+        NormalizationLimitReached {
+            projection: format!(
+                "{}::{}",
+                trait_name.map_or("<unknown>", |name| name.data(db).as_str()),
+                assoc.name.data(db)
+            ),
+        }
+        .accumulate(db);
         return TyId::invalid(db, InvalidCause::TypeNormalizationLimit);
     }
     let mut normalizer = TypeNormalizer {

@@ -11,7 +11,7 @@ use common::{
     },
 };
 use hir::analysis::{
-    analysis_pass::AnalysisPassManager, diagnostics::DiagnosticVoucher, initialize_analysis_pass,
+    analysis_pass::AnalysisPassManager, analyze_module, diagnostics::DiagnosticVoucher,
     semantic::SemanticAccessAnalysisPass,
 };
 use hir::{
@@ -27,7 +27,7 @@ define_input_db!(DriverDataBase);
 impl DriverDataBase {
     // TODO: An temporary implementation for ui testing.
     pub fn run_on_top_mod<'db>(&'db self, top_mod: TopLevelMod<'db>) -> DiagnosticsCollection<'db> {
-        self.run_on_file_with_pass_manager(top_mod, initialize_analysis_pass())
+        DiagnosticsCollection(boxed(analyze_module(self, top_mod)))
     }
 
     pub fn run_on_file_with_pass_manager<'db>(
@@ -39,16 +39,12 @@ impl DriverDataBase {
     }
 
     pub fn run_on_ingot<'db>(&'db self, ingot: Ingot<'db>) -> DiagnosticsCollection<'db> {
-        self.run_on_ingot_with_pass_manager(ingot, initialize_analysis_pass())
-    }
-
-    pub fn run_on_ingot_with_pass_manager<'db>(
-        &'db self,
-        ingot: Ingot<'db>,
-        mut pass_manager: hir::analysis::analysis_pass::AnalysisPassManager,
-    ) -> DiagnosticsCollection<'db> {
         let tree = module_tree(self, ingot);
-        DiagnosticsCollection(pass_manager.run_on_module_tree(self, tree))
+        DiagnosticsCollection(
+            tree.all_modules()
+                .flat_map(|top_mod| boxed(analyze_module(self, top_mod)))
+                .collect(),
+        )
     }
 
     pub fn top_mod(&self, input: File) -> TopLevelMod<'_> {
@@ -116,6 +112,13 @@ impl DriverDataBase {
 
         trim_trailing_line_whitespace(std::str::from_utf8(buffer.as_slice()).unwrap())
     }
+}
+
+fn boxed<'db>(diags: Vec<CompleteDiagnostic>) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+    diags
+        .into_iter()
+        .map(|diag| Box::new(diag) as Box<dyn DiagnosticVoucher + 'db>)
+        .collect()
 }
 
 /// The `--color` preference for diagnostics written to standard error.

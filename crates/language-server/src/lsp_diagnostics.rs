@@ -2,13 +2,13 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url}
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{
-    diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics},
+    diagnostics::cmp_complete_diagnostics,
     file::{File, IngotFileKind},
     ingot::IngotKind,
 };
 use driver::DriverDataBase;
 use hir::Ingot;
-use hir::analysis::initialize_analysis_pass;
+use hir::analysis::analyze_module;
 use hir::hir_def::HirIngot;
 use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
@@ -42,7 +42,6 @@ impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
         let t_total = std::time::Instant::now();
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
-        let mut pass_manager = initialize_analysis_pass();
         let ingot_files = ingot.files(self);
         let is_standalone = ingot.kind(self) == IngotKind::StandAlone;
         let file_count = ingot_files
@@ -67,10 +66,8 @@ impl LspDiagnostics for DriverDataBase {
 
             let t_file = std::time::Instant::now();
             let top_mod = map_file_to_mod(self, file);
-            let diagnostics = pass_manager.run_on_module(self, top_mod);
+            let mut finalized_diags = analyze_module(self, top_mod);
             tracing::debug!("[fe:timing]  file {url}: {:?}", t_file.elapsed());
-            let mut finalized_diags: Vec<CompleteDiagnostic> =
-                diagnostics.iter().map(|d| d.to_complete(self)).collect();
             if finalized_diags
                 .iter()
                 .any(|d| d.severity == common::diagnostics::Severity::Error)
