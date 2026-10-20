@@ -15,6 +15,10 @@ value's lifetime ends, and a type that holds a resource releases it in its
 - A temporary is destroyed at the end of its statement. A `let` that binds
   an access (`let s = ref make().span()`) keeps the statement's temporaries
   until the end of its block, as long as the binding that may borrow them.
+- A block whose value is an access keeps its bindings until the end of the
+  enclosing block, for the same reason: in
+  `let s = { let b = MemBuffer::alloc(4); b.span() }`, `b` lives as long
+  as `s` may view it.
 - A loop body's bindings are destroyed at the end of each iteration.
 - `return`, `break`, `continue`, a failing `?` and a `let .. else` that
   leaves destroy what the scopes they leave hold.
