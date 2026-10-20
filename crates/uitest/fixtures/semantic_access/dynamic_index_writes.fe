@@ -1,0 +1,32 @@
+// A store destroys what it overwrites. At a dynamic index it may reach an
+// element already moved out, so it waits until no element may be.
+use core::ops::Drop
+
+struct Token { id: u256 }
+impl Drop for Token {
+    fn drop(own self) {}
+}
+
+struct Pair { a: Token, b: Token }
+
+// Rejected: `i` may name the moved element.
+fn write(_ i: usize) {
+    var tokens = [Token { id: 0 }, Token { id: 1 }]
+    let _moved = tokens[0]
+    tokens[i] = Token { id: 2 }
+}
+
+// Rejected: the same through a field of an element.
+fn write_field(_ i: usize) {
+    var pairs = [Pair { a: Token { id: 0 }, b: Token { id: 1 } }]
+    let _moved = pairs[0].a
+    pairs[i].a = Token { id: 2 }
+}
+
+// Accepted: a store at the moved element's constant index restores it first.
+fn restore(_ i: usize) {
+    var tokens = [Token { id: 0 }, Token { id: 1 }]
+    let _moved = tokens[0]
+    tokens[0] = Token { id: 2 }
+    tokens[i] = Token { id: 3 }
+}
