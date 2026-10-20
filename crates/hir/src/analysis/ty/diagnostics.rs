@@ -1655,6 +1655,9 @@ pub enum ImplDiag<'db> {
         stricter_bounds: ThinVec<TraitInstId<'db>>,
     },
 
+    /// A `drop` that declares effects, which no call site could provide.
+    DropEffects { primary: DynLazySpan<'db> },
+
     /// A `Drop` implementation for a `Copy` type.
     DropOnCopy {
         primary: DynLazySpan<'db>,
@@ -1706,6 +1709,7 @@ impl ImplDiag<'_> {
             Self::DropImplNotGeneric { .. } => 37,
             Self::DropStricterBound { .. } => 38,
             Self::DropOnCopy { .. } => 39,
+            Self::DropEffects { .. } => 40,
             Self::CyclicEffectRow { .. } => 34,
             Self::MethodMaybeMutMismatch { .. } => 35,
             Self::PartialMutImpl { .. } => 36,

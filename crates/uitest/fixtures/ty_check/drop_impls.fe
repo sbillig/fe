@@ -92,6 +92,17 @@ impl Drop for Effectful {
     }
 }
 
+// Rejected: an effect row names effects too.
+struct OnDrop<F: Fn() -> ()> {
+    f: F,
+}
+
+impl<F: Fn() -> ()> Drop for OnDrop<F> {
+    fn drop(own self) uses F::E {
+        (self.f)()
+    }
+}
+
 // Accepted: a mutable owned receiver.
 struct Counter {
     n: u64,

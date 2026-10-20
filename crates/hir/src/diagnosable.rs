@@ -985,8 +985,23 @@ impl<'db> ImplTrait<'db> {
         })
     }
 
+    /// The `drop` of a `Drop` implementation, if it declares effects.
+    fn drop_with_effects(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implementor: ImplementorId<'db>,
+    ) -> Option<Func<'db>> {
+        let drop = ty::corelib::resolve_core_trait(db, self.scope(), &["ops", "Drop"])?;
+        if implementor.trait_def(db) != drop {
+            return None;
+        }
+        self.methods(db)
+            .find(|func| !func.declared_effects(db).data(db).is_empty())
+    }
+
     /// A drop runs for every value of a type, where no call is written, so
-    /// `Drop` covers the whole of a struct or enum type that has no copies.
+    /// `Drop` covers the whole of a struct or enum type that has no copies,
+    /// and its `drop` declares no effects.
     fn diags_drop(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -995,6 +1010,14 @@ impl<'db> ImplTrait<'db> {
         let drop = ty::corelib::resolve_core_trait(db, self.scope(), &["ops", "Drop"])?;
         if implementor.trait_def(db) != drop {
             return None;
+        }
+        if let Some(func) = self.drop_with_effects(db, implementor) {
+            return Some(
+                ty::diagnostics::ImplDiag::DropEffects {
+                    primary: func.span().effects().into(),
+                }
+                .into(),
+            );
         }
         let primary: DynLazySpan<'db> = self.span().ty().into();
         let ty = implementor.self_ty(db);
@@ -2214,7 +2237,11 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
             return out;
         };
 
-        out.extend(implementor.diags_method_conformance(db));
+        // The effects of a `drop` are diagnosed as such, not as bounds the
+        // trait's method lacks.
+        if self.drop_with_effects(db, implementor).is_none() {
+            out.extend(implementor.diags_method_conformance(db));
+        }
         out.extend(self.diags_blanket_copy(db, implementor));
         out.extend(self.diags_view_copy(db, implementor));
         out.extend(self.diags_state_only_copy(db, implementor));
