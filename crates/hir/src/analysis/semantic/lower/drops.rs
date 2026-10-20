@@ -13,7 +13,7 @@ use cranelift_entity::EntityRef;
 use super::body::SmirLowerCtxt;
 use crate::analysis::{
     semantic::{
-        SBlockId, SExpr, SLocalId, SPlace, SStmtKind, STerminatorKind, SemanticLocalRole,
+        SBlockId, SExpr, SLocalId, SOperand, SPlace, SStmtKind, STerminatorKind, SemanticLocalRole,
         ValueProvenance, capability::semantics::holds_carrier,
     },
     ty::{drop_glue::ty_has_drop_glue, ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
@@ -207,17 +207,36 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
                     if !self.is_held(base.value)
             )
         {
-            let depth = match self.locals[dst.index()].source {
-                Some(LocalBinding::Local { .. }) => {
-                    self.drop_scopes.iter().rposition(|scope| scope.bindings)
-                }
-                _ => self.temp_scopes[dst.index()]
-                    .and_then(|id| self.drop_scopes.iter().position(|scope| scope.id == id)),
-            };
-            match depth {
-                Some(depth) => self.hold_in(*dst, depth),
-                None => self.hold_in_innermost(*dst),
+            self.hold_defined(*dst);
+        }
+    }
+
+    /// Holds `local` in the scope it belongs to: a binding's block, or the
+    /// scope a temporary is allocated in.
+    pub(super) fn hold_defined(&mut self, local: SLocalId) {
+        let depth = match self.locals[local.index()].source {
+            Some(LocalBinding::Local { .. }) => {
+                self.drop_scopes.iter().rposition(|scope| scope.bindings)
             }
+            _ => self.temp_scopes[local.index()]
+                .and_then(|id| self.drop_scopes.iter().position(|scope| scope.id == id)),
+        };
+        match depth {
+            Some(depth) => self.hold_in(local, depth),
+            None => self.hold_in_innermost(local),
+        }
+    }
+
+    /// Passes a branch's value to `result`, the value of its `if` or
+    /// `match`. No scope holds `result` until the join defines it on every
+    /// path reaching it: another branch may leave the scopes before then.
+    pub(super) fn assign_branch_result(&mut self, result: SLocalId, value: SOperand) {
+        self.push_synthetic_stmt(SStmtKind::Assign {
+            dst: result,
+            expr: SExpr::Forward(value),
+        });
+        for scope in &mut self.drop_scopes {
+            scope.owners.retain(|owner| *owner != result);
         }
     }
 
