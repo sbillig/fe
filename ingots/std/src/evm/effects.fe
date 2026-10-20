@@ -1264,8 +1264,32 @@ pub fn revert<T>(_ value: own T) -> !
 pub fn revert_error<T>(_ error: own T) -> !
     where T: ErrorVariant<Sol> + Encode<Sol>
 {
+    if !T::IS_DYNAMIC && T::HEAD_SIZE <= SCRATCH_ERROR_HEADS {
+        // The revert discards memory, and a static encoding reads only the
+        // values of `error`'s fields, so the bytes below the heap can hold
+        // the payload without an allocation, like a panic's.
+        let base = scratch_ptr()
+        unsafe {
+            ops::mstore(addr: base, value: (<T as ErrorVariant<Sol>>::SELECTOR as u256) << 224)
+            error.encode(AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(base, 4), len: T::HEAD_SIZE))
+            ops::revert(offset: base, len: 4 + T::HEAD_SIZE)
+        }
+    }
     let buffer = encode_error(error)
     unsafe { ops::revert(offset: buffer.ptr(), len: buffer.len() as u256) }
+}
+
+/// The most head bytes a scratch-encoded error payload may take: with its
+/// selector it ends at 0x80, below every allocation.
+const SCRATCH_ERROR_HEADS: u256 = 0x7c
+
+extern {
+    const fn __bitcast<From, To>(_: From) -> To
+}
+
+/// The first byte of linear memory.
+fn scratch_ptr() -> *u8 {
+    __bitcast<u256, *u8>(0)
 }
 
 /// Encode a custom error (4-byte selector + ABI-encoded fields) into freshly
