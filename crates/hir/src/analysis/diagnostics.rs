@@ -3772,7 +3772,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::BorrowArgMustBePlace { primary, kind } => {
+            Self::BorrowArgMustBePlace {
+                primary,
+                kind,
+                split,
+            } => {
                 let kw = match kind {
                     BorrowKind::Mut => "mut",
                     BorrowKind::Ref => "ref",
@@ -3781,13 +3785,16 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!("`{kw}` argument must be a place"),
-                    sub_diagnostics: vec![SubDiagnostic {
+                    sub_diagnostics: [SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!(
                             "temporaries and literal values cannot be used where `{kw}` is expected"
                         ),
                         span: primary.resolve(db),
-                    }],
+                    }]
+                    .into_iter()
+                    .chain(split_demand_label(db, split))
+                    .collect(),
                     notes: vec![format!(
                         "help: bind the value to a named local first, then pass `{kw} <place>`"
                     )],
@@ -3799,6 +3806,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 kind,
                 suggestion,
+                split,
             } => {
                 let kw = match kind {
                     BorrowKind::Mut => "mut",
@@ -3808,11 +3816,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: "explicit borrow required".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
+                    sub_diagnostics: [SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!("this argument must be explicitly borrowed as `{kw}`"),
                         span: primary.resolve(db),
-                    }],
+                    }]
+                    .into_iter()
+                    .chain(split_demand_label(db, split))
+                    .collect(),
                     notes: vec![
                         suggestion
                             .as_ref()
@@ -6459,6 +6470,20 @@ impl DiagnosticVoucher for ImplDiag<'_> {
             },
         }
     }
+}
+
+/// The label naming the unsafe split whose `mut` binding asked a call in it
+/// for `mut`.
+fn split_demand_label<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    split: &Option<crate::span::DynLazySpan<'db>>,
+) -> Option<SubDiagnostic> {
+    split.as_ref().map(|split| SubDiagnostic {
+        style: LabelStyle::Secondary,
+        message: "a `mut` binding of this unsafe split asks each access in it for `mut`"
+            .to_string(),
+        span: split.resolve(db),
+    })
 }
 
 /// The `uses` entry naming `func`'s effect keyed `key`, at the mode `mode` a
