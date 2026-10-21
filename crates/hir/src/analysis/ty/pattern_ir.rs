@@ -104,9 +104,25 @@ impl<'db> PatternStore<'db> {
         self.roots_by_pat.get(&pat).copied()
     }
 
-    /// A pattern is irrefutable when it alone is exhaustive.
+    /// A pattern is irrefutable when it alone is exhaustive. A product is
+    /// proven field by field, so that the exhaustiveness analysis, which is
+    /// bounded, only sees or-patterns.
     pub fn is_irrefutable(&self, db: &'db dyn HirAnalysisDb, id: ValidatedPatId) -> bool {
-        is_exhaustive(db, self, &[id], self.node(id).match_ty)
+        match self.node(id).kind() {
+            ValidatedPatKind::Wildcard { .. } => true,
+            ValidatedPatKind::Constructor { ctor, fields } => {
+                let only_ctor = match ctor {
+                    ConstructorKind::Type(_) => true,
+                    ConstructorKind::Variant(variant, _) => variant.enum_.len_variants(db) == 1,
+                    ConstructorKind::Literal(..) => false,
+                };
+                only_ctor && fields.iter().all(|&field| self.is_irrefutable(db, field))
+            }
+            ValidatedPatKind::Or(pats) => {
+                pats.iter().any(|&pat| self.is_irrefutable(db, pat))
+                    || is_exhaustive(db, self, pats, self.node(id).match_ty)
+            }
+        }
     }
 }
 
