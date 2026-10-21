@@ -121,21 +121,24 @@ impl<'db> ImportResolver<'db> {
         // A pass only resolves the uses that read the imports of a scope that
         // the last pass changed; the others would resolve as before.
         //
-        // `state` sums the hashes of all resolutions. A state that repeats
-        // means the passes cycle without settling: the uses that changed in
-        // the cycle depend on each other in a way that no resolution
+        // A pass's resolutions are a function of the last pass's, so passes
+        // that don't settle go around a cycle of states. The uses that change
+        // in the cycle depend on each other in a way that no resolution
         // satisfies, like `use x::y as z` and `use z::x` where the outer scope
         // has an `x`, or in more than one way, like `use x as y` and
-        // `use y as x` where the outer scope has both. A pass that changes
-        // nothing repeats the state of the last one, which ends the iteration
-        // without marking any use.
+        // `use y as x` where the outer scope has both. Each state is compared
+        // with the one saved at the last pass that is a power of two, which
+        // finds a cycle within a few times its length (Brent's algorithm);
+        // `fingerprint`, a sum of the resolutions' hashes, rules out most
+        // states without comparing them.
         let mut outcomes = vec![Ok(()); uses.len()];
         let mut changed_in = vec![0; uses.len()];
         let mut readers: FxHashMap<ScopeId<'db>, FxHashSet<usize>> = FxHashMap::default();
         let mut dirty: FxHashSet<usize> = (0..uses.len()).collect();
-        let mut state = 0u64;
-        let mut states = FxHashMap::from_iter([(state, 0)]);
-        for pass in 1.. {
+        let state = |this: &Self| (this.imports.glob_resolved.clone(), this.buckets.clone());
+        let mut fingerprint = 0u64;
+        let mut saved = (0, fingerprint, state(&self));
+        for pass in 1usize.. {
             let resolved: Vec<_> = dirty
                 .into_iter()
                 .map(|idx| {
@@ -155,18 +158,25 @@ impl<'db> ImportResolver<'db> {
                 let use_ = uses[idx];
                 let hash = imported.hash(use_);
                 let old = self.replace(use_, imported);
-                state = state.wrapping_add(hash).wrapping_sub(old.hash(use_));
+                fingerprint = fingerprint.wrapping_add(hash).wrapping_sub(old.hash(use_));
                 changed_in[idx] = pass;
                 let scope_readers = readers.get(&use_scope(db, use_)).into_iter().flatten();
                 dirty.extend(scope_readers.filter(|&&reader| reader != idx));
             }
-            if let Some(start) = states.insert(state, pass) {
+            if dirty.is_empty() {
+                break;
+            }
+            let (saved_pass, saved_fingerprint, saved_state) = &saved;
+            if fingerprint == *saved_fingerprint && state(&self) == *saved_state {
                 for (outcome, &changed) in outcomes.iter_mut().zip(&changed_in) {
-                    if changed > start {
+                    if changed > *saved_pass {
                         *outcome = Err((0, NameResolutionError::Ambiguous(ThinVec::new())));
                     }
                 }
                 break;
+            }
+            if pass.is_power_of_two() {
+                saved = (pass, fingerprint, state(&self));
             }
         }
 
