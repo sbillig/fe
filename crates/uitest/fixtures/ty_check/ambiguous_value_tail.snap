@@ -4,25 +4,25 @@ expression: diags
 input_file: fixtures/ty_check/ambiguous_value_tail.fe
 ---
 error[2-0004]: `X` is ambiguous
-   ┌─ ambiguous_value_tail.fe:28:9
+   ┌─ ambiguous_value_tail.fe:36:9
    │
- 6 │     pub const X: bool = true
+ 7 │     pub const X: bool = true
    │               - candidate 1
    ·
-11 │     pub const X: bool = false
+13 │     pub const X: bool = false
    │               - candidate 2
    ·
-28 │         X => 1
+36 │         X => 1
    │         ^ `X` is ambiguous
 
 error[2-0004]: `N` is ambiguous
-   ┌─ ambiguous_value_tail.fe:32:23
+   ┌─ ambiguous_value_tail.fe:40:23
    │
- 7 │     pub const N: u256 = 1
+ 8 │     pub const N: u256 = 1
    │               - candidate 1
    ·
-12 │     pub const N: u256 = 2
+14 │     pub const N: u256 = 2
    │               - candidate 2
    ·
-32 │ fn generic_arg(_ w: W<N>) {}
+40 │ fn generic_arg(_ w: W<N>) {}
    │                       ^ `N` is ambiguous

@@ -1,13 +1,14 @@
 use std::ops::Range;
 
 use crate::core::hir_def::{
-    BindingMarker, IdentId, LitKind, Partial, Pat, PatId, PathId, TupleTypeId, VariantKind,
+    BindingMarker, IdentId, ItemKind, LitKind, Partial, Pat, PatId, PathId, TupleTypeId,
+    VariantKind, scope_graph::ScopeId,
 };
 use either::Either;
 
 use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
-    name_resolution::{ExpectedPathKind, PathRes, PathResError, PathResErrorKind, ResolvedVariant},
+    name_resolution::{ExpectedPathKind, PathRes, PathResErrorKind, ResolvedVariant},
     semantic::{
         SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
         instance::resolve_semantic_const_ref,
@@ -408,22 +409,36 @@ impl<'db> TyChecker<'db> {
             &lowering_cx,
         );
 
-        // Bare identifiers that aren't found or don't resolve to a type/variant
-        // are local bindings, unless the expected type is a msg type, in which
-        // case we try to resolve the identifier as a msg variant first.
+        // Bare identifiers that aren't found, or that name only things no
+        // pattern matches, like functions, are local bindings that shadow
+        // them. A msg variant in a named recv arm was handled above.
         if let Some(name) = path.as_ident(self.db)
-            && matches!(
-                res,
-                Err(PathResError {
-                    kind: PathResErrorKind::NotFound { .. },
-                    ..
-                }) | Ok(PathRes::Trait(_)
-                    | PathRes::Mod(_)
-                    | PathRes::Func(_)
-                    | PathRes::TraitMethod(..)
-                    | PathRes::Method(..)
-                    | PathRes::FuncParam(..))
-            )
+            && match &res {
+                Ok(res) => matches!(
+                    res,
+                    PathRes::Trait(_)
+                        | PathRes::Mod(_)
+                        | PathRes::Func(_)
+                        | PathRes::TraitMethod(..)
+                        | PathRes::Method(..)
+                        | PathRes::FuncParam(..)
+                ),
+                Err(err) => match &err.kind {
+                    PathResErrorKind::NotFound { .. } => true,
+                    PathResErrorKind::Ambiguous(cands) => cands.iter().all(|cand| {
+                        matches!(
+                            cand.scope(),
+                            Some(ScopeId::Item(
+                                ItemKind::Func(_)
+                                    | ItemKind::Mod(_)
+                                    | ItemKind::TopMod(_)
+                                    | ItemKind::Trait(_)
+                            ))
+                        )
+                    }),
+                    _ => false,
+                },
+            }
         {
             let binding = LocalBinding::local(
                 pat,

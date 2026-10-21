@@ -3,11 +3,13 @@ use b::*
 
 mod a {
     pub fn S() {}
+    pub fn f() {}
     pub const X: bool = true
     pub const N: u256 = 1
 }
 mod b {
     pub fn S() {}
+    pub fn f() {}
     pub const X: bool = false
     pub const N: u256 = 2
 }
@@ -19,6 +21,12 @@ struct W<const K: u256> {}
 fn record(s: S) -> S {
     let S { v } = s
     S { v }
+}
+
+// A binding shadows ambiguous functions, as it does one function.
+fn shadow(x: u8) -> u8 {
+    let f = x
+    f
 }
 
 // An ambiguous value with no type of the same name is an error, not a
