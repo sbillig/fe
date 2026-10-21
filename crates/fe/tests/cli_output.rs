@@ -261,6 +261,51 @@ fn test_cli_check_ingot_nested_in_its_dependency() {
 }
 
 #[test]
+fn test_cli_check_assoc_item_ignores_traits_of_dependencies_not_in_scope() {
+    // A dependency implements its own trait with an associated const of the
+    // same name for `String<N>`. Without importing it, `Self::SIZE` in the
+    // root ingot's impl must not become ambiguous.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src")).unwrap();
+    fs::create_dir_all(root.join("dep/src")).unwrap();
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"scope\"\nversion = \"0.1.0\"\nmembers = [{ path = \"app\", name = \"app\" }, { path = \"dep\", name = \"dep\" }]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n[dependencies]\ndep = true\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("dep/fe.toml"),
+        "[ingot]\nname = \"dep\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let trait_src = |name: &str| {
+        format!(
+            "pub trait {name} {{\n    const SIZE: usize\n    fn bytes(self) -> [u8; Self::SIZE]\n}}\n\
+             impl<const LEN: usize> {name} for String<LEN> {{\n    const SIZE: usize = LEN\n    \
+             fn bytes(self) -> [u8; Self::SIZE] {{ self.as_bytes().to_array() }}\n}}\n"
+        )
+    };
+    fs::write(root.join("dep/src/lib.fe"), trait_src("Key")).unwrap();
+    fs::write(
+        root.join("app/src/lib.fe"),
+        format!(
+            "{}pub fn first() -> u8 {{ dep::Key::bytes(\"ab\")[0] }}\n",
+            trait_src("Literal")
+        ),
+    )
+    .unwrap();
+
+    let (output, exit_code) = run_fe_check(root.to_str().expect("utf8 path"));
+    assert_eq!(exit_code, 0, "expected a clean check:\n{output}");
+}
+
+#[test]
 fn test_cli_check_unresolved_record_init_path_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("unresolved_record_init_path.fe");
@@ -1063,6 +1108,89 @@ fn test_cli_build_sonatina_rejects_executable_emit() {
     );
 }
 
+#[cfg(feature = "sp1")]
+#[test]
+fn test_cli_build_sp1_ir_needs_no_toolchain_and_elf_preflights_it() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("guest.fe");
+    fs::write(&source, include_str!("../../../examples/sp1_increment.fe")).unwrap();
+    for emit in ["ir", "elf", "elf,ir"] {
+        let out = temp.path().join(emit);
+        let result = Command::new(fe_binary())
+            .args(["build", "--backend", "sp1", "--emit", emit, "--out-dir"])
+            .arg(&out)
+            .arg(&source)
+            .env_remove("SONATINA_SP1_TOOLCHAIN")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        if emit == "ir" {
+            assert!(result.status.success(), "{stderr}");
+            let ir = fs::read_to_string(out.join("guest.sp1.sona")).unwrap();
+            assert!(ir.contains("riscv64im-succinct-zkvm-elf"));
+            assert!(!out.join("guest.elf").exists());
+        } else {
+            assert_eq!(result.status.code(), Some(1), "{stderr}");
+            assert!(stderr.contains("set SONATINA_SP1_TOOLCHAIN"), "{stderr}");
+            assert!(!out.exists(), "failed preflight must not write artifacts");
+        }
+    }
+}
+
+#[cfg(feature = "sp1")]
+#[test]
+fn test_cli_build_sp1_rejects_incompatible_artifacts() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("guest.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").unwrap();
+    for emit in [
+        "bytecode",
+        "runtime-bytecode",
+        "abi",
+        "metadata",
+        "executable",
+    ] {
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--backend",
+            "sp1",
+            "--emit",
+            emit,
+            source.to_str().unwrap(),
+        ]);
+        assert_eq!(exit_code, 1, "{output}");
+        assert!(output.contains("SP1 backend only supports"), "{output}");
+    }
+}
+
+#[test]
+fn test_cli_test_rejects_sp1_backend() {
+    let (output, exit_code) = run_fe_main(&["test", "--backend", "sp1"]);
+    assert_eq!(exit_code, 2, "{output}");
+    assert!(output.contains("invalid value 'sp1'"), "{output}");
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_elf_emit() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("guest.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").unwrap();
+    let (output, exit_code) = run_fe_main(&["build", "--emit", "elf", source.to_str().unwrap()]);
+    assert_eq!(exit_code, 1, "{output}");
+    assert!(
+        output.contains("`--emit elf` requires `--backend sp1`"),
+        "{output}"
+    );
+}
+
+#[cfg(not(feature = "sp1"))]
+#[test]
+fn test_cli_sp1_requires_feature() {
+    let (output, exit_code) = run_fe_main(&["build", "--backend", "sp1"]);
+    assert_eq!(exit_code, 2, "{output}");
+    assert!(output.contains("invalid value 'sp1'"), "{output}");
+}
+
 #[test]
 fn test_cli_build_emit_abi_dyn_string_matches_string_selector() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1145,6 +1273,50 @@ fn test_cli_build_emit_abi_enum_field_uses_sol_compat_type() {
     assert_eq!(input_types, ["uint8", "bytes", "uint256", "uint256"]);
     assert_eq!(function["inputs"][0]["name"], "mode");
     assert_eq!(function["outputs"][0]["type"], "uint8");
+}
+
+#[test]
+fn test_cli_build_emit_abi_leaves_tuple_struct_fields_unnamed() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_tuple_struct.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+
+    // Positional field names only exist for `.0` lookups; like tuple
+    // components, the fields are unnamed in the ABI.
+    let function = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .find(|entry| entry["type"] == "function")
+        .expect("function entry");
+    let components = function["inputs"][0]["components"]
+        .as_array()
+        .expect("tuple components");
+    assert_eq!(components.len(), 2);
+    for component in components {
+        assert_eq!(component["name"], "");
+        assert_eq!(component["type"], "uint256");
+    }
 }
 
 #[test]
@@ -3823,7 +3995,7 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
         ),
         (
             "unsafe_trust_create",
-            "evm.create2<dep::Vault>(value: 0, args: (), salt: 0)",
+            "evm.create2<dep::Vault>(value: Wei::zero(), args: (), salt: 0)",
             "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
         ),
     ] {

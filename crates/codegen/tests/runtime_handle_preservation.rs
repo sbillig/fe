@@ -866,7 +866,7 @@ struct Note {
 }
 
 fn note_size(_ note: own Note) -> u256 {
-    note.id + note.body.len()
+    note.id + note.body.len() as u256
 }
 
 fn entry() -> u256 {
@@ -895,7 +895,7 @@ fn pointer_aggregate_temporaries_stay_values() {
         r#"use core::abi::store_word
 use core::ptr::MemBuffer
 
-fn buffer_len() -> u256 {
+fn buffer_len() -> usize {
     let buffer = MemBuffer::alloc(32)
     unsafe { store_word(ptr: buffer.ptr(), value: 42) }
     buffer.span().len()
@@ -1944,8 +1944,10 @@ fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
 fn readonly_with_provider_can_remain_const_backed() {
     with_test_runtime_package!(
         "readonly_with_provider_can_remain_const_backed.fe",
+        // Two words: a one-word constant struct is passed as the plain word.
         r#"pub struct Counter {
     pub value: u256,
+    pub step: u256,
 }
 
 fn read() -> u256 uses (counter: Counter) {
@@ -1954,10 +1956,10 @@ fn read() -> u256 uses (counter: Counter) {
 
 #[test]
 fn test_readonly_with_provider() {
-    let out: u256 = with (Counter = Counter { value: 7 }) {
+    let out: u256 = with (Counter = Counter { value: 7, step: 1 }) {
         read() + read()
     }
-    let other: u256 = with (Counter = { Counter { value: 9 } }) {
+    let other: u256 = with (Counter = { Counter { value: 9, step: 1 } }) {
         read() + read()
     }
 
