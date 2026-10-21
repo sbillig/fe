@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_relative_path.fe
+---
+error[2-0002]: `V` is not found
+   ┌─ recv_arm_relative_path.fe:12:15
+   │
+12 │         self::V { nonexistent: _ } -> u256 { 1 }
+   │               ^ `V` is not found
+
+error[2-0002]: `W` is not found
+   ┌─ recv_arm_relative_path.fe:13:15
+   │
+13 │         self::W { n } -> u256 { n }
+   │               ^ `W` is not found

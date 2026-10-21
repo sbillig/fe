@@ -1,0 +1,15 @@
+msg M {
+    #[selector = 0x01]
+    V { n: u256 } -> u256,
+    #[selector = 0x02]
+    W { n: u256 } -> u256,
+}
+
+// An arm's path is resolved where the arm is written, so `self::V` names
+// no variant of `M`.
+pub contract C {
+    recv M {
+        self::V { nonexistent: _ } -> u256 { 1 }
+        self::W { n } -> u256 { n }
+    }
+}

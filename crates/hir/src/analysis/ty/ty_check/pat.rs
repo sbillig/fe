@@ -840,7 +840,7 @@ impl<'db> TyChecker<'db> {
                 }
             },
             Err(err) => {
-                if !self.is_named_recv_arm_pat(pat)
+                if self.named_recv_arm_ident(pat, path).is_none()
                     && let Some(diag) =
                         err.into_diag(self.db, path, span.clone().path(), ExpectedPathKind::Pat)
                 {
@@ -1021,7 +1021,7 @@ impl<'db> TyChecker<'db> {
                     (invalid, None)
                 }
                 Err(err) => {
-                    if !self.is_named_recv_arm_pat(pat)
+                    if self.named_recv_arm_ident(pat, *path).is_none()
                         && let Some(diag) = err.into_diag(
                             self.db,
                             *path,
@@ -1058,11 +1058,15 @@ impl<'db> TyChecker<'db> {
         self.finish_pat_check(pat, expected, actual, analysis)
     }
 
-    /// Whether `pat` is an arm's pattern in a `recv` block that names its msg
-    /// type. Checking the block reports such a pattern that names no variant.
-    fn is_named_recv_arm_pat(&self, pat: PatId) -> bool {
-        matches!(self.env.owner().recv_arm(self.db), Some(arm) if arm.pat == pat)
-            && self.env.owner().recv_msg_path(self.db).is_some()
+    /// The name that `path` is, when it is a bare name in the pattern `pat` of
+    /// an arm of a `recv` block that names its msg type. Checking the block
+    /// reports such a name that is no variant of the msg type.
+    fn named_recv_arm_ident(&self, pat: PatId, path: PathId<'db>) -> Option<IdentId<'db>> {
+        let owner = self.env.owner();
+        if owner.recv_arm(self.db)?.pat != pat || owner.recv_msg_path(self.db).is_none() {
+            return None;
+        }
+        path.as_ident(self.db)
     }
 
     fn expected_msg_variant_for_named_recv_pat(
@@ -1071,10 +1075,7 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
         expected: TyId<'db>,
     ) -> Option<TyId<'db>> {
-        if !self.is_named_recv_arm_pat(pat) {
-            return None;
-        }
-        let path_ident = path.as_ident(self.db)?;
+        let path_ident = self.named_recv_arm_ident(pat, path)?;
         let adt_def = expected.adt_def(self.db)?;
         let AdtRef::Struct(struct_) = adt_def.adt_ref(self.db) else {
             return None;
