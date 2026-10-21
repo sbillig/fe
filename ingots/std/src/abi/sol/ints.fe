@@ -1636,10 +1636,8 @@ impl<T: SolWordRepr + SolInt> StorageKey for T {
         store_word(ptr: ptr, value: self.canonical_word())
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        self.canonical_word()
+    fn key_word(self) -> Option<u256> {
+        Some(self.canonical_word())
     }
 }
 

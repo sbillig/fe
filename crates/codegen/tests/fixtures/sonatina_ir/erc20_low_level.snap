@@ -9,6 +9,10 @@ type @layout_0 = {i256, i256, i256};
 type @layout_1 = {i256};
 type @layout_2 = {@layout_1, @layout_1};
 type @layout_3 = {i256, i256};
+type @layout_4 = enum {
+    #variant_0,
+    #variant_1(i256),
+};
 
 global private const @layout_1 $const_region_0 = {0};
 
@@ -492,21 +496,23 @@ func private %keccak_words(v0.[i256; 2]) -> i256 {
         return v6;
 }
 
-func private %key_word__g7bf4(v0.@layout_2) -> i256 {
+func private %key_word__g7bf4(v0.@layout_2) -> @layout_4 {
     block0:
         jump block1;
 
     block1:
-        return 0.i256;
+        v1.@layout_4 = enum.make @layout_4 #variant_0;
+        return v1;
 }
 
-func private %impl_trait_Address__key_word(v0.@layout_1) -> i256 {
+func private %impl_trait_Address__key_word(v0.@layout_1) -> @layout_4 {
     block0:
         jump block1;
 
     block1:
         v3.i256 = extract_value v0 0.i256;
-        return v3;
+        v4.@layout_4 = enum.make @layout_4 #variant_1 v3;
+        return v4;
 }
 
 func private %impl_MemBuffer__len(v0.objref<@layout_0>) -> i256 {
@@ -585,59 +591,68 @@ func inline(always) private %mapping_slot__g67a8(v0.i256, v1.@layout_1) -> i256 
         jump block1;
 
     block1:
-        br 1.i1 block2 block3;
+        v4.@layout_4 = call %impl_trait_Address__key_word v1;
+        v5.enumtag(@layout_4) = enum.tag v4;
+        br_table v5 block6 (1.enumtag(@layout_4) block5);
 
     block2:
-        v5.i256 = call %impl_trait_Address__key_word v1;
-        v9.[i256; 2] = insert_value undef.[i256; 2] 0.i256 v5;
-        v11.[i256; 2] = insert_value v9 1.i256 v0;
-        v12.i256 = call %keccak_words v11;
-        return v12;
+        v11.[i256; 2] = insert_value undef.[i256; 2] 0.i256 v35;
+        v13.[i256; 2] = insert_value v11 1.i256 v0;
+        v14.i256 = call %keccak_words v13;
+        return v14;
 
     block3:
         jump block4;
 
     block4:
-        v14.i256 = call %impl_trait_Address__encoded_len v1;
-        (v16.i256, v17.i1) = uaddo v14 32.i256;
-        br v17 block9 block10;
+        v16.i256 = call %impl_trait_Address__encoded_len v1;
+        (v18.i256, v19.i1) = uaddo v16 32.i256;
+        br v19 block11 block12;
 
     block5:
-        v33.i256 = call %keccak256 v2;
-        jump block8;
+        enum.assert_variant v4 #variant_1;
+        v35.i256 = enum.extract v4 #variant_1 0.i256;
+        jump block2;
 
     block6:
-        v36.@layout_3 = insert_value undef.@layout_3 0.i256 v22;
-        v38.@layout_3 = insert_value v36 1.i256 v29;
-        v39.objref<i256> = obj.proj v2 0.i256;
-        v40.i256 = extract_value v38 0.i256;
-        obj.store v39 v40;
-        v41.objref<i256> = obj.proj v2 1.i256;
-        v42.i256 = extract_value v38 1.i256;
-        obj.store v41 v42;
-        jump block5;
+        jump block3;
 
     block7:
-        return v33;
+        v37.i256 = call %keccak256 v2;
+        jump block10;
 
     block8:
+        v40.@layout_3 = insert_value undef.@layout_3 0.i256 v24;
+        v42.@layout_3 = insert_value v40 1.i256 v31;
+        v43.objref<i256> = obj.proj v2 0.i256;
+        v44.i256 = extract_value v42 0.i256;
+        obj.store v43 v44;
+        v45.objref<i256> = obj.proj v2 1.i256;
+        v46.i256 = extract_value v42 1.i256;
+        obj.store v45 v46;
         jump block7;
 
     block9:
+        return v37;
+
+    block10:
+        jump block9;
+
+    block11:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block10:
-        v22.i256 = call %core__lib__ptr__alloc_bytes_8b3e v16;
-        call %impl_trait_Address__write_key v22 v1;
-        v26.i256 = add v22 v14;
-        mstore v26 v0 i256;
-        (v29.i256, v30.i1) = uaddo v14 32.i256;
-        br v30 block9 block11;
+    block12:
+        v24.i256 = call %core__lib__ptr__alloc_bytes_8b3e v18;
+        call %impl_trait_Address__write_key v24 v1;
+        v28.i256 = add v24 v16;
+        mstore v28 v0 i256;
+        (v31.i256, v32.i1) = uaddo v16 32.i256;
+        br v32 block11 block13;
 
-    block11:
-        jump block6;
+    block13:
+        jump block8;
 }
 
 func inline(always) private %mapping_slot__g7bf4(v0.i256, v1.@layout_2) -> i256 {
@@ -646,59 +661,68 @@ func inline(always) private %mapping_slot__g7bf4(v0.i256, v1.@layout_2) -> i256 
         jump block1;
 
     block1:
-        br 0.i1 block2 block3;
+        v4.@layout_4 = call %key_word__g7bf4 v1;
+        v5.enumtag(@layout_4) = enum.tag v4;
+        br_table v5 block6 (1.enumtag(@layout_4) block5);
 
     block2:
-        v5.i256 = call %key_word__g7bf4 v1;
-        v9.[i256; 2] = insert_value undef.[i256; 2] 0.i256 v5;
-        v11.[i256; 2] = insert_value v9 1.i256 v0;
-        v12.i256 = call %keccak_words v11;
-        return v12;
+        v11.[i256; 2] = insert_value undef.[i256; 2] 0.i256 v35;
+        v13.[i256; 2] = insert_value v11 1.i256 v0;
+        v14.i256 = call %keccak_words v13;
+        return v14;
 
     block3:
         jump block4;
 
     block4:
-        v14.i256 = call %encoded_len__g7528 v1;
-        (v16.i256, v17.i1) = uaddo v14 32.i256;
-        br v17 block9 block10;
+        v16.i256 = call %encoded_len__g7528 v1;
+        (v18.i256, v19.i1) = uaddo v16 32.i256;
+        br v19 block11 block12;
 
     block5:
-        v33.i256 = call %keccak256 v2;
-        jump block8;
+        enum.assert_variant v4 #variant_1;
+        v35.i256 = enum.extract v4 #variant_1 0.i256;
+        jump block2;
 
     block6:
-        v36.@layout_3 = insert_value undef.@layout_3 0.i256 v22;
-        v38.@layout_3 = insert_value v36 1.i256 v29;
-        v39.objref<i256> = obj.proj v2 0.i256;
-        v40.i256 = extract_value v38 0.i256;
-        obj.store v39 v40;
-        v41.objref<i256> = obj.proj v2 1.i256;
-        v42.i256 = extract_value v38 1.i256;
-        obj.store v41 v42;
-        jump block5;
+        jump block3;
 
     block7:
-        return v33;
+        v37.i256 = call %keccak256 v2;
+        jump block10;
 
     block8:
+        v40.@layout_3 = insert_value undef.@layout_3 0.i256 v24;
+        v42.@layout_3 = insert_value v40 1.i256 v31;
+        v43.objref<i256> = obj.proj v2 0.i256;
+        v44.i256 = extract_value v42 0.i256;
+        obj.store v43 v44;
+        v45.objref<i256> = obj.proj v2 1.i256;
+        v46.i256 = extract_value v42 1.i256;
+        obj.store v45 v46;
         jump block7;
 
     block9:
+        return v37;
+
+    block10:
+        jump block9;
+
+    block11:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block10:
-        v22.i256 = call %core__lib__ptr__alloc_bytes_8b3e v16;
-        call %write_key__g7528 v22 v1;
-        v26.i256 = add v22 v14;
-        mstore v26 v0 i256;
-        (v29.i256, v30.i1) = uaddo v14 32.i256;
-        br v30 block9 block11;
+    block12:
+        v24.i256 = call %core__lib__ptr__alloc_bytes_8b3e v18;
+        call %write_key__g7528 v24 v1;
+        v28.i256 = add v24 v16;
+        mstore v28 v0 i256;
+        (v31.i256, v32.i1) = uaddo v16 32.i256;
+        br v32 block11 block13;
 
-    block11:
-        jump block6;
+    block13:
+        jump block8;
 }
 
 func private %mint__gf15d(v0.@layout_1, v1.i256, v2.i256) -> i256 {

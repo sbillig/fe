@@ -18,13 +18,10 @@ pub trait StorageKey {
     /// bytes in a live allocation.
     unsafe fn write_key(ptr: *u8, self)
 
-    /// Whether the encoding is the single word `key_word` returns, which
-    /// lets a slot derivation hash two values instead of a memory preimage.
-    const IS_WORD: bool = false
-
-    /// The key's one-word encoding when `IS_WORD`.
-    fn key_word(self) -> u256 {
-        0
+    /// The encoding when it is a single word, which lets a slot derivation
+    /// hash two values instead of a memory preimage.
+    fn key_word(self) -> Option<u256> {
+        None
     }
 }
 
@@ -38,10 +35,8 @@ impl StorageKey for u256 {
         mstore(addr: ptr, value: self)
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        self
+    fn key_word(self) -> Option<u256> {
+        Some(self)
     }
 }
 
@@ -55,10 +50,8 @@ impl StorageKey for Address {
         u256::write_key(ptr: ptr, self.inner)
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        self.inner
+    fn key_word(self) -> Option<u256> {
+        Some(self.inner)
     }
 }
 
@@ -75,10 +68,8 @@ impl StorageKey for u8 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -91,10 +82,8 @@ impl StorageKey for u16 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -107,10 +96,8 @@ impl StorageKey for u32 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -123,10 +110,8 @@ impl StorageKey for u64 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -139,10 +124,8 @@ impl StorageKey for u128 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -155,10 +138,8 @@ impl StorageKey for usize {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -174,10 +155,8 @@ impl StorageKey for i8 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -190,10 +169,8 @@ impl StorageKey for i16 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -206,10 +183,8 @@ impl StorageKey for i32 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -222,10 +197,8 @@ impl StorageKey for i64 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -238,10 +211,8 @@ impl StorageKey for i128 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -254,10 +225,8 @@ impl StorageKey for i256 {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -270,10 +239,8 @@ impl StorageKey for isize {
         u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        IntWord::to_word(self)
+    fn key_word(self) -> Option<u256> {
+        Some(IntWord::to_word(self))
     }
 }
 
@@ -288,10 +255,8 @@ impl StorageKey for bool {
         u256::write_key(ptr: ptr, if self { 1 } else { 0 })
     }
 
-    const IS_WORD: bool = true
-
-    fn key_word(self) -> u256 {
-        if self { 1 } else { 0 }
+    fn key_word(self) -> Option<u256> {
+        Some(self as u256)
     }
 }
 
