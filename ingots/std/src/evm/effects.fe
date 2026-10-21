@@ -1152,13 +1152,15 @@ where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
     let payload_size = abi_payload_size(message)
-    let buffer = MemBuffer::alloc(selector_size as usize + payload_size as usize)
+    let buffer = unsafe { MemBuffer::alloc_uninit(selector_size as usize + payload_size as usize) }
+    let payload = ptr::offset_bytes(buffer.ptr(), selector_size)
     unsafe {
         // The selector word's low bytes are overwritten by the payload, or
         // lie past the buffer's end in unallocated memory.
         ops::mstore(addr: buffer.ptr(), value: (selector as u256) << 224)
-        // The bytes after the selector, which only this encoding writes.
-        message.encode(AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(buffer.ptr(), selector_size), len: payload_size))
+        // The payload bytes, zeroed for the encoding to fill.
+        ptr::zero_bytes(payload, payload_size)
+        message.encode(AbiFrame::from_raw_parts(ptr: payload, len: payload_size))
     }
     buffer
 }
@@ -1257,35 +1259,8 @@ pub fn revert<T>(_ value: own T) -> !
 pub fn revert_error<T>(_ error: own T) -> !
     where T: ErrorVariant<Sol> + Encode<Sol>
 {
-    if !T::IS_DYNAMIC && 4 + T::HEAD_SIZE <= SCRATCH_BYTES {
-        // The revert discards memory, and a static encoding reads only the
-        // values of `error`'s fields, so the bytes below the heap can hold
-        // the payload without an allocation, like a panic's.
-        let base = scratch_ptr()
-        let frame = ptr::offset_bytes(base, 4)
-        unsafe {
-            ops::mstore(addr: base, value: (<T as ErrorVariant<Sol>>::SELECTOR as u256) << 224)
-            ptr::zero_bytes(frame, T::HEAD_SIZE)
-            error.encode(AbiFrame::from_raw_parts(ptr: frame, len: T::HEAD_SIZE))
-            ops::revert(offset: base, len: 4 + T::HEAD_SIZE)
-        }
-    }
     let buffer = encode_error(error)
     unsafe { ops::revert(offset: buffer.ptr(), len: buffer.len() as u256) }
-}
-
-/// The bytes below the backend's free-pointer slot at 0x40, which a return or
-/// revert payload can use instead of an allocation: the exit discards memory,
-/// and an encoder that allocates still finds the free pointer intact.
-const SCRATCH_BYTES: u256 = 0x40
-
-extern {
-    const fn __bitcast<From, To>(_: From) -> To
-}
-
-/// The first byte of linear memory.
-fn scratch_ptr() -> *u8 {
-    __bitcast<u256, *u8>(0)
 }
 
 /// Encode a custom error (4-byte selector + ABI-encoded fields) into freshly
@@ -1367,17 +1342,6 @@ impl ContractHost for Evm {
     fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
         where T: Encode<A> + AbiSize
     {
-        if !T::IS_DYNAMIC && T::HEAD_SIZE <= SCRATCH_BYTES {
-            // Returning discards memory, and a static encoding reads only the
-            // values of `value`'s fields, so a small payload can go to the
-            // bytes below the heap.
-            let base = scratch_ptr()
-            unsafe {
-                ptr::zero_bytes(base, T::HEAD_SIZE)
-                value.encode(AbiFrame::from_raw_parts(ptr: base, len: T::HEAD_SIZE))
-                self.return_data(data: MemSpan::from_raw_parts(ptr: base, len: T::HEAD_SIZE as usize))
-            }
-        }
         let out = encode_return_alloc<A, T>(value)
         self.return_bytes(data: out.span())
     }

@@ -1,7 +1,6 @@
-// Returns and reverts encode small static payloads into the scratch bytes
-// below the heap instead of allocating. The payload holds exactly what the
-// encoding writes, whatever those bytes held before, and an encoding that
-// allocates gets memory past the payload.
+// Returns and reverts carry exactly the bytes an encoding writes: bytes it
+// skips read as zero whatever low memory held, and an encoding that
+// allocates keeps its payload.
 use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode, store_word}
 use core::ptr
 use std::abi::Sol
@@ -99,7 +98,7 @@ pub contract Payloads {
     }
 }
 
-/// Fill the first two words of memory with ones.
+/// Fill the first two words of memory, the backend's spill slots, with ones.
 fn dirty_scratch() {
     unsafe {
         store_word(ptr: __bitcast<u256, *u8>(0), value: !(0 as u256))
