@@ -1,0 +1,1 @@
+A bare name in a pattern that is ambiguous, such as `None` imported both by a glob and by the prelude, is now reported as ambiguous instead of becoming a binding that matches anything. An ambiguous constant used as a generic argument, such as `W<N>` with two glob-imported `N`s, is reported as ambiguous instead of not found.

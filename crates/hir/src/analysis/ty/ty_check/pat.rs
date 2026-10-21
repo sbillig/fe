@@ -7,7 +7,7 @@ use either::Either;
 
 use super::{ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
-    name_resolution::{ExpectedPathKind, PathRes, ResolvedVariant},
+    name_resolution::{ExpectedPathKind, PathRes, PathResError, PathResErrorKind, ResolvedVariant},
     semantic::{
         SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
         instance::resolve_semantic_const_ref,
@@ -408,19 +408,21 @@ impl<'db> TyChecker<'db> {
             &lowering_cx,
         );
 
-        // Bare identifiers that don't resolve to a type/variant are local bindings,
-        // unless the expected type is a msg type, in which case we try to resolve
-        // the identifier as a msg variant first.
+        // Bare identifiers that aren't found or don't resolve to a type/variant
+        // are local bindings, unless the expected type is a msg type, in which
+        // case we try to resolve the identifier as a msg variant first.
         if let Some(name) = path.as_ident(self.db)
             && matches!(
                 res,
-                Err(_)
-                    | Ok(PathRes::Trait(_)
-                        | PathRes::Mod(_)
-                        | PathRes::Func(_)
-                        | PathRes::TraitMethod(..)
-                        | PathRes::Method(..)
-                        | PathRes::FuncParam(..))
+                Err(PathResError {
+                    kind: PathResErrorKind::NotFound { .. },
+                    ..
+                }) | Ok(PathRes::Trait(_)
+                    | PathRes::Mod(_)
+                    | PathRes::Func(_)
+                    | PathRes::TraitMethod(..)
+                    | PathRes::Method(..)
+                    | PathRes::FuncParam(..))
             )
         {
             let binding = LocalBinding::local(

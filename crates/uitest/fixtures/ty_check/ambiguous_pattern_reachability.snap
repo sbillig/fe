@@ -17,6 +17,20 @@ error[2-0004]: `Some` is ambiguous
 12 │     Some(T)
    │     ---- candidate 1 (from implicit import)
 
+error[2-0004]: `None` is ambiguous
+   ┌─ ambiguous_pattern_reachability.fe:11:9
+   │
+ 5 │     None
+   │     ---- candidate 2
+   ·
+11 │         None => 0
+   │         ^^^^ `None` is ambiguous
+   │
+   ┌─ src/option.fe:11:5
+   │
+11 │     None,
+   │     ---- candidate 1 (from implicit import)
+
 error[2-0004]: `Some` is ambiguous
    ┌─ ambiguous_pattern_reachability.fe:16:13
    │
