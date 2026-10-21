@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/import_ambiguous_external.fe
+---
+error[2-0004]: `core` is ambiguous
+  ┌─ import_ambiguous_external.fe:2:5
+  │
+2 │ use core
+  │     ^^^^ `core` is ambiguous

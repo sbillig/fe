@@ -1,12 +1,13 @@
 //! This module implements import and export resolution for HIR.
 //!
-//! Imports are resolved to a fixed point: each pass resolves every `use` of
-//! the ingot from scratch against the current resolutions of the others, until
-//! a pass changes nothing. A use's own resolution is withdrawn while it is
+//! Imports are resolved to a fixed point: each pass resolves uses from scratch
+//! against the resolutions that the others had after the last pass, until a
+//! pass changes nothing. A use's own resolution is withdrawn while it is
 //! resolved, so it can't name itself. Because nothing is kept from an earlier
-//! pass, a resolution that a later import shadows is replaced, and the
-//! resolutions and diagnostics of the last pass are consistent with each other.
-use std::{hash::BuildHasher, mem};
+//! pass, a resolution that a later import shadows is replaced, and because no
+//! use sees what another resolved in the same pass, the result doesn't depend
+//! on the order of the uses.
+use std::{cell::RefCell, hash::BuildHasher, mem};
 
 use common::{indexmap::IndexMap, ingot::Ingot};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
@@ -48,6 +49,36 @@ pub(crate) struct ImportResolver<'db> {
 
     /// The named uses that import each name into each scope.
     named_uses: IndexMap<(ScopeId<'db>, IdentId<'db>), Vec<Use<'db>>>,
+
+    /// The scopes of the ingot whose imports lookups have read since this was
+    /// last taken.
+    reads: RefCell<FxHashSet<ScopeId<'db>>>,
+}
+
+/// What a use imports.
+#[derive(PartialEq, Eq)]
+enum Imported<'db> {
+    Glob(GlobNames<'db>),
+    Bucket(NameResBucket<'db>),
+}
+
+impl<'db> Imported<'db> {
+    fn none(db: &'db dyn HirAnalysisDb, use_: Use<'db>) -> Self {
+        if use_.is_glob(db) {
+            Self::Glob(GlobNames::default())
+        } else {
+            Self::Bucket(NameResBucket::default())
+        }
+    }
+
+    fn hash(&self, use_: Use<'db>) -> u64 {
+        match self {
+            Self::Glob(names) => names.iter().fold(0u64, |hash, entry| {
+                hash.wrapping_add(FxBuildHasher.hash_one((use_, entry)))
+            }),
+            Self::Bucket(bucket) => FxBuildHasher.hash_one((use_, bucket)),
+        }
+    }
 }
 
 impl<'db> ImportResolver<'db> {
@@ -58,6 +89,7 @@ impl<'db> ImportResolver<'db> {
             imports: ResolvedImports::default(),
             buckets: FxHashMap::default(),
             named_uses: IndexMap::default(),
+            reads: RefCell::default(),
         }
     }
 
@@ -86,29 +118,53 @@ impl<'db> ImportResolver<'db> {
             }
         }
 
+        // A pass only resolves the uses that read the imports of a scope that
+        // the last pass changed; the others would resolve as before.
+        //
         // `state` sums the hashes of all resolutions. A state that repeats
-        // means the passes cycle without settling: the uses that the last pass
-        // changed depend on each other in a way that no resolution satisfies,
-        // like `use x::y as z` and `use z::x` where the outer scope has an `x`.
+        // means the passes cycle without settling: the uses that changed in
+        // the cycle depend on each other in a way that no resolution
+        // satisfies, like `use x::y as z` and `use z::x` where the outer scope
+        // has an `x`, or in more than one way, like `use x as y` and
+        // `use y as x` where the outer scope has both. A pass that changes
+        // nothing repeats the state of the last one, which ends the iteration
+        // without marking any use.
         let mut outcomes = vec![Ok(()); uses.len()];
+        let mut changed_in = vec![0; uses.len()];
+        let mut readers: FxHashMap<ScopeId<'db>, FxHashSet<usize>> = FxHashMap::default();
+        let mut dirty: FxHashSet<usize> = (0..uses.len()).collect();
         let mut state = 0u64;
-        let mut states = FxHashSet::from_iter([state]);
-        loop {
-            let mut changed = vec![];
-            for (idx, (&use_, outcome)) in uses.iter().zip(&mut outcomes).enumerate() {
-                let delta;
-                (delta, *outcome) = self.update(use_);
-                if let Some(delta) = delta {
-                    state = state.wrapping_add(delta);
-                    changed.push(idx);
-                }
+        let mut states = FxHashMap::from_iter([(state, 0)]);
+        for pass in 1.. {
+            let resolved: Vec<_> = dirty
+                .into_iter()
+                .map(|idx| {
+                    let resolved = self.resolve(uses[idx]);
+                    for scope in self.reads.take() {
+                        readers.entry(scope).or_default().insert(idx);
+                    }
+                    (idx, resolved)
+                })
+                .collect();
+            dirty = FxHashSet::default();
+            for (idx, (imported, outcome)) in resolved {
+                outcomes[idx] = outcome;
+                let Some(imported) = imported else {
+                    continue;
+                };
+                let use_ = uses[idx];
+                let hash = imported.hash(use_);
+                let old = self.replace(use_, imported);
+                state = state.wrapping_add(hash).wrapping_sub(old.hash(use_));
+                changed_in[idx] = pass;
+                let scope_readers = readers.get(&use_scope(db, use_)).into_iter().flatten();
+                dirty.extend(scope_readers.filter(|&&reader| reader != idx));
             }
-            if changed.is_empty() {
-                break;
-            }
-            if !states.insert(state) {
-                for idx in changed {
-                    outcomes[idx] = Err((0, NameResolutionError::Ambiguous(ThinVec::new())));
+            if let Some(start) = states.insert(state, pass) {
+                for (outcome, &changed) in outcomes.iter_mut().zip(&changed_in) {
+                    if changed > start {
+                        *outcome = Err((0, NameResolutionError::Ambiguous(ThinVec::new())));
+                    }
                 }
                 break;
             }
@@ -119,7 +175,7 @@ impl<'db> ImportResolver<'db> {
             .zip(outcomes)
             .filter(|(use_, _)| !use_.is_synthetic_use(db))
             .filter_map(|(&use_, outcome)| {
-                let (idx, err) = outcome.err().or_else(|| self.glob_shadows_external(use_))?;
+                let (idx, err) = outcome.err()?;
                 self.diag(use_, idx, err)
             })
             .collect();
@@ -139,54 +195,58 @@ impl<'db> ImportResolver<'db> {
         (self.imports, diags)
     }
 
-    /// Resolves `use_` again and records its resolution. Returns the change
-    /// of the resolution's hash if the resolution changed, and the error if
-    /// the resolution failed.
-    fn update(&mut self, use_: Use<'db>) -> (Option<u64>, Result<(), SegmentError<'db>>) {
-        let scope = use_scope(self.db, use_);
-        if use_.is_glob(self.db) {
-            let old = mem::take(self.glob_names_mut(scope, use_));
-            let (new, outcome) = match self.resolve_base(use_, scope) {
-                Ok(target) => {
-                    let mut names = NameResolver::new(self.db, &*self)
-                        .collect_all_resolutions_for_glob(target, scope);
-                    for res in names.values_mut().flatten() {
-                        res.derivation = NameDerivation::GlobImported(use_);
-                    }
-                    (names, Ok(()))
+    /// Resolves `use_` against the current resolutions of the others. Returns
+    /// what it imports if that changed, and the error if the resolution failed.
+    fn resolve(
+        &mut self,
+        use_: Use<'db>,
+    ) -> (Option<Imported<'db>>, Result<(), SegmentError<'db>>) {
+        let db = self.db;
+        let scope = use_scope(db, use_);
+        let own = self.replace(use_, Imported::none(db, use_));
+        let resolved = self.resolve_base(use_, scope).and_then(|target| {
+            if use_.is_glob(db) {
+                let mut names =
+                    NameResolver::new(db, &*self).collect_all_resolutions_for_glob(target, scope);
+                for res in names.values_mut().flatten() {
+                    res.derivation = NameDerivation::GlobImported(use_);
                 }
-                Err(err) => (GlobNames::default(), Err(err)),
-            };
-            let hash = |names: &GlobNames<'db>| {
-                names.iter().fold(0u64, |hash, entry| {
-                    hash.wrapping_add(FxBuildHasher.hash_one((use_, entry)))
-                })
-            };
-            let delta = (old != new).then(|| hash(&new).wrapping_sub(hash(&old)));
-            *self.glob_names_mut(scope, use_) = new;
-            (delta, outcome)
-        } else {
-            let name = use_.imported_name(self.db);
-            let old = self.buckets.remove(&use_).unwrap_or_default();
-            if let Some(name) = name {
-                self.merge_named(scope, name);
+                return Ok(Imported::Glob(names));
             }
-            let (new, outcome) = match self.resolve_named(use_, scope) {
-                Ok(bucket) => (bucket, Ok(())),
-                Err(err) => (NameResBucket::default(), Err(err)),
-            };
-            let hash = |bucket: &NameResBucket<'db>| FxBuildHasher.hash_one((use_, bucket));
-            let delta = (old != new).then(|| hash(&new).wrapping_sub(hash(&old)));
-            self.buckets.insert(use_, new);
-            if let Some(name) = name {
-                self.merge_named(scope, name);
-            }
-            (delta, outcome)
-        }
+            let segments = use_path(db, use_)?;
+            let idx = segments.len() - 1;
+            let mut bucket = self.lookup(scope, target, idx, &segments[idx])?;
+            bucket.set_derivation(NameDerivation::NamedImported(use_));
+            Ok(Imported::Bucket(bucket))
+        });
+        let (imported, outcome) = match resolved {
+            Ok(imported) => (
+                imported,
+                self.glob_shadows_external(use_).map_or(Ok(()), Err),
+            ),
+            Err(err) => (Imported::none(db, use_), Err(err)),
+        };
+        let changed = imported != own;
+        self.replace(use_, own);
+        (changed.then_some(imported), outcome)
     }
 
-    fn glob_names_mut(&mut self, scope: ScopeId<'db>, use_: Use<'db>) -> &mut GlobNames<'db> {
-        &mut self.imports.glob_resolved[&scope].imported[&use_]
+    /// Replaces what `use_` imports, and returns what it imported before.
+    fn replace(&mut self, use_: Use<'db>, imported: Imported<'db>) -> Imported<'db> {
+        let scope = use_scope(self.db, use_);
+        match imported {
+            Imported::Glob(names) => {
+                let old = &mut self.imports.glob_resolved[&scope].imported[&use_];
+                Imported::Glob(mem::replace(old, names))
+            }
+            Imported::Bucket(bucket) => {
+                let old = self.buckets.insert(use_, bucket).unwrap_or_default();
+                if let Some(name) = use_.imported_name(self.db) {
+                    self.merge_named(scope, name);
+                }
+                Imported::Bucket(old)
+            }
+        }
     }
 
     /// Merges the buckets of the named uses importing `name` into `scope`.
@@ -203,19 +263,6 @@ impl<'db> ImportResolver<'db> {
         } else {
             named.insert(name, merged);
         }
-    }
-
-    fn resolve_named(
-        &self,
-        use_: Use<'db>,
-        scope: ScopeId<'db>,
-    ) -> Result<NameResBucket<'db>, SegmentError<'db>> {
-        let target = self.resolve_base(use_, scope)?;
-        let segments = use_path(self.db, use_)?;
-        let idx = segments.len() - 1;
-        let mut bucket = self.lookup(scope, target, idx, &segments[idx])?;
-        bucket.set_derivation(NameDerivation::NamedImported(use_));
-        Ok(bucket)
     }
 
     /// Resolves all segments of the path of `use_` but the last one, and
@@ -433,6 +480,7 @@ impl<'db> Importer<'db> for ImportResolver<'db> {
         scope: ScopeId<'db>,
     ) -> &'a ResolvedImports<'db> {
         if scope.ingot(db) == self.ingot {
+            self.reads.borrow_mut().insert(scope);
             &self.imports
         } else {
             DefaultImporter.imports(db, scope)

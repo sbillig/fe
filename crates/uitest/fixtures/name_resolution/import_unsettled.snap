@@ -14,3 +14,15 @@ error[2-0004]: `N` is ambiguous
   │
 9 │     use N::Y as X
   │         ^ `N` is ambiguous
+
+error[2-0004]: `B` is ambiguous
+   ┌─ import_unsettled.fe:16:9
+   │
+16 │     use B as A
+   │         ^ `B` is ambiguous
+
+error[2-0004]: `A` is ambiguous
+   ┌─ import_unsettled.fe:17:9
+   │
+17 │     use A as B
+   │         ^ `A` is ambiguous

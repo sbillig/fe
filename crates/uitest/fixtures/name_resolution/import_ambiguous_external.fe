@@ -1,0 +1,6 @@
+use foo::*
+use core
+
+mod foo {
+    pub mod core {}
+}

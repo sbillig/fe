@@ -581,11 +581,8 @@ impl<'db, 'a> NameResolver<'db, 'a> {
     /// for this is
     /// - Ambiguous error should be reported lazily, meaning it should be
     ///   reported when the resolution is actually used.
-    /// - The function is used for glob imports, so it's necessary to return
-    ///   monotonously increasing results. Also, we can't arbitrarily choose the
-    ///   possible resolution from multiple candidates to avoid hiding
-    ///   ambiguity. That's also the reason why we can't use [`ResBucket`] and
-    ///   [`ResBucket::merge`] in this function.
+    /// - We can't arbitrarily choose one of several candidates without hiding
+    ///   the ambiguity, which is why [`NameResBucket::merge`] isn't used here.
     ///
     /// The below examples demonstrates the second point.
     /// We need to report ambiguous error at `const C: S = S` because `S` is
