@@ -1,0 +1,146 @@
+// Returns and reverts encode small static payloads into the scratch bytes
+// below the heap instead of allocating. The payload holds exactly what the
+// encoding writes, whatever those bytes held before, and an encoding that
+// allocates gets memory past the payload.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode, store_word}
+use core::ptr
+use std::abi::Sol
+use std::evm::revert_error
+
+extern {
+    const fn __bitcast<From, To>(_: From) -> To
+}
+
+// Writes only its second word; the first stays zero.
+struct Sparse { tag: u256 }
+
+impl AbiSize for Sparse {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = false
+}
+
+impl Encode<Sol> for Sparse {
+    fn encode(own self, _ out: AbiFrame) {
+        out.slice(offset: 32, len: 32).store_word(at: 0, value: 7)
+    }
+}
+
+impl Decode<Sol> for Sparse {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Sparse { tag: 0 }
+    }
+}
+
+// An error whose one-word field writes nothing.
+struct Blank { tag: u256 }
+
+impl AbiSize for Blank {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl Encode<Sol> for Blank {
+    fn encode(own self, _ out: AbiFrame) {}
+}
+
+impl ErrorVariant<Sol> for Blank {
+    const SELECTOR: u32 = 0x12345678
+}
+
+// Allocates twice after writing its third word, then writes whether both
+// allocations lie past the backend's free-pointer slot at 0x40. The
+// allocations are sized from calldata, so the allocator places them.
+struct Allocating { len: u256 }
+
+impl AbiSize for Allocating {
+    const HEAD_SIZE: u256 = 96
+    const IS_DYNAMIC: bool = false
+}
+
+impl Encode<Sol> for Allocating {
+    fn encode(own self, _ out: AbiFrame) {
+        out.store_word(at: 64, value: 3)
+        let first = ptr::alloc_bytes(self.len)
+        let second = ptr::alloc_bytes(self.len)
+        out.store_word(at: 0, value: 1)
+        let past_slot = __bitcast<*u8, u256>(first) >= 0x60 && __bitcast<*u8, u256>(second) >= 0x60
+        out.store_word(at: 32, value: if past_slot { 2 } else { 0 })
+    }
+}
+
+impl Decode<Sol> for Allocating {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Allocating { len: 0 }
+    }
+}
+
+msg PayloadMsg {
+    #[selector = 0x01]
+    ReturnSparse -> Sparse,
+    #[selector = 0x02]
+    RevertBlank,
+    #[selector = 0x03]
+    ReturnAllocating { len: u256 } -> Allocating,
+}
+
+pub contract Payloads {
+    recv PayloadMsg {
+        ReturnSparse {} -> Sparse {
+            dirty_scratch()
+            Sparse { tag: 0 }
+        }
+        RevertBlank {} {
+            dirty_scratch()
+            revert_error(Blank { tag: 0 })
+        }
+        ReturnAllocating { len } -> Allocating {
+            Allocating { len }
+        }
+    }
+}
+
+/// Fill the first two words of memory with ones.
+fn dirty_scratch() {
+    unsafe {
+        store_word(ptr: __bitcast<u256, *u8>(0), value: !(0 as u256))
+        store_word(ptr: __bitcast<u256, *u8>(32), value: !(0 as u256))
+    }
+}
+
+#[test]
+fn sparse_return_reads_zero_where_nothing_was_written()
+uses (evm: mut Evm, call: mut Call)
+{
+    let payloads = evm.create2<Payloads>(value: 0, args: (), salt: 0)
+    let outcome = payloads.try_call(PayloadMsg::ReturnSparse {})
+    assert!(outcome.success())
+    let data = outcome.returndata()
+    assert!(data.len() == 64)
+    assert!(data.word_at(0) == 0)
+    assert!(data.word_at(32) == 7)
+}
+
+#[test]
+fn sparse_error_reads_zero_where_nothing_was_written()
+uses (evm: mut Evm, call: mut Call)
+{
+    let payloads = evm.create2<Payloads>(value: 0, args: (), salt: 0)
+    let outcome = payloads.try_call(PayloadMsg::RevertBlank {})
+    assert!(!outcome.success())
+    let data = outcome.returndata()
+    assert!(data.len() == 36)
+    assert!(data.word_at(0) >> 224 == 0x12345678)
+    assert!(data.word_at(4) == 0)
+}
+
+#[test]
+fn allocating_encoding_keeps_its_payload() uses (evm: mut Evm, call: mut Call) {
+    let payloads = evm.create2<Payloads>(value: 0, args: (), salt: 0)
+    let outcome = payloads.try_call(PayloadMsg::ReturnAllocating { len: 32 })
+    assert!(outcome.success())
+    let data = outcome.returndata()
+    assert!(data.len() == 96)
+    assert!(data.word_at(0) == 1)
+    assert!(data.word_at(32) == 2)
+    assert!(data.word_at(64) == 3)
+}
