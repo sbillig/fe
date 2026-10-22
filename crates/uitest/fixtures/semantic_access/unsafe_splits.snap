@@ -35,3 +35,11 @@ error[16-0001]: access conflict in `fn duplicated`
    │
 45 │     (a, a)
    │     ^^^^^^ the components of a split must be disjoint when one of them is `mut`
+
+error[16-0001]: access conflict in `fn write_beside`
+   ┌─ unsafe_splits.fe:69:5
+   │
+68 │     let (mut x, y) = unsafe { (cell(mut to, true), cell(from, false)) }
+   │                                                         ---- access opened here
+69 │     from.a = 1
+   │     ^^^^^^^^^^ cannot write to this place while a `ref` access of it is open

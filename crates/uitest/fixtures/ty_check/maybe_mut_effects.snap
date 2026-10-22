@@ -108,16 +108,6 @@ error[8-0037]: effect `RawStorage` must be mutable when calling `pair_at`
     │
     = use a mutable binding or pass a mutable reference in the `with` block
 
-error[8-0037]: effect `RawStorage` must be mutable when calling `storage_at`
-    ┌─ maybe_mut_effects.fe:117:49
-    │
-116 │ fn nested_split_with_read() uses (storage: RawStorage) {
-    │                                   ------------------- effect `RawStorage` is provided here
-117 │     let ((mut a, b), c) = unsafe { (pair_at(0), storage_at<u256>(2)) }
-    │                                                 ^^^^^^^^^^^^^^^^^^^ `storage_at` requires `mut RawStorage`
-    │
-    = use a mutable binding or pass a mutable reference in the `with` block
-
 error[8-0037]: effect `Store` must be mutable when calling `needs_mut`
     ┌─ maybe_mut_effects.fe:128:5
     │

@@ -1529,9 +1529,6 @@ pub struct TyChecker<'db> {
     /// call and the effect's binding index, which a raise to `mut` requires
     /// mutable as resolution does.
     effect_providers: FxHashMap<(ExprId, u32), ProvidedEffect<'db>>,
-    /// The unsafe split whose `mut` binding is asking its accesses for
-    /// `mut`, which the errors that asks for name.
-    split_demand: Option<ExprId>,
     diags: Vec<FuncBodyDiag<'db>>,
     /// Set once deferred work is resolved for the last time, after which type
     /// equalities are decided rather than retained.
@@ -2880,7 +2877,6 @@ impl<'db> TyChecker<'db> {
             shape_bindings: FxHashSet::default(),
             missing_effects: Vec::new(),
             effect_providers: FxHashMap::default(),
-            split_demand: None,
             diags: Vec::new(),
             final_pass: false,
         }
@@ -3213,10 +3209,10 @@ impl<'db> TyChecker<'db> {
             return;
         };
         // A `mut` binding of an access component asks the `mut?` call the
-        // source grants through for `mut`, as an earlier arm may have.
-        if self.pattern_asks_mut(pat, shape) {
-            self.select_mut_place(source);
-        }
+        // source grants it through for `mut`, as an earlier arm may have.
+        let mut asked = shape.clone();
+        self.pattern_asks_mut(pat, &mut asked);
+        self.select_mut_grants(source, &asked);
         let selected = self.env.typed_expr(source).and_then(|source| source.shape);
         let shape = selected.as_ref().unwrap_or(shape);
         self.consume_access(source);
@@ -3507,37 +3503,43 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    /// Whether `pat` binds a component of `shape` that is a `ref` access with
-    /// a `mut` binding, which needs the access to be `mut`.
-    fn pattern_asks_mut(&self, pat: PatId, shape: &Shape<'db>) -> bool {
+    /// Makes `asked`, the shape a source grants `pat`, what `pat` asks of it:
+    /// each access with a `mut` binding of a component below it is `mut`.
+    fn pattern_asks_mut(&self, pat: PatId, asked: &mut Shape<'db>) {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
-            return false;
+            return;
         };
-        match (shape, pat_data) {
-            (Shape::Owned(_) | Shape::Access(BorrowKind::Mut, _), _) => false,
-            (Shape::Access(BorrowKind::Ref, _), _) => {
-                self.first_marked_binding(pat, BindingMarker::Mut).is_some()
+        match (asked, pat_data) {
+            (Shape::Access(kind, _), _) => {
+                if self.first_marked_binding(pat, BindingMarker::Mut).is_some() {
+                    *kind = BorrowKind::Mut;
+                }
             }
-            (_, Pat::Or(lhs, rhs)) => {
-                self.pattern_asks_mut(*lhs, shape) || self.pattern_asks_mut(*rhs, shape)
+            (asked, Pat::Or(lhs, rhs)) => {
+                self.pattern_asks_mut(*lhs, asked);
+                self.pattern_asks_mut(*rhs, asked);
             }
             (Shape::Tuple(elems), Pat::Tuple(pats)) => {
                 let rest = pats
                     .iter()
                     .position(|pat| pat.is_rest(self.db, self.body()));
-                pats.iter().enumerate().any(|(idx, &pat)| {
+                let len = elems.len();
+                for (idx, &pat) in pats.iter().enumerate() {
                     let elem = match rest {
-                        Some(rest) if idx > rest => (elems.len() + idx).checked_sub(pats.len()),
+                        Some(rest) if idx > rest => (len + idx).checked_sub(pats.len()),
                         _ => Some(idx),
                     };
-                    elem.and_then(|elem| elems.get(elem))
-                        .is_some_and(|elem| self.pattern_asks_mut(pat, elem))
-                })
+                    if let Some(elem) = elem.and_then(|elem| elems.get_mut(elem)) {
+                        self.pattern_asks_mut(pat, elem);
+                    }
+                }
             }
             (Shape::Sum { payload, .. }, Pat::PathTuple(_, pats)) => {
-                matches!(pats.as_slice(), [payload_pat] if self.pattern_asks_mut(*payload_pat, payload))
+                if let [payload_pat] = pats.as_slice() {
+                    self.pattern_asks_mut(*payload_pat, payload);
+                }
             }
-            _ => false,
+            _ => {}
         }
     }
 

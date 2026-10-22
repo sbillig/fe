@@ -83,7 +83,7 @@ impl<'db> TyChecker<'db> {
             .shape
             .as_ref()
             .is_some_and(|given| !given.grants(shape))
-            && self.select_mut_place(expr)
+            && self.select_mut_grants(expr, shape)
         {
             prop = self.env.typed_expr(expr).expect("yield site is typed");
         }
@@ -197,34 +197,11 @@ impl<'db> TyChecker<'db> {
                     _ => prop.shape.clone(),
                 }
             }
-            // An unsafe split grants what its access elements do, a product
-            // of accesses among them.
-            Partial::Present(Expr::Tuple(elems)) if self.env.is_unsafe_split(expr) => {
-                let elems = elems.clone();
-                let outer = self.split_demand.replace(expr);
-                // Every access element is asked, whatever an earlier one
-                // answers, so each reports what it cannot pass `mut`.
-                let mut all = true;
-                for &elem in &elems {
-                    all &= self.env.typed_expr(elem).is_some_and(|elem| {
-                        !elem
-                            .shape
-                            .is_some_and(|shape| shape.has_access_of(BorrowKind::Ref))
-                    }) || self.select_mut_place(elem);
-                }
-                self.split_demand = outer;
-                if !all {
-                    return false;
-                }
-                Some(Shape::Tuple(
-                    elems
-                        .iter()
-                        .map(|&elem| {
-                            let elem = self.env.typed_expr(elem).expect("an element is typed");
-                            elem.shape.unwrap_or(Shape::Owned(elem.ty))
-                        })
-                        .collect(),
-                ))
+            // An unsafe split asks each of its accesses.
+            Partial::Present(Expr::Tuple(_)) if self.env.is_unsafe_split(expr) => {
+                return prop
+                    .shape
+                    .is_some_and(|shape| self.select_mut_grants(expr, &shape.to_mut()));
             }
             _ => return false,
         };
@@ -237,6 +214,81 @@ impl<'db> TyChecker<'db> {
             },
         );
         true
+    }
+
+    /// Makes `expr`, a source of accesses, grant `required`, which may need
+    /// `mut` where it grants a read access, and returns whether it then does.
+    /// An unsafe split, also as a block's tail, asks only its elements
+    /// granting those parts for `mut`, so its other accesses keep their
+    /// modes; any other source is asked for `mut` whole, as a call has one
+    /// mode.
+    pub(super) fn select_mut_grants(&mut self, expr: ExprId, required: &Shape<'db>) -> bool {
+        let grants = |this: &Self| {
+            this.env
+                .typed_expr(expr)
+                .and_then(|prop| prop.shape)
+                .is_some_and(|given| given.grants(required))
+        };
+        let Some(prop) = self.env.typed_expr(expr) else {
+            return false;
+        };
+        let granted = grants(self);
+        if granted || !required.has_access_of(BorrowKind::Mut) {
+            return granted;
+        }
+        match (self.env.expr_data(expr), required) {
+            // A block grants what its tail does.
+            (Partial::Present(Expr::Block(stmts, _)), _) => {
+                let Some(Partial::Present(Stmt::Expr(tail))) =
+                    stmts.last().map(|stmt| stmt.data(self.db, self.body()))
+                else {
+                    return false;
+                };
+                let tail = *tail;
+                self.select_mut_grants(tail, required);
+                let tail = self.env.typed_expr(tail).expect("a block's tail is typed");
+                self.env.type_expr(
+                    expr,
+                    ExprProp {
+                        is_mut: tail.is_mut,
+                        shape: tail.shape,
+                        ..prop
+                    },
+                );
+            }
+            // Every element is asked, whatever an earlier one answers, so
+            // each reports what it cannot pass `mut`. The split is as
+            // mutable as its grants.
+            (Partial::Present(Expr::Tuple(elems)), Shape::Tuple(parts))
+                if self.env.is_unsafe_split(expr) =>
+            {
+                let elems = elems.clone();
+                for (&elem, part) in elems.iter().zip(parts) {
+                    self.select_mut_grants(elem, part);
+                }
+                let shape = Shape::Tuple(
+                    elems
+                        .iter()
+                        .map(|&elem| {
+                            let elem = self.env.typed_expr(elem).expect("an element is typed");
+                            elem.shape.unwrap_or(Shape::Owned(elem.ty))
+                        })
+                        .collect(),
+                );
+                self.env.type_expr(
+                    expr,
+                    ExprProp {
+                        is_mut: !shape.has_access_of(BorrowKind::Ref),
+                        shape: Some(shape),
+                        ..prop
+                    },
+                );
+            }
+            _ => {
+                self.select_mut_place(expr);
+            }
+        }
+        grants(self)
     }
 
     /// Calls the `mut?` callee of the call `expr`, typed as `prop`, at `mut`,
@@ -380,21 +432,16 @@ impl<'db> TyChecker<'db> {
             return;
         }
         let span = arg.span(self.body()).into();
-        let split = self
-            .split_demand
-            .map(|split| split.span(self.body()).into());
         if self.env.is_place_expr(arg) {
             self.push_diag(BodyDiag::ExplicitBorrowRequired {
                 primary: span,
                 kind: BorrowKind::Mut,
                 suggestion: place_borrow_suggestion(self.db, self.body(), arg, BorrowKind::Mut),
-                split,
             });
         } else {
             self.push_diag(BodyDiag::BorrowArgMustBePlace {
                 primary: span,
                 kind: BorrowKind::Mut,
-                split,
             });
         }
     }
@@ -416,7 +463,7 @@ impl<'db> TyChecker<'db> {
                     self.select_mut_parts(elem, at_ref, at_mut);
                 }
             }
-            _ if self.grants_product(arg, at_mut) => {}
+            _ if self.select_mut_grants(arg, at_mut) => {}
             _ => self.report_product_arg(arg, at_mut, true),
         }
     }
@@ -442,19 +489,6 @@ impl<'db> TyChecker<'db> {
                 expected: product.clone(),
             },
         });
-    }
-
-    /// Whether `arg`, a projection's result, grants the parts of `product`.
-    /// A `mut?` call is asked for `mut` when a part needs it.
-    pub(super) fn grants_product(&mut self, arg: ExprId, product: &Shape<'db>) -> bool {
-        let grants = |this: &Self| {
-            this.env
-                .typed_expr(arg)
-                .and_then(|prop| prop.shape)
-                .is_some_and(|granted| granted.grants(product))
-        };
-        grants(self)
-            || product.has_access_of(BorrowKind::Mut) && self.select_mut_place(arg) && grants(self)
     }
 
     /// Marks `expr` as used as an access. A block forwards the access of its

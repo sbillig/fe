@@ -44,3 +44,28 @@ fn duplicated(_ xs: mut MemArray<u256>) -> (mut u256, mut u256) {
     let (mut a, mut b) = xs.pair_mut(0, 1)
     (a, a)
 }
+
+struct Cells {
+    a: u256,
+    b: u256,
+}
+
+#[raw_place]
+fn cell(_ cells: mut? Cells, _ first: bool) -> mut? u256 {
+    if first { mut? cells.a } else { mut? cells.b }
+}
+
+// Accepted: a `mut` binding of one part asks only its call for `mut`, so the
+// part bound plainly holds `from` for reading.
+fn read_beside(_ to: mut Cells, _ from: mut Cells) {
+    let (mut x, y) = unsafe { (cell(mut to, true), cell(from, false)) }
+    let z = from.a
+    x = y + z
+}
+
+// Rejected: `from` stays reserved while `y` is open.
+fn write_beside(_ to: mut Cells, _ from: mut Cells) {
+    let (mut x, y) = unsafe { (cell(mut to, true), cell(from, false)) }
+    from.a = 1
+    x = y
+}

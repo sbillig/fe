@@ -245,35 +245,26 @@ error[8-0037]: effect `Store` must be mutable when calling `cell`
     = use a mutable binding or pass a mutable reference in the `with` block
 
 error[8-0069]: explicit borrow required
-    ┌─ maybe_mut_raises.fe:193:62
+    ┌─ maybe_mut_raises.fe:194:58
     │
-193 │     let (mut a, b) = unsafe { (cell_of(mut d, true), cell_of(e, false)) }
-    │                               -------------------------------^---------
-    │                               │                              │
-    │                               │                              this argument must be explicitly borrowed as `mut`
-    │                               a `mut` binding of this unsafe split asks each access in it for `mut`
+194 │     let (a, mut b) = unsafe { (cell_of(d, true), cell_of(e, false)) }
+    │                                                          ^ this argument must be explicitly borrowed as `mut`
     │
     = help: try `mut e`
 
 error[8-0069]: explicit borrow required
-    ┌─ maybe_mut_raises.fe:200:53
+    ┌─ maybe_mut_raises.fe:201:53
     │
-200 │     let (mut a, mut b) = unsafe { (ref c.a, cell_of(e, false)) }
-    │                                   ------------------^---------
-    │                                   │                 │
-    │                                   │                 this argument must be explicitly borrowed as `mut`
-    │                                   a `mut` binding of this unsafe split asks each access in it for `mut`
+201 │     let (mut a, mut b) = unsafe { (ref c.a, cell_of(e, false)) }
+    │                                                     ^ this argument must be explicitly borrowed as `mut`
     │
     = help: try `mut e`
 
 error[8-0069]: explicit borrow required
-    ┌─ maybe_mut_raises.fe:204:44
+    ┌─ maybe_mut_raises.fe:205:44
     │
-204 │     let (mut a, mut b) = unsafe { (cell_of(e, false), ref c.a) }
-    │                                   ---------^------------------
-    │                                   │        │
-    │                                   │        this argument must be explicitly borrowed as `mut`
-    │                                   a `mut` binding of this unsafe split asks each access in it for `mut`
+205 │     let (mut a, mut b) = unsafe { (cell_of(e, false), ref c.a) }
+    │                                            ^ this argument must be explicitly borrowed as `mut`
     │
     = help: try `mut e`
 
@@ -294,33 +285,17 @@ error[8-0123]: a `mut` binding needs a mutable place or access
     = write `var` for a mutable copy, or use the `mut` projection to write through
 
 error[8-0123]: a `mut` binding needs a mutable place or access
-    ┌─ maybe_mut_raises.fe:200:10
+    ┌─ maybe_mut_raises.fe:201:10
     │
-200 │     let (mut a, mut b) = unsafe { (ref c.a, cell_of(e, false)) }
+201 │     let (mut a, mut b) = unsafe { (ref c.a, cell_of(e, false)) }
     │          ^^^^^ this binds part of a read access
     │
     = write `var` for a mutable copy, or use the `mut` projection to write through
 
 error[8-0123]: a `mut` binding needs a mutable place or access
-    ┌─ maybe_mut_raises.fe:200:17
+    ┌─ maybe_mut_raises.fe:205:17
     │
-200 │     let (mut a, mut b) = unsafe { (ref c.a, cell_of(e, false)) }
-    │                 ^^^^^ this binds part of a read access
-    │
-    = write `var` for a mutable copy, or use the `mut` projection to write through
-
-error[8-0123]: a `mut` binding needs a mutable place or access
-    ┌─ maybe_mut_raises.fe:204:10
-    │
-204 │     let (mut a, mut b) = unsafe { (cell_of(e, false), ref c.a) }
-    │          ^^^^^ this binds part of a read access
-    │
-    = write `var` for a mutable copy, or use the `mut` projection to write through
-
-error[8-0123]: a `mut` binding needs a mutable place or access
-    ┌─ maybe_mut_raises.fe:204:17
-    │
-204 │     let (mut a, mut b) = unsafe { (cell_of(e, false), ref c.a) }
+205 │     let (mut a, mut b) = unsafe { (cell_of(e, false), ref c.a) }
     │                 ^^^^^ this binds part of a read access
     │
     = write `var` for a mutable copy, or use the `mut` projection to write through

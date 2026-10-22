@@ -188,14 +188,15 @@ fn cell_of(_ cells: mut? Cells, _ first: bool) -> mut? u256 {
     if first { mut? cells.a } else { mut? cells.b }
 }
 
-// A `mut` binding of one part asks every access in the split for `mut`.
-fn split_asks_each(_ d: mut Cells, _ e: Cells) {
-    let (mut a, b) = unsafe { (cell_of(mut d, true), cell_of(e, false)) }
-    a = b
+// A `mut` binding of one part asks only the access granting it for `mut`:
+// `e` must be `mut`, and `d` may be read-only.
+fn split_asks_part(_ d: Cells, _ e: Cells) {
+    let (a, mut b) = unsafe { (cell_of(d, true), cell_of(e, false)) }
+    b = a
 }
 
-// Each access element is asked, whatever an earlier one answers, so `e`
-// must be `mut` in either order.
+// Each part bound `mut` is asked, whatever another answers, so `e` must be
+// `mut` in either order.
 fn split_read_first(_ c: mut Cells, _ e: Cells) {
     let (mut a, mut b) = unsafe { (ref c.a, cell_of(e, false)) }
 }

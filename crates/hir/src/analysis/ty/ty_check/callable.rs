@@ -1005,7 +1005,6 @@ fn check_arg_mode<'db>(
                 primary: arg.expr_span.clone(),
                 kind: BorrowKind::Mut,
                 suggestion: place_borrow_suggestion(db, tc.body(), arg.expr, BorrowKind::Mut),
-                split: None,
             });
             diagnosed = true;
         }
@@ -1036,13 +1035,11 @@ fn check_arg_mode<'db>(
                     primary: arg.expr_span.clone(),
                     kind: BorrowKind::Mut,
                     suggestion: place_borrow_suggestion(db, tc.body(), arg.expr, BorrowKind::Mut),
-                    split: None,
                 });
             } else {
                 tc.push_diag(BodyDiag::BorrowArgMustBePlace {
                     primary: arg.expr_span.clone(),
                     kind: BorrowKind::Mut,
-                    split: None,
                 });
             }
         }
@@ -1088,7 +1085,7 @@ fn check_product_arg<'db>(
         }
         return diagnosed;
     }
-    if tc.grants_product(arg.expr, product) {
+    if tc.select_mut_grants(arg.expr, product) {
         tc.consume_access(arg.expr);
         return false;
     }

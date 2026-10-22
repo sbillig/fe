@@ -111,8 +111,8 @@ unsafe fn pair_at(_ slot: u256) -> (mut? u256, mut? u256) uses (storage: mut? Ra
     unsafe { (storage_at<u256>(slot), storage_at<u256>(slot + 1)) }
 }
 
-// A `mut` binding of a nested split part asks the call for `mut`, which
-// needs the effect `mut`.
+// A `mut` binding of a nested split part asks the call granting it for
+// `mut`, which needs the effect `mut`; `c`'s call stays at `ref`.
 fn nested_split_with_read() uses (storage: RawStorage) {
     let ((mut a, b), c) = unsafe { (pair_at(0), storage_at<u256>(2)) }
     a = 1

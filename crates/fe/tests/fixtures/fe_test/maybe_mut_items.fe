@@ -180,3 +180,31 @@ fn demand_reaches_an_unsafe_split() {
     b += 20
     assert(first.a == 11 && second.b == 24)
 }
+
+// A use asking one part of an unsafe split for `mut` asks only the access
+// granting it, so `from`, whose part is only read, may be read-only.
+fn copy_cell(_ to: mut Cells, _ from: Cells) {
+    let (mut a, b) = unsafe { (cell(mut to, true), cell(from, false)) }
+    a = b
+}
+
+fn cell_pair(_ to: mut Cells, _ from: Cells) -> (mut u256, ref u256) {
+    unsafe { (cell(mut to, true), cell(from, false)) }
+}
+
+fn add_into(_ (mut a, b): (mut u256, ref u256)) {
+    a += b
+}
+
+#[test]
+fn demand_reaches_one_part_of_an_unsafe_split() {
+    var to = Cells { a: 1, b: 2 }
+    let from = Cells { a: 3, b: 4 }
+    copy_cell(mut to, from)
+    assert(to.a == 4)
+    let (mut a, b) = cell_pair(mut to, from)
+    a = b + 1
+    assert(to.a == 5)
+    add_into(unsafe { (cell(mut to, true), cell(from, false)) })
+    assert(to.a == 9)
+}
