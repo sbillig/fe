@@ -1085,7 +1085,7 @@ fn check_product_arg<'db>(
         }
         return diagnosed;
     }
-    if tc.grants_product(arg.expr, product) {
+    if tc.select_mut_grants(arg.expr, product) {
         tc.consume_access(arg.expr);
         return false;
     }

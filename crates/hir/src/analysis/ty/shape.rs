@@ -152,6 +152,26 @@ impl<'db> Shape<'db> {
         }
     }
 
+    /// This shape with each of its accesses `mut`.
+    pub fn to_mut(&self) -> Self {
+        match self {
+            Self::Owned(_) => self.clone(),
+            Self::Access(_, ty) => Self::Access(BorrowKind::Mut, *ty),
+            Self::Tuple(elems) => Self::Tuple(elems.iter().map(Self::to_mut).collect()),
+            Self::Sum {
+                ty,
+                variant,
+                arg,
+                payload,
+            } => Self::Sum {
+                ty: *ty,
+                variant: *variant,
+                arg: *arg,
+                payload: Box::new(payload.to_mut()),
+            },
+        }
+    }
+
     /// The type a projection call has in the type checker.
     pub fn erased_ty(&self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         match self {
