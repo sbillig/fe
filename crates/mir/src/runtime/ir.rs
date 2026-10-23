@@ -1707,6 +1707,80 @@ impl<'db> RuntimePlace<'db> {
 }
 
 impl<'db> RuntimeBuiltin<'db> {
+    /// Whether running the builtin can be observed beyond its result: it
+    /// writes memory or state, calls out, logs, frees, can revert, or hides
+    /// its operand from the optimizer.
+    pub fn has_effect(&self) -> bool {
+        match self {
+            Self::Mstore { .. }
+            | Self::Mstore8 { .. }
+            | Self::Mcopy { .. }
+            | Self::ZeroMem { .. }
+            | Self::StoreConstBytes { .. }
+            | Self::Sstore { .. }
+            | Self::ReturnDataCopy { .. }
+            | Self::CallDataCopy { .. }
+            | Self::CodeCopy { .. }
+            | Self::ExtCodeCopy { .. }
+            | Self::BlackBox { .. }
+            | Self::Free { .. }
+            | Self::Call { .. }
+            | Self::StaticCall { .. }
+            | Self::DelegateCall { .. }
+            | Self::Create { .. }
+            | Self::Create2 { .. }
+            | Self::Log0 { .. }
+            | Self::Log1 { .. }
+            | Self::Log2 { .. }
+            | Self::Log3 { .. }
+            | Self::Log4 { .. } => true,
+            Self::IntrinsicArith { checked, .. } => *checked,
+            Self::Mload { .. }
+            | Self::Msize
+            | Self::Sload { .. }
+            | Self::CallValue
+            | Self::ReturnDataSize
+            | Self::CallDataSize
+            | Self::CallDataLoad { .. }
+            | Self::CodeSize
+            | Self::ExtCodeSize { .. }
+            | Self::ExtCodeHash { .. }
+            | Self::Keccak256 { .. }
+            | Self::KeccakWords { .. }
+            | Self::AddMod { .. }
+            | Self::MulMod { .. }
+            | Self::LeadingZeros { .. }
+            | Self::Byte { .. }
+            | Self::SignExtend { .. }
+            | Self::Saturating { .. }
+            | Self::Address
+            | Self::Caller
+            | Self::Origin
+            | Self::GasPrice
+            | Self::CoinBase
+            | Self::Balance { .. }
+            | Self::Timestamp
+            | Self::Number
+            | Self::PrevRandao
+            | Self::GasLimit
+            | Self::ChainId
+            | Self::BaseFee
+            | Self::SelfBalance
+            | Self::BlockHash { .. }
+            | Self::BlobHash { .. }
+            | Self::BlobBaseFee
+            | Self::Gas
+            | Self::CurrentCodeRegionLen
+            | Self::CodeRegionOffset { .. }
+            | Self::CodeRegionLen { .. }
+            | Self::Malloc { .. }
+            | Self::TryMalloc { .. }
+            | Self::PtrOffsetBytes { .. }
+            | Self::CallDataSelector
+            | Self::MakeContractFieldRef { .. } => false,
+        }
+    }
+
     pub fn values_mut(&mut self) -> Vec<&mut RValueId> {
         match self {
             Self::Mload { addr }

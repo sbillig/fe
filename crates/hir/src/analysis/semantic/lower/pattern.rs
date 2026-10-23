@@ -662,10 +662,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             join_bb,
             arms,
         };
-        if !self.lower_decision_tree(&tree, &mut projections, target) {
+        let join_reachable = self.lower_decision_tree(&tree, &mut projections, target);
+        self.switch_to(join_bb);
+        if join_reachable {
+            self.hold_defined(result);
+        } else {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
         }
-        self.switch_to(join_bb);
         result
     }
 
@@ -707,10 +710,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     if falls {
                         // The arm's value passes to the join, which takes it.
                         let arm_value = self.take_operand(arm.body, arm_value);
-                        self.push_synthetic_stmt(SStmtKind::Assign {
-                            dst: result,
-                            expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
-                        });
+                        self.assign_branch_result(result, SOperand::expr(arm_value, arm.body));
                     }
                     self.pop_drop_scope(None);
                     if falls {

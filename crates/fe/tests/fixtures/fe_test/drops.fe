@@ -1,0 +1,123 @@
+use core::{MemBuffer, Option}
+use core::ops::Drop
+use core::ptr
+
+// Each drop counts itself through a raw pointer, which no scope owns.
+struct Counted {
+    counter: *u256,
+}
+
+impl Drop for Counted {
+    fn drop(own self) {
+        unsafe { *self.counter += 1 }
+    }
+}
+
+fn consume(_ value: own Counted) {}
+
+fn counter() -> *u256 {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    counter
+}
+
+fn count(_ counter: *u256) -> u256 {
+    unsafe { *counter }
+}
+
+#[test]
+fn values_are_destroyed_once() {
+    let counter = counter()
+    {
+        let _a = Counted { counter }
+        let b = Counted { counter }
+        consume(b)
+        assert(count(counter) == 1)
+    }
+    assert(count(counter) == 2)
+}
+
+#[test]
+fn a_deferred_binding_lives_until_its_block_ends() {
+    let counter = counter()
+    {
+        var value: Counted
+        {
+            value = Counted { counter }
+        }
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 1)
+}
+
+#[test]
+fn a_binding_given_a_value_on_every_branch_can_be_used_after() {
+    var buffer: MemBuffer
+    if true {
+        buffer = MemBuffer::alloc(8)
+    } else {
+        buffer = MemBuffer::alloc(9)
+    }
+    assert(buffer.len() == 8)
+}
+
+#[test]
+fn conditional_moves_destroy_once() {
+    let counter = counter()
+    for c in [true, false] {
+        let value = Counted { counter }
+        if c {
+            consume(value)
+        }
+    }
+    assert(count(counter) == 2)
+}
+
+#[test]
+fn reassignment_destroys_the_old_value() {
+    let counter = counter()
+    var value = Counted { counter }
+    value = Counted { counter }
+    assert(count(counter) == 1)
+    consume(value)
+    assert(count(counter) == 2)
+}
+
+struct Tagged {
+    inner: Counted,
+    n: u256,
+}
+
+impl Drop for Tagged {
+    fn drop(own self) {}
+}
+
+#[test]
+fn a_drop_that_does_nothing_still_destroys_its_fields() {
+    let counter = counter()
+    {
+        let _tagged = Tagged { inner: Counted { counter }, n: 1 }
+    }
+    assert(count(counter) == 1)
+}
+
+#[test]
+fn matched_payloads_are_destroyed() {
+    let counter = counter()
+    let some = Option::Some(Counted { counter })
+    match some {
+        Option::Some(value) => consume(value)
+        Option::None => {}
+    }
+    let _none: Option<Counted> = Option::None
+    assert(count(counter) == 1)
+    {
+        let kept = Option::Some(Counted { counter })
+        match kept {
+            Option::Some(_) => {}
+            Option::None => {}
+        }
+        assert(count(counter) == 1)
+    }
+    assert(count(counter) == 2)
+}
