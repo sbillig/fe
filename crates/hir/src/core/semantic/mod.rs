@@ -98,7 +98,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData, TyParam};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
-use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
+use crate::analysis::ty::visitor::TyVisitable;
 use crate::analysis::ty::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     provider::{
@@ -3698,15 +3698,35 @@ impl<'db> Trait<'db> {
 // ADT recursion (semantic) --------------------------------------------------
 
 impl<'db> AdtDef<'db> {
-    /// Detects a recursive ADT cycle that is not guarded by an indirect wrapper
-    /// (e.g., pointer/reference). Returns the cycle members if the ADT is part
-    /// of a cycle; otherwise returns None.
+    /// Detects a recursive ADT cycle that no pointer breaks, including one a
+    /// generic ADT keeps its argument behind, as `Box<T>` does: a value of
+    /// the ADT would contain itself. Returns the cycle members if the ADT is
+    /// part of a cycle; otherwise returns None.
     pub fn recursive_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
+        self.cycle(db, false)
+    }
+
+    /// As `recursive_cycle`, but through every argument of a generic ADT,
+    /// wherever its value keeps it: an ABI type or a storage layout holds its
+    /// arguments', as `DynArray<T>`'s ABI type holds `T`'s.
+    pub fn recursive_cycle_through_arguments(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<Vec<AdtCycleMember<'db>>> {
+        self.cycle(db, true)
+    }
+
+    fn cycle(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        every_argument: bool,
+    ) -> Option<Vec<AdtCycleMember<'db>>> {
         fn impl_check<'db>(
             db: &'db dyn HirAnalysisDb,
             root: AdtDef<'db>,
             adt: AdtDef<'db>,
             chain: &[AdtCycleMember<'db>],
+            every_argument: bool,
         ) -> Option<Vec<AdtCycleMember<'db>>> {
             if adt == root && !chain.is_empty() {
                 return Some(chain.to_vec());
@@ -3717,16 +3737,26 @@ impl<'db> AdtDef<'db> {
             let mut chain = chain.to_vec();
             for (field_idx, field) in adt.fields(db).iter().enumerate() {
                 for (ty_idx, ty) in field.iter_types(db).enumerate() {
-                    for field_adt_ref in collect_direct_adts(db, ty.instantiate_identity()) {
+                    let mut adts = FxHashSet::default();
+                    visit_in_place(db, ty.instantiate_identity(), every_argument, &mut |ty| {
+                        if let Some(adt) = ty.adt_def(db) {
+                            adts.insert(adt.adt_ref(db));
+                        }
+                    });
+                    for field_adt_ref in adts {
                         chain.push(AdtCycleMember {
                             adt,
                             field_idx,
                             ty_idx,
                         });
 
-                        if let Some(cycle) =
-                            impl_check(db, root, lower_adt(db, field_adt_ref), &chain)
-                        {
+                        if let Some(cycle) = impl_check(
+                            db,
+                            root,
+                            lower_adt(db, field_adt_ref),
+                            &chain,
+                            every_argument,
+                        ) {
                             return Some(cycle);
                         }
                         chain.pop();
@@ -3736,7 +3766,7 @@ impl<'db> AdtDef<'db> {
             None
         }
 
-        impl_check(db, self, self, &[])
+        impl_check(db, self, self, &[], every_argument)
     }
 }
 
@@ -4041,44 +4071,70 @@ pub fn ingot_growing_cycles<'db>(
 
 /// Collect all ADTs directly appearing inside the given type without
 /// traversing through indirect wrappers like pointers or references.
-fn collect_direct_adts<'db>(
+/// Calls `f` on `ty` and on each type a value of `ty` holds in place: not
+/// behind a pointer, nor, unless `every_argument`, as an argument its ADT
+/// keeps behind one.
+fn visit_in_place<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> rustc_hash::FxHashSet<AdtRef<'db>> {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
-    use crate::analysis::ty::visitor::TyVisitable;
-    use rustc_hash::FxHashSet;
-
-    struct AdtCollector<'db> {
-        db: &'db dyn HirAnalysisDb,
-        adts: FxHashSet<AdtRef<'db>>,
-    }
-    impl<'db> TyVisitor<'db> for AdtCollector<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-        fn visit_app(&mut self, abs: TyId<'db>, arg: TyId<'db>) {
-            let is_indirect = match abs.data(self.db) {
-                TyData::TyBase(TyBase::Prim(PrimTy::Ptr(_))) => true,
-                // Future: handle Ref when introduced.
-                _ => false,
-            };
-            if !is_indirect {
-                walk_ty(self, abs);
-                walk_ty(self, arg)
+    every_argument: bool,
+    f: &mut impl FnMut(TyId<'db>),
+) {
+    f(ty);
+    let (head, args) = ty.decompose_ty_app(db);
+    match head.data(db) {
+        TyData::TyBase(TyBase::Prim(PrimTy::Ptr(_))) => {}
+        TyData::TyBase(TyBase::Adt(adt)) if !every_argument => {
+            for (arg, &held) in args.iter().zip(adt_params_held_in_place(db, *adt)) {
+                if held {
+                    visit_in_place(db, *arg, every_argument, f);
+                }
             }
         }
-        fn visit_adt(&mut self, adt: AdtDef<'db>) {
-            self.adts.insert(adt.adt_ref(self.db));
+        _ => {
+            for arg in args {
+                visit_in_place(db, *arg, every_argument, f);
+            }
         }
     }
+}
 
-    let mut collector = AdtCollector {
-        db,
-        adts: FxHashSet::default(),
-    };
-    ty.visit_with(&mut collector);
-    collector.adts
+/// Which of `adt`'s type parameters its values hold in place. A type may
+/// hold itself through a parameter kept behind a pointer, as `Box<T>`'s is,
+/// and stay finite.
+#[salsa::tracked(return_ref, cycle_fn = adt_params_held_in_place_cycle_recover, cycle_initial = adt_params_held_in_place_cycle_initial)]
+pub(crate) fn adt_params_held_in_place<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> Vec<bool> {
+    let params = adt.params(db);
+    let mut held = vec![false; params.len()];
+    for field in adt.fields(db) {
+        for ty in field.iter_types(db) {
+            visit_in_place(db, ty.instantiate_identity(), false, &mut |ty| {
+                if let Some(index) = params.iter().position(|param| *param == ty) {
+                    held[index] = true;
+                }
+            });
+        }
+    }
+    held
+}
+
+fn adt_params_held_in_place_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> Vec<bool> {
+    vec![false; adt.params(db).len()]
+}
+
+fn adt_params_held_in_place_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &[bool],
+    _count: u32,
+    _adt: AdtDef<'db>,
+) -> salsa::CycleRecoveryAction<Vec<bool>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 #[derive(Clone, Copy, Debug)]
