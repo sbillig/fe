@@ -22,6 +22,7 @@ use crate::{
                 project_pattern_child_source_ty,
             },
             provider::AddressSpace,
+            shape::Shape,
             ty_check::PatBindingMode,
             ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
         },
@@ -330,7 +331,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             PatternSource::Value(value) => self.bind_validated_pattern(root, value),
             PatternSource::Place {
                 place, provider, ..
-            } => self.bind_validated_pattern_place(root, place, provider),
+            } => self.bind_validated_pattern_place(root, place, provider, None),
         }
     }
 
@@ -482,8 +483,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         )
     }
 
+    /// Binds `pat`'s bindings to the parts of `value` they name. A part no
+    /// binding names is not projected, so it stays in `value`: projecting
+    /// would move it out, as a value's projection does.
     fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
-        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
+        let store = self.typed_body.pattern_store();
+        let kind = store.node(pat).kind().clone();
         match kind {
             ValidatedPatKind::Wildcard {
                 binding: Some(binding),
@@ -529,7 +534,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ValidatedPatKind::Wildcard { binding: None } => {}
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Variant(variant, _) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for (idx, field_pat) in fields
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, field)| store.binds(*field))
+                    {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -549,7 +558,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     }
                 }
                 ConstructorKind::Type(_) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for (idx, field_pat) in fields
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, field)| store.binds(*field))
+                    {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -575,13 +588,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// Binds `pat`'s bindings to the components of `place` where they lie.
-    fn bind_validated_pattern_place(
+    /// `parts` is the shape of a product parameter's parts at `place`: an
+    /// access part holds an access, which its pattern matches as a value.
+    pub(super) fn bind_validated_pattern_place(
         &mut self,
         pat: ValidatedPatId,
         place: SPlace<'db>,
         provider: Option<AddressSpace>,
+        parts: Option<&Shape<'db>>,
     ) {
-        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
+        let store = self.typed_body.pattern_store();
+        if let Some(access @ Shape::Access(..)) = parts {
+            if store.binds(pat) {
+                let carrier_ty = access.carrier_ty(self.db);
+                let carrier = self.emit_expr(carrier_ty, SExpr::ReadPlace { place });
+                self.bind_validated_pattern(pat, self.owned_pattern_value(carrier, carrier_ty));
+            }
+            return;
+        }
+        let kind = store.node(pat).kind().clone();
         match kind {
             ValidatedPatKind::Wildcard {
                 binding: Some(binding),
@@ -604,12 +629,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }
                         _ => crate::projection::Projection::Field(idx),
                     });
-                    self.bind_validated_pattern_place(field_pat, component, provider);
+                    let parts = match parts {
+                        Some(Shape::Tuple(elems)) => elems.get(idx),
+                        _ => None,
+                    };
+                    self.bind_validated_pattern_place(field_pat, component, provider, parts);
                 }
             }
             ValidatedPatKind::Or(pats) => {
                 if let Some(first) = pats.first() {
-                    self.bind_validated_pattern_place(*first, place, provider);
+                    self.bind_validated_pattern_place(*first, place, provider, parts);
                 }
             }
         }

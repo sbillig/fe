@@ -18,7 +18,7 @@ use crate::analysis::{
     },
     ty::{drop_glue::ty_has_drop_glue, ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
 };
-use crate::hir_def::{Partial, Pat, PatId};
+use crate::hir_def::{Partial, Pat, PatId, params::FuncParamMode};
 use crate::projection::Projection;
 
 pub(super) struct DropScope {
@@ -271,22 +271,30 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         }
     }
 
-    /// Holds the owners of an entry: its `own` parameters and the fields a
-    /// receive arm binds.
+    /// Holds the owners of an entry: its `own` parameters, the product
+    /// parameters its parts are gathered into, and the fields a receive arm
+    /// binds.
     pub(super) fn hold_entry(&mut self) {
         for local in self.entry_locals.clone() {
-            if matches!(
-                self.locals[local.index()].source,
+            let owner = match self.locals[local.index()].source {
                 Some(
                     LocalBinding::Local { .. }
-                        | LocalBinding::Param {
-                            mode: crate::hir_def::params::FuncParamMode::Own,
-                            ..
-                        }
-                )
-            ) {
-                self.hold_in(local, 0);
-            }
+                    | LocalBinding::Param {
+                        mode: FuncParamMode::Own,
+                        ..
+                    },
+                ) => local,
+                // A product is held where its first part is passed.
+                Some(LocalBinding::ParamPart { idx, part: 0, .. }) => {
+                    let product = self
+                        .typed_body
+                        .param_binding(idx)
+                        .expect("a part's parameter is bound");
+                    self.binding_locals[&product]
+                }
+                _ => continue,
+            };
+            self.hold_in(owner, 0);
         }
     }
 
