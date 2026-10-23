@@ -1,4 +1,5 @@
-// Track explicit stack slots and owned buffer allocations, including failures.
+// Counts the frame stack's allocation (3 frames of 232 bytes), the frames'
+// buffers and empty allocations (one byte), failing the chosen attempt.
 #define _DEFAULT_SOURCE
 #include <stddef.h>
 #include <stdint.h>
@@ -19,7 +20,7 @@ typedef union {
     struct { size_t extent, size; } info;
 } Header;
 void *malloc(size_t size) {
-    if (size == 558 && ++stack_attempts == FAIL_STACK) { failures++; return NULL; }
+    if (size == 696 && ++stack_attempts == FAIL_STACK) { failures++; return NULL; }
     if (size == 8192 && ++buffer_attempts == FAIL_BUFFER) { failures++; return NULL; }
     if (size > SIZE_MAX - sizeof(Header)) return NULL;
     size_t extent = sizeof(Header) + size;
@@ -28,7 +29,7 @@ void *malloc(size_t size) {
     if (header == MAP_FAILED) return NULL;
     header->info.extent = extent;
     header->info.size = size;
-    stacks += size == 558;
+    stacks += size == 696;
     buffers += size == 8192;
     units += size == 1;
     memset(header + 1, 0xa5, size);
@@ -37,9 +38,10 @@ void *malloc(size_t size) {
 void free(void *pointer) {
     if (!pointer) return;
     Header *header = (Header *)pointer - 1;
-    stack_frees += header->info.size == 558;
+    stack_frees += header->info.size == 696;
     buffer_frees += header->info.size == 8192;
     unit_frees += header->info.size == 1;
+    // Unmapping makes any later use of the allocation fault.
     munmap(header, header->info.extent);
 }
 __attribute__((destructor)) static void check_releases(void) {
@@ -52,7 +54,7 @@ __attribute__((destructor)) static void check_releases(void) {
             stack_attempts, buffer_attempts, failures);
     if (stacks != expected_stack || stack_frees != expected_stack ||
         buffers != expected_buffers || buffer_frees != expected_buffers ||
-        units != expected_stack || unit_frees != expected_stack ||
+        units != expected_attempts || unit_frees != expected_attempts ||
         stack_attempts != 1 || buffer_attempts != expected_attempts ||
         failures != expected_failures) _Exit(101);
 }
