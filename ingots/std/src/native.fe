@@ -1,7 +1,5 @@
 /// Interfaces to the native host runtime.
 use core::ptr
-pub use bytes::ByteBuffer
-pub use stack::FixedStack
 
 extern {
     // Host process accounting. The scalar-only signature gives it no access to Fe memory.

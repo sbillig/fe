@@ -1073,6 +1073,33 @@ fn native_fallible_allocation_reports_failure_and_releases_blocks() {
 }
 
 #[test]
+fn native_owners_destroy_what_they_hold_and_free_it_once() {
+    let temp = tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let object = build_native_object(&fixtures.join("owners.fe"), &out, level);
+        let executable = out.join("balanced");
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
+            .arg(&object)
+            .arg(fixtures.join("balanced_allocator.c"))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "{linked:?}");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            "de-ab-c-fg\nxy-ABC\n-b\nu-U\n123\n",
+            "O{level}"
+        );
+    }
+}
+
+#[test]
 fn native_values_are_destroyed_once_in_scope_order() {
     let temp = tempdir().unwrap();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -1215,38 +1242,32 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_byte_buffer_copies_ranges_between_buffers() {
+fn native_buffer_slices_copy_ranges_between_buffers() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("byte_buffer_copy.fe");
     fs::write(
         &source,
         r#"
-use std::native::ByteBuffer
+use core::MemBuffer
 pub fn main() -> i32 {
-    var from = ByteBuffer::new()
-    var into = ByteBuffer::new()
-    from.copy_from(dest: 0, source: into, offset: 0, len: 0)
+    var from = MemBuffer::empty()
+    var into = MemBuffer::empty()
+    from.slice(offset: 0, len: 0).copy_from(into.span())
     core::assert(from.try_resize(100) && into.try_resize(70))
-    var i: u64 = 0
-    while i < 100 {
-        from.set_byte(index: i, value: (i + 1).downcast_truncate())
-        i += 1
+    for i in 0..100 {
+        from[i] = (i + 1).downcast_truncate()
     }
-    into.copy_from(dest: 3, source: from, offset: 40, len: 60)
-    into.copy_from(dest: 70, source: from, offset: 100, len: 0)
-    i = 0
-    while i < 70 {
+    into.slice(offset: 3, len: 60).copy_from(from.slice(offset: 40, len: 60))
+    into.slice(offset: 70, len: 0).copy_from(from.slice(offset: 100, len: 0))
+    for i in 0..70 {
         let expected: u8 = if i >= 3 && i < 63 { (i + 38).downcast_truncate() } else { 0 }
-        core::assert(into.byte_at(i) == expected)
-        i += 1
+        core::assert(into[i] == expected)
     }
-    i = 0
-    while i < 100 {
-        core::assert(from.byte_at(i) == (i + 1).downcast_truncate())
-        i += 1
+    for i in 0..100 {
+        core::assert(from[i] == (i + 1).downcast_truncate())
     }
-    from.release()
-    into.release()
+    let copy = MemBuffer::try_from_span(from.slice(offset: 10, len: 5)).unwrap()
+    core::assert(copy.len() == 5 && copy.capacity() == 5 && copy[0] == 11 && copy[4] == 15)
     0
 }
 "#,
@@ -1261,71 +1282,56 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_byte_buffer_preserves_contents_and_reuses_zeroed_storage() {
+fn native_buffers_preserve_contents_and_reuse_zeroed_storage() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("byte_buffer.fe");
     fs::write(
         &source,
         r#"
-use std::native::ByteBuffer
-fn consume(buffer: own ByteBuffer) { buffer.release() }
+use core::MemBuffer
+fn consume(_ buffer: own MemBuffer) {}
 pub fn main() -> i32 {
-    var empty = ByteBuffer::new()
+    var empty = MemBuffer::empty()
     core::assert(empty.len() == 0 && empty.capacity() == 0)
-    empty.copy_within(dest: 0, source: 0, len: 0)
-    empty.release()
-    var round: u64 = 0
-    while round < 8 {
-        var buffer = ByteBuffer::new()
+    empty.span().copy_within(source: 0, dest: 0, len: 0)
+    for _ in 0..8 {
+        var buffer = MemBuffer::empty()
         core::assert(buffer.try_resize(33))
-        var i: u64 = 0
-        while i < 33 {
-            core::assert(buffer.byte_at(i) == 0)
-            buffer.set_byte(index: i, value: (i + 1).downcast_truncate())
-            i += 1
+        for i in 0..33 {
+            core::assert(buffer[i] == 0)
+            buffer[i] = (i + 1).downcast_truncate()
         }
         core::assert(buffer.try_resize(3000))
-        i = 0
-        while i < 3000 {
+        for i in 0..3000 {
             let expected: u8 = if i < 33 { (i + 1).downcast_truncate() } else { 0 }
-            core::assert(buffer.byte_at(i) == expected)
-            i += 1
+            core::assert(buffer[i] == expected)
         }
-        buffer.copy_within(dest: 5, source: 0, len: 33)
-        i = 0
-        while i < 33 {
-            core::assert(buffer.byte_at(i + 5) == (i + 1).downcast_truncate())
-            i += 1
+        buffer.span().copy_within(source: 0, dest: 5, len: 33)
+        for i in 0..33 {
+            core::assert(buffer[i + 5] == (i + 1).downcast_truncate())
         }
-        buffer.copy_within(dest: 0, source: 5, len: 33)
-        buffer.copy_within(dest: 0, source: 0, len: 33)
-        i = 0
-        while i < 33 {
-            core::assert(buffer.byte_at(i) == (i + 1).downcast_truncate())
-            i += 1
+        buffer.span().copy_within(source: 5, dest: 0, len: 33)
+        buffer.span().copy_within(source: 0, dest: 0, len: 33)
+        for i in 0..33 {
+            core::assert(buffer[i] == (i + 1).downcast_truncate())
         }
         let capacity = buffer.capacity()
-        core::assert(!buffer.try_resize(0xffffffffffffffff))
+        core::assert(!buffer.try_resize(0x10000000000000000))
         core::assert(buffer.len() == 3000 && buffer.capacity() == capacity)
-        core::assert(buffer.byte_at(32) == 33)
+        core::assert(buffer[32] == 33)
         core::assert(buffer.try_resize(8))
         core::assert(buffer.try_resize(40))
-        i = 0
-        while i < 40 {
+        for i in 0..40 {
             let expected: u8 = if i < 8 { (i + 1).downcast_truncate() } else { 0 }
-            core::assert(buffer.byte_at(i) == expected)
-            i += 1
+            core::assert(buffer[i] == expected)
         }
         buffer.clear()
         core::assert(buffer.len() == 0 && buffer.capacity() == capacity)
         core::assert(buffer.try_resize(3000))
-        i = 0
-        while i < 3000 {
-            core::assert(buffer.byte_at(i) == 0)
-            i += 1
+        for i in 0..3000 {
+            core::assert(buffer[i] == 0)
         }
         consume(buffer)
-        round += 1
     }
     0
 }
@@ -1341,39 +1347,33 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_byte_buffer_allocation_failure_is_atomic_and_storage_is_released() {
+fn native_buffer_allocation_failure_is_atomic_and_storage_is_released() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("allocation_failure.fe");
     fs::write(
         &source,
         r#"
-use std::native::ByteBuffer
+use core::MemBuffer
 pub fn main() -> i32 {
-    var empty = ByteBuffer::new()
+    var empty = MemBuffer::empty()
     core::assert(!empty.try_resize(3000))
     core::assert(empty.len() == 0 && empty.capacity() == 0)
-    empty.release()
-    var buffer = ByteBuffer::new()
+    var buffer = MemBuffer::empty()
     core::assert(buffer.try_resize(513))
     core::assert(buffer.capacity() == 1024)
-    var i: u64 = 0
-    while i < 513 {
-        core::assert(buffer.byte_at(i) == 0)
-        buffer.set_byte(index: i, value: (i % 251).downcast_truncate())
-        i += 1
+    for i in 0..513 {
+        core::assert(buffer[i] == 0)
+        buffer[i] = (i % 251).downcast_truncate()
     }
     core::assert(buffer.try_resize(1500))
     core::assert(buffer.capacity() == 2048)
     core::assert(!buffer.try_resize(3000))
     core::assert(buffer.len() == 1500 && buffer.capacity() == 2048)
-    i = 0
-    while i < 1500 {
+    for i in 0..1500 {
         let expected: u8 = if i < 513 { (i % 251).downcast_truncate() } else { 0 }
-        core::assert(buffer.byte_at(i) == expected)
-        i += 1
+        core::assert(buffer[i] == expected)
     }
     buffer.clear()
-    buffer.release()
     0
 }
 "#,
@@ -1406,27 +1406,26 @@ fn native_input_reborrows_preserve_independent_buffer_and_scalar_updates() {
     fs::write(
         &source,
         r#"
-use std::native::ByteBuffer
-struct Frame { data: ByteBuffer, value: u256 }
-fn mixed(_ buffer: mut ByteBuffer, _ value: mut u256) {
+use core::MemBuffer
+struct Frame { data: MemBuffer, value: u256 }
+fn mixed(_ buffer: mut MemBuffer, _ value: mut u256) {
     value += 1
     core::assert(buffer.try_resize(33))
     let scalar: u256 = value
-    buffer.set_byte(index: 32, value: scalar.downcast_unchecked())
-    buffer.copy_within(dest: 0, source: 32, len: 1)
-    value += buffer.byte_at(0) as u256
+    buffer[32] = scalar.downcast_unchecked()
+    buffer.span().copy_within(source: 32, dest: 0, len: 1)
+    value += buffer[0] as u256
 }
-fn forward(_ buffer: mut ByteBuffer, _ value: mut u256) {
+fn forward(_ buffer: mut MemBuffer, _ value: mut u256) {
     mixed(mut buffer, mut value)
 }
 fn run(_ frame: mut Frame) { forward(mut frame.data, mut frame.value) }
 pub fn main() -> i32 {
-    var frame = Frame { data: ByteBuffer::new(), value: 20 }
+    var frame = Frame { data: MemBuffer::empty(), value: 20 }
     run(mut frame)
-    core::assert(frame.value == 42 && frame.data.byte_at(32) == 21)
+    core::assert(frame.value == 42 && frame.data[32] == 21)
     run(mut frame)
-    core::assert(frame.value == 86 && frame.data.byte_at(0) == 43)
-    frame.data.release()
+    core::assert(frame.value == 86 && frame.data[0] == 43)
     0
 }
 "#,
@@ -1449,25 +1448,20 @@ fn native_callee_separation_preserves_fresh_buffer_callers() {
     fs::write(
         &source,
         r#"
-use std::native::ByteBuffer
-struct Journal { bytes: ByteBuffer }
+use core::MemBuffer
+struct Journal { bytes: MemBuffer }
 struct Frame { data: Journal, value: u256 }
 impl Frame {
-    fn new() -> Self { Self { data: Journal { bytes: ByteBuffer::new() }, value: 0 } }
+    fn new() -> Self { Self { data: Journal { bytes: MemBuffer::empty() }, value: 0 } }
     fn run(mut self, state: mut Frame) {
         self.data.bytes.clear()
         self.value = 1
         core::assert(self.data.bytes.try_resize(32))
         core::assert(state.data.bytes.try_resize(32))
-        self.data.bytes.set_byte(index: 0, value: 2)
-        var i: u64 = 0
-        while i < 32 {
-            state.data.bytes.set_byte(index: i, value: 3)
-            i += 1
-        }
+        self.data.bytes[0] = 2
+        state.data.bytes.span().fill(3)
         state.value += 1
     }
-    fn release(own self) { self.data.bytes.release() }
 }
 fn execute(state: mut Frame) -> Frame {
     var vm = Frame::new()
@@ -1477,17 +1471,14 @@ fn execute(state: mut Frame) -> Frame {
 fn finish(state: mut Frame) {
     var vm = Frame::new()
     vm.run(mut state)
-    vm.release()
 }
 pub fn main() -> i32 {
     var state = Frame::new()
     let vm = execute(state: mut state)
     core::assert(vm.value == 1 && state.value == 1)
-    core::assert(vm.data.bytes.byte_at(0) == 2 && state.data.bytes.byte_at(31) == 3)
-    vm.release()
+    core::assert(vm.data.bytes[0] == 2 && state.data.bytes[31] == 3)
     finish(state: mut state)
-    core::assert(state.value == 2 && state.data.bytes.byte_at(31) == 3)
-    state.release()
+    core::assert(state.value == 2 && state.data.bytes[31] == 3)
     0
 }
 "#,
@@ -1510,37 +1501,33 @@ fn native_recursive_receiver_authority_converges() {
     fs::write(
         &source,
         r#"
-use std::native::ByteBuffer
-fn write_at_depth(_ buffer: mut ByteBuffer, depth: usize, value: u8) {
+use core::MemBuffer
+fn write_at_depth(_ buffer: mut MemBuffer, depth: usize, value: u8) {
     if depth == 0 {
-        buffer.set_byte(index: 31, value)
+        buffer[31] = value
     } else {
         write_at_depth(mut buffer, depth: depth - 1, value)
     }
 }
-fn write_alternating(_ first: mut ByteBuffer, _ second: mut ByteBuffer, depth: usize, value: u8) {
+fn write_alternating(_ first: mut MemBuffer, _ second: mut MemBuffer, depth: usize, value: u8) {
     if depth == 0 {
-        first.set_byte(index: 31, value)
+        first[31] = value
     } else {
         write_alternating(mut second, mut first, depth: depth - 1, value)
     }
 }
 pub fn main() -> i32 {
-    var buffer = ByteBuffer::new()
-    core::assert(buffer.try_resize(32))
+    var buffer = MemBuffer::alloc(32)
     write_at_depth(mut buffer, depth: 0, value: 19)
-    core::assert(buffer.byte_at(31) == 19)
+    core::assert(buffer[31] == 19)
     write_at_depth(mut buffer, depth: 32, value: 42)
-    core::assert(buffer.byte_at(31) == 42)
-    var other = ByteBuffer::new()
-    core::assert(other.try_resize(32))
-    other.set_byte(index: 31, value: 7)
+    core::assert(buffer[31] == 42)
+    var other = MemBuffer::alloc(32)
+    other[31] = 7
     write_alternating(mut buffer, mut other, depth: 32, value: 19)
-    core::assert(buffer.byte_at(31) == 19 && other.byte_at(31) == 7)
+    core::assert(buffer[31] == 19 && other[31] == 7)
     write_alternating(mut buffer, mut other, depth: 33, value: 42)
-    core::assert(buffer.byte_at(31) == 19 && other.byte_at(31) == 42)
-    other.release()
-    buffer.release()
+    core::assert(buffer[31] == 19 && other[31] == 42)
     0
 }
 "#,
@@ -1563,31 +1550,28 @@ fn native_recursive_buffer_poststates_converge() {
     fs::write(
         &source,
         r#"
-use std::native::ByteBuffer
-fn grow(_ buffer: mut ByteBuffer, depth: usize, length: u64, value: u8) {
+use core::MemBuffer
+fn grow(_ buffer: mut MemBuffer, depth: usize, length: usize, value: u8) {
     if depth == 0 {
-        var size: u64 = 1
-        while size <= length {
+        for size in 1..length + 1 {
             core::assert(buffer.try_resize(size))
-            buffer.set_byte(index: size - 1, value)
-            size += 1
+            buffer[size - 1] = value
         }
     } else { grow(mut buffer, depth: depth - 1, length, value) }
 }
-fn clear(_ buffer: mut ByteBuffer, depth: usize) {
+fn clear(_ buffer: mut MemBuffer, depth: usize) {
     if depth == 0 { buffer.clear() }
     else { clear(mut buffer, depth: depth - 1) }
 }
 pub fn main() -> i32 {
-    var buffer = ByteBuffer::new()
+    var buffer = MemBuffer::empty()
     grow(mut buffer, depth: 32, length: 32, value: 19)
-    core::assert(buffer.len() == 32 && buffer.byte_at(31) == 19)
+    core::assert(buffer.len() == 32 && buffer[31] == 19)
     clear(mut buffer, depth: 32)
     core::assert(buffer.len() == 0)
     grow(mut buffer, depth: 16, length: 513, value: 42)
     core::assert(buffer.len() == 513)
-    for index in 0..513 { core::assert(buffer.byte_at(index.downcast_unchecked()) == 42) }
-    buffer.release()
+    for index in 0..513 { core::assert(buffer[index] == 42) }
     0
 }
 "#,
@@ -1674,12 +1658,12 @@ fn build_native_object(source: &Path, out: &Path, level: &str) -> PathBuf {
 }
 
 #[test]
-fn native_fixed_stack_owns_slots_and_reclaims_allocations() {
+fn native_owners_free_each_allocation_once_on_every_path() {
     let temp = tempdir().unwrap();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
     for level in ["0", "1", "2"] {
         let out = temp.path().join(format!("out-{level}"));
-        let object = build_native_object(&fixtures.join("fixed_stack.fe"), &out, level);
+        let object = build_native_object(&fixtures.join("owned_frames.fe"), &out, level);
         for (stack_failure, buffer_failure, mode) in [
             (0, 0, "0"),
             (1, 0, "1"),
@@ -1694,7 +1678,7 @@ fn native_fixed_stack_owns_slots_and_reclaims_allocations() {
                 .arg(format!("-DFAIL_STACK={stack_failure}"))
                 .arg(format!("-DFAIL_BUFFER={buffer_failure}"))
                 .arg(&object)
-                .arg(fixtures.join("stack_allocator.c"))
+                .arg(fixtures.join("owner_allocator.c"))
                 .arg("-o")
                 .arg(&executable)
                 .output()
@@ -1710,26 +1694,22 @@ fn native_fixed_stack_owns_slots_and_reclaims_allocations() {
 }
 
 #[test]
-fn native_fixed_stack_reserves_its_owner_while_top_is_used() {
+fn native_vec_elements_reserve_their_owner_while_used() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("stack_access.fe");
     for operation in [
-        "let value = stack.pop()\ncore::assert(top == value)",
-        "stack.release()\ncore::assert(top == 1)",
+        "let value = stack.pop()\ncore::assert(top == value.unwrap())",
+        "core::mem::drop(stack)\ncore::assert(top == 1)",
     ] {
         fs::write(
             &source,
             format!(
                 r#"
-use core::Option
-use std::native::FixedStack
+use core::MemVec
 pub fn main() -> i32 {{
-    var stack: FixedStack<u256, 1> = match FixedStack::try_new() {{
-        Option::Some(stack) => stack,
-        Option::None => core::panic(),
-    }}
-    stack.try_push(1).unwrap()
-    let top = mut stack.top()
+    var stack: MemVec<u256> = MemVec::new()
+    stack.push(1)
+    let top = mut stack[0]
     {operation}
     0
 }}
