@@ -2411,6 +2411,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )
                 }
             }
+            RuntimeBuiltin::SwapBytes { value } => {
+                let value = self.local_value(*value)?;
+                self.lower_swap_bytes(value)
+            }
             RuntimeBuiltin::BlackBox { value } => {
                 let value = self.local_value(*value)?;
                 let ty = self.fb.type_of(value);
@@ -5921,6 +5925,40 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst(Zext::new(inst_set, is_zero, Type::I256), Type::I256);
         self.fb
             .insert_inst(Add::new(inst_set, zeros, extra), Type::I256)
+    }
+
+    /// Reverses the bytes of a word: swaps its halves, then the halves of
+    /// each half, down to single bytes.
+    fn lower_swap_bytes(&mut self, value: ValueId) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let mut word = value;
+        for bits in [128usize, 64, 32, 16, 8] {
+            // Every other `bits`-wide lane, from the lowest.
+            let mut lanes = [0u8; 32];
+            for (index, byte) in lanes.iter_mut().enumerate() {
+                if (31 - index) / (bits / 8) % 2 == 0 {
+                    *byte = 0xff;
+                }
+            }
+            let lanes = self.fb.make_imm_value(I256::from_be_bytes(&lanes));
+            let shift = self.fb.make_imm_value(I256::from(bits as u32));
+            let low = self
+                .fb
+                .insert_inst(And::new(inst_set, word, lanes), Type::I256);
+            let raised = self
+                .fb
+                .insert_inst(Shl::new(inst_set, shift, low), Type::I256);
+            let shifted = self
+                .fb
+                .insert_inst(Shr::new(inst_set, shift, word), Type::I256);
+            let lowered = self
+                .fb
+                .insert_inst(And::new(inst_set, shifted, lanes), Type::I256);
+            word = self
+                .fb
+                .insert_inst(Or::new(inst_set, raised, lowered), Type::I256);
+        }
+        word
     }
 
     fn lower_modular_arithmetic(
