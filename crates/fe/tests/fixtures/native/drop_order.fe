@@ -117,6 +117,25 @@ fn extended() {
     put(45)
 }
 
+struct Cell {
+    n: i32,
+}
+
+impl Cell {
+    fn peek(mut? self) -> (Noisy, mut? i32) {
+        (noisy(112), mut? self.n)
+    }
+}
+
+// ".-p": a temporary's access ends at its last use, before it is destroyed.
+fn carried() {
+    var cell = Cell { n: 1 }
+    let (_, ref n) = cell.peek()
+    put(45 + n)
+    cell.n = 5
+    put(45)
+}
+
 // "oi"
 fn outer() {
     let _value = Outer { inner: noisy(105), n: 111 }
@@ -403,6 +422,8 @@ pub fn main() -> i32 {
     closures()
     put(10)
     extended()
+    put(10)
+    carried()
     put(10)
     try_exit(false)
     put(10)
