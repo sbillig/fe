@@ -16,6 +16,16 @@ extern {
     /// `alloc_bytes_unchecked`, whose callers bound it.
     fn alloc_raw(_ size: u256) -> *u8
 
+    /// As `alloc_raw`, but returns a null address when the native host cannot
+    /// allocate. EVM memory runs out only with the gas, so there it is
+    /// `alloc_raw`. Every call goes through `try_alloc_bytes`, which bounds the
+    /// size.
+    fn try_alloc_raw(_ size: u256) -> *u8
+
+    /// Releases an allocation that `alloc_raw` or `try_alloc_raw` made. Native
+    /// hosts free it; EVM memory is never reclaimed.
+    unsafe fn dealloc_raw(_ ptr: *u8)
+
     /// Copies `len` bytes between linear-memory regions.
     ///
     /// Both complete `len`-byte ranges must lie in live allocations.
@@ -818,6 +828,24 @@ pub fn alloc_bytes(_ len: u256) -> *u8 {
         panic_code(PANIC_OUT_OF_MEMORY)
     }
     alloc_raw(len)
+}
+
+/// Allocates `len` bytes without initializing them, or `None` when `len`
+/// exceeds `MAX_ALLOCATION` or the native host is out of memory.
+pub fn try_alloc_bytes(_ len: u256) -> Option<*u8> {
+    if len > MAX_ALLOCATION {
+        return Option::None
+    }
+    let ptr = try_alloc_raw(len)
+    if ptr as u256 == 0 { Option::None } else { Option::Some(ptr) }
+}
+
+/// Releases an allocation made by `alloc_bytes` or `try_alloc_bytes`.
+///
+/// The caller must own the allocation, `ptr` must be its first byte, and
+/// nothing may access it afterwards.
+pub unsafe fn dealloc<T>(_ ptr: *T) {
+    dealloc_raw(cast<T, u8>(ptr))
 }
 
 /// Allocates `len` bytes, without initializing them or bounding `len`. The
