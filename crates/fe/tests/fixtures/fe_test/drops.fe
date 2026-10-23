@@ -140,6 +140,31 @@ fn a_drop_that_does_nothing_still_destroys_its_fields() {
     assert(count(counter) == 1)
 }
 
+// Its effect is where its own type needs no destroying, which no answer of
+// `needs_drop` makes consistent; it needs destroying, as natively.
+struct Contrary {
+    counter: *u256,
+}
+
+impl Drop for Contrary {
+    fn drop(own self) {
+        if core::mem::needs_drop<Contrary>() {
+        } else {
+            unsafe { *self.counter += 1 }
+        }
+    }
+}
+
+#[test]
+fn a_drop_may_ask_whether_its_own_type_needs_destroying() {
+    let counter = counter()
+    assert(core::mem::needs_drop<Contrary>())
+    {
+        let _contrary = Contrary { counter }
+    }
+    assert(count(counter) == 0)
+}
+
 // Reading a `Copy` field of a `Drop` part moves nothing out of the part,
 // which is destroyed whole on return.
 fn tagged_sum(_ (Tagged { n, .. }, k): (own Tagged, own u256), _ counter: *u256) -> u256 {
@@ -280,4 +305,29 @@ fn projection_results_that_own_values_destroy_them_once() {
     assert(count(counter) == 3)
     let y = if got == 5 { x } else { 0 }
     assert(y == 5)
+}
+
+trait Names {
+    type Named
+}
+
+struct NamesCounted {}
+
+impl Names for NamesCounted {
+    type Named = Counted
+}
+
+struct Namer<T: Names> {
+    named: T::Named,
+}
+
+// A field typed by an associated type holds the type it names.
+#[test]
+fn associated_type_fields_are_destroyed() {
+    let counter = counter()
+    assert(core::mem::needs_drop<Namer<NamesCounted>>())
+    {
+        let _namer = Namer<NamesCounted> { named: Counted { counter } }
+    }
+    assert(count(counter) == 1)
 }
