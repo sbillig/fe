@@ -1,4 +1,4 @@
-use core::{MemBuffer, Option}
+use core::{Box, MemBuffer, MemVec, Option}
 use core::ops::Drop
 use core::ptr
 
@@ -194,4 +194,41 @@ fn matched_payloads_are_destroyed() {
         assert(count(counter) == 1)
     }
     assert(count(counter) == 2)
+}
+
+#[test]
+fn owners_destroy_what_they_hold() {
+    let counter = counter()
+    {
+        var values = MemVec::new()
+        for _ in 0..3 {
+            values.push(Counted { counter })
+        }
+        values.truncate(2)
+        assert(count(counter) == 1)
+        let _boxed = Box::new(Counted { counter })
+        let unboxed = Box::new(Counted { counter }).into_inner()
+        assert(count(counter) == 1)
+        consume(unboxed)
+        assert(count(counter) == 2)
+    }
+    assert(count(counter) == 5)
+}
+
+struct Node {
+    counted: Counted,
+    next: Option<Box<Node>>,
+}
+
+#[test]
+fn a_boxed_list_destroys_every_node() {
+    let counter = counter()
+    {
+        var head = Option::None
+        for _ in 0..5 {
+            head = Option::Some(Box::new(Node { counted: Counted { counter }, next: head }))
+        }
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 5)
 }
