@@ -5,6 +5,8 @@
 //! enum's are those of the variant it holds. EVM memory is never reclaimed,
 //! so there a part whose destruction has no effect is skipped, with the flags
 //! only it consults.
+use std::mem;
+
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
@@ -412,7 +414,7 @@ impl<'db> RmirEmitter<'db> {
         block
     }
 
-    fn alloc_bool_temp(&mut self) -> RLocalId {
+    pub(super) fn alloc_bool_temp(&mut self) -> RLocalId {
         self.alloc_runtime_temp(
             TyId::bool(self.db),
             RuntimeCarrier::Value(RuntimeClass::Scalar(ScalarClass {
@@ -422,7 +424,7 @@ impl<'db> RmirEmitter<'db> {
         )
     }
 
-    fn assign_bool(&mut self, bb: RBlockId, dst: RLocalId, value: bool) {
+    pub(super) fn assign_bool(&mut self, bb: RBlockId, dst: RLocalId, value: bool) {
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -492,7 +494,7 @@ impl<'db> RmirEmitter<'db> {
         self_param && implements_drop(self.db, func)
     }
 
-    fn needs_drop(&self, ty: TyId<'db>) -> bool {
+    pub(super) fn needs_drop(&self, ty: TyId<'db>) -> bool {
         runtime_needs_drop(self.db, ty, self.target())
     }
 }
@@ -559,13 +561,14 @@ fn runtime_needs_drop_cycle_initial<'db>(
     _: TyId<'db>,
     _: RuntimeTarget,
 ) -> bool {
-    true
+    false
 }
 
 /// Whether destroying a value of `ty` does anything on `target`. Natively,
 /// every value with drop glue is destroyed. On EVM, a part is destroyed when
-/// its `drop` has an effect there; a type that recursively holds itself is
-/// assumed to have one.
+/// its `drop` has an effect there. As for effects, recursion adds nothing: a
+/// type that holds itself, such as a list of boxed nodes, needs destroying
+/// only if something it holds does.
 #[salsa::tracked(returns(copy), cycle_initial = runtime_needs_drop_cycle_initial)]
 pub(crate) fn runtime_needs_drop<'db>(
     db: &'db dyn MirDb,
@@ -649,28 +652,72 @@ fn runtime_instance_has_effect<'db>(db: &'db dyn MirDb, instance: RuntimeInstanc
 }
 
 fn has_effect<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> bool {
-    body.blocks.iter().any(|block| {
-        !matches!(
-            block.terminator,
-            RTerminator::Return(_)
-                | RTerminator::Goto(_)
-                | RTerminator::Branch { .. }
-                | RTerminator::SwitchScalar { .. }
-                | RTerminator::MatchEnumTag { .. }
-        ) || block.stmts.iter().any(|statement| match statement {
-            RStmt::Assign { expr, .. } => match expr {
-                RExpr::Call { callee, .. } => runtime_instance_has_effect(db, *callee),
-                RExpr::Builtin(builtin) => builtin.has_effect(),
-                RExpr::EnumAssertVariantRef { .. } => true,
-                _ => false,
-            },
-            RStmt::End { .. } => false,
-            RStmt::AssertIndexInBounds { .. }
-            | RStmt::EnumAssertVariant { .. }
-            | RStmt::Store { .. }
-            | RStmt::CopyInto { .. }
-            | RStmt::EnumSetTag { .. }
-            | RStmt::EnumWriteVariant { .. } => true,
-        })
+    // A branch on a constant false, such as a `needs_drop` that is false,
+    // takes its `else` side only; a true one takes both. A `needs_drop` that a
+    // cycle decides starts false, and effects then only grow as answers turn
+    // true, so the cycle settles even when a `drop`'s effect depends on
+    // `needs_drop` of its own type.
+    // A local assigned once holds a constant it is assigned or copies.
+    let mut definitions: FxHashMap<RLocalId, Option<&RExpr<'db>>> = FxHashMap::default();
+    for statement in body.blocks.iter().flat_map(|block| &block.stmts) {
+        if let RStmt::Assign { dst, expr } = statement {
+            definitions
+                .entry(*dst)
+                .and_modify(|definition| *definition = None)
+                .or_insert(Some(expr));
+        }
+    }
+    let constant = |mut local: RLocalId| {
+        for _ in 0..definitions.len() {
+            match definitions.get(&local).copied().flatten()? {
+                RExpr::ConstScalar(ConstScalar::Bool(value)) => return Some(*value),
+                RExpr::Use(source) => local = *source,
+                _ => return None,
+            }
+        }
+        None
+    };
+    let mut reached = vec![false; body.blocks.len()];
+    let mut pending = vec![RBlockId::from_u32(0)];
+    while let Some(block) = pending.pop() {
+        if mem::replace(&mut reached[block.index()], true) {
+            continue;
+        }
+        let block = &body.blocks[block.index()];
+        if block_has_effect(db, block) {
+            return true;
+        }
+        match block.terminator {
+            RTerminator::Branch { cond, else_bb, .. } if constant(cond) == Some(false) => {
+                pending.push(else_bb)
+            }
+            ref terminator => pending.extend(terminator.successors()),
+        }
+    }
+    false
+}
+
+fn block_has_effect<'db>(db: &'db dyn MirDb, block: &RBlock<'db>) -> bool {
+    !matches!(
+        block.terminator,
+        RTerminator::Return(_)
+            | RTerminator::Goto(_)
+            | RTerminator::Branch { .. }
+            | RTerminator::SwitchScalar { .. }
+            | RTerminator::MatchEnumTag { .. }
+    ) || block.stmts.iter().any(|statement| match statement {
+        RStmt::Assign { expr, .. } => match expr {
+            RExpr::Call { callee, .. } => runtime_instance_has_effect(db, *callee),
+            RExpr::Builtin(builtin) => builtin.has_effect(),
+            RExpr::EnumAssertVariantRef { .. } => true,
+            _ => false,
+        },
+        RStmt::End { .. } => false,
+        RStmt::AssertIndexInBounds { .. }
+        | RStmt::EnumAssertVariant { .. }
+        | RStmt::Store { .. }
+        | RStmt::CopyInto { .. }
+        | RStmt::EnumSetTag { .. }
+        | RStmt::EnumWriteVariant { .. } => true,
     })
 }
