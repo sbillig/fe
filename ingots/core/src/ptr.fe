@@ -17,6 +17,8 @@ extern {
     /// Native `ref`/`mut` slots require a valid typed store before they are read.
     /// Every allocation goes through `alloc_bytes`, which bounds the size, or
     /// `alloc_bytes_unchecked`, whose callers bound it.
+    /// A zero-size allocation takes no memory, so it never fails, need not be
+    /// released, and may share its address with other allocations.
     fn alloc_raw(_ size: u256) -> *u8
 
     /// As `alloc_raw`, but returns a null address when the native host cannot
