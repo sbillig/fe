@@ -669,7 +669,11 @@ fn runtime_instance_has_effect<'db>(db: &'db dyn MirDb, instance: RuntimeInstanc
 }
 
 fn has_effect<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> bool {
-    // A branch on a constant, such as `needs_drop`'s, takes one side only.
+    // A branch on a constant false, such as a `needs_drop` that is false,
+    // takes its `else` side only; a true one takes both. A `needs_drop` that a
+    // cycle decides starts false, and effects then only grow as answers turn
+    // true, so the cycle settles even when a `drop`'s effect depends on
+    // `needs_drop` of its own type.
     // A local assigned once holds a constant it is assigned or copies.
     let mut definitions: FxHashMap<RLocalId, Option<&RExpr<'db>>> = FxHashMap::default();
     for statement in body.blocks.iter().flat_map(|block| &block.stmts) {
@@ -701,12 +705,8 @@ fn has_effect<'db>(db: &'db dyn MirDb, body: &RuntimeBody<'db>) -> bool {
             return true;
         }
         match block.terminator {
-            RTerminator::Branch {
-                cond,
-                then_bb,
-                else_bb,
-            } if let Some(value) = constant(cond) => {
-                pending.push(if value { then_bb } else { else_bb })
+            RTerminator::Branch { cond, else_bb, .. } if constant(cond) == Some(false) => {
+                pending.push(else_bb)
             }
             ref terminator => pending.extend(terminator.successors()),
         }
