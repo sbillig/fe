@@ -1298,7 +1298,7 @@ fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLoc
             .statements
             .iter()
             .any(|statement| match &statement.kind {
-                NStatementKind::End { .. } => false,
+                NStatementKind::End { .. } | NStatementKind::Drop { .. } => false,
                 NStatementKind::Store { destination, .. } => mutable_place_uses_local(destination),
                 NStatementKind::Define {
                     expr: NExpr::Borrow { place, kind, .. },

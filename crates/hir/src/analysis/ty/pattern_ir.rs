@@ -147,6 +147,17 @@ impl<'db> PatternStore<'db> {
         }
     }
 
+    /// Whether `id` binds a name anywhere in it.
+    pub fn binds(&self, id: ValidatedPatId) -> bool {
+        match self.node(id).kind() {
+            ValidatedPatKind::Wildcard { binding } => binding.is_some(),
+            ValidatedPatKind::Constructor { fields, .. } => {
+                fields.iter().any(|field| self.binds(*field))
+            }
+            ValidatedPatKind::Or(pats) => pats.iter().any(|pat| self.binds(*pat)),
+        }
+    }
+
     pub fn mir_unsupported_reason(&self, id: ValidatedPatId) -> Option<&'static str> {
         match self.node(id).kind() {
             ValidatedPatKind::Wildcard { .. } => None,

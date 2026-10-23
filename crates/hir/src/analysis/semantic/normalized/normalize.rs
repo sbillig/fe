@@ -16,11 +16,11 @@ use crate::{
             eval_const_ref, get_or_build_semantic_instance,
             lower::layout_backing_source_path_is_prefix,
             normalized::{
-                NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
-                NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId, NRootKind, NStatement,
-                NStatementId, NStatementKind, NStructuralPath, NSuccessor, NTerminator,
-                NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody, ReadMode,
-                StructuralRepack, ViewAccess, copied_scalar_ty, is_literal_allocation,
+                NBlock, NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg,
+                NEffectArgValue, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId,
+                NRootKind, NStatement, NStatementId, NStatementKind, NStructuralPath, NSuccessor,
+                NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
+                ReadMode, StructuralRepack, ViewAccess, copied_scalar_ty, is_literal_allocation,
                 layout_plan::{
                     NLayoutBackingSource, NLayoutPlan, NLayoutProjection, NLayoutSourcePath,
                     NLayoutUseBacking, NRootRepresentation, NValueRepresentation,
@@ -258,7 +258,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             self.mark_address_root(dst.local, &mut needs_slot);
                         }
                     }
-                    SStmtKind::End { .. } => {}
+                    SStmtKind::End { .. } | SStmtKind::Drop { .. } => {}
                 }
             }
         }
@@ -581,6 +581,31 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         self.current_values[dst.index()].push(value);
                         pushed.push(*dst);
                     }
+                }
+                SStmtKind::Drop { place } => {
+                    let target = if place.path.is_empty() && !self.local_has_place(place.local) {
+                        NDropTarget::Value(self.current_value(place.local)?)
+                    } else {
+                        let mut target =
+                            self.normalize_place(raw_block, statement.origin, place)?;
+                        if target.ty.as_capability(self.db).is_some() {
+                            target = self.dereference_place(
+                                raw_block,
+                                statement.origin,
+                                place.local,
+                                target,
+                            )?;
+                        }
+                        NDropTarget::Place(target)
+                    };
+                    let id = NStatementId::new(self.statement_count);
+                    self.statement_count += 1;
+                    self.blocks[block_index].statements.push(NStatement {
+                        id,
+                        source: Some(statement.id),
+                        origin: statement.origin,
+                        kind: NStatementKind::Drop { target },
+                    });
                 }
                 SStmtKind::End { access } => {
                     // An access the normalization folded away has nothing to close.
@@ -2878,6 +2903,13 @@ fn block_uses_and_defs(
                         }
                     }
                 }
+                SStmtKind::Drop { place } => {
+                    for local in place.used_locals() {
+                        if !block_defs.contains(&local) {
+                            block_uses.insert(local);
+                        }
+                    }
+                }
                 SStmtKind::End { .. } => {}
             }
         }
@@ -3066,7 +3098,8 @@ fn read_twice(var _ index: own usize, values: [u256; 2]) -> u256 {
                 }),
                 NStatementKind::Define { .. }
                 | NStatementKind::Store { .. }
-                | NStatementKind::End { .. } => None,
+                | NStatementKind::End { .. }
+                | NStatementKind::Drop { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(
