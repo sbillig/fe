@@ -160,8 +160,9 @@ impl<T> MemArray<T> {
     pub fn new_zeroed(_ len: usize) -> Self
         where T: Clearable
     {
-        var array = unsafe { Self::new_uninit(len) }
-        array.zero()
+        let array = unsafe { Self::new_uninit(len) }
+        // The elements are not yet values, so there is nothing to destroy.
+        unsafe { zero_bytes(cast<T, u8>(array.ptr), array.byte_len() as u256) }
         array
     }
 
@@ -169,8 +170,8 @@ impl<T> MemArray<T> {
     pub fn try_new_zeroed(_ len: usize) -> Option<Self>
         where T: Clearable
     {
-        var array = unsafe { Self::try_new_uninit(len)? }
-        array.zero()
+        let array = unsafe { Self::try_new_uninit(len)? }
+        unsafe { zero_bytes(cast<T, u8>(array.ptr), array.byte_len() as u256) }
         Option::Some(array)
     }
 
@@ -275,7 +276,7 @@ impl<T> MemArray<T> {
         self.as_slice().replace(index, value)
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self.as_slice().set(index, value)
     }
@@ -285,12 +286,12 @@ impl<T> MemArray<T> {
         self.as_slice().swap(i, j)
     }
 
-    /// Sets every element to its zero value: its bytes zeroed, which is a
-    /// value of a `Clearable` type.
+    /// Sets every element to its zero value, destroying the one it held; see
+    /// `MemSlice::zero`.
     pub fn zero(mut self)
         where T: Clearable
     {
-        unsafe { zero_bytes(cast<T, u8>(self.ptr), self.byte_len() as u256) }
+        self.as_slice().zero()
     }
 }
 
@@ -365,7 +366,7 @@ impl<T> MemVec<T> {
         self.as_slice().replace(index, value)
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self.as_slice().set(index, value)
     }
@@ -671,7 +672,7 @@ impl<T> MemSlice<T> {
         old
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self[index] = value
     }
@@ -722,11 +723,15 @@ impl<T> MemSlice<T> {
     }
 
     /// Sets every element to its zero value: its bytes zeroed, which is a
-    /// value of a `Clearable` type.
+    /// value of a `Clearable` type. Each element's previous value is
+    /// destroyed first, as an assignment destroys what it overwrites.
     pub fn zero(mut self)
         where T: Clearable
     {
-        unsafe { zero_bytes(byte_ptr(self.ptr), self.byte_len() as u256) }
+        unsafe {
+            drop_in_place_n(self.ptr, self.len)
+            zero_bytes(byte_ptr(self.ptr), self.byte_len() as u256)
+        }
     }
 }
 
@@ -1198,7 +1203,7 @@ fn grown_capacity(_ capacity: usize, needed: usize, initial: usize, max: usize) 
 }
 
 /// Allocates an array without initializing its contents. The caller must
-/// initialize each element before it is read.
+/// initialize each element before it is read or the array is destroyed.
 pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
     MemArray::new_uninit(len)
 }
