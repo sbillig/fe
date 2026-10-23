@@ -1,7 +1,7 @@
 //! Lexical destruction: each scope destroys the owners it holds where control
 //! leaves it.
 //!
-//! A binding belongs to the block or arm that binds it, and a temporary to
+//! A binding belongs to the block or arm that declares it, and a temporary to
 //! the scope it is allocated in: the statement, the block tail, a condition
 //! or an arm. A scope ends where its code falls through, or where `break`,
 //! `continue`, `return`, `?` or a failed condition leaves it; the value a
@@ -13,11 +13,12 @@ use cranelift_entity::EntityRef;
 use super::body::SmirLowerCtxt;
 use crate::analysis::{
     semantic::{
-        SBlockId, SExpr, SLocalId, SPlace, SStmtKind, STerminatorKind, SemanticLocalRole,
-        ValueProvenance,
+        SBlockId, SExpr, SLocalId, SOperand, SPlace, SStmtKind, STerminatorKind, SemanticLocalRole,
+        ValueProvenance, capability::semantics::holds_carrier,
     },
     ty::{drop_glue::ty_has_drop_glue, ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
 };
+use crate::hir_def::{Partial, Pat, PatId, params::FuncParamMode};
 use crate::projection::Projection;
 
 pub(super) struct DropScope {
@@ -72,6 +73,76 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
             .filter(|owner| Some(*owner) != value)
             .collect();
         self.destroy(&owners);
+    }
+
+    /// Whether a binding of `pat` holds an access, which may borrow the
+    /// statement's temporaries.
+    pub(super) fn pattern_holds_access(&self, pat: PatId) -> bool {
+        if let Some(binding) = self.typed_body.pat_binding(pat)
+            && let Some(local) = self.binding_locals.get(&binding)
+            && holds_carrier(self.db, self.locals[local.index()].ty)
+        {
+            return true;
+        }
+        match pat.data(self.db, self.body) {
+            Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                pats.iter().any(|pat| self.pattern_holds_access(*pat))
+            }
+            Partial::Present(Pat::Record(_, fields)) => fields
+                .iter()
+                .any(|field| self.pattern_holds_access(field.pat)),
+            Partial::Present(Pat::Or(lhs, rhs)) => {
+                self.pattern_holds_access(*lhs) || self.pattern_holds_access(*rhs)
+            }
+            _ => false,
+        }
+    }
+
+    /// Holds the `var` bindings `pat` declares without a value in the block
+    /// declaring them, in declaration order. An assignment in a nested scope
+    /// then gives a binding its value without making that scope its owner;
+    /// drop elaboration finds whether it has one at each exit. A `let`
+    /// declared without a value can never be given one.
+    pub(super) fn hold_declared(&mut self, pat: PatId) {
+        if let Some(binding) = self.typed_body.pat_binding(pat)
+            && binding.is_mut()
+            && let Some(&local) = self.binding_locals.get(&binding)
+        {
+            self.hold_defined(local);
+        }
+        match pat.data(self.db, self.body) {
+            Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                for &pat in pats {
+                    self.hold_declared(pat);
+                }
+            }
+            Partial::Present(Pat::Record(_, fields)) => {
+                for field in fields {
+                    self.hold_declared(field.pat);
+                }
+            }
+            Partial::Present(Pat::Or(lhs, rhs)) => {
+                self.hold_declared(*lhs);
+                self.hold_declared(*rhs);
+            }
+            _ => {}
+        }
+    }
+
+    /// Hands what the innermost scope, a statement's, holds to the scope of
+    /// the statement's bindings: they live as long as the bindings that may
+    /// borrow them.
+    pub(super) fn extend_temporaries(&mut self) {
+        let owners = std::mem::take(
+            &mut self
+                .drop_scopes
+                .last_mut()
+                .expect("a statement has its scope")
+                .owners,
+        );
+        if let Some(depth) = self.drop_scopes.iter().rposition(|scope| scope.bindings) {
+            self.drop_scopes[depth].owners.extend(owners);
+        }
     }
 
     /// The owners each scope holds so far.
@@ -168,36 +239,68 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
                     if !self.is_held(base.value)
             )
         {
-            let depth = match self.locals[dst.index()].source {
-                Some(LocalBinding::Local { .. }) => {
-                    self.drop_scopes.iter().rposition(|scope| scope.bindings)
-                }
-                _ => self.temp_scopes[dst.index()]
-                    .and_then(|id| self.drop_scopes.iter().position(|scope| scope.id == id)),
-            };
-            match depth {
-                Some(depth) => self.hold_in(*dst, depth),
-                None => self.hold_in_innermost(*dst),
-            }
+            self.hold_defined(*dst);
         }
     }
 
-    /// Holds the owners of an entry: its `own` parameters and the fields a
-    /// receive arm binds.
+    /// Holds `local` in the scope it belongs to: a binding's block, or the
+    /// scope a temporary is allocated in.
+    pub(super) fn hold_defined(&mut self, local: SLocalId) {
+        let depth = match self.locals[local.index()].source {
+            Some(LocalBinding::Local { .. }) => {
+                self.drop_scopes.iter().rposition(|scope| scope.bindings)
+            }
+            _ => self.temp_scopes[local.index()]
+                .and_then(|id| self.drop_scopes.iter().position(|scope| scope.id == id)),
+        };
+        match depth {
+            Some(depth) => self.hold_in(local, depth),
+            None => self.hold_in_innermost(local),
+        }
+    }
+
+    /// Passes a branch's value to `result`, the value of its `if` or
+    /// `match`. No scope holds `result` until the join defines it on every
+    /// path reaching it: another branch may leave the scopes before then.
+    pub(super) fn assign_branch_result(&mut self, result: SLocalId, value: SOperand) {
+        self.push_synthetic_stmt(SStmtKind::Assign {
+            dst: result,
+            expr: SExpr::Forward(value),
+        });
+        for scope in &mut self.drop_scopes {
+            scope.owners.retain(|owner| *owner != result);
+        }
+    }
+
+    /// Holds the owners of an entry: its `own` parameters, the product
+    /// parameters its parts are gathered into, and the fields a receive arm
+    /// binds.
     pub(super) fn hold_entry(&mut self) {
         for local in self.entry_locals.clone() {
-            if matches!(
-                self.locals[local.index()].source,
+            let owner = match self.locals[local.index()].source {
                 Some(
                     LocalBinding::Local { .. }
-                        | LocalBinding::Param {
-                            mode: crate::hir_def::params::FuncParamMode::Own,
-                            ..
-                        }
-                )
-            ) {
-                self.hold_in(local, 0);
-            }
+                    | LocalBinding::Param {
+                        mode: FuncParamMode::Own,
+                        ..
+                    },
+                ) => local,
+                // A product is held where its first part is passed.
+                Some(LocalBinding::ParamPart {
+                    site, idx, part: 0, ..
+                }) => {
+                    let product = (0..)
+                        .map_while(|param| self.typed_body.param_binding(param))
+                        .find(|binding| {
+                            matches!(binding, LocalBinding::Param { site: param_site, idx: param, .. }
+                                if *param_site == site && *param == idx)
+                        })
+                        .expect("a part's parameter is bound");
+                    self.binding_locals[&product]
+                }
+                _ => continue,
+            };
+            self.hold_in(owner, 0);
         }
     }
 
