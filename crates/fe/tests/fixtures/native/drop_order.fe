@@ -136,6 +136,12 @@ fn carried() {
     put(45)
 }
 
+// "-BOIA": the binding, then what the pattern leaves of the product, in
+// declaration order, as for an `own` tuple parameter.
+fn product_leftovers(_ (Outer { n, .. }, Pair { b, .. }): (own Outer, own Pair)) {
+    put(n - 34)
+}
+
 // "oi"
 fn outer() {
     let _value = Outer { inner: noisy(105), n: 111 }
@@ -424,6 +430,8 @@ pub fn main() -> i32 {
     extended()
     put(10)
     carried()
+    put(10)
+    product_leftovers((Outer { inner: noisy(73), n: 79 }, Pair { a: noisy(65), b: noisy(66) }))
     put(10)
     try_exit(false)
     put(10)
