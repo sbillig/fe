@@ -57,6 +57,15 @@ pub fn normalize_semantic_body<'db>(
     artifacts_from_admission(db, semantic_body_admission(db, instance))
 }
 
+/// The admission of the body runtime lowering uses: the checked one's, with
+/// constant-evaluable operations folded.
+pub fn runtime_semantic_body_admission<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticBodyAdmission<'db> {
+    runtime_admitted_semantic_body_query(db, instance)
+}
+
 /// The verified body with constant-evaluable operations folded, which runtime
 /// lowering uses; ownership is checked on
 /// [`normalize_semantic_body`] instead.

@@ -489,8 +489,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         )
     }
 
+    /// Binds `pat`'s bindings to the parts of `value` they name. A part no
+    /// binding names is not projected, so it stays in `value`: projecting
+    /// would move it out, as a value's projection does.
     fn bind_validated_pattern(&mut self, pat: ValidatedPatId, value: PatternValue<'db>) {
-        let kind = self.typed_body.pattern_store().node(pat).kind().clone();
+        let store = self.typed_body.pattern_store();
+        let kind = store.node(pat).kind().clone();
         match kind {
             ValidatedPatKind::Wildcard {
                 binding: Some(binding),
@@ -498,7 +502,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ValidatedPatKind::Wildcard { binding: None } => {}
             ValidatedPatKind::Constructor { ctor, fields } => match ctor {
                 ConstructorKind::Variant(variant, _) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for (idx, field_pat) in fields
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, field)| store.binds(*field))
+                    {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -518,7 +526,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     }
                 }
                 ConstructorKind::Type(_) => {
-                    for (idx, field_pat) in fields.into_iter().enumerate() {
+                    for (idx, field_pat) in fields
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(_, field)| store.binds(*field))
+                    {
                         let assigned_ty = self.validated_pattern_child_carrier_ty(
                             value,
                             field_pat,
@@ -694,10 +706,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             join_bb,
             arms,
         };
-        if !self.lower_decision_tree(&tree, &mut projections, target) {
+        let join_reachable = self.lower_decision_tree(&tree, &mut projections, target);
+        self.switch_to(join_bb);
+        if join_reachable {
+            self.hold_defined(result);
+        } else {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
         }
-        self.switch_to(join_bb);
         result
     }
 
@@ -739,10 +754,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     if falls {
                         // The arm's value passes to the join, which takes it.
                         let arm_value = self.take_operand(arm.body, arm_value);
-                        self.push_synthetic_stmt(SStmtKind::Assign {
-                            dst: result,
-                            expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
-                        });
+                        self.assign_branch_result(result, SOperand::expr(arm_value, arm.body));
                     }
                     self.pop_drop_scope(None);
                     if falls {
