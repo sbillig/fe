@@ -198,6 +198,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::ProjectionRecursion => 13,
             SemanticDiagnosticKind::RawPlaceViolation => 14,
             SemanticDiagnosticKind::InstanceLimit => 16,
+            SemanticDiagnosticKind::ConstDestructor => 17,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -268,6 +269,10 @@ impl SemanticDiagnosticKind {
             ),
             Self::InstanceLimit => format!(
                 "instantiation limit exceeded in `fn {}`",
+                checker_name(db, instance)
+            ),
+            Self::ConstDestructor => format!(
+                "compile-time destructor in `fn {}`",
                 checker_name(db, instance)
             ),
         }
@@ -452,4 +457,7 @@ pub enum SemanticDiagnosticKind {
     /// A call instantiating its callee with generic arguments past the
     /// instance limits, as recursion that grows them does.
     InstanceLimit,
+    /// A body evaluated at compile time destroying a value whose
+    /// destruction may run a `Drop` implementation.
+    ConstDestructor,
 }
