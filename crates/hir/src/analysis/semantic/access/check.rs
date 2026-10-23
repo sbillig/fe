@@ -2158,6 +2158,31 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
             NPlaceBase::CapabilityTarget { carrier } => self.carrier_key(carrier),
         };
+        // `[*]` names no definite element, so the drop may reach one moved
+        // out and destroy again what was moved, unless that owns nothing.
+        if let Some(key) = key
+            && path.contains(&Step::Index(None))
+            && let Some(found) = state.moved.iter().find(|(moved, moved_path)| {
+                *moved == key
+                    && paths_overlap(moved_path, &path)
+                    && moved_path
+                        .get(path.len()..)
+                        .unwrap_or_default()
+                        .iter()
+                        .try_fold(place.ty, |ty, step| {
+                            self.drop_components(ty)
+                                .into_iter()
+                                .find_map(|(component, ty)| (component == *step).then_some(ty))
+                        })
+                        .is_none_or(|ty| self.owns_drop_glue(ty))
+            })
+        {
+            return Err(self.moved_diag(
+                "cannot assign at a dynamic index while an element may be moved out",
+                origin,
+                found,
+            ));
+        }
         if self.checking {
             let parts = self.drop_parts(key, &path, place.ty, state);
             self.record_drop(statement, parts, place.ty, origin)?;
