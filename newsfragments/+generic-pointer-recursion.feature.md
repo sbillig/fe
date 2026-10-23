@@ -1,0 +1,1 @@
+A type may hold itself through a generic type that keeps its argument behind a pointer, as in `struct Node { next: Option<Box<Node>> }` or `struct Tree { children: MemVec<Tree> }`. Such fields were rejected as recursive type definitions.

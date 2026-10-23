@@ -255,7 +255,11 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
             }
             match adt_ref {
                 AdtRef::Struct(struct_) => {
-                    if adt_ref.as_adt(db).recursive_cycle(db).is_some() {
+                    if adt_ref
+                        .as_adt(db)
+                        .recursive_cycle_through_arguments(db)
+                        .is_some()
+                    {
                         return Err(AbiTypeError::Recursive(format!(
                             "recursive ABI type `{}`",
                             ty.pretty_print(db)
