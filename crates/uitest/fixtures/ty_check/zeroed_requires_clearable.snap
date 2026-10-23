@@ -67,7 +67,7 @@ error[6-0003]: trait bound is not satisfied
  42 │     strings.zero()
     │             ^^^^ `DynString` doesn't implement `Clearable`
     │
-    ┌─ src/ptr.fe:291:18
+    ┌─ src/ptr.fe:292:18
     │
-291 │         where T: Clearable
+292 │         where T: Clearable
     │                  --------- required by this bound on `zero`
