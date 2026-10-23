@@ -160,12 +160,14 @@ impl<'db> RmirEmitter<'db> {
             NDropTarget::Place(place) => DropSource::Place(place.clone()),
         };
         // A drop's own `self` is destroyed field by field, never passed back
-        // to the `drop` running.
+        // to the `drop` running. Whether its fields need destroying decides,
+        // not whether its type does, which is what this `drop` is lowered to
+        // find out on EVM.
         let field_wise = self.drops_own_self(target);
         let mut bb = bb;
         for part in elaboration.parts(statement).to_vec() {
             let part_ty = self.part_ty(ty, &part.path);
-            if self.needs_drop(part_ty) {
+            if (field_wise && part.path.is_empty()) || self.needs_drop(part_ty) {
                 bb = self.lower_drop_part(bb, &source, &part, part_ty, field_wise);
             }
         }
@@ -214,7 +216,7 @@ impl<'db> RmirEmitter<'db> {
         ty: TyId<'db>,
         field_wise: bool,
     ) -> RBlockId {
-        if !self.needs_drop(ty) {
+        if !field_wise && !self.needs_drop(ty) {
             return bb;
         }
         if !field_wise && has_drop_impl(self.db, ty) {

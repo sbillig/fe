@@ -104,6 +104,24 @@ fn product_parameters_destroy_unbound_parts_on_return() {
     assert(count(counter) == 3)
 }
 
+struct Tagged {
+    inner: Counted,
+    n: u256,
+}
+
+impl Drop for Tagged {
+    fn drop(own self) {}
+}
+
+#[test]
+fn a_drop_that_does_nothing_still_destroys_its_fields() {
+    let counter = counter()
+    {
+        let _tagged = Tagged { inner: Counted { counter }, n: 1 }
+    }
+    assert(count(counter) == 1)
+}
+
 #[test]
 fn matched_payloads_are_destroyed() {
     let counter = counter()
