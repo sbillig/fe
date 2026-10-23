@@ -1,4 +1,7 @@
-//! Moving a value out of a place that stays in use.
+//! Ending values early and moving them out of places that stay in use.
+//!
+//! `drop` destroys a value before its owner's scope ends, and `forget`
+//! consumes one without destroying it.
 //!
 //! A value moved out of a `mut` place leaves a hole that must be filled
 //! before the access ends. `replace` and `take` move the old value out and
@@ -26,4 +29,13 @@ pub fn replace<T>(_ dest: mut T, _ value: own T) -> T {
 /// Moves the value out of `dest`, leaving `T::default()` in its place.
 pub fn take<T: Default>(_ dest: mut T) -> T {
     replace(mut dest, T::default())
+}
+
+/// Destroys `value` here, ending its lifetime before its owner's scope does.
+pub fn drop<T>(_ value: own T) {}
+
+extern {
+    /// Consumes `value` without destroying it, so whatever it owns stays
+    /// allocated. Leaking is memory-safe, so this is safe.
+    pub fn forget<T>(_ value: own T)
 }

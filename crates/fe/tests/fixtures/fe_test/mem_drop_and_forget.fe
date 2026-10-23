@@ -1,0 +1,19 @@
+use core::mem
+
+struct Token {
+    id: u256,
+}
+
+fn consume(_ token: own Token) -> u256 {
+    let id = token.id
+    mem::drop(token)
+    id
+}
+
+#[test]
+fn values_end_early_or_leak() {
+    let kept = Token { id: 7 }
+    let leaked = Token { id: 9 }
+    assert(consume(kept) == 7)
+    mem::forget(leaked)
+}

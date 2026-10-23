@@ -159,6 +159,7 @@ pub fn check_func_body<'db>(
             func: callee,
             key,
             mode: ModeMarker::Mut,
+            in_drop,
         }) = &diag
             && let Some(FuncBodyDiag::Body(BodyDiag::MissingEffect { mode, .. })) =
                 diags.iter_mut().find(|other| {
@@ -168,6 +169,7 @@ pub fn check_func_body<'db>(
                             func: *callee,
                             key: *key,
                             mode: ModeMarker::None,
+                            in_drop: *in_drop,
                         })
                 })
         {
