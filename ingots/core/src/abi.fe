@@ -1,6 +1,6 @@
 use ingot::Copy
 use ingot::Option
-use ingot::num::{IntDowncast, WordValue}
+use ingot::num::{IntDowncast, WordValue, from_be, to_be}
 use ingot::ptr
 use ingot::ops::Eq
 
@@ -309,15 +309,16 @@ impl AbiFrame {
     }
 }
 
-/// Writes `value` as a word at `ptr`, which must have room for 32 bytes in a
-/// live allocation.
+/// Writes `value` as a big-endian word at `ptr`, which must have room for 32
+/// bytes in a live allocation.
 pub unsafe fn store_word(ptr: *u8, value: u256) {
-    unsafe { *ptr::cast<u8, u256>(ptr) = value }
+    unsafe { *ptr::cast<u8, u256>(ptr) = to_be(value) }
 }
 
-/// Reads the word at `ptr`, whose 32 bytes must lie in a live allocation.
+/// Reads the big-endian word at `ptr`, whose 32 bytes must lie in a live
+/// allocation.
 pub unsafe fn load_word(_ ptr: *u8) -> u256 {
-    unsafe { *ptr::cast<u8, u256>(ptr) }
+    from_be(unsafe { *ptr::cast<u8, u256>(ptr) })
 }
 
 pub fn decode_or_revert<A: Abi, T, D, I>(d: mut D, _ input: I) -> T
@@ -1198,7 +1199,7 @@ impl Eq for DynString {
 // slack after every allocation, which their allocator does not yet leave.
 #[inline(always)]
 unsafe fn mem_word_at(base: *u8, offset: u256) -> u256 {
-    *ptr::cast<u8, u256>(ptr::offset_bytes(base, offset))
+    from_be(*ptr::cast<u8, u256>(ptr::offset_bytes(base, offset)))
 }
 
 /// A span's bytes read past its end as zeros, like calldata's.
