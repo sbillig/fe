@@ -167,3 +167,47 @@ fn a_let_else_drops_its_bindings_only_where_they_are_bound() {
         &["*", "-", "*"],
     );
 }
+
+#[test]
+fn a_destroyed_temporary_does_not_hold_the_accesses_it_carries() {
+    // The tuple lives as long as `n`, but its access ends at `n`'s last use.
+    check(
+        "struct Cell { n: u64 }\nimpl Cell { fn peek(mut? self) -> (Buf, mut? u64) { (make(1), mut? self.n) } }\nfn f() -> u64 { var cell = Cell { n: 1 }\n let (_, ref n) = cell.peek()\n let m = n + 1\n cell.n = 5\n m }",
+        "f",
+        // The tuple at the end, and the moved `make(1)`.
+        &["*", "-"],
+    );
+}
+
+#[test]
+fn a_question_mark_exit_destroys_what_its_path_holds() {
+    check(
+        "fn half(_ x: u64) -> Option<u64> { if x == 0 { Option::None } else { Option::Some(x / 2) } }\nfn f(_ n: u64) -> Option<Buf> { let b = make(1)\n let h = half(n)?\n Option::Some(b) }",
+        "f",
+        // Only where `?` returns is `b` destroyed; elsewhere it moved.
+        &["-", "-", "-", "*"],
+    );
+    check(
+        "use core::Result\nfn f(_ r: own Result<Buf, u64>) -> Result<Buf, Buf> { let b = make(1)\n let v = r?\n Result::Ok(make(v + b.id)) }",
+        "f",
+        // `b` on both paths, and `r` whole only on the path that goes on:
+        // where `?` returns, its error moved out.
+        &["-", "-", "*", "*", "-", "*", "-"],
+    );
+}
+
+#[test]
+fn a_branch_that_leaves_does_not_destroy_the_value_of_its_siblings() {
+    check(
+        "fn f(_ o: own Option<Buf>) -> u64 { let b = match o { Option::Some(b) => b\n Option::None => return 0 }\n consume(b) }",
+        "f",
+        // Only `o` is initialized where the `None` arm returns.
+        &["-", "-", "-", "-", "-", "-", "*"],
+    );
+    check(
+        "fn f(_ c: bool) -> u64 { let b = if c { make(1) } else { return 0 }\n view(b) }",
+        "f",
+        // The `else` returns holding nothing; `b` lives to the end.
+        &["-", "-", "*"],
+    );
+}

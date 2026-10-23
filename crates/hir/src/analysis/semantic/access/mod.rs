@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt, iter};
 
 use common::diagnostics::CompleteDiagnostic;
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::SalsaValue;
 
 pub use self::control::{
@@ -42,8 +42,8 @@ use crate::{
             identity_semantic_instance_key,
             normalized::{
                 NBlockId, NDataProjection, NDropTarget, NExpr, NPlace, NStatementId,
-                NStatementKind, SemanticBodyAdmission, normalize_semantic_body,
-                semantic_body_admission,
+                NStatementKind, NormalizedBody, SemanticBodyAdmission, normalize_semantic_body,
+                runtime_semantic_body_admission, semantic_body_admission,
             },
             root_semantic_instance_key,
         },
@@ -89,6 +89,76 @@ pub struct DropElaboration {
 }
 
 impl DropElaboration {
+    /// This elaboration of `checked`, keyed by the statements of `body`,
+    /// another normalization of the same raw body, as constant folding makes
+    /// for runtime lowering. Folding renumbers normalized statements, but
+    /// each keeps the raw statement it comes from, and the blocks stay the
+    /// same.
+    fn rekeyed(&self, checked: &NormalizedBody<'_>, body: &NormalizedBody<'_>) -> Self {
+        // Where each raw statement's normalized statements begin in `body`,
+        // and its last one.
+        let mut before = FxHashMap::default();
+        let mut last = FxHashMap::default();
+        for (block, data) in body.blocks.iter().enumerate() {
+            let mut point = DropFlagPoint::BlockStart(NBlockId::new(block));
+            for statement in &data.statements {
+                if let Some(source) = statement.source {
+                    before.entry(source).or_insert(point);
+                    last.insert(source, statement.id);
+                }
+                point = DropFlagPoint::After(statement.id);
+            }
+        }
+        // The point after each checked statement, in `body`: after its raw
+        // statement, or, for one normalization introduced, before the next
+        // raw statement of its block.
+        let mut after = FxHashMap::default();
+        for (block, data) in checked.blocks.iter().enumerate() {
+            let mut next = DropFlagPoint::BeforeTerminator(NBlockId::new(block));
+            for statement in data.statements.iter().rev() {
+                match statement
+                    .source
+                    .and_then(|source| Some((before.get(&source)?, last[&source])))
+                {
+                    Some((&first, last)) => {
+                        after.insert(statement.id, DropFlagPoint::After(last));
+                        next = first;
+                    }
+                    None => {
+                        after.insert(statement.id, next);
+                    }
+                }
+            }
+        }
+        let mut drops: Vec<_> = self
+            .drops
+            .iter()
+            .map(|(statement, parts)| {
+                let DropFlagPoint::After(statement) = after[statement] else {
+                    unreachable!("a drop is a raw statement that folding keeps")
+                };
+                (statement, parts.clone())
+            })
+            .collect();
+        drops.sort_by_key(|(statement, _)| *statement);
+        let flag_updates = self
+            .flag_updates
+            .iter()
+            .map(|update| DropFlagUpdate {
+                at: match update.at {
+                    DropFlagPoint::After(statement) => after[&statement],
+                    point => point,
+                },
+                ..*update
+            })
+            .collect();
+        Self {
+            drops,
+            flags: self.flags.clone(),
+            flag_updates,
+        }
+    }
+
     pub fn parts(&self, statement: NStatementId) -> &[DropPart] {
         self.drops
             .binary_search_by_key(&statement, |(id, _)| *id)
@@ -132,6 +202,27 @@ pub enum DropFlagPoint {
     /// The end of a block, whose terminator moves its operand or, on every
     /// edge, an argument.
     BeforeTerminator(NBlockId),
+}
+
+/// What `instance`'s drops destroy, keyed by the statements of the body
+/// runtime lowering uses.
+#[salsa::tracked]
+pub fn runtime_drop_elaboration<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<DropElaboration> {
+    let elaboration = drop_elaboration(db, instance)?;
+    let (SemanticBodyAdmission::Ready(checked), SemanticBodyAdmission::Ready(runtime)) = (
+        semantic_body_admission(db, instance),
+        runtime_semantic_body_admission(db, instance),
+    ) else {
+        return None;
+    };
+    Some(if checked == runtime {
+        elaboration.clone()
+    } else {
+        elaboration.rekeyed(checked.body(db), runtime.body(db))
+    })
 }
 
 /// What `instance`'s drops destroy, once its body is checked.

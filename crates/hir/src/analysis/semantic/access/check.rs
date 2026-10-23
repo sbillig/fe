@@ -48,12 +48,11 @@ use crate::{
             adt_def::AdtRef,
             corelib::{
                 MemoryAccessKind, bounded_by_sealed_capabilities, effect_key_state_access,
-                external_call_state_access, is_sealed_evm_capability, resolve_core_trait,
+                external_call_state_access, is_sealed_evm_capability,
             },
-            drop_glue::{adt_drop_impl, ty_has_drop_glue},
+            drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
             provider::{AddressSpace, provider_semantics},
             shape::Shape,
-            trait_lower::lower_impl_trait,
             trait_resolution::PredicateListId,
             ty_check::{BindingAccess, BodyOwner, LocalBinding, infer_body},
             ty_def::{BorrowKind, CapabilityKind, ShapeMode, TyData, TyId},
@@ -1838,15 +1837,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             ),
             MoveKey::Param(_) | MoveKey::Access(_) => false,
         };
-        self_param
-            && func
-                .containing_impl_trait(self.db)
-                .is_some_and(|impl_trait| {
-                    lower_impl_trait(self.db, impl_trait).is_some_and(|implementor| {
-                        Some(implementor.trait_def(self.db))
-                            == resolve_core_trait(self.db, self.scope, &["ops", "Drop"])
-                    })
-                })
+        self_param && implements_drop(self.db, func)
     }
 
     /// Whether `value` owns what it holds, rather than reading a place or
