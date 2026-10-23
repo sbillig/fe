@@ -11,7 +11,9 @@ value's lifetime ends, and a type that holds a resource releases it in its
   bindings declared after it. A `var` declared without a value belongs to
   the block declaring it, wherever an assignment gives it one, and is
   destroyed there if it has one.
-- A parameter taken `own` is destroyed when the function returns.
+- A parameter taken `own` is destroyed when the function returns, after the
+  function's bindings. So is an owned part of a parameter's pattern or
+  product (`_ (a, _): (own T, own T)`) that the pattern leaves unbound.
 - A temporary is destroyed at the end of its statement. A `let` that binds
   an access (`let s = ref make().span()`) keeps the statement's temporaries
   until the end of its block, as long as the binding that may borrow them.

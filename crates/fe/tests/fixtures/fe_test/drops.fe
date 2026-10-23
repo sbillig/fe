@@ -83,6 +83,27 @@ fn reassignment_destroys_the_old_value() {
     assert(count(counter) == 2)
 }
 
+// A part a product parameter's pattern leaves unbound is destroyed when the
+// function returns.
+fn ignore_owned(_ (_, n): (own Counted, own u256), _ counter: *u256) -> u256 {
+    assert(count(counter) == 0)
+    n
+}
+
+fn ignore_nested(_ ((_, n), _): ((own Counted, own u256), own Counted), _ counter: *u256) -> u256 {
+    assert(count(counter) == 1)
+    n
+}
+
+#[test]
+fn product_parameters_destroy_unbound_parts_on_return() {
+    let counter = counter()
+    assert(ignore_owned((Counted { counter }, 1), counter) == 1)
+    assert(count(counter) == 1)
+    assert(ignore_nested(((Counted { counter }, 1), Counted { counter }), counter) == 1)
+    assert(count(counter) == 3)
+}
+
 #[test]
 fn matched_payloads_are_destroyed() {
     let counter = counter()

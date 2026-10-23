@@ -18,7 +18,7 @@ use crate::analysis::{
     },
     ty::{drop_glue::ty_has_drop_glue, ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
 };
-use crate::hir_def::{Partial, Pat, PatId};
+use crate::hir_def::{Partial, Pat, PatId, params::FuncParamMode};
 use crate::projection::Projection;
 
 pub(super) struct DropScope {
@@ -131,8 +131,11 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
 
     /// Hands what the innermost scope, a statement's, holds to the scope of
     /// the statement's bindings: they live as long as the bindings that may
-    /// borrow them.
-    pub(super) fn extend_temporaries(&mut self) {
+    /// borrow them. The `let` destructuring product parameter `product`
+    /// hands them to the function's scope in the product's place instead, so
+    /// a part its pattern leaves unbound is destroyed when the function
+    /// returns, as an `own` parameter is.
+    pub(super) fn extend_temporaries(&mut self, product: Option<SLocalId>) {
         let owners = std::mem::take(
             &mut self
                 .drop_scopes
@@ -140,7 +143,14 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
                 .expect("a statement has its scope")
                 .owners,
         );
-        if let Some(depth) = self.drop_scopes.iter().rposition(|scope| scope.bindings) {
+        if let Some(product) = product {
+            let entry = &mut self.drop_scopes[0].owners;
+            let at = entry
+                .iter()
+                .position(|owner| *owner == product)
+                .map_or(entry.len(), |at| at + 1);
+            entry.splice(at..at, owners);
+        } else if let Some(depth) = self.drop_scopes.iter().rposition(|scope| scope.bindings) {
             self.drop_scopes[depth].owners.extend(owners);
         }
     }
@@ -279,22 +289,30 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         }
     }
 
-    /// Holds the owners of an entry: its `own` parameters and the fields a
-    /// receive arm binds.
+    /// Holds the owners of an entry: its `own` parameters, the product
+    /// parameters its parts are gathered into, and the fields a receive arm
+    /// binds.
     pub(super) fn hold_entry(&mut self) {
         for local in self.entry_locals.clone() {
-            if matches!(
-                self.locals[local.index()].source,
+            let owner = match self.locals[local.index()].source {
                 Some(
                     LocalBinding::Local { .. }
-                        | LocalBinding::Param {
-                            mode: crate::hir_def::params::FuncParamMode::Own,
-                            ..
-                        }
-                )
-            ) {
-                self.hold_in(local, 0);
-            }
+                    | LocalBinding::Param {
+                        mode: FuncParamMode::Own,
+                        ..
+                    },
+                ) => local,
+                // A product is held where its first part is passed.
+                Some(LocalBinding::ParamPart { idx, part: 0, .. }) => {
+                    let product = self
+                        .typed_body
+                        .param_binding(idx)
+                        .expect("a part's parameter is bound");
+                    self.binding_locals[&product]
+                }
+                _ => continue,
+            };
+            self.hold_in(owner, 0);
         }
     }
 

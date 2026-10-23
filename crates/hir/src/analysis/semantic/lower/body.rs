@@ -2351,9 +2351,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         _ => self.bind_pattern(*pat, value),
                     }
                     // A temporary a binding's access borrows lives as long
-                    // as the binding.
-                    if self.pattern_holds_access(*pat) {
-                        self.extend_temporaries();
+                    // as the binding, and a part of a product parameter as
+                    // long as the parameter.
+                    let product = self
+                        .typed_body
+                        .expr_binding(*init)
+                        .filter(|binding| self.typed_body.param_product(*binding).is_some())
+                        .map(|binding| self.binding_locals[&binding]);
+                    if product.is_some() || self.pattern_holds_access(*pat) {
+                        self.extend_temporaries(product);
                     }
                 } else {
                     self.hold_declared(*pat);
