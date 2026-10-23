@@ -122,6 +122,20 @@ fn a_drop_that_does_nothing_still_destroys_its_fields() {
     assert(count(counter) == 1)
 }
 
+// Reading a `Copy` field of a `Drop` part moves nothing out of the part,
+// which is destroyed whole on return.
+fn tagged_sum(_ (Tagged { n, .. }, k): (own Tagged, own u256), _ counter: *u256) -> u256 {
+    assert(count(counter) == 0)
+    n + k
+}
+
+#[test]
+fn product_patterns_read_copy_fields_of_drop_parts() {
+    let counter = counter()
+    assert(tagged_sum((Tagged { inner: Counted { counter }, n: 2 }, 3), counter) == 5)
+    assert(count(counter) == 1)
+}
+
 #[test]
 fn matched_payloads_are_destroyed() {
     let counter = counter()
