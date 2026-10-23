@@ -3346,6 +3346,13 @@ impl<'db> RmirEmitter<'db> {
         {
             return Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased));
         }
+        if kind == RuntimeBuiltinFuncKind::NeedsDrop {
+            let ty = semantic.key(self.db).subst(self.db).generic_args(self.db)[0];
+            let needs_drop = self.needs_drop(ty);
+            let ret = self.alloc_bool_temp();
+            self.assign_bool(bb, ret, needs_drop);
+            return Some(ret);
+        }
         if kind == RuntimeBuiltinFuncKind::Clear {
             // A zero-sized place is erased: clearing it stores nothing.
             if let [place] = args.as_slice() {
@@ -4339,10 +4346,11 @@ impl<'db> RmirEmitter<'db> {
                 LoweredBuiltinCall::Terminator(RTerminator::Trap)
             }
             // Lowered with its payload in `lower_panic_code`, by
-            // `lower_clear`, and as nothing.
+            // `lower_clear`, as nothing, and as a constant.
             RuntimeBuiltinFuncKind::PanicCode
             | RuntimeBuiltinFuncKind::Clear
-            | RuntimeBuiltinFuncKind::Forget => return None,
+            | RuntimeBuiltinFuncKind::Forget
+            | RuntimeBuiltinFuncKind::NeedsDrop => return None,
             RuntimeBuiltinFuncKind::IntrinsicKeccak256
             | RuntimeBuiltinFuncKind::IntrinsicKeccakWords => return None,
         })
