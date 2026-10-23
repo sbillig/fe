@@ -123,6 +123,95 @@ fn needs_drop_skips_destruction_that_does_nothing_on_evm() {
 }
 
 #[test]
+fn memory_owners_of_plain_values_are_not_destroyed_on_evm() {
+    let ir = emit_evm_ir(
+        r#"
+use core::{Box, MemArray, MemBuffer, MemVec}
+
+fn run(_ n: usize) -> u256 {
+    var values: MemVec<u256> = MemVec::new()
+    for i in 0..n {
+        values.push(i as u256)
+    }
+    values.truncate(1)
+    let boxed = Box::new(values[0])
+    let array = MemArray<u256>::new_zeroed(n)
+    var buffer = MemBuffer::with_capacity(n)
+    buffer.resize(n)
+    boxed.get() + array.len() as u256 + buffer.len() as u256
+}
+
+msg Msg {
+    #[selector = 0]
+    Run { n: usize } -> u256,
+}
+
+contract C {
+    recv Msg {
+        Run { n } -> u256 {
+            run(n)
+        }
+    }
+}
+"#
+        .to_string(),
+    );
+    // The library's own calls remain at O0, but no `Drop::drop` is emitted.
+    assert!(!ir.contains("__drop"), "{ir}");
+}
+
+const RECURSIVE: &str = r#"
+use core::{Box, MemVec, Option}
+use core::ops::Drop
+
+struct Token { counter: *u256 }
+
+TOKEN_DROP
+
+struct Node { token: Token, next: Option<Box<Node>> }
+
+struct Tree { token: Token, children: MemVec<Tree> }
+
+fn run(_ n: u256) -> u256 {
+    let counter = core::ptr::alloc<u256>()
+    var head: Option<Box<Node>> = Option::None
+    var tree = Tree { token: Token { counter }, children: MemVec::new() }
+    var i: u256 = 0
+    while i < n {
+        head = Option::Some(Box::new(Node { token: Token { counter }, next: head }))
+        tree.children.push(Tree { token: Token { counter }, children: MemVec::new() })
+        i += 1
+    }
+    unsafe { *counter }
+}
+
+msg Msg {
+    #[selector = 0]
+    Run { n: u256 } -> u256,
+}
+
+contract C {
+    recv Msg {
+        Run { n } -> u256 {
+            run(n)
+        }
+    }
+}
+"#;
+
+#[test]
+fn recursion_alone_does_not_make_owners_destroyed_on_evm() {
+    let ir = |token_drop: &str| emit_evm_ir(RECURSIVE.replace("TOKEN_DROP", token_drop));
+    // Holding itself adds no effect, so a list or tree of plain values has
+    // nothing to destroy.
+    let plain = ir("");
+    assert!(!plain.contains("__drop"), "{plain}");
+    // A part whose drop has an effect is still reached through the recursion.
+    let counted = ir("impl Drop for Token { fn drop(own self) { unsafe { *self.counter += 1 } } }");
+    assert!(counted.contains("__drop"), "{counted}");
+}
+
+#[test]
 fn indexed_stores_check_bounds_before_destroying() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///evm_drops.fe").unwrap();
