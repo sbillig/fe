@@ -1354,6 +1354,10 @@ pub enum RuntimeBuiltin<'db> {
     LeadingZeros {
         value: RValueId,
     },
+    /// Reverses the bytes of a word.
+    SwapBytes {
+        value: RValueId,
+    },
     /// Returns a scalar unchanged while hiding it from the optimizer.
     BlackBox {
         value: RValueId,
@@ -1759,6 +1763,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::AddMod { .. }
             | Self::MulMod { .. }
             | Self::LeadingZeros { .. }
+            | Self::SwapBytes { .. }
             | Self::Byte { .. }
             | Self::SignExtend { .. }
             | Self::Saturating { .. }
@@ -1800,6 +1805,7 @@ impl<'db> RuntimeBuiltin<'db> {
             Self::Sload { slot: value }
             | Self::CallDataLoad { offset: value }
             | Self::LeadingZeros { value }
+            | Self::SwapBytes { value }
             | Self::BlackBox { value }
             | Self::BlockHash { block: value }
             | Self::BlobHash { index: value }
