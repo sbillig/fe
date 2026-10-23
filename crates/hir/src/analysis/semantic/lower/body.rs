@@ -825,11 +825,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         ) && let Some(binding) = self.typed_body.expr_binding(expr)
             && !self.capture_places.contains_key(&binding)
             && let Some(&local) = self.binding_locals.get(&binding)
-            && (self.locals[local.index()]
+            && self.locals[local.index()]
                 .ty
                 .as_capability(self.db)
                 .is_some()
-                || self.typed_body.param_product(binding).is_some())
         {
             return self.value_pattern_source(local);
         }
@@ -2327,6 +2326,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         match stmt_data {
             Stmt::Let(pat, _, init, else_) => {
                 if let Some(init) = init {
+                    // The `let` a product parameter's body begins with binds
+                    // the parts where they lie in the product, as an `own`
+                    // parameter's pattern binds its fields: the product keeps
+                    // what the pattern leaves unbound.
+                    if let Some(binding) = self.typed_body.expr_binding(*init)
+                        && let Some(shape) = self.typed_body.param_product(binding)
+                        && let Some(root) = self.typed_body.pattern_root(*pat)
+                    {
+                        let product = SPlace::new(self.binding_locals[&binding]);
+                        self.bind_validated_pattern_place(root, product, None, Some(shape));
+                        return;
+                    }
                     let value = if matches!(
                         pat.data(self.db, self.body),
                         Partial::Present(Pat::Path(..))
@@ -2351,15 +2362,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         _ => self.bind_pattern(*pat, value),
                     }
                     // A temporary a binding's access borrows lives as long
-                    // as the binding, and a part of a product parameter as
-                    // long as the parameter.
-                    let product = self
-                        .typed_body
-                        .expr_binding(*init)
-                        .filter(|binding| self.typed_body.param_product(*binding).is_some())
-                        .map(|binding| self.binding_locals[&binding]);
-                    if product.is_some() || self.pattern_holds_access(*pat) {
-                        self.extend_temporaries(product);
+                    // as the binding.
+                    if self.pattern_holds_access(*pat) {
+                        self.extend_temporaries();
                     }
                 } else {
                     self.hold_declared(*pat);

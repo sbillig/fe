@@ -131,11 +131,8 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
 
     /// Hands what the innermost scope, a statement's, holds to the scope of
     /// the statement's bindings: they live as long as the bindings that may
-    /// borrow them. The `let` destructuring product parameter `product`
-    /// hands them to the function's scope in the product's place instead, so
-    /// a part its pattern leaves unbound is destroyed when the function
-    /// returns, as an `own` parameter is.
-    pub(super) fn extend_temporaries(&mut self, product: Option<SLocalId>) {
+    /// borrow them.
+    pub(super) fn extend_temporaries(&mut self) {
         let owners = std::mem::take(
             &mut self
                 .drop_scopes
@@ -143,14 +140,7 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
                 .expect("a statement has its scope")
                 .owners,
         );
-        if let Some(product) = product {
-            let entry = &mut self.drop_scopes[0].owners;
-            let at = entry
-                .iter()
-                .position(|owner| *owner == product)
-                .map_or(entry.len(), |at| at + 1);
-            entry.splice(at..at, owners);
-        } else if let Some(depth) = self.drop_scopes.iter().rposition(|scope| scope.bindings) {
+        if let Some(depth) = self.drop_scopes.iter().rposition(|scope| scope.bindings) {
             self.drop_scopes[depth].owners.extend(owners);
         }
     }
