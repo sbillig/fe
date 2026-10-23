@@ -1,6 +1,6 @@
 // Relinked only into the fallible-allocation regression executable. It refuses
-// 4096-byte requests and counts the 1024-byte and 1-byte blocks the test owns;
-// a zero-byte request reaches the host as one byte.
+// 4096-byte requests and counts the 1024-byte block the test owns. The test's
+// empty allocation must not reach the host at all.
 #define _DEFAULT_SOURCE
 #include <stddef.h>
 #include <stdint.h>
@@ -11,6 +11,7 @@
 static unsigned allocations;
 static unsigned releases;
 static unsigned failures;
+static unsigned empties;
 
 typedef union {
     max_align_t alignment;
@@ -18,6 +19,7 @@ typedef union {
 } Header;
 
 void *malloc(size_t size) {
+    empties += size <= 1;
     if (size == 4096) {
         failures++;
         return NULL;
@@ -28,7 +30,7 @@ void *malloc(size_t size) {
                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (header == MAP_FAILED) return NULL;
     header->info.extent = extent;
-    header->info.watched = size == 1024 || size == 1;
+    header->info.watched = size == 1024;
     allocations += header->info.watched;
     return header + 1;
 }
@@ -41,5 +43,5 @@ void free(void *pointer) {
 }
 
 __attribute__((destructor)) static void check_releases(void) {
-    if (allocations != 2 || releases != 2 || failures != 1) _Exit(101);
+    if (allocations != 1 || releases != 1 || failures != 1 || empties != 0) _Exit(101);
 }
