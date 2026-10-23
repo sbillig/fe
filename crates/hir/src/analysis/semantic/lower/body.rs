@@ -46,6 +46,7 @@ use crate::{
 };
 
 use super::{
+    drops::DropScope,
     effects::{WithBindingSource, provisional_owner_effect_bindings},
     elaborate::elaborate_ends,
     local_facts::{initial_snapshot_source, ordinary_direct_value_role},
@@ -162,6 +163,8 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
     let root = template_owner
         .root_expr(db)
         .unwrap_or_else(|| body.expr(db));
+    cx.push_drop_scope(true);
+    cx.hold_entry();
     let result = cx.lower_expr(root);
     if !cx.is_terminated(cx.current) {
         let result = (cx.expr_ty(root) != TyId::unit(db)).then(|| SOperand::expr(result, root));
@@ -230,6 +233,12 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     slide: Option<SBlockId>,
     /// The components of each unsafe split lowered so far.
     unsafe_splits: Vec<Vec<SValueId>>,
+    /// The scopes enclosing the code being lowered, innermost last, with the
+    /// owners each destroys where control leaves it (`drops`).
+    pub(super) drop_scopes: Vec<DropScope>,
+    /// The scope each temporary was allocated in, by local.
+    pub(super) temp_scopes: Vec<Option<u32>>,
+    pub(super) next_drop_scope: u32,
 }
 
 pub(super) struct BlockState<'db> {
@@ -263,6 +272,9 @@ pub(super) struct LoopScope {
     pub(super) continue_bb: SBlockId,
     pub(super) break_bb: SBlockId,
     pub(super) has_reachable_continue: bool,
+    /// The scopes outside the loop body: `break` and `continue` destroy the
+    /// owners of the scopes inside it.
+    pub(super) drop_depth: usize,
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
@@ -319,6 +331,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             yield_depth: 0,
             slide: None,
             unsafe_splits: Vec::new(),
+            drop_scopes: Vec::new(),
+            temp_scopes: Vec::new(),
+            next_drop_scope: 0,
         };
         cx.collect_binding_locals();
         cx.current = cx.new_block();
@@ -501,6 +516,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.assigned_snapshots.push(snapshot_source.is_some());
         self.assigned_layout_backing_sources
             .push(!layout_backing_sources.is_empty());
+        let scope = source.map_or_else(|| self.allocation_scope(), |_| None);
+        self.temp_scopes.push(scope);
         self.locals.push(SLocal {
             ty,
             mutability,
@@ -561,6 +578,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     pub(super) fn push_stmt(&mut self, origin: SemOrigin<'db>, kind: SStmtKind<'db>) {
         if !self.is_terminated(self.current) {
             self.update_stmt_local_facts(&kind);
+            self.hold_assigned(&kind);
             let id = SStmtId::from_u32(self.next_stmt_id);
             self.next_stmt_id = self
                 .next_stmt_id
@@ -730,19 +748,29 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// Ends the body on the current path with `value`. A projection yields
     /// it instead: its session resumes in the slide of the `yield` statement
     /// being lowered, or else returns.
+    /// Every scope ends on the path, and the value leaves with it. A
+    /// projection's frame outlives its yield: its scopes end where its
+    /// session resumes and returns.
     fn exit(&mut self, origin: SemOrigin<'db>, value: Option<SOperand>) {
-        let block = self.current;
         let Some(value) = value.filter(|_| self.instance.is_projection(self.db)) else {
-            self.set_terminator(block, origin, STerminatorKind::Return(value));
+            self.destroy_scopes_from(0, value.map(|value| value.value));
+            self.set_terminator(self.current, origin, STerminatorKind::Return(value));
             return;
         };
         let resume = self.new_block();
-        self.set_terminator(block, origin, STerminatorKind::Yield { value, resume });
-        let after = self
-            .slide
-            .map_or(STerminatorKind::Return(None), STerminatorKind::Goto);
-        self.set_terminator(resume, origin, after);
+        self.set_terminator(
+            self.current,
+            origin,
+            STerminatorKind::Yield { value, resume },
+        );
         self.current = resume;
+        match self.slide {
+            Some(slide) => self.set_terminator(resume, origin, STerminatorKind::Goto(slide)),
+            None => {
+                self.destroy_scopes_from(0, None);
+                self.set_terminator(resume, origin, STerminatorKind::Return(None));
+            }
+        }
     }
 
     pub(super) fn set_synthetic_terminator(&mut self, block: SBlockId, kind: STerminatorKind<'db>) {
@@ -814,6 +842,26 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             return self.value_pattern_source(local);
         }
         let value = self.lower_source(expr);
+        // A value that owns something to destroy is matched in place, so it
+        // has one owner: the tests read it and the bindings move its parts
+        // out. A value has no `ref` or `mut` binding to borrow it.
+        let ty = self.locals[value.index()].ty;
+        if self.needs_destroying(ty) {
+            let local = self.alloc_temp(ty);
+            self.push_stmt(
+                SemOrigin::Expr(expr),
+                SStmtKind::Assign {
+                    dst: local,
+                    expr: SExpr::UseValue(SOperand::expr(value, expr)),
+                },
+            );
+            return PatternSource::Place {
+                place: SPlace::new(local),
+                ty,
+                provider: None,
+                inspected: true,
+            };
+        }
         self.value_pattern_source(value)
     }
 
@@ -1286,6 +1334,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let src = self.take_expr_operand(*src);
                 if self.typed_body.semantic_expr_lowering(*dst).is_some() {
                     let dst = SPlace::new(self.lower_access(*dst));
+                    self.drop_before_write(&dst, self.locals[src.value.index()].ty);
                     self.push_stmt(origin, SStmtKind::Store { dst, src });
                 } else {
                     let dst = self.lower_place(*dst);
@@ -2266,7 +2315,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         )
     }
 
+    /// A block's scope holds its bindings and its tail's temporaries; its
+    /// value passes to the enclosing scope.
     fn lower_block_expr(&mut self, stmts: &[StmtId]) -> SValueId {
+        self.push_drop_scope(true);
+        let value = self.lower_block_stmts(stmts);
+        self.pop_drop_scope(Some(value));
+        value
+    }
+
+    fn lower_block_stmts(&mut self, stmts: &[StmtId]) -> SValueId {
         let Some((tail, head)) = stmts.split_last() else {
             return self.unit_value();
         };
@@ -2286,7 +2344,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
+    /// A statement's scope holds its temporaries; its bindings belong to
+    /// the enclosing block.
     fn lower_stmt(&mut self, stmt: StmtId) {
+        self.push_drop_scope(false);
+        self.lower_stmt_in_scope(stmt);
+        self.pop_drop_scope(None);
+    }
+
+    fn lower_stmt_in_scope(&mut self, stmt: StmtId) {
         let Partial::Present(stmt_data) = stmt.data(self.db, self.body) else {
             panic!("cannot lower absent statement")
         };
@@ -2308,9 +2374,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         Some(else_) if !self.pattern_is_irrefutable(*pat) => {
                             let then_bb = self.new_block();
                             let else_bb = self.new_block();
+                            let held = self.held_counts();
                             self.lower_pattern_branch(*pat, value, then_bb, else_bb);
                             self.switch_to(else_bb);
-                            let _ = self.lower_expr(*else_);
+                            self.without_held_since(&held, |this| {
+                                let _ = this.lower_expr(*else_);
+                            });
                             self.switch_to(then_bb);
                         }
                         _ => self.bind_pattern(*pat, value),
@@ -2323,11 +2392,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let is_reachable = !self.is_terminated(self.current);
                 let scope = self.loop_stack.last_mut().expect("continue outside loop");
                 scope.has_reachable_continue |= is_reachable;
-                let continue_bb = scope.continue_bb;
+                let (continue_bb, drop_depth) = (scope.continue_bb, scope.drop_depth);
+                self.destroy_scopes_from(drop_depth, None);
                 self.set_terminator(self.current, origin, STerminatorKind::Goto(continue_bb));
             }
             Stmt::Break => {
                 let scope = self.loop_stack.last().copied().expect("break outside loop");
+                self.destroy_scopes_from(scope.drop_depth, None);
                 self.set_terminator(self.current, origin, STerminatorKind::Goto(scope.break_bb));
             }
             Stmt::Return(expr) => {
@@ -2360,16 +2431,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let exit_bb = self.new_block();
         self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
 
+        // An iteration's scope holds what its condition binds.
         self.switch_to(cond_bb);
-        self.lower_cond_branch(cond, body_bb, exit_bb);
+        let drop_depth = self.drop_scopes.len();
+        self.push_drop_scope(true);
+        self.lower_cond_branch(cond, body_bb, exit_bb, drop_depth, true);
 
         self.loop_stack.push(LoopScope {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             has_reachable_continue: false,
+            drop_depth,
         });
         self.switch_to(body_bb);
         let _ = self.lower_expr(body_expr);
+        self.pop_drop_scope(None);
         if !self.is_terminated(self.current) {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(cond_bb));
         }
@@ -2534,12 +2610,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             },
         );
 
+        // An iteration's scope holds the element and what the pattern binds.
+        let drop_depth = self.drop_scopes.len();
         self.loop_stack.push(LoopScope {
             continue_bb: latch_bb,
             break_bb: exit_bb,
             has_reachable_continue: false,
+            drop_depth,
         });
         self.switch_to(body_bb);
+        self.push_drop_scope(true);
         let mut at_args = with_state(self, state);
         // `produce` advances the driver through a `mut` access.
         if let (Some(temp), Some(driver)) = (driver, plan.driver)
@@ -2555,6 +2635,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let step = self.value_pattern_source(yielded);
         self.bind_pattern(pat, step);
         let _ = self.lower_expr(body_expr);
+        self.pop_drop_scope(None);
         let falls_through = !self.is_terminated(self.current);
         if falls_through {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(latch_bb));
@@ -2587,25 +2668,33 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let join_bb = self.new_block();
         let mut join_reachable = false;
 
-        self.lower_cond_branch(cond, then_bb, else_bb);
+        // The `then` branch's scope holds what the condition binds.
+        let then_depth = self.drop_scopes.len();
+        self.push_drop_scope(true);
+        self.lower_cond_branch(cond, then_bb, else_bb, then_depth, true);
 
         // Each branch's value passes to the join, so the join takes it.
         self.switch_to(then_bb);
         let then_value = self.lower_expr(then_expr);
-        if !self.is_terminated(self.current) {
-            join_reachable = true;
+        let then_falls = !self.is_terminated(self.current);
+        if then_falls {
             let then_value = self.take_operand(then_expr, then_value);
             self.push_synthetic_stmt(SStmtKind::Assign {
                 dst: result,
                 expr: SExpr::Forward(SOperand::expr(then_value, then_expr)),
             });
+        }
+        self.pop_drop_scope(None);
+        if then_falls {
+            join_reachable = true;
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
         }
 
         self.switch_to(else_bb);
+        self.push_drop_scope(false);
         let else_value = else_expr.map(|expr| (expr, self.lower_expr(expr)));
-        if !self.is_terminated(self.current) {
-            join_reachable = true;
+        let else_falls = !self.is_terminated(self.current);
+        if else_falls {
             let else_value = match else_value {
                 Some((expr, value)) => SOperand::expr(self.take_operand(expr, value), expr),
                 None => SOperand::synthetic(self.unit_value()),
@@ -2614,6 +2703,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 dst: result,
                 expr: SExpr::Forward(else_value),
             });
+        }
+        self.pop_drop_scope(None);
+        if else_falls {
+            join_reachable = true;
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
         }
 
@@ -2703,8 +2796,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.switch_to(rhs_bb);
                 self.lower_expr_branch(*rhs, then_bb, else_bb);
             }
+            // The condition's temporaries end before it branches.
             _ => {
+                self.push_drop_scope(false);
                 let cond = self.lower_expr(expr);
+                self.pop_drop_scope(None);
                 self.set_synthetic_terminator(
                     self.current,
                     STerminatorKind::Branch {
@@ -2732,14 +2828,29 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.lower_match_expr_with_decision_tree(value, result, join_bb, arms)
     }
 
-    fn lower_cond_branch(&mut self, cond: CondId, then_bb: SBlockId, else_bb: SBlockId) {
+    /// Branches on `cond`. What it binds, and the scrutinees those bindings
+    /// come from, belong to the scope at `then_depth`, which a failed
+    /// condition leaves when `else_bb` is outside it (`exits`).
+    fn lower_cond_branch(
+        &mut self,
+        cond: CondId,
+        then_bb: SBlockId,
+        else_bb: SBlockId,
+        then_depth: usize,
+        exits: bool,
+    ) {
         let Partial::Present(cond_data) = cond.data(self.db, self.body) else {
             panic!("cannot lower absent condition")
         };
+        let held = exits.then_some(then_depth);
 
         match cond_data {
+            // The condition's temporaries end before it branches.
             Cond::Expr(expr) => {
+                self.push_drop_scope(false);
                 let cond = self.lower_expr(*expr);
+                self.pop_drop_scope(None);
+                let else_bb = self.condition_exit(else_bb, held, &[]);
                 self.set_synthetic_terminator(
                     self.current,
                     STerminatorKind::Branch {
@@ -2751,23 +2862,33 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Cond::Bin(lhs, rhs, LogicalBinOp::And) => {
                 let rhs_bb = self.new_block();
-                self.lower_cond_branch(*lhs, rhs_bb, else_bb);
+                self.lower_cond_branch(*lhs, rhs_bb, else_bb, then_depth, exits);
                 self.switch_to(rhs_bb);
-                self.lower_cond_branch(*rhs, then_bb, else_bb);
+                self.lower_cond_branch(*rhs, then_bb, else_bb, then_depth, exits);
             }
             Cond::Bin(lhs, rhs, LogicalBinOp::Or) => {
                 let rhs_bb = self.new_block();
-                self.lower_cond_branch(*lhs, then_bb, rhs_bb);
+                self.lower_cond_branch(*lhs, then_bb, rhs_bb, then_depth, false);
                 self.switch_to(rhs_bb);
-                self.lower_cond_branch(*rhs, then_bb, else_bb);
+                self.lower_cond_branch(*rhs, then_bb, else_bb, then_depth, exits);
             }
+            // A matched scrutinee lives on with what is bound from it; a
+            // failed match destroys it. An irrefutable pattern never fails.
             Cond::Let(pat, expr) => {
+                self.push_drop_scope(false);
                 let value = self.lower_scrutinee(*expr);
-                if self.pattern_is_irrefutable(*pat) {
-                    self.bind_pattern(*pat, value);
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-                } else {
-                    self.lower_pattern_branch(*pat, value, then_bb, else_bb);
+                let scrutinee = self.take_drop_scope();
+                let else_bb = (!self.pattern_is_irrefutable(*pat))
+                    .then(|| self.condition_exit(else_bb, held, &scrutinee));
+                for owner in scrutinee {
+                    self.hold_in(owner, then_depth);
+                }
+                match else_bb {
+                    Some(else_bb) => self.lower_pattern_branch(*pat, value, then_bb, else_bb),
+                    None => {
+                        self.bind_pattern(*pat, value);
+                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
+                    }
                 }
             }
         }
@@ -2798,6 +2919,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn push_place_write(&mut self, origin: SemOrigin<'db>, dst: SPlace<'db>, src: SOperand) {
+        self.drop_before_write(&dst, self.locals[src.value.index()].ty);
         let kind = if self.place_can_assign_directly(&dst) {
             SStmtKind::Assign {
                 dst: dst.local,

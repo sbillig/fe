@@ -27,7 +27,7 @@ entity_impl!(NValueId);
 pub struct NRootId(u32);
 entity_impl!(NRootId);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, SalsaValue)]
 pub struct NBlockId(u32);
 entity_impl!(NBlockId);
 
@@ -69,7 +69,9 @@ impl<'db> NormalizedBody<'db> {
         };
         match &self.block(block)?.statements.get(statement as usize)?.kind {
             NStatementKind::Define { expr, .. } => Some((block, expr)),
-            NStatementKind::Store { .. } | NStatementKind::End { .. } => None,
+            NStatementKind::Store { .. }
+            | NStatementKind::End { .. }
+            | NStatementKind::Drop { .. } => None,
         }
     }
 
@@ -95,6 +97,19 @@ impl<'db> NormalizedBody<'db> {
         let base_ty = self.place_base_ty(db, place.base)?;
         let prefix = NDataPath::new(place.path.iter().take(len).copied().collect::<Vec<_>>());
         super::verify::project_path_ty(db, self.owner, &self.values, base_ty, &prefix).ok()
+    }
+
+    /// The type of `value` after the first `len` steps of `path`.
+    pub fn value_prefix_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        value: NValueId,
+        path: &NDataPath,
+        len: usize,
+    ) -> Option<TyId<'db>> {
+        let prefix = NDataPath::new(path.iter().take(len).copied().collect::<Vec<_>>());
+        super::verify::project_path_ty(db, self.owner, &self.values, self.value(value)?.ty, &prefix)
+            .ok()
     }
 
     /// Values required to access a place, including the value that initializes
@@ -173,6 +188,12 @@ impl<'db> NormalizedBody<'db> {
                         value.value == target || place_uses_target(destination)
                     }
                     NStatementKind::End { access } => end_uses && *access == target,
+                    NStatementKind::Drop {
+                        target: NDropTarget::Value(value),
+                    } => *value == target,
+                    NStatementKind::Drop {
+                        target: NDropTarget::Place(place),
+                    } => place_uses_target(place),
                 };
                 if used {
                     return true;
@@ -596,6 +617,17 @@ pub enum NStatementKind<'db> {
     End {
         access: NValueId,
     },
+    /// Destroys what `target` still owns (`SStmtKind::Drop`).
+    Drop {
+        target: NDropTarget<'db>,
+    },
+}
+
+/// What a `Drop` destroys: an owned value no place holds, or a place.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum NDropTarget<'db> {
+    Value(NValueId),
+    Place(NPlace<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

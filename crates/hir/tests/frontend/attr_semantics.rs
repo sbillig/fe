@@ -332,7 +332,7 @@ fn runtime() uses (evm: mut Evm) {}"#,
         .flat_map(|block| block.stmts.iter())
         .filter_map(|stmt| match &stmt.kind {
             SStmtKind::Assign { expr, .. } => Some(expr),
-            SStmtKind::Store { .. } | SStmtKind::End { .. } => None,
+            SStmtKind::Store { .. } | SStmtKind::End { .. } | SStmtKind::Drop { .. } => None,
         })
         .collect::<Vec<_>>();
     assert!(exprs.iter().any(|expr| matches!(
@@ -477,7 +477,7 @@ fn runtime() uses (evm: mut Evm) {}"#,
             .flat_map(|block| block.stmts.iter())
             .filter_map(|stmt| match &stmt.kind {
                 SStmtKind::Assign { expr, .. } => Some(expr),
-                SStmtKind::Store { .. } | SStmtKind::End { .. } => None,
+                SStmtKind::Store { .. } | SStmtKind::End { .. } | SStmtKind::Drop { .. } => None,
             })
         {
             saw_len |= matches!(
@@ -538,7 +538,10 @@ fn array_repeat_lowering_preserves_repeat_expr_through_normalization() {
                 expr: SExpr::ArrayRepeat { ty, .. },
                 ..
             } if ty.is_array(&db) => Some(()),
-            SStmtKind::Assign { .. } | SStmtKind::Store { .. } | SStmtKind::End { .. } => None,
+            SStmtKind::Assign { .. }
+            | SStmtKind::Store { .. }
+            | SStmtKind::End { .. }
+            | SStmtKind::Drop { .. } => None,
         })
         .expect("expected array repeat in raw semantic lowering");
 
@@ -555,7 +558,8 @@ fn array_repeat_lowering_preserves_repeat_expr_through_normalization() {
             } if ty.is_array(&db) => ty.array_len(&db),
             NStatementKind::Define { .. }
             | NStatementKind::Store { .. }
-            | NStatementKind::End { .. } => None,
+            | NStatementKind::End { .. }
+            | NStatementKind::Drop { .. } => None,
         })
         .expect("expected concrete array repeat to remain structural after normalization");
     assert_eq!(normalized_array_len, 4);
@@ -589,7 +593,10 @@ fn generic_array_repeat_with_symbolic_len_normalizes_as_repeat() {
                 expr: SExpr::ArrayRepeat { ty, .. },
                 ..
             } if ty.is_array(&db) && ty.array_len(&db).is_none() => Some(()),
-            SStmtKind::Assign { .. } | SStmtKind::Store { .. } | SStmtKind::End { .. } => None,
+            SStmtKind::Assign { .. }
+            | SStmtKind::Store { .. }
+            | SStmtKind::End { .. }
+            | SStmtKind::Drop { .. } => None,
         })
         .expect("expected symbolic array repeat in raw semantic lowering");
 
@@ -606,7 +613,8 @@ fn generic_array_repeat_with_symbolic_len_normalizes_as_repeat() {
             } if ty.is_array(&db) && ty.array_len(&db).is_none() => Some(()),
             NStatementKind::Define { .. }
             | NStatementKind::Store { .. }
-            | NStatementKind::End { .. } => None,
+            | NStatementKind::End { .. }
+            | NStatementKind::Drop { .. } => None,
         })
         .expect("expected symbolic array repeat to stay unexpanded after normalization");
 }
@@ -663,7 +671,10 @@ impl Tower {
                         ..
                     },
             } => Some(*dst),
-            SStmtKind::Assign { .. } | SStmtKind::Store { .. } | SStmtKind::End { .. } => None,
+            SStmtKind::Assign { .. }
+            | SStmtKind::Store { .. }
+            | SStmtKind::End { .. }
+            | SStmtKind::Drop { .. } => None,
         })
         .collect::<std::collections::HashSet<_>>();
 
