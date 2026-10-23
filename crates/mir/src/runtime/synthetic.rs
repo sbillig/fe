@@ -1069,7 +1069,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         if key == callee.key(self.db) {
             callee
         } else {
-            get_or_build_runtime_instance(self.db, key)
+            get_or_build_runtime_instance(self.db, key, callee.target(self.db))
         }
     }
 

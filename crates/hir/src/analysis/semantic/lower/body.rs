@@ -917,6 +917,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     },
                 )
             }
+            // The block's bindings belong to the enclosing scope: the access
+            // it evaluates to may view them, so they live as long as it may.
             Partial::Present(Expr::Block(stmts, _)) => {
                 let (tail, head) = stmts.split_last().expect("an access block has a tail");
                 for stmt in head {
@@ -1020,6 +1022,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         );
 
         self.switch_to(failure_bb);
+        // The failure path's temporaries exist only on it, which leaves
+        // every scope.
+        self.push_drop_scope(false);
         let error = (kind == SumKind::Result).then(|| {
             SOperand::synthetic(self.emit_expr_with_origin(
                 origin,
@@ -1047,6 +1052,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             },
         );
         self.exit_empty(origin, SOperand::synthetic(exit));
+        self.take_drop_scope();
 
         self.switch_to(success_bb);
         VariantIndex(success)
@@ -2384,6 +2390,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }
                         _ => self.bind_pattern(*pat, value),
                     }
+                    // A temporary a binding's access borrows lives as long
+                    // as the binding.
+                    if self.pattern_holds_access(*pat) {
+                        self.extend_temporaries();
+                    }
+                } else {
+                    self.hold_declared(*pat);
                 }
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
@@ -2727,10 +2740,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let then_falls = !self.is_terminated(self.current);
         if then_falls {
             let then_value = self.take_operand(then_expr, then_value);
-            self.push_synthetic_stmt(SStmtKind::Assign {
-                dst: result,
-                expr: SExpr::Forward(SOperand::expr(then_value, then_expr)),
-            });
+            self.assign_branch_result(result, SOperand::expr(then_value, then_expr));
         }
         self.pop_drop_scope(None);
         if then_falls {
@@ -2747,10 +2757,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 Some((expr, value)) => SOperand::expr(self.take_operand(expr, value), expr),
                 None => SOperand::synthetic(self.unit_value()),
             };
-            self.push_synthetic_stmt(SStmtKind::Assign {
-                dst: result,
-                expr: SExpr::Forward(else_value),
-            });
+            self.assign_branch_result(result, else_value);
         }
         self.pop_drop_scope(None);
         if else_falls {
@@ -2758,10 +2765,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             self.set_synthetic_terminator(self.current, STerminatorKind::Goto(join_bb));
         }
 
-        if !join_reachable {
+        self.switch_to(join_bb);
+        if join_reachable {
+            self.hold_defined(result);
+        } else {
             self.set_synthetic_terminator(join_bb, STerminatorKind::Goto(join_bb));
         }
-        self.switch_to(join_bb);
         result
     }
 
