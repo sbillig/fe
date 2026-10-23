@@ -9,9 +9,9 @@ error[8-0097]: call to unsafe function `copy_raw` requires an `unsafe` block or 
    6 │     ptr::copy_raw(dest, source, 32)
      │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
      │
-     ┌─ src/ptr.fe:1249:15
+     ┌─ src/ptr.fe:1254:15
      │
-1249 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
+1254 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
      │               -------- callee defined here
 
 error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` block or function
@@ -20,9 +20,9 @@ error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` blo
  10 │     MemSlice::from_raw_parts(ptr: p, len: 4)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/ptr.fe:551:19
+    ┌─ src/ptr.fe:552:19
     │
-551 │     pub unsafe fn from_raw_parts(ptr: *T, len: usize) -> mut? Self {
+552 │     pub unsafe fn from_raw_parts(ptr: *T, len: usize) -> mut? Self {
     │                   -------------- callee defined here
 
 error[8-0097]: call to unsafe function `store_word` requires an `unsafe` block or function
@@ -53,7 +53,7 @@ error[8-0097]: call to unsafe function `alloc_array` requires an `unsafe` block 
   22 │     let array = ptr::alloc_array<u256>(1)
      │                 ^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
      │
-     ┌─ src/ptr.fe:1202:15
+     ┌─ src/ptr.fe:1207:15
      │
-1202 │ pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
+1207 │ pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
      │               ----------- callee defined here
