@@ -697,30 +697,34 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             },
             DecisionTree::Leaf(leaf) => match target {
+                // An arm's scope holds what it binds.
                 DecisionTreeTarget::MatchArms {
                     result,
                     join_bb,
                     arms,
                 } => {
+                    self.push_drop_scope(true);
                     self.bind_decision_tree_leaf(leaf, projections);
                     let arm = &arms[leaf.arm_index];
                     let arm_value = self.lower_expr(arm.body);
-                    if self.is_terminated(self.current) {
-                        false
-                    } else {
+                    let falls = !self.is_terminated(self.current);
+                    if falls {
                         // The arm's value passes to the join, which takes it.
                         let arm_value = self.take_operand(arm.body, arm_value);
                         self.push_synthetic_stmt(SStmtKind::Assign {
                             dst: result,
                             expr: SExpr::Forward(SOperand::expr(arm_value, arm.body)),
                         });
+                    }
+                    self.pop_drop_scope(None);
+                    if falls {
                         self.set_terminator(
                             self.current,
                             SemOrigin::Pat(arm.pat),
                             STerminatorKind::Goto(join_bb),
                         );
-                        true
                     }
+                    falls
                 }
                 DecisionTreeTarget::Branch {
                     then_bb, else_bb, ..

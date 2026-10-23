@@ -41,8 +41,9 @@ use crate::{
             },
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalized::{
-                NDataProjection, NExpr, NPlace, NStatementKind, SemanticBodyAdmission,
-                normalize_semantic_body, semantic_body_admission,
+                NBlockId, NDataProjection, NDropTarget, NExpr, NPlace, NStatementId,
+                NStatementKind, SemanticBodyAdmission, normalize_semantic_body,
+                semantic_body_admission,
             },
             root_semantic_instance_key,
         },
@@ -62,14 +63,86 @@ use self::{
 
 #[derive(Clone, Debug, PartialEq, Eq, Update)]
 pub enum SemanticAccessCheckResult<'db> {
-    /// Checked, with the body's warnings and, for a projection, the address
-    /// space each access component yields: its result spaces.
+    /// Checked, with the body's warnings, for a projection the address
+    /// space each access component yields (its result spaces), and what its
+    /// drops destroy.
     Ok {
         warnings: Vec<SemanticDiagnosticId<'db>>,
         spaces: Vec<Option<AddressSpace>>,
+        drops: DropElaboration,
     },
     Blocked(BlockedSemanticBody<'db>),
     Err(SemanticDiagnosticId<'db>),
+}
+
+/// What a body's drops destroy, as the moves before each decide.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Update)]
+pub struct DropElaboration {
+    /// The parts each `Drop` statement destroys, by statement; a drop with
+    /// nothing initialized destroys none.
+    pub drops: Vec<(NStatementId, Vec<DropPart>)>,
+    /// Each flag's value where the body begins: whether the path it tracks
+    /// is initialized there.
+    pub flags: Vec<bool>,
+    /// Where the moves and initializations of a flagged path happen.
+    pub flag_updates: Vec<DropFlagUpdate>,
+}
+
+impl DropElaboration {
+    pub fn parts(&self, statement: NStatementId) -> &[DropPart] {
+        self.drops
+            .binary_search_by_key(&statement, |(id, _)| *id)
+            .map_or(&[], |index| &self.drops[index].1)
+    }
+}
+
+/// A part of a drop's target to destroy, by its path from the target. It is
+/// destroyed where all its flags hold: one per path on its way that only
+/// some paths through the body move.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct DropPart {
+    pub path: Vec<DropStep>,
+    pub flags: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum DropStep {
+    Field(u16),
+    /// A variant's field, which the value holds only as that variant.
+    Variant {
+        variant: u16,
+        field: u16,
+    },
+    Index(usize),
+}
+
+/// A flagged path becomes initialized, or is moved, at `at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct DropFlagUpdate {
+    pub at: DropFlagPoint,
+    pub flag: u32,
+    pub initialized: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum DropFlagPoint {
+    After(NStatementId),
+    /// The start of a block, whose parameters are defined there.
+    BlockStart(NBlockId),
+    /// The end of a block, whose terminator moves its operand or, on every
+    /// edge, an argument.
+    BeforeTerminator(NBlockId),
+}
+
+/// What `instance`'s drops destroy, once its body is checked.
+pub fn drop_elaboration<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<&'db DropElaboration> {
+    match body_check(db, instance) {
+        SemanticAccessCheckResult::Ok { drops, .. } => Some(drops),
+        SemanticAccessCheckResult::Blocked(_) | SemanticAccessCheckResult::Err(_) => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,12 +243,17 @@ fn body_check<'db>(
         ) => return SemanticAccessCheckResult::Err(SemanticDiagnosticId::new(db, diag)),
     };
     match check::check_body(db, instance, &artifacts.body) {
-        Ok((warnings, spaces)) => SemanticAccessCheckResult::Ok {
+        Ok(check::CheckedBody {
+            warnings,
+            spaces,
+            drops,
+        }) => SemanticAccessCheckResult::Ok {
             warnings: warnings
                 .into_iter()
                 .map(|diag| SemanticDiagnosticId::new(db, diag))
                 .collect(),
             spaces,
+            drops,
         },
         Err(diag) => SemanticAccessCheckResult::Err(SemanticDiagnosticId::new(db, diag)),
     }
@@ -188,6 +266,7 @@ fn body_check_cycle_initial<'db>(
     SemanticAccessCheckResult::Ok {
         warnings: Vec::new(),
         spaces: Vec::new(),
+        drops: DropElaboration::default(),
     }
 }
 
@@ -468,8 +547,14 @@ fn generated_callees<'db>(
                     );
                 }
             }
-            NStatementKind::Store { destination, .. } => visit(destination),
-            NStatementKind::End { .. } => {}
+            NStatementKind::Store { destination, .. }
+            | NStatementKind::Drop {
+                target: NDropTarget::Place(destination),
+            } => visit(destination),
+            NStatementKind::End { .. }
+            | NStatementKind::Drop {
+                target: NDropTarget::Value(_),
+            } => {}
         }
     }
     callees
