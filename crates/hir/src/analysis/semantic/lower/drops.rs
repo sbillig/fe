@@ -13,8 +13,8 @@ use cranelift_entity::EntityRef;
 use super::body::SmirLowerCtxt;
 use crate::analysis::{
     semantic::{
-        SBlockId, SExpr, SLocalId, SOperand, SPlace, SStmtKind, STerminatorKind, SemanticLocalRole,
-        ValueProvenance, capability::semantics::holds_carrier,
+        SBlockId, SExpr, SLocalId, SOperand, SPlace, SStmtKind, STerminatorKind, SemOrigin,
+        SemanticLocalRole, ValueProvenance, capability::semantics::holds_carrier,
     },
     ty::{drop_glue::ty_has_drop_glue, ty_check::LocalBinding, ty_def::TyId, ty_is_copy},
 };
@@ -197,19 +197,27 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         exit
     }
 
-    /// A write of a value of type `ty` destroys what its place held. A raw
-    /// pointer's pointee is written as it is: raw memory is outside the
-    /// analysis.
-    pub(super) fn drop_before_write(&mut self, place: &SPlace<'db>, ty: TyId<'db>) {
+    /// A write of a value of type `ty` destroys what its place held, as part
+    /// of the write. A raw pointer's pointee is written as it is: raw memory
+    /// is outside the analysis.
+    pub(super) fn drop_before_write(
+        &mut self,
+        origin: SemOrigin<'db>,
+        place: &SPlace<'db>,
+        ty: TyId<'db>,
+    ) {
         if self.needs_destroying(ty)
             && !place
                 .path
                 .iter()
                 .any(|projection| matches!(projection, Projection::Deref))
         {
-            self.push_synthetic_stmt(SStmtKind::Drop {
-                place: place.clone(),
-            });
+            self.push_stmt(
+                origin,
+                SStmtKind::Drop {
+                    place: place.clone(),
+                },
+            );
         }
     }
 
