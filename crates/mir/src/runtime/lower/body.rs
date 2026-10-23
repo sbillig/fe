@@ -819,6 +819,8 @@ impl<'db> RmirEmitter<'db> {
             NStatementKind::Define { result, expr } => {
                 self.lower_assign(bb, stmt_idx, stmt.source, *result, expr)
             }
+            // TODO(owned-value-destruction 2f): lower drop elaboration.
+            NStatementKind::Drop { .. } => {}
             NStatementKind::End { access } => {
                 if !self.end_lane_extent(bb, LaneExtent::Access(*access))
                     && let NValueDefinition::Statement { block, statement } =
@@ -3187,7 +3189,7 @@ impl<'db> RmirEmitter<'db> {
             NStatementKind::Store { destination, .. } => {
                 self.lower_place_index_checks(bb, destination)
             }
-            NStatementKind::End { .. } => {}
+            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
         }
     }
 

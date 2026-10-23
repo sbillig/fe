@@ -1486,6 +1486,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     self.finish_session(session)?;
                 }
             }
+            // TODO(owned-value-destruction 2g): run `Drop` implementations.
+            SStmtKind::Drop { .. } => {}
         }
         Ok(())
     }

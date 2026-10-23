@@ -631,6 +631,12 @@ pub enum SStmtKind<'db> {
     End {
         access: SStmtId,
     },
+    /// Destroys what `place` still owns: its owner's scope ends, or a store
+    /// is about to overwrite it. Drop elaboration decides which of its parts
+    /// are initialized.
+    Drop {
+        place: SPlace<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
