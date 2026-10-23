@@ -78,6 +78,10 @@ use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 // Sonatina's EVM calling convention can carry at most 16 arguments.
 const MAX_DIRECT_CALL_ARGS: usize = 16;
 
+// Host C functions that native core memory operations call. Fe items cannot
+// claim these symbols.
+const HOST_SYMBOLS: &[&str] = &["memmove", "malloc", "free"];
+
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
 
@@ -260,7 +264,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 db,
                 package,
                 fixed_symbol,
-                if native { &["memmove"] } else { &[] },
+                if native { HOST_SYMBOLS } else { &[] },
             ),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
@@ -335,11 +339,11 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let symbol = self.function_symbol(instance);
         if self.is_native_target()
             && function.linkage(self.db) == RuntimeLinkage::External
-            && symbol == "memmove"
+            && HOST_SYMBOLS.contains(&symbol.as_str())
         {
-            return Err(LowerError::Unsupported(
-                "native extern symbol `memmove` is reserved for memory copies".to_string(),
-            ));
+            return Err(LowerError::Unsupported(format!(
+                "native extern symbol `{symbol}` is reserved for core memory operations"
+            )));
         }
         if function.linkage(self.db) == RuntimeLinkage::External
             && (!self.is_native_target()
@@ -2033,6 +2037,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         Ok(Lowered::Value(value))
     }
 
+    fn host_function(&mut self, signature: Signature) -> Result<FuncRef, LowerError> {
+        let name = signature.name().to_string();
+        self.module
+            .builder
+            .declare_function(signature)
+            .map_err(|error| {
+                LowerError::Internal(format!("failed to declare native `{name}`: {error}"))
+            })
+    }
+
     fn allocate_bytes(&mut self, size: ValueId, pointee: Type) -> Result<ValueId, LowerError> {
         let ptr_ty = self.fb.ptr_type(pointee);
         Ok(if self.module.is_native_target() {
@@ -2185,20 +2199,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         self.emit_empty_revert(invalid)?;
                     }
                     let pointer = self.fb.ptr_type(Type::I8);
-                    let memmove = self
-                        .module
-                        .builder
-                        .declare_function(Signature::new_single(
-                            "memmove",
-                            Linkage::External,
-                            &[pointer, pointer, Type::I64],
-                            pointer,
-                        ))
-                        .map_err(|error| {
-                            LowerError::Internal(format!(
-                                "failed to declare native memmove: {error}"
-                            ))
-                        })?;
+                    let memmove = self.host_function(Signature::new_single(
+                        "memmove",
+                        Linkage::External,
+                        &[pointer, pointer, Type::I64],
+                        pointer,
+                    ))?;
                     let dst = self.coerce_value_to_ty(dst, pointer)?;
                     let src = self.coerce_value_to_ty(src, pointer)?;
                     let len = self.coerce_value_to_ty(len, Type::I64)?;
@@ -2561,15 +2567,55 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let size = self.local_value(*size)?;
                 self.allocate_bytes(size, Type::I8)?
             }
-            RuntimeBuiltin::NativePtrIsNull { ptr } => {
+            RuntimeBuiltin::TryMalloc { size } => {
+                let size = self.local_value(*size)?;
                 if !self.module.is_native_target() {
-                    return Err(LowerError::Unsupported(
-                        "native pointer null checks require a native target".into(),
+                    // EVM memory runs out only with the gas, never with a result.
+                    return self.allocate_bytes(size, Type::I8);
+                }
+                let pointer = self.fb.ptr_type(Type::I8);
+                let malloc = self.host_function(Signature::new_single(
+                    "malloc",
+                    Linkage::External,
+                    &[Type::I64],
+                    pointer,
+                ))?;
+                // Callers bound the size to 64 bits. A zero size takes one byte,
+                // so that a null result always means the host is out of memory.
+                let size = self.coerce_value_to_ty(size, Type::I64)?;
+                let empty = self
+                    .fb
+                    .insert_inst(IsZero::new(self.module.inst_set(), size), Type::I1);
+                let empty = self.fb.insert_inst(
+                    Zext::new(self.module.inst_set(), empty, Type::I64),
+                    Type::I64,
+                );
+                let size = self
+                    .fb
+                    .insert_inst(Or::new(self.module.inst_set(), size, empty), Type::I64);
+                self.fb.insert_inst(
+                    Call::new(self.module.inst_set(), malloc, smallvec![size]),
+                    pointer,
+                )
+            }
+            RuntimeBuiltin::Free { ptr } => {
+                // EVM memory is never reclaimed.
+                if self.module.is_native_target() {
+                    let pointer = self.fb.ptr_type(Type::I8);
+                    let free = self.host_function(Signature::new_unit(
+                        "free",
+                        Linkage::External,
+                        &[pointer],
+                    ))?;
+                    let ptr = self.local_value(*ptr)?;
+                    let ptr = self.coerce_value_to_ty(ptr, pointer)?;
+                    self.fb.insert_inst_no_result(Call::new(
+                        self.module.inst_set(),
+                        free,
+                        smallvec![ptr],
                     ));
                 }
-                let ptr = self.local_value(*ptr)?;
-                self.fb
-                    .insert_inst(IsZero::new(self.module.inst_set(), ptr), Type::I1)
+                zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
                 let ptr = self.local_value(*ptr)?;

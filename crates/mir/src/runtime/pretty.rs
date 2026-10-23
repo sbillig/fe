@@ -808,9 +808,8 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {region:?}"),
         RuntimeBuiltin::CodeRegionLen { region } => format!("code_region_len {region:?}"),
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
-        RuntimeBuiltin::NativePtrIsNull { ptr } => {
-            format!("native_ptr_is_null {}", format_local_id(*ptr))
-        }
+        RuntimeBuiltin::TryMalloc { size } => format!("try_malloc {}", format_local_id(*size)),
+        RuntimeBuiltin::Free { ptr } => format!("free {}", format_local_id(*ptr)),
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => format!(
             "ptr_offset_bytes {}, {}",
             format_local_id(*ptr),
