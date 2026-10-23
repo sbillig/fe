@@ -15,6 +15,10 @@ impl Drop for Counted {
 
 fn consume(_ value: own Counted) {}
 
+fn counted(_ counter: *u256) -> Counted {
+    Counted { counter }
+}
+
 fn counter() -> *u256 {
     let counter = ptr::alloc<u256>()
     unsafe { *counter = 0 }
@@ -237,6 +241,27 @@ fn matched_payloads_are_destroyed() {
         assert(count(counter) == 1)
     }
     assert(count(counter) == 2)
+}
+
+// An irrefutable `if let` or `while let` never fails: what it binds is
+// destroyed where its body ends or a later condition fails.
+#[test]
+fn irrefutable_conditions_destroy_what_they_bind() {
+    let counter = counter()
+    if let _c = counted(counter) {
+        assert(count(counter) == 0)
+    }
+    assert(count(counter) == 1)
+    var rounds: u256 = 0
+    while let (_c, n) = (counted(counter), rounds) && n < 2 {
+        rounds += 1
+    }
+    assert(count(counter) == 4)
+}
+
+// A condition that diverges never fails either.
+fn a_diverging_condition_after_a_binding(_ counter: *u256) {
+    if let _c = counted(counter) && core::panic() {}
 }
 
 struct Slot {

@@ -2890,20 +2890,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.lower_cond_branch(*rhs, then_bb, else_bb, then_depth, exits);
             }
             // A matched scrutinee lives on with what is bound from it; a
-            // failed match destroys it.
+            // failed match destroys it. An irrefutable pattern never fails.
             Cond::Let(pat, expr) => {
                 self.push_drop_scope(false);
                 let value = self.lower_scrutinee(*expr);
                 let scrutinee = self.take_drop_scope();
-                let else_bb = self.condition_exit(else_bb, held, &scrutinee);
+                let else_bb = (!self.pattern_is_irrefutable(*pat))
+                    .then(|| self.condition_exit(else_bb, held, &scrutinee));
                 for owner in scrutinee {
                     self.hold_in(owner, then_depth);
                 }
-                if self.pattern_is_irrefutable(*pat) {
-                    self.bind_pattern(*pat, value);
-                    self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
-                } else {
-                    self.lower_pattern_branch(*pat, value, then_bb, else_bb);
+                match else_bb {
+                    Some(else_bb) => self.lower_pattern_branch(*pat, value, then_bb, else_bb),
+                    None => {
+                        self.bind_pattern(*pat, value);
+                        self.set_synthetic_terminator(self.current, STerminatorKind::Goto(then_bb));
+                    }
                 }
             }
         }

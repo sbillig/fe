@@ -171,7 +171,8 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
 
     /// A block a failed condition takes on its way to `else_bb`, destroying
     /// `owners` and what the scope at `held` holds so far: the bindings and
-    /// scrutinees of the conditions before it.
+    /// scrutinees of the conditions before it. A condition that diverged
+    /// never fails, so it gets none.
     pub(super) fn condition_exit(
         &mut self,
         else_bb: SBlockId,
@@ -184,7 +185,7 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
             .chain(owners)
             .copied()
             .collect();
-        if owners.is_empty() {
+        if owners.is_empty() || self.is_terminated(self.current) {
             return else_bb;
         }
         let current = self.current;
