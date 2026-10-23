@@ -7,6 +7,7 @@
 
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
+use thin_vec::ThinVec;
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
@@ -15,10 +16,14 @@ use crate::analysis::ty::diagnostics::{
     TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
 };
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
+use crate::analysis::ty::method_cmp::{ConstraintEntailment, classify_constraint_entailment};
 use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
+use crate::analysis::ty::trait_resolution::{
+    TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
+};
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::{
     collect_ty_lower_errors, emit_invalid_ty_error, path_generic_args, trait_ref_arg_diags,
@@ -33,7 +38,7 @@ use crate::span::DynLazySpan;
 
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::trait_def::ImplementorId;
+use crate::analysis::ty::trait_def::{ImplementorId, impls_for_trait_def};
 use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, VariantView,
     WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
@@ -993,6 +998,108 @@ impl<'db> ImplTrait<'db> {
                 ty,
                 collection,
                 position: "`Copy`",
+            }
+            .into()
+        })
+    }
+
+    /// The `drop` of a `Drop` implementation, if it declares effects.
+    fn drop_with_effects(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implementor: ImplementorId<'db>,
+    ) -> Option<Func<'db>> {
+        let drop = ty::corelib::resolve_core_trait(db, self.scope(), &["ops", "Drop"])?;
+        if implementor.trait_def(db) != drop {
+            return None;
+        }
+        self.methods(db)
+            .find(|func| !func.declared_effects(db).data(db).is_empty())
+    }
+
+    /// A drop runs for every value of a type, where no call is written, so
+    /// `Drop` covers the whole of a struct or enum type that has no copies,
+    /// and its `drop` declares no effects.
+    fn diags_drop(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implementor: ImplementorId<'db>,
+    ) -> Option<TyDiagCollection<'db>> {
+        let drop = ty::corelib::resolve_core_trait(db, self.scope(), &["ops", "Drop"])?;
+        if implementor.trait_def(db) != drop {
+            return None;
+        }
+        if let Some(func) = self.drop_with_effects(db, implementor) {
+            return Some(
+                ty::diagnostics::ImplDiag::DropEffects {
+                    primary: func.span().effects().into(),
+                }
+                .into(),
+            );
+        }
+        let primary: DynLazySpan<'db> = self.span().ty().into();
+        let ty = implementor.self_ty(db);
+        if ty.is_view(db) {
+            return Some(
+                TyLowerDiag::ViewTypeMode {
+                    span: primary,
+                    ty,
+                    mode: "`Drop`",
+                }
+                .into(),
+            );
+        }
+        if let Some(collection) = ty.pinned_part(db) {
+            return Some(
+                TyLowerDiag::StateOnlyValue {
+                    span: primary,
+                    ty,
+                    collection,
+                    position: "`Drop`",
+                }
+                .into(),
+            );
+        }
+        let args = ty.generic_args(db);
+        let distinct_params = args
+            .iter()
+            .enumerate()
+            .all(|(index, arg)| arg.as_generic_param(db).is_some() && !args[..index].contains(arg));
+        let Some(adt) = ty.adt_def(db).filter(|_| distinct_params) else {
+            return Some(ty::diagnostics::ImplDiag::DropImplNotGeneric { primary, ty }.into());
+        };
+        // Any `Copy` implementation counts, whatever its bounds: a conditional
+        // one would still make some instances both copied and destroyed. Only
+        // the type's own ingot can implement a core trait for it.
+        let copy = ty::corelib::resolve_core_trait(db, self.scope(), &["marker", "Copy"])?;
+        let adt_ty = ty.base_ty(db);
+        if impls_for_trait_def(db, adt.ingot(db), copy)
+            .iter()
+            .any(|implementor| implementor.self_ty(db).base_ty(db) == adt_ty)
+        {
+            return Some(ty::diagnostics::ImplDiag::DropOnCopy { primary, ty }.into());
+        }
+        let declared =
+            collect_constraints(db, adt.adt_ref(db).generic_owner()).instantiate(db, args);
+        let stricter_bounds: ThinVec<_> = collect_constraints(db, self.into())
+            .instantiate_identity()
+            .list(db)
+            .iter()
+            .copied()
+            .filter(|goal| {
+                !declared.list(db).contains(goal)
+                    && classify_constraint_entailment(is_goal_satisfiable(
+                        db,
+                        TraitSolveCx::new(db, self.scope()).with_assumptions(declared),
+                        *goal,
+                    )) != ConstraintEntailment::Proven
+            })
+            .collect();
+        (!stricter_bounds.is_empty()).then(|| {
+            ty::diagnostics::ImplDiag::DropStricterBound {
+                primary,
+                ty,
+                stricter_bounds,
             }
             .into()
         })
@@ -2148,11 +2255,16 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
             return out;
         };
 
-        out.extend(implementor.diags_method_conformance(db));
+        // The effects of a `drop` are diagnosed as such, not as bounds the
+        // trait's method lacks.
+        if self.drop_with_effects(db, implementor).is_none() {
+            out.extend(implementor.diags_method_conformance(db));
+        }
         out.extend(self.diags_blanket_copy(db, implementor));
         out.extend(self.diags_view_copy(db, implementor));
         out.extend(self.diags_state_only_copy(db, implementor));
         out.extend(self.diags_copy_fields(db, implementor));
+        out.extend(self.diags_drop(db, implementor));
         out.extend(self.diags_compiler_implemented_trait(db, implementor));
         out.extend(self.diags_pin(db, implementor));
         out.extend(self.diags_unsafe_impl(db, implementor));

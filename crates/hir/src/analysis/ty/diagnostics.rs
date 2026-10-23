@@ -537,10 +537,12 @@ pub enum BodyDiag<'db> {
         given: TyId<'db>,
     },
 
+    /// `in_drop`: the caller is a `drop`, which declares no effects.
     MissingEffect {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
         key: HirTypeId<'db>,
+        in_drop: bool,
     },
 
     /// A call needs an abstract row, which only the caller's own can supply.
@@ -548,6 +550,7 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
         row: RowKey<'db>,
+        in_drop: bool,
     },
 
     AmbiguousEffect {
@@ -1203,6 +1206,12 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         name: IdentId<'db>,
     },
+
+    /// A call of `Drop::drop`, or the function used as a value: only the
+    /// compiler runs it, once per value.
+    DropCalledDirectly {
+        primary: DynLazySpan<'db>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1363,6 +1372,7 @@ impl<'db> BodyDiag<'db> {
             Self::ProductArgTooWeak { .. } => 150,
             Self::LateClosureEffect { .. } => 151,
             Self::ParamBindsTwice { .. } => 134,
+            Self::DropCalledDirectly { .. } => 152,
             Self::InitializerMarker { .. } => 124,
             Self::VarOfNoValue { .. } => 125,
             Self::UnsafeFieldRequiresUnsafe { .. } => 126,
@@ -1708,6 +1718,29 @@ pub enum ImplDiag<'db> {
     /// whose fields, views and state the checks of a `Copy` type never see.
     BlanketCopy { primary: DynLazySpan<'db> },
 
+    /// A `Drop` implementation for anything but a struct or enum applied to
+    /// distinct generic parameters of the implementation.
+    DropImplNotGeneric {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// A `Drop` implementation with bounds its type does not declare.
+    DropStricterBound {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        stricter_bounds: ThinVec<TraitInstId<'db>>,
+    },
+
+    /// A `drop` that declares effects, which no call site could provide.
+    DropEffects { primary: DynLazySpan<'db> },
+
+    /// A `Drop` implementation for a `Copy` type.
+    DropOnCopy {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
     /// An effect row whose components, expanded through the rows they name,
     /// come back to it.
     CyclicEffectRow {
@@ -1750,6 +1783,10 @@ impl ImplDiag<'_> {
             Self::UnsafeImplMismatch { .. } => 30,
             Self::CopyFieldNotCopy { .. } => 31,
             Self::BlanketCopy { .. } => 32,
+            Self::DropImplNotGeneric { .. } => 37,
+            Self::DropStricterBound { .. } => 38,
+            Self::DropOnCopy { .. } => 39,
+            Self::DropEffects { .. } => 40,
             Self::CyclicEffectRow { .. } => 34,
             Self::MethodMaybeMutMismatch { .. } => 35,
             Self::PartialMutImpl { .. } => 36,
