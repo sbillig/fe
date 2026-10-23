@@ -2150,17 +2150,13 @@ impl<'a, 'db> Analysis<'a, 'db> {
             NDropTarget::Value(value) => {
                 let entry = (MoveKey::Value(*value), Path::new());
                 if self.checking {
+                    let ty = self.body.values[value.index()].ty;
                     let parts = if self.value_owns(*value) {
-                        self.drop_parts(
-                            Some(entry.0),
-                            &entry.1,
-                            self.body.values[value.index()].ty,
-                            state,
-                        )
+                        self.drop_parts(Some(entry.0), &entry.1, ty, state)
                     } else {
                         Vec::new()
                     };
-                    self.drop_parts.push((statement, parts));
+                    self.record_drop(statement, parts, ty, origin)?;
                 }
                 state.record_move(entry);
                 return Ok(());
@@ -2178,7 +2174,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
         };
         if self.checking {
             let parts = self.drop_parts(key, &path, place.ty, state);
-            self.drop_parts.push((statement, parts));
+            self.record_drop(statement, parts, place.ty, origin)?;
         }
         // `[*]` names no definite element; the store a drop precedes
         // initializes it again.
@@ -2199,6 +2195,38 @@ impl<'a, 'db> Analysis<'a, 'db> {
             MemoryAccessKind::Write,
             origin,
         )
+    }
+
+    /// Records the parts the drop `statement` destroys. Compile-time code
+    /// runs no `Drop` implementation, so there a drop may destroy nothing
+    /// whose destruction might run one.
+    fn record_drop(
+        &mut self,
+        statement: NStatementId,
+        parts: Vec<DropPart>,
+        ty: TyId<'db>,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), Diag<'db>> {
+        if !parts.is_empty()
+            && match self.instance.key(self.db).owner(self.db) {
+                BodyOwner::Func(func, _) => func.is_const(self.db),
+                BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+                BodyOwner::ContractInit { .. }
+                | BodyOwner::ContractRecvArm { .. }
+                | BodyOwner::Closure { .. } => false,
+            }
+        {
+            return Err(self.diag(
+                SemanticDiagnosticKind::ConstDestructor,
+                origin,
+                format!(
+                    "destroying `{}` may run a `Drop` implementation, which compile-time code cannot",
+                    ty.pretty_print(self.db)
+                ),
+            ));
+        }
+        self.drop_parts.push((statement, parts));
+        Ok(())
     }
 
     /// What tracks the initialization of a carrier's referent: the data
