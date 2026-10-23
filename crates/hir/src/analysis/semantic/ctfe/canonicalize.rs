@@ -242,6 +242,13 @@ fn canonicalize_stmt<'db>(
             }
         }
         SStmtKind::End { access } => SStmtKind::End { access: *access },
+        // A destroyed local holds nothing to substitute.
+        SStmtKind::Drop { place } => {
+            locals[place.local.index()] = None;
+            SStmtKind::Drop {
+                place: place.clone(),
+            }
+        }
     };
     SStmt {
         id: stmt.id,
@@ -261,7 +268,7 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
         let mut changed = false;
         for statement in body.blocks.iter().flat_map(|block| &block.stmts) {
             let (dst, sources, address, writes) = match &statement.kind {
-                SStmtKind::End { .. } => continue,
+                SStmtKind::End { .. } | SStmtKind::Drop { .. } => continue,
                 SStmtKind::Assign { dst, expr } => {
                     let mut address = None;
                     let mut writes = Vec::new();

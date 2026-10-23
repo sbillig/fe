@@ -275,7 +275,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
         let mut state = in_state.clone();
         for statement in &self.body.blocks[block.index()].statements {
             match &statement.kind {
-                NStatementKind::End { .. } => {}
+                NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
                 NStatementKind::Store { destination, .. } => {
                     if let Some(target) = self.write_target_of_place(destination) {
                         state.assigned.insert(target);
