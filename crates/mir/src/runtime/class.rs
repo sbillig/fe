@@ -485,7 +485,7 @@ fn builtin_result_class<'db>(
             verify_word_value(body, *modulus)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
-        RuntimeBuiltin::LeadingZeros { value } => {
+        RuntimeBuiltin::LeadingZeros { value } | RuntimeBuiltin::SwapBytes { value } => {
             verify_word_value(body, *value)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
