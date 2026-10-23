@@ -1,1 +1,0 @@
-`std::native::ByteBuffer` and `std::native::FixedStack` are removed. Use `core::MemBuffer` and `core::MemVec`, which free their memory when destroyed, so no `release` call is needed: `try_resize` and indexing replace `ByteBuffer`'s methods, and `copy_within` and `copy_from` are on `buffer.span()` and its slices.

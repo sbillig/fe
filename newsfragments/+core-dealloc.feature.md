@@ -1,1 +1,0 @@
-`core::ptr::try_alloc_bytes` allocates without trapping, returning `None` when the size exceeds `2**64 - 1` bytes or the native host is out of memory, and `core::ptr::dealloc` releases an allocation: native targets free it, and EVM memory is never reclaimed.

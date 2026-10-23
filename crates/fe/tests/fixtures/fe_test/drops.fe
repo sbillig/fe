@@ -368,6 +368,25 @@ fn element_writes_destroy_only_what_they_overwrite() {
     assert(count(counter) == 8)
 }
 
+struct Holder {
+    counted: Counted,
+}
+
+// Raw memory is outside ownership: a write through a pointer, to the
+// pointee or to a field of it, destroys nothing.
+#[test]
+fn raw_writes_destroy_nothing() {
+    let counter = counter()
+    let p = ptr::alloc<Holder>()
+    unsafe {
+        *p = Holder { counted: Counted { counter } }
+        p.counted = Counted { counter }
+        (*p).counted = Counted { counter }
+        *p = Holder { counted: Counted { counter } }
+    }
+    assert(count(counter) == 0)
+}
+
 struct Node {
     counted: Counted,
     next: Option<Box<Node>>,
