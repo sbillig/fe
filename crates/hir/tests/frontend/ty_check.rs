@@ -1127,12 +1127,12 @@ fn forge(pointer: *u8) -> ByteBuffer {
     ByteBuffer { allocation: Option::Some(pointer), len: 64, capacity: 64 }
 }
 fn expose(buffer: ByteBuffer) -> Option<*u8> { buffer.allocation }
-fn deallocate(pointer: *u8) { std::native::bytes::free(pointer) }
+fn deallocate(pointer: *u8) { core::ptr::dealloc_raw(pointer) }
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
     let diags = diagnostics_for(&db, top_mod);
-    for name in ["allocation", "len", "capacity", "free"] {
+    for name in ["allocation", "len", "capacity", "dealloc_raw"] {
         assert!(
             diags
                 .iter()
