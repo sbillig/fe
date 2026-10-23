@@ -187,6 +187,7 @@ define_runtime_intrinsics! {
     Malloc => (Core, ["ptr", "alloc_raw"]),
     TryMalloc => (Core, ["ptr", "try_alloc_raw"]),
     Free => (Core, ["ptr", "dealloc_raw"]),
+    Forget => (Core, ["mem", "forget"]),
     PtrOffsetBytes => (Core, ["ptr", "offset_bytes"]),
     PtrEq => (Core, ["ptr", "addr_eq"]),
     Mload => (Std, ["evm", "ops", "mload"]),
