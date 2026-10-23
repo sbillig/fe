@@ -1,0 +1,1 @@
+`std::native::bytes` no longer declares `malloc`, `free` and `is_null`; allocate with `core::ptr::try_alloc_bytes` and release with `core::ptr::dealloc`, and test a pointer for null with `ptr as u256 == 0`. On native targets, `extern` declarations named `malloc` or `free` are rejected, as `memmove` already was.

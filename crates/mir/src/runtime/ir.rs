@@ -1412,7 +1412,13 @@ pub enum RuntimeBuiltin<'db> {
     Malloc {
         size: RValueId,
     },
-    NativePtrIsNull {
+    /// Like `Malloc`, but yields a null address when the host cannot
+    /// allocate.
+    TryMalloc {
+        size: RValueId,
+    },
+    /// Releases an allocation from `Malloc` or `TryMalloc`.
+    Free {
         ptr: RValueId,
     },
     PtrOffsetBytes {
@@ -1724,7 +1730,8 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::BlockHash { block: value }
             | Self::BlobHash { index: value }
             | Self::Malloc { size: value }
-            | Self::NativePtrIsNull { ptr: value } => vec![value],
+            | Self::TryMalloc { size: value }
+            | Self::Free { ptr: value } => vec![value],
             Self::Mstore { addr: a, value: b }
             | Self::Mstore8 { addr: a, value: b }
             | Self::ZeroMem { dst: a, len: b }
