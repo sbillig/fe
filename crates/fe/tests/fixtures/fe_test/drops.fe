@@ -1,4 +1,4 @@
-use core::{Box, MemBuffer, MemVec, Option}
+use core::{Box, MemArray, MemBuffer, MemVec, Option}
 use core::ops::Drop
 use core::ptr
 
@@ -215,6 +215,37 @@ fn a_boxed_list_destroys_every_node() {
             head = Option::Some(Box::new(Node { counted: Counted { counter }, next: head }))
         }
         assert(count(counter) == 0)
+    }
+    assert(count(counter) == 5)
+}
+
+// The zero `Tally`, whose counter is null, counts nothing when destroyed.
+struct Tally {
+    counter: *u256,
+}
+
+impl Drop for Tally {
+    fn drop(own self) {
+        if self.counter as u256 != 0 {
+            unsafe { *self.counter += 1 }
+        }
+    }
+}
+
+#[test]
+fn zeroing_destroys_what_it_overwrites() {
+    let counter = counter()
+    {
+        var values = MemVec::new()
+        values.push(Tally { counter })
+        values.push(Tally { counter })
+        values.as_slice().zero()
+        assert(count(counter) == 2)
+        var array = MemArray::from_fn(3, |_| Tally { counter })
+        array.zero()
+        assert(count(counter) == 5)
+        // A zeroed array starts as zero values; nothing was there to destroy.
+        let _fresh: MemArray<Tally> = MemArray::new_zeroed(4)
     }
     assert(count(counter) == 5)
 }
