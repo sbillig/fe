@@ -1,6 +1,7 @@
 use super::intrinsic::size_of
 use super::marker::{Clearable, Copy}
 use super::mem::{drop, forget, needs_drop}
+use super::num::{from_be, to_be}
 use super::option::Option
 use super::ops::{Drop, Eq, Index, Len}
 use super::result::Result
@@ -738,13 +739,13 @@ impl MemSlice<u8> {
     /// The 32 bytes from `offset` on, which need not be word-aligned, as a
     /// big-endian word. Reverts unless all 32 lie in the span.
     pub fn read_word(self, _ offset: usize) -> u256 {
-        unsafe { *cast<u8, u256>(self.word_ptr(offset)) }
+        from_be(unsafe { *cast<u8, u256>(self.word_ptr(offset)) })
     }
 
     /// Writes `value` big-endian over the 32 bytes from `offset` on, which
     /// need not be word-aligned. Reverts unless all 32 lie in the span.
     pub fn write_word(mut self, offset: usize, value: u256) {
-        unsafe { *cast<u8, u256>(self.word_ptr(offset)) = value }
+        unsafe { *cast<u8, u256>(self.word_ptr(offset)) = to_be(value) }
     }
 
     fn word_ptr(self, _ offset: usize) -> *u8 {
@@ -985,7 +986,7 @@ impl MemBuffer {
                     len: (offset - self.len) as u256,
                 )
             }
-            *cast<u8, u256>(offset_bytes(self.ptr, offset as u256)) = value
+            *cast<u8, u256>(offset_bytes(self.ptr, offset as u256)) = to_be(value)
         }
         let end = offset + 32
         if end > self.len {

@@ -3346,6 +3346,28 @@ impl<'db> RmirEmitter<'db> {
         {
             return Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased));
         }
+        // EVM memory is big-endian, so there a word is its own big-endian
+        // representation.
+        if matches!(
+            kind,
+            RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian
+        ) && self.target() == RuntimeTarget::Evm
+            && let [value] = args.as_slice()
+        {
+            let class = self.value_class(*value)?.clone();
+            let ret = self.alloc_runtime_temp(
+                semantic_return_ty(self.db, semantic),
+                RuntimeCarrier::Value(class),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: ret,
+                    expr: RExpr::Use(*value),
+                },
+            );
+            return Some(ret);
+        }
         if kind == RuntimeBuiltinFuncKind::NeedsDrop {
             let ty = semantic.key(self.db).subst(self.db).generic_args(self.db)[0];
             let needs_drop = self.needs_drop(ty);
@@ -4036,6 +4058,13 @@ impl<'db> RmirEmitter<'db> {
                 let [value] = args else { return None };
                 builtin(
                     crate::runtime::RuntimeBuiltin::LeadingZeros { value: *value },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian => {
+                let [value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::SwapBytes { value: *value },
                     Some(word.clone()),
                 )
             }
