@@ -254,20 +254,27 @@ math = true
 }
 
 #[test]
-fn aggregate_object_copies_run_at_every_level() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test/aggregate_object_copies.fe");
-    for backend in ["sonatina", "native"] {
-        for level in ["0", "1", "2"] {
-            let result = Command::new(env!("CARGO_BIN_EXE_fe"))
-                .args(["test", "--backend", backend, "--jobs", "1", "-O", level])
-                .arg(&fixture)
-                .output()
-                .unwrap();
-            assert!(
-                String::from_utf8_lossy(&result.stdout).contains("3 passed; 0 failed"),
-                "{backend} -O{level}: {result:?}"
-            );
+fn aggregate_fixtures_run_at_every_level() {
+    for (name, expected_count) in [
+        ("aggregate_object_copies.fe", 3),
+        ("const_aggregate_values.fe", 5),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(name);
+        for backend in ["sonatina", "native"] {
+            for level in ["0", "1", "2"] {
+                let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+                    .args(["test", "--backend", backend, "--jobs", "1", "-O", level])
+                    .arg(&fixture)
+                    .output()
+                    .unwrap();
+                assert!(
+                    String::from_utf8_lossy(&result.stdout)
+                        .contains(&format!("{expected_count} passed; 0 failed")),
+                    "{name} {backend} -O{level}: {result:?}"
+                );
+            }
         }
     }
 }
