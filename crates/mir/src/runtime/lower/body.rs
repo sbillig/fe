@@ -1,5 +1,5 @@
 use hir::analysis::ty::AddressSpace;
-use std::{collections::HashSet, mem::size_of};
+use std::mem::size_of;
 
 use cranelift_entity::EntityRef;
 use hir::analysis::{
@@ -47,12 +47,11 @@ use crate::{
         project_field_class, project_index_class, project_variant_field_class, runtime_place_lane,
     },
     runtime::{
-        ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot,
-        RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
-        RuntimeBody, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion,
-        RuntimeExitBehavior, RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimePlace,
-        RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole,
-        VariantId,
+        ConstScalar, IntrinsicArithBinOp, Layout, LayoutId, PlaceElem, PlaceRoot, RBlock, RBlockId,
+        RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody, RuntimeBuiltin,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
+        RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
         layout_utils::RuntimeMemoryLayout,
         package::{LowerError, generated_call_error, runtime_instance_for_semantic},
@@ -71,9 +70,8 @@ use super::{
         is_immutable_reference, semantic_return_ty,
     },
     consts::{
-        aggregate_const_ref_class, aggregate_const_ref_region, collect_const_ref_regions,
-        const_scalar_for_class, const_scalar_from_value, enum_tag_scalar,
-        evaluated_const_ref_value, lower_const_region,
+        aggregate_const_ref_class, const_scalar_for_class, const_scalar_from_value,
+        enum_tag_scalar, evaluated_const_ref_value, lower_const_region,
     },
     conversion::{
         RuntimeConversionEmitter, RuntimeConversionError, RuntimeConversionPlanner,
@@ -463,7 +461,6 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) facts: BodyStaticFacts<'db>,
     pub(super) signature: RuntimeInterfaceSignature<'db>,
     pub(super) env: RuntimeTypeEnv<'db>,
-    const_ref_regions: HashSet<ConstRegionId<'db>>,
     pub(super) semantic_carriers: Vec<RuntimeCarrier<'db>>,
     pub(super) semantic_locals: Vec<RuntimeLocalLowering<'db>>,
     pub(super) provider_bindings: Vec<RuntimeProviderBinding<'db>>,
@@ -685,7 +682,6 @@ impl<'db> RmirEmitter<'db> {
         } = inferred;
         let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
-        let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
         let terminated_blocks = vec![false; semantic_body.normalized.blocks.len()];
         let stmt_origins = vec![Vec::new(); semantic_body.normalized.blocks.len()];
         let terminator_origins = vec![SemOrigin::Synthetic; semantic_body.normalized.blocks.len()];
@@ -709,7 +705,6 @@ impl<'db> RmirEmitter<'db> {
             facts,
             signature,
             env,
-            const_ref_regions,
             semantic_carriers,
             semantic_locals,
             provider_bindings,
@@ -1433,41 +1428,7 @@ impl<'db> RmirEmitter<'db> {
             .cloned()
             .expect("const destination should have a runtime class");
         let expected_ty = self.const_lowering_ty(self.locals[dst.index()].semantic_ty, &target);
-        if matches!(const_, SConst::Ref(..)) {
-            self.lower_const_ref_for_class(bb, dst, value, expected_ty, &target);
-        } else {
-            self.lower_sem_const_for_class(bb, dst, value, expected_ty, &target);
-        }
-    }
-
-    fn lower_const_ref_for_class(
-        &mut self,
-        bb: RBlockId,
-        dst: RLocalId,
-        value: SemConstId<'db>,
-        expected_ty: TyId<'db>,
-        target: &RuntimeClass<'db>,
-    ) {
-        let value = self.reify_runtime_const(expected_ty, value);
-        if aggregate_const_ref_class(self.db, self.env, value).is_some()
-            && self.target_accepts_const_ref_source(target)
-        {
-            let src = self.lower_sem_const_as_const_handle(bb, value, expected_ty);
-            let value = if self.value_class(src) == Some(target) {
-                src
-            } else {
-                self.coerce_value(bb, src, target)
-            };
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::Use(value),
-                },
-            );
-        } else {
-            self.lower_sem_const_for_class(bb, dst, value, expected_ty, target);
-        }
+        self.lower_sem_const_for_class(bb, dst, value, expected_ty, &target);
     }
 
     fn lower_sem_const_for_class(
@@ -1511,16 +1472,11 @@ impl<'db> RmirEmitter<'db> {
         if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
             return value;
         }
-        if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, target) {
+        if let Some(value) = self.try_lower_const_data(bb, ty, value, target) {
             return value;
         }
-        if self.known_const_ref_region(value).is_some() {
-            let value = self.lower_sem_const_as_const_handle(bb, value, ty);
-            return if self.value_class(value) == Some(target) {
-                value
-            } else {
-                self.coerce_value(bb, value, target)
-            };
+        if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, target) {
+            return value;
         }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
             return self.lower_sem_const_scalar(bb, ty, scalar);
@@ -1612,13 +1568,13 @@ impl<'db> RmirEmitter<'db> {
         if let Some(value) = self.try_lower_dyn_string_literal(bb, ty, value) {
             return value;
         }
-        let layout = self.layout_for_ty(ty);
-        if let Some(value) = self.try_lower_bytes_array_const_as_class(
-            bb,
-            ty,
-            value,
-            &RuntimeClass::AggregateValue { layout },
-        ) {
+        let aggregate = RuntimeClass::AggregateValue {
+            layout: self.layout_for_ty(ty),
+        };
+        if let Some(value) = self.try_lower_const_data(bb, ty, value, &aggregate) {
+            return value;
+        }
+        if let Some(value) = self.try_lower_bytes_array_const_as_class(bb, ty, value, &aggregate) {
             return value;
         }
         if let Some(scalar) = const_scalar_from_value(self.db, self.env, value) {
@@ -1638,12 +1594,9 @@ impl<'db> RmirEmitter<'db> {
             SemConstValue::Tuple { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }
-            | SemConstValue::Enum { .. } => self.lower_non_scalar_const_as_class(
-                bb,
-                value,
-                ty,
-                &RuntimeClass::AggregateValue { layout },
-            ),
+            | SemConstValue::Enum { .. } => {
+                self.lower_non_scalar_const_as_class(bb, value, ty, &aggregate)
+            }
             SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => {
                 panic!("semantic const should lower as a natural runtime value: {value:?}")
             }
@@ -1665,6 +1618,27 @@ impl<'db> RmirEmitter<'db> {
         };
         ty.is_core_dyn_string(self.db)
             .then(|| self.lower_dyn_string_literal(bb, ty, bytes))
+    }
+
+    /// An aggregate constant with const data reads it from its region.
+    fn try_lower_const_data(
+        &mut self,
+        bb: RBlockId,
+        ty: TyId<'db>,
+        value: SemConstId<'db>,
+        target: &RuntimeClass<'db>,
+    ) -> Option<RLocalId> {
+        if aggregate_const_ref_class(self.db, self.env, value).is_none()
+            || !self.target_accepts_const_ref_source(target)
+        {
+            return None;
+        }
+        let handle = self.lower_sem_const_as_const_handle(bb, value, ty);
+        Some(if self.value_class(handle) == Some(target) {
+            handle
+        } else {
+            self.coerce_value(bb, handle, target)
+        })
     }
 
     fn try_lower_bytes_array_const_as_class(
@@ -1870,11 +1844,6 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         local
-    }
-
-    fn known_const_ref_region(&self, value: SemConstId<'db>) -> Option<ConstRegionId<'db>> {
-        let region = aggregate_const_ref_region(self.db, self.env, value)?;
-        self.const_ref_regions.contains(&region).then_some(region)
     }
 
     fn lower_sem_const_scalar(

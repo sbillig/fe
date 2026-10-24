@@ -351,24 +351,6 @@ impl<'db> RuntimeConversionPlanner<'db> {
             (
                 RuntimeClass::Ref {
                     pointee,
-                    kind: RefKind::Const,
-                    view: RefView::Whole,
-                },
-                RuntimeClass::AggregateValue { .. },
-            ) if pointee.aggregate_layout().is_some() => {
-                let loaded = pointee.as_ref().clone();
-                let layout = loaded.aggregate_layout().expect("aggregate const layout");
-                steps.push(RuntimeConversionStep::MaterializeToObject {
-                    class: RuntimeClass::object_ref(layout),
-                });
-                steps.push(RuntimeConversionStep::LoadRef {
-                    class: loaded.clone(),
-                });
-                self.convert(loaded, target, steps)
-            }
-            (
-                RuntimeClass::Ref {
-                    pointee,
                     kind: RefKind::Provider { space, .. },
                     view: RefView::Whole,
                 },
@@ -876,6 +858,22 @@ mod tests {
         assert_eq!(
             plan.steps.as_ref(),
             &[RuntimeConversionStep::MaterializeToObject { class: target }]
+        );
+    }
+
+    #[test]
+    fn const_ref_to_aggregate_value_loads_the_whole_value() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        let target = RuntimeClass::AggregateValue { layout };
+
+        let plan =
+            RuntimeConversionPlanner::plan(&db, RuntimeClass::const_ref(layout), target.clone())
+                .unwrap();
+
+        assert_eq!(
+            plan.steps.as_ref(),
+            &[RuntimeConversionStep::LoadRef { class: target }]
         );
     }
 

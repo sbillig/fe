@@ -2378,6 +2378,49 @@ fn use_returned_array() -> u8 {
 }
 
 #[test]
+fn constant_aggregate_initializers_store_their_const_data_whole() {
+    with_test_runtime_package!(
+        "constant_aggregate_initializers_store_their_const_data_whole.fe",
+        r#"
+const TABLE: [u256; 4] = [1, 2, 3, 4]
+
+fn zeroed_bytes(i: usize) -> u8 {
+    var bytes: [u8; 64] = [0; 64]
+    bytes[i] = 7
+    bytes[1]
+}
+
+fn copied_table(i: usize) -> u256 {
+    var xs: [u256; 4] = TABLE
+    xs[i] = 7
+    xs[1]
+}
+
+#[test]
+fn initializers() {
+    assert(zeroed_bytes(i: 3) == 0 && copied_table(i: 1) == 7)
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
+            for (name, ty) in [("zeroed_bytes", "[i8; 64]"), ("copied_table", "[i256; 4]")] {
+                let body = sonatina_function_body(&output, name);
+                assert!(
+                    body.contains(&format!("{ty} = const.load")) && !body.contains("insert_value"),
+                    "a constant initializer should load its const data whole:\n{body}"
+                );
+                assert_eq!(
+                    body.matches("obj.alloc").count(),
+                    1,
+                    "a constant initializer should store into its binding without a temporary:\n{body}"
+                );
+            }
+        }
+    );
+}
+
+#[test]
 fn by_value_array_returns_store_whole_into_object_storage() {
     with_runtime_package!(
         "by_value_array_returns_store_whole_into_object_storage.fe",

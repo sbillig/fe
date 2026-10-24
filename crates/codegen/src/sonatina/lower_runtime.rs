@@ -3606,26 +3606,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 ObjLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
             ),
-            PlaceTerminal::Const { value, class } if class.aggregate_layout().is_some() => {
-                let layout = class.aggregate_layout().expect("const aggregate layout");
-                let layout_ty = self.module.ty_for_layout(layout)?;
-                let object = self.fb.insert_inst(
-                    ObjAlloc::new(self.module.inst_set(), layout_ty),
-                    self.fb.module_builder.objref_type(layout_ty),
-                );
-                self.copy_source_into_object(
-                    CopySource::Const {
-                        value,
-                        class: class.clone(),
-                    },
-                    &class,
-                    object,
-                )?;
-                self.fb.insert_inst(
-                    ObjLoad::new(self.module.inst_set(), object),
-                    self.module.ty_for_class(&class)?,
-                )
-            }
             PlaceTerminal::Const { value, .. } => self.fb.insert_inst(
                 ConstLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,

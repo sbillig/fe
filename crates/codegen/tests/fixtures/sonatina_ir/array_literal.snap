@@ -14,11 +14,8 @@ func private %large_array_literal() -> [i8; 64] {
     block1:
         v64.constref<[i8; 64]> = const.ref $const_region_0;
         v65.constref<[i8; 64]> = const.ref $const_region_0;
-        v66.objref<[i8; 64]> = obj.alloc [i8; 64];
-        v67.[i8; 64] = const.load v65;
-        obj.store v66 v67;
-        v68.[i8; 64] = obj.load v66;
-        return v68;
+        v66.[i8; 64] = const.load v65;
+        return v66;
 }
 
 func private %main_root() {

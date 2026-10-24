@@ -151,9 +151,9 @@ func private %test_effect_ptr_domains() {
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_b2ea v1;
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a25 0.i256;
         v7.constref<@layout_0> = const.ref $const_region_0;
-        v9.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
-        v11.@layout_0 = insert_value v9 1.i256 20.i256;
-        obj.store v0 v11;
+        v8.constref<@layout_0> = const.ref $const_region_0;
+        v9.@layout_0 = const.load v8;
+        obj.store v0 v9;
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a78 v0;
         return;
 }

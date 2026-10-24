@@ -19,9 +19,9 @@ func private %empty_field_assign() {
 
     block1:
         v2.constref<@layout_1> = const.ref $const_region_0;
-        v6.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v7.@layout_1 = insert_value v6 1.i256 1.i256;
-        obj.store v0 v7;
+        v3.constref<@layout_1> = const.ref $const_region_0;
+        v4.@layout_1 = const.load v3;
+        obj.store v0 v4;
         return;
 }
 
