@@ -1833,8 +1833,8 @@ pub fn entry() -> u256 {
             "{label} should load through const data projections:\n{pick}"
         );
         assert!(
-            !ir.contains("obj.init.const"),
-            "{label} should not materialize the full array:\n{ir}"
+            !ir.contains("[i256; 4] = const.load"),
+            "{label} should not load the full array:\n{ir}"
         );
     }
 }

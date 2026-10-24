@@ -15,9 +15,10 @@ func private %fixed_u256_array_literal() -> [i256; 4] {
         v4.constref<[i256; 4]> = const.ref $const_region_0;
         v5.constref<[i256; 4]> = const.ref $const_region_0;
         v6.objref<[i256; 4]> = obj.alloc [i256; 4];
-        obj.init.const v6 v5;
-        v7.[i256; 4] = obj.load v6;
-        return v7;
+        v7.[i256; 4] = const.load v5;
+        obj.store v6 v7;
+        v8.[i256; 4] = obj.load v6;
+        return v8;
 }
 
 func private %main_root() {

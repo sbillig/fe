@@ -18,18 +18,20 @@ func private %main() -> @layout_0 {
     block1:
         v2.constref<@layout_0> = const.ref $const_region_0;
         v3.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v3 v2;
-        v4.@layout_0 = obj.load v3;
-        v5.i8 = call %match_tuple_extract v4;
-        v6.constref<@layout_0> = const.ref $const_region_0;
-        v8.constref<@layout_1> = const.ref $const_region_1;
-        v9.objref<@layout_1> = obj.alloc @layout_1;
-        obj.init.const v9 v8;
-        v10.@layout_1 = obj.load v9;
-        v11.i8 = call %match_nested_extract v10;
-        v14.@layout_0 = insert_value undef.@layout_0 0.i256 v5;
-        v16.@layout_0 = insert_value v14 1.i256 v11;
-        return v16;
+        v4.@layout_0 = const.load v2;
+        obj.store v3 v4;
+        v5.@layout_0 = obj.load v3;
+        v6.i8 = call %match_tuple_extract v5;
+        v7.constref<@layout_0> = const.ref $const_region_0;
+        v9.constref<@layout_1> = const.ref $const_region_1;
+        v10.objref<@layout_1> = obj.alloc @layout_1;
+        v11.@layout_1 = const.load v9;
+        obj.store v10 v11;
+        v12.@layout_1 = obj.load v10;
+        v13.i8 = call %match_nested_extract v12;
+        v16.@layout_0 = insert_value undef.@layout_0 0.i256 v6;
+        v18.@layout_0 = insert_value v16 1.i256 v13;
+        return v18;
 }
 
 func private %main_root() {

@@ -221,14 +221,16 @@ func private %test_generic_type_collision() -> i32 {
         v5.constref<@layout_0> = const.ref $const_region_1;
         v6.constref<@layout_1> = const.ref $const_region_0;
         v7.objref<@layout_1> = obj.alloc @layout_1;
-        obj.init.const v7 v6;
-        v8.@layout_1 = obj.load v7;
-        v9.@layout_1 = call %generic_fn__gb148 v8;
-        v10.constref<@layout_0> = const.ref $const_region_1;
-        v11.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v11 v10;
-        v12.@layout_0 = obj.load v11;
-        v13.@layout_0 = call %generic_fn__gf088 v12;
+        v8.@layout_1 = const.load v6;
+        obj.store v7 v8;
+        v9.@layout_1 = obj.load v7;
+        v10.@layout_1 = call %generic_fn__gb148 v9;
+        v11.constref<@layout_0> = const.ref $const_region_1;
+        v12.objref<@layout_0> = obj.alloc @layout_0;
+        v13.@layout_0 = const.load v11;
+        obj.store v12 v13;
+        v14.@layout_0 = obj.load v12;
+        v15.@layout_0 = call %generic_fn__gf088 v14;
         return 42.i32;
 }
 
