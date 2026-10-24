@@ -153,12 +153,7 @@ func private %test_effect_ptr_domains() {
         v7.constref<@layout_0> = const.ref $const_region_0;
         v9.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
         v11.@layout_0 = insert_value v9 1.i256 20.i256;
-        v12.objref<i256> = obj.proj v0 0.i256;
-        v13.i256 = extract_value v11 0.i256;
-        obj.store v12 v13;
-        v14.objref<i256> = obj.proj v0 1.i256;
-        v15.i256 = extract_value v11 1.i256;
-        obj.store v14 v15;
+        obj.store v0 v11;
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump__gb2d8_3a78 v0;
         return;
 }

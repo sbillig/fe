@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 523
 expression: output
 input_file: crates/codegen/tests/fixtures/high_level_contract.fe
 ---
@@ -286,16 +285,11 @@ func inline(always) private %contract_init_abi_EchoContract() {
         v23.objref<i256> = obj.proj v0 1.i256;
         obj.store v23 v11;
         v24.@layout_2 = call %decoder_new;
-        v25.objref<i256> = obj.proj v1 0.i256;
-        v26.i256 = extract_value v24 0.i256;
-        obj.store v25 v26;
-        v27.objref<i256> = obj.proj v1 1.i256;
-        v28.i256 = extract_value v24 1.i256;
-        obj.store v27 v28;
-        v29.@layout_2 = call %decode_payload__g6c12 v1 v0;
-        v30.i256 = extract_value v29 0.i256;
-        v31.i256 = extract_value v29 1.i256;
-        call %__EchoContract_init v30 v31 0.i256;
+        obj.store v1 v24;
+        v25.@layout_2 = call %decode_payload__g6c12 v1 v0;
+        v26.i256 = extract_value v25 0.i256;
+        v27.i256 = extract_value v25 1.i256;
+        call %__EchoContract_init v26 v27 0.i256;
         return;
 }
 
@@ -1058,12 +1052,7 @@ func private %return_value(v0.i256) {
     block11:
         v37.@layout_2 = insert_value undef.@layout_2 0.i256 v31;
         v39.@layout_2 = insert_value v37 1.i256 v33;
-        v40.objref<i256> = obj.proj v1 0.i256;
-        v41.i256 = extract_value v39 0.i256;
-        obj.store v40 v41;
-        v42.objref<i256> = obj.proj v1 1.i256;
-        v43.i256 = extract_value v39 1.i256;
-        obj.store v42 v43;
+        obj.store v1 v39;
         jump block10;
 
     block12:
@@ -1071,14 +1060,9 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block13:
-        v47.@layout_2 = insert_value undef.@layout_2 0.i256 v15;
-        v49.@layout_2 = insert_value v47 1.i256 32.i256;
-        v50.objref<i256> = obj.proj v2 0.i256;
-        v51.i256 = extract_value v49 0.i256;
-        obj.store v50 v51;
-        v52.objref<i256> = obj.proj v2 1.i256;
-        v53.i256 = extract_value v49 1.i256;
-        obj.store v52 v53;
+        v43.@layout_2 = insert_value undef.@layout_2 0.i256 v15;
+        v45.@layout_2 = insert_value v43 1.i256 32.i256;
+        obj.store v2 v45;
         jump block12;
 
     block14:
@@ -1086,14 +1070,9 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block15:
-        v57.@layout_2 = insert_value undef.@layout_2 0.i256 v22;
-        v59.@layout_2 = insert_value v57 1.i256 32.i256;
-        v60.objref<i256> = obj.proj v3 0.i256;
-        v61.i256 = extract_value v59 0.i256;
-        obj.store v60 v61;
-        v62.objref<i256> = obj.proj v3 1.i256;
-        v63.i256 = extract_value v59 1.i256;
-        obj.store v62 v63;
+        v49.@layout_2 = insert_value undef.@layout_2 0.i256 v22;
+        v51.@layout_2 = insert_value v49 1.i256 32.i256;
+        obj.store v3 v51;
         jump block14;
 
     block16:
@@ -1101,22 +1080,17 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block17:
-        v66.i256 = extract_value v23 0.i256;
-        v67.i256 = extract_value v23 1.i256;
+        v54.i256 = extract_value v23 0.i256;
+        v55.i256 = extract_value v23 1.i256;
         jump block19;
 
     block18:
         jump block16;
 
     block19:
-        v71.@layout_2 = insert_value undef.@layout_2 0.i256 v66;
-        v73.@layout_2 = insert_value v71 1.i256 v67;
-        v74.objref<i256> = obj.proj v4 0.i256;
-        v75.i256 = extract_value v73 0.i256;
-        obj.store v74 v75;
-        v76.objref<i256> = obj.proj v4 1.i256;
-        v77.i256 = extract_value v73 1.i256;
-        obj.store v76 v77;
+        v59.@layout_2 = insert_value undef.@layout_2 0.i256 v54;
+        v61.@layout_2 = insert_value v59 1.i256 v55;
+        obj.store v4 v61;
         jump block18;
 }
 

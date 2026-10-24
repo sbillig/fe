@@ -47,8 +47,8 @@ use sonatina_ir::{
             Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, MemAllocDynamic,
-            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjMaterializeHeap,
-            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeHeap, ObjProj,
+            ObjStore, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -141,7 +141,6 @@ define_lowering_inst_set!(
     Mstore,
     ObjAlloc,
     ObjIndex,
-    ObjInitConst,
     ObjLoad,
     ObjMaterializeHeap,
     ObjProj,
@@ -3784,11 +3783,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     self.fb.type_of(*value),
                 )));
             }
-            self.fb.insert_inst_no_result(ObjInitConst::new(
-                self.module.inst_set(),
-                object,
-                *value,
-            ));
+            let loaded = self
+                .fb
+                .insert_inst(ConstLoad::new(self.module.inst_set(), *value), class_ty);
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, loaded));
             return Ok(());
         }
 
@@ -3796,6 +3795,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             let value = self.load_copy_source_leaf(&source, class)?;
             self.fb
                 .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, value));
+            return Ok(());
+        }
+
+        // A value of the object's own type stores whole: copying it field by field
+        // would only extract and store each leaf unchanged.
+        if let CopySource::Value { value, .. } = &source
+            && self.fb.type_of(object)
+                == self.fb.module_builder.objref_type(self.fb.type_of(*value))
+        {
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, *value));
             return Ok(());
         }
 
