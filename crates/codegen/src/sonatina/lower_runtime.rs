@@ -3799,6 +3799,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             return Ok(());
         }
 
+        // A value of the object's own type stores whole: copying it field by field
+        // would only extract and store each leaf unchanged.
+        if let CopySource::Value { value, .. } = &source
+            && self.fb.type_of(object)
+                == self.fb.module_builder.objref_type(self.fb.type_of(*value))
+        {
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), object, *value));
+            return Ok(());
+        }
+
         self.copy_aggregate_source_into_object(source, class, object)
     }
 

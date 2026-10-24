@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/revert.fe
 ---
@@ -88,12 +87,7 @@ func private %standalone_revert__revert__fail__gcd5c_b28f() {
     block5:
         v15.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
         v17.@layout_1 = insert_value v15 1.i256 v11;
-        v18.objref<i256> = obj.proj v0 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v0 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
+        obj.store v0 v17;
         jump block4;
 }
 
@@ -123,12 +117,7 @@ func private %standalone_revert__revert__fail__gcd5c_b920() {
     block5:
         v15.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
         v17.@layout_1 = insert_value v15 1.i256 v11;
-        v18.objref<i256> = obj.proj v0 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v0 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
+        obj.store v0 v17;
         jump block4;
 }
 

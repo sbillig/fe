@@ -2378,9 +2378,9 @@ fn use_returned_array() -> u8 {
 }
 
 #[test]
-fn by_value_array_return_materialization_structurally_copies_into_object_storage() {
+fn by_value_array_returns_store_whole_into_object_storage() {
     with_runtime_package!(
-        "by_value_array_return_materialization_structurally_copies_into_object_storage.fe",
+        "by_value_array_returns_store_whole_into_object_storage.fe",
         r#"
 fn return_array_after_projection(xs: [u256; 3]) -> [u256; 3] {
     let ys = xs
@@ -2398,23 +2398,32 @@ fn use_returned_array() -> u256 {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             let body = sonatina_function_body(&output, "use_returned_array");
+            let result = body
+                .lines()
+                .find_map(|line| {
+                    line.contains("call %return_array_after_projection")
+                        .then(|| line.trim().split('.').next())
+                        .flatten()
+                })
+                .unwrap_or_else(|| panic!("missing array call:\n{body}"));
 
             assert!(
-                body.contains("extract_value"),
-                "by-value aggregate materialization should structurally extract fields instead of whole-object obj.store:\n{body}"
+                body.lines().any(|line| line.contains("obj.store")
+                    && line.trim().ends_with(&format!(" {result};"))),
+                "a by-value array result should store into its object whole:\n{body}"
             );
             assert!(
-                body.contains("obj.load"),
-                "object-backed aggregate copies should load leaf values from the source object before storing them:\n{body}"
+                !body.contains("extract_value"),
+                "a by-value array result should not be copied element by element:\n{body}"
             );
         }
     );
 }
 
 #[test]
-fn fieldless_enum_fields_copy_into_object_storage_via_enum_ops() {
+fn enum_bearing_struct_results_store_whole_into_object_storage() {
     with_test_runtime_package!(
-        "fieldless_enum_fields_copy_into_object_storage_via_enum_ops.fe",
+        "enum_bearing_struct_results_store_whole_into_object_storage.fe",
         r#"
 enum E {
     A,
@@ -2434,16 +2443,17 @@ fn build(flag: bool) -> Pair {
 
 #[test]
 fn exercise() {
-    let pair = build(true)
-    assert(pair.xs[0] == 1)
+    var pair = build(true)
+    pair.xs[1] = 5
+    assert(pair.xs[0] == 1 && pair.xs[1] == 5)
 }
 "#,
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
             assert!(
-                output.contains("enum.set_tag"),
-                "fieldless enum object copies should set the destination enum tag explicitly:\n{output}"
+                !output.contains("enum.set_tag") && !output.contains("br_table"),
+                "a struct result should keep its enum field inside one whole store:\n{output}"
             );
         }
     );

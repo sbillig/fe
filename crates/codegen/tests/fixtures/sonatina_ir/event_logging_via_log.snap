@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/event_logging_via_log.fe
 ---
@@ -130,12 +129,7 @@ func inline(always) private %emit__gcd5c(v0.@layout_2) {
     block5:
         v24.@layout_3 = insert_value undef.@layout_3 0.i256 v19;
         v26.@layout_3 = insert_value v24 1.i256 v20;
-        v27.objref<i256> = obj.proj v1 0.i256;
-        v28.i256 = extract_value v26 0.i256;
-        obj.store v27 v28;
-        v29.objref<i256> = obj.proj v1 1.i256;
-        v30.i256 = extract_value v26 1.i256;
-        obj.store v29 v30;
+        obj.store v1 v26;
         jump block4;
 
     block6:

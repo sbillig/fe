@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map_contract.fe
 ---
@@ -35,12 +34,7 @@ func private %abi_encode(v0.i256) {
     block5:
         v16.@layout_1 = insert_value undef.@layout_1 0.i256 v10;
         v18.@layout_1 = insert_value v16 1.i256 v12;
-        v19.objref<i256> = obj.proj v1 0.i256;
-        v20.i256 = extract_value v18 0.i256;
-        obj.store v19 v20;
-        v21.objref<i256> = obj.proj v1 1.i256;
-        v22.i256 = extract_value v18 1.i256;
-        obj.store v21 v22;
+        obj.store v1 v18;
         jump block4;
 }
 
@@ -244,15 +238,7 @@ func private %init() {
         v2.i256 = sym_size &__BalanceMap_runtime;
         v3.i256 = sym_addr &__BalanceMap_runtime;
         v4.@layout_0 = call %alloc v2;
-        v6.objref<i256> = obj.proj v0 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v0 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v0 2.i256;
-        v13.i256 = extract_value v4 2.i256;
-        obj.store v12 v13;
+        obj.store v0 v4;
         call %codecopy v0 0.i256 v3 v2;
         jump block3;
 
@@ -261,24 +247,19 @@ func private %init() {
         unreachable;
 
     block3:
-        v17.objref<i256> = obj.proj v0 0.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<i256> = obj.proj v0 1.i256;
-        v20.i256 = obj.load v19;
+        v9.objref<i256> = obj.proj v0 0.i256;
+        v10.i256 = obj.load v9;
+        v12.objref<i256> = obj.proj v0 1.i256;
+        v13.i256 = obj.load v12;
         jump block5;
 
     block4:
         jump block2;
 
     block5:
-        v24.@layout_1 = insert_value undef.@layout_1 0.i256 v18;
-        v26.@layout_1 = insert_value v24 1.i256 v20;
-        v27.objref<i256> = obj.proj v1 0.i256;
-        v28.i256 = extract_value v26 0.i256;
-        obj.store v27 v28;
-        v29.objref<i256> = obj.proj v1 1.i256;
-        v30.i256 = extract_value v26 1.i256;
-        obj.store v29 v30;
+        v17.@layout_1 = insert_value undef.@layout_1 0.i256 v10;
+        v19.@layout_1 = insert_value v17 1.i256 v13;
+        obj.store v1 v19;
         jump block4;
 }
 
@@ -369,12 +350,7 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
     block3:
         v27.@layout_1 = insert_value undef.@layout_1 0.i256 v13;
         v30.@layout_1 = insert_value v27 1.i256 v20;
-        v31.objref<i256> = obj.proj v2 0.i256;
-        v32.i256 = extract_value v30 0.i256;
-        obj.store v31 v32;
-        v33.objref<i256> = obj.proj v2 1.i256;
-        v34.i256 = extract_value v30 1.i256;
-        obj.store v33 v34;
+        obj.store v2 v30;
         jump block2;
 
     block4:
@@ -711,12 +687,7 @@ func private %runtime() {
     block56:
         v75.@layout_1 = insert_value undef.@layout_1 0.i256 v71;
         v77.@layout_1 = insert_value v75 1.i256 0.i256;
-        v78.objref<i256> = obj.proj v0 0.i256;
-        v79.i256 = extract_value v77 0.i256;
-        obj.store v78 v79;
-        v80.objref<i256> = obj.proj v0 1.i256;
-        v81.i256 = extract_value v77 1.i256;
-        obj.store v80 v81;
+        obj.store v0 v77;
         jump block55;
 }
 

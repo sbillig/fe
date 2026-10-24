@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 523
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map.fe
 ---
@@ -543,12 +542,7 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
     block3:
         v27.@layout_4 = insert_value undef.@layout_4 0.i256 v13;
         v30.@layout_4 = insert_value v27 1.i256 v20;
-        v31.objref<i256> = obj.proj v2 0.i256;
-        v32.i256 = extract_value v30 0.i256;
-        obj.store v31 v32;
-        v33.objref<i256> = obj.proj v2 1.i256;
-        v34.i256 = extract_value v30 1.i256;
-        obj.store v33 v34;
+        obj.store v2 v30;
         jump block2;
 
     block4:
@@ -725,12 +719,7 @@ func private %return_value(v0.i256) {
     block11:
         v37.@layout_4 = insert_value undef.@layout_4 0.i256 v31;
         v39.@layout_4 = insert_value v37 1.i256 v33;
-        v40.objref<i256> = obj.proj v1 0.i256;
-        v41.i256 = extract_value v39 0.i256;
-        obj.store v40 v41;
-        v42.objref<i256> = obj.proj v1 1.i256;
-        v43.i256 = extract_value v39 1.i256;
-        obj.store v42 v43;
+        obj.store v1 v39;
         jump block10;
 
     block12:
@@ -738,14 +727,9 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block13:
-        v47.@layout_4 = insert_value undef.@layout_4 0.i256 v15;
-        v49.@layout_4 = insert_value v47 1.i256 32.i256;
-        v50.objref<i256> = obj.proj v2 0.i256;
-        v51.i256 = extract_value v49 0.i256;
-        obj.store v50 v51;
-        v52.objref<i256> = obj.proj v2 1.i256;
-        v53.i256 = extract_value v49 1.i256;
-        obj.store v52 v53;
+        v43.@layout_4 = insert_value undef.@layout_4 0.i256 v15;
+        v45.@layout_4 = insert_value v43 1.i256 32.i256;
+        obj.store v2 v45;
         jump block12;
 
     block14:
@@ -753,14 +737,9 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block15:
-        v57.@layout_4 = insert_value undef.@layout_4 0.i256 v22;
-        v59.@layout_4 = insert_value v57 1.i256 32.i256;
-        v60.objref<i256> = obj.proj v3 0.i256;
-        v61.i256 = extract_value v59 0.i256;
-        obj.store v60 v61;
-        v62.objref<i256> = obj.proj v3 1.i256;
-        v63.i256 = extract_value v59 1.i256;
-        obj.store v62 v63;
+        v49.@layout_4 = insert_value undef.@layout_4 0.i256 v22;
+        v51.@layout_4 = insert_value v49 1.i256 32.i256;
+        obj.store v3 v51;
         jump block14;
 
     block16:
@@ -768,22 +747,17 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block17:
-        v66.i256 = extract_value v23 0.i256;
-        v67.i256 = extract_value v23 1.i256;
+        v54.i256 = extract_value v23 0.i256;
+        v55.i256 = extract_value v23 1.i256;
         jump block19;
 
     block18:
         jump block16;
 
     block19:
-        v71.@layout_4 = insert_value undef.@layout_4 0.i256 v66;
-        v73.@layout_4 = insert_value v71 1.i256 v67;
-        v74.objref<i256> = obj.proj v4 0.i256;
-        v75.i256 = extract_value v73 0.i256;
-        obj.store v74 v75;
-        v76.objref<i256> = obj.proj v4 1.i256;
-        v77.i256 = extract_value v73 1.i256;
-        obj.store v76 v77;
+        v59.@layout_4 = insert_value undef.@layout_4 0.i256 v54;
+        v61.@layout_4 = insert_value v59 1.i256 v55;
+        obj.store v4 v61;
         jump block18;
 }
 

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
 expression: output
 input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
 ---
@@ -133,15 +132,7 @@ func private %init() {
         v2.i256 = sym_size &__Foo_runtime;
         v3.i256 = sym_addr &__Foo_runtime;
         v4.@layout_0 = call %alloc v2;
-        v6.objref<i256> = obj.proj v0 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v0 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v0 2.i256;
-        v13.i256 = extract_value v4 2.i256;
-        obj.store v12 v13;
+        obj.store v0 v4;
         call %codecopy v0 0.i256 v3 v2;
         jump block3;
 
@@ -150,24 +141,19 @@ func private %init() {
         unreachable;
 
     block3:
-        v17.objref<i256> = obj.proj v0 0.i256;
-        v18.i256 = obj.load v17;
-        v19.objref<i256> = obj.proj v0 1.i256;
-        v20.i256 = obj.load v19;
+        v9.objref<i256> = obj.proj v0 0.i256;
+        v10.i256 = obj.load v9;
+        v12.objref<i256> = obj.proj v0 1.i256;
+        v13.i256 = obj.load v12;
         jump block5;
 
     block4:
         jump block2;
 
     block5:
-        v24.@layout_1 = insert_value undef.@layout_1 0.i256 v18;
-        v26.@layout_1 = insert_value v24 1.i256 v20;
-        v27.objref<i256> = obj.proj v1 0.i256;
-        v28.i256 = extract_value v26 0.i256;
-        obj.store v27 v28;
-        v29.objref<i256> = obj.proj v1 1.i256;
-        v30.i256 = extract_value v26 1.i256;
-        obj.store v29 v30;
+        v17.@layout_1 = insert_value undef.@layout_1 0.i256 v10;
+        v19.@layout_1 = insert_value v17 1.i256 v13;
+        obj.store v1 v19;
         jump block4;
 }
 
@@ -322,12 +308,7 @@ func private %runtime() {
     block5:
         v8.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
         v11.@layout_1 = insert_value v8 1.i256 0.i256;
-        v12.objref<i256> = obj.proj v0 0.i256;
-        v13.i256 = extract_value v11 0.i256;
-        obj.store v12 v13;
-        v14.objref<i256> = obj.proj v0 1.i256;
-        v15.i256 = extract_value v11 1.i256;
-        obj.store v14 v15;
+        obj.store v0 v11;
         jump block4;
 }
 
