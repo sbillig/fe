@@ -1,4 +1,4 @@
-use core::{MemBuffer, Option}
+use core::{MemBuffer, Option, Result}
 use core::ops::Drop
 
 extern {
@@ -125,6 +125,14 @@ impl Cell {
     fn peek(mut? self) -> (Noisy, mut? i32) {
         (noisy(112), mut? self.n)
     }
+
+    fn pick(mut? self, _ hit: bool) -> Result<Noisy, (own Noisy, mut? i32)> {
+        if hit {
+            Result::Ok((noisy(43), mut? self.n))
+        } else {
+            Result::Err(noisy(45))
+        }
+    }
 }
 
 // ".-p": a temporary's access ends at its last use, before it is destroyed.
@@ -134,6 +142,22 @@ fn carried() {
     put(45 + n)
     cell.n = 5
     put(45)
+}
+
+// Every variant owns a value, which the match destroys where its arms join.
+fn picked(_ cell: Cell, _ hit: bool) -> i32 {
+    match cell.pick(hit) {
+        Result::Ok(_) => 111
+        Result::Err(_) => 101
+    }
+}
+
+// "+o" and "-e"
+fn picking() {
+    var cell = Cell { n: 1 }
+    put(picked(cell, true))
+    put(10)
+    put(picked(cell, false))
 }
 
 // "-BOIA": the binding, then what the pattern leaves of the product, in
@@ -430,6 +454,8 @@ pub fn main() -> i32 {
     extended()
     put(10)
     carried()
+    put(10)
+    picking()
     put(10)
     product_leftovers((Outer { inner: noisy(73), n: 79 }, Pair { a: noisy(65), b: noisy(66) }))
     put(10)
