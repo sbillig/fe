@@ -996,7 +996,7 @@ func private %dynamic_payload_size(v0.i256) -> i256 {
         return 0.i256;
 }
 
-func private %impl_trait_u256__encode__gf13e(v0.i256, v1.@layout_1) {
+func inline(always) private %impl_trait_u256__encode__gf13e(v0.i256, v1.@layout_1) {
     block0:
         jump block1;
 
@@ -1005,7 +1005,7 @@ func private %impl_trait_u256__encode__gf13e(v0.i256, v1.@layout_1) {
         return;
 }
 
-func private %impl_trait_Address__encode__gf13e(v0.@layout_0, v1.@layout_1) {
+func inline(always) private %impl_trait_Address__encode__gf13e(v0.@layout_0, v1.@layout_1) {
     block0:
         jump block1;
 

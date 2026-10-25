@@ -603,7 +603,7 @@ func inline(always) private %encode__g4d3d(v0.@layout_0, v1.@layout_0) {
         return;
 }
 
-func private %encode__gf13e(v0.i256, v1.@layout_0) {
+func inline(always) private %encode__gf13e(v0.i256, v1.@layout_0) {
     block0:
         jump block1;
 
