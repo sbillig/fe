@@ -68,6 +68,7 @@ struct EmitSelection {
     metadata: bool,
     executable: bool,
     elf: bool,
+    wasm: bool,
 }
 
 impl EmitSelection {
@@ -80,6 +81,7 @@ impl EmitSelection {
             metadata: false,
             executable: false,
             elf: false,
+            wasm: false,
         };
         for emit in requested {
             match emit {
@@ -90,6 +92,7 @@ impl EmitSelection {
                 BuildEmit::Metadata => selection.metadata = true,
                 BuildEmit::Executable => selection.executable = true,
                 BuildEmit::Elf => selection.elf = true,
+                BuildEmit::Wasm => selection.wasm = true,
             }
         }
         selection
@@ -112,11 +115,14 @@ fn validate_build_request(
 ) -> Result<(), String> {
     #[cfg(not(feature = "sp1"))]
     let _ = ingot;
-    #[cfg(not(feature = "cranelift"))]
+    #[cfg(not(any(feature = "cranelift", feature = "wasm")))]
     let _ = contract;
 
     if emit.elf && backend.name() != "sp1" {
         return Err("`--emit elf` requires `--backend sp1`".to_string());
+    }
+    if emit.wasm && !backend.is_wasm() {
+        return Err("`--emit wasm` requires `--backend wasm`".to_string());
     }
 
     match backend {
@@ -151,6 +157,22 @@ fn validate_build_request(
         }
         #[cfg(feature = "sp1")]
         BuildBackend::Sp1 => Ok(()),
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm if contract.is_some() => {
+            Err("wasm output does not support `--contract`".to_string())
+        }
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm
+            if emit.writes_any_bytecode()
+                || emit.abi
+                || emit.metadata
+                || emit.executable
+                || emit.elf =>
+        {
+            Err("wasm backend only supports `--emit wasm` and `--emit ir`".to_string())
+        }
+        #[cfg(feature = "wasm")]
+        BuildBackend::Wasm => Ok(()),
     }
 }
 
@@ -786,8 +808,8 @@ fn build_workspace(
         .cloned()
         .unwrap_or_else(|| workspace_root.join("out"));
 
-    #[cfg(feature = "cranelift")]
-    if backend.is_native() {
+    #[cfg(any(feature = "cranelift", feature = "wasm"))]
+    if backend.builds_executables() {
         let mut executables = Vec::new();
         let mut artifact_names = BTreeSet::new();
         for member in members {
@@ -808,13 +830,13 @@ fn build_workspace(
             }
             let artifact = sanitize_name_with_default(member.name.as_str(), "main");
             if !artifact_names.insert(artifact.to_ascii_lowercase()) {
-                eprintln!("Error: Native executable names collide: {artifact}");
+                eprintln!("Error: Executable names collide: {artifact}");
                 return true;
             }
             executables.push(member);
         }
         if executables.is_empty() {
-            eprintln!("Error: No native executable entry points found to build");
+            eprintln!("Error: No executable entry points found to build");
             return true;
         }
         let mut had_errors = false;
@@ -1209,7 +1231,19 @@ fn build_ingot_url(
             report_dir,
         );
     }
-    #[cfg(not(feature = "cranelift"))]
+    #[cfg(feature = "wasm")]
+    if backend.is_wasm() {
+        return build_wasm_top_mod(
+            db,
+            ingot.root_mod(db),
+            opt_level,
+            emit,
+            out_dir,
+            &ir_file_stem,
+            report_dir,
+        );
+    }
+    #[cfg(not(any(feature = "cranelift", feature = "wasm")))]
     let _ = backend;
 
     build_ingot(
@@ -1373,8 +1407,21 @@ fn build_top_mod(
     missing_contract_is_error: bool,
     report_dir: Option<&Utf8PathBuf>,
 ) -> BuildSummary {
-    #[cfg(not(feature = "cranelift"))]
+    #[cfg(not(any(feature = "cranelift", feature = "wasm")))]
     let _ = backend;
+
+    #[cfg(feature = "wasm")]
+    if backend.is_wasm() {
+        return build_wasm_top_mod(
+            db,
+            top_mod,
+            opt_level,
+            emit,
+            out_dir,
+            ir_file_stem,
+            report_dir,
+        );
+    }
 
     #[cfg(feature = "cranelift")]
     if matches!(backend, BuildBackend::Native) {
@@ -1529,6 +1576,51 @@ fn build_native_top_mod(
         return BuildSummary { had_errors: true };
     }
     BuildSummary { had_errors: false }
+}
+
+#[cfg(feature = "wasm")]
+fn build_wasm_top_mod(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    emit: EmitSelection,
+    out_dir: &Utf8Path,
+    ir_file_stem: &str,
+    report_dir: Option<&Utf8PathBuf>,
+) -> BuildSummary {
+    let report_dir = report_dir.map(Utf8PathBuf::as_path);
+    let result = codegen::emit_module_wasm_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        codegen::WasmOutputSelection {
+            ir: emit.ir,
+            wasm: emit.wasm,
+        },
+    )
+    .map_err(|err| format!("Failed to compile wasm output: {err}"))
+    .and_then(|artifacts| {
+        ensure_output_dirs(emit, out_dir, out_dir)?;
+        if let Some(ir) = artifacts.ir {
+            write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "wasm.sona", &ir)?;
+        }
+        if let Some(wasm) = artifacts.wasm {
+            let name = format!("{}.wasm", sanitize_name_with_default(ir_file_stem, "main"));
+            let file = out_dir.join(&name);
+            fs::write(&file, &wasm).map_err(|err| format!("Failed to write {file}: {err}"))?;
+            if let Some(report_dir) = report_dir {
+                let _ = fs::write(report_dir.join(&name), &wasm);
+            }
+            println!("Wrote {file}");
+        }
+        Ok(())
+    });
+    if let Err(err) = &result {
+        eprintln!("Error: {err}");
+    }
+    BuildSummary {
+        had_errors: result.is_err(),
+    }
 }
 
 #[cfg(feature = "sp1")]
@@ -1730,7 +1822,13 @@ fn ensure_output_dirs(
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
 ) -> Result<(), String> {
-    if emit.writes_any_bytecode() || emit.abi || emit.metadata || emit.executable || emit.elf {
+    if emit.writes_any_bytecode()
+        || emit.abi
+        || emit.metadata
+        || emit.executable
+        || emit.elf
+        || emit.wasm
+    {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
     }
@@ -2279,6 +2377,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.elf {
         parts.push("elf");
     }
+    if emit.wasm {
+        parts.push("wasm");
+    }
     parts.join(",")
 }
 
@@ -2392,6 +2493,7 @@ mod tests {
             metadata: false,
             executable: false,
             elf: false,
+            wasm: false,
         };
         assert_eq!(describe_emit_selection(emit), "abi");
     }

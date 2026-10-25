@@ -9,6 +9,7 @@ doc-server = ["dep:tokio", "dep:axum"]
 lsp = ["dep:language-server", "dep:tokio"]
 cranelift = ["codegen/cranelift", "dep:libc"]
 sp1 = ["cranelift", "codegen/sp1", "dep:sonatina-sp1"]
+wasm = ["codegen/wasm", "dep:wasmi"]
 
 [dependencies]
 clap.workspace = true
@@ -47,6 +48,7 @@ colored = "2"
 hex = "0.4"
 tempfile = "3.23"
 libc = { version = "0.2", optional = true }
+wasmi = { version = "2.0.0", default-features = false, features = ["stable", "std", "validate", "portable-dispatch"], optional = true }
 toml = "0.8.8"
 ethers-core = "2"
 glob.workspace = true

@@ -261,6 +261,13 @@ writes both. ELF linking requires the pinned Succinct toolchain configured throu
 `SONATINA_SP1_TOOLCHAIN`. See the [SP1 guide](tests/sp1/README.md) for installation,
 guest input and public values, and proof verification tests.
 
+With the optional `wasm` Cargo feature, `fe build --backend wasm <file.fe>` compiles
+a standalone `pub fn main() -> i32` to a `wasm32` module. The default output is
+`<out>/<file>.wasm`; `--emit ir` writes `<out>/<file>.wasm.sona`, and `--emit wasm,ir`
+writes both. The module exports `main` and `memory`, and imports host functions such
+as `putchar` and `getchar` from `env`. `fe test --backend wasm` runs tests in an
+embedded wasm interpreter.
+
 The `metadata.json` artifact follows the Solidity Contract Metadata schema (`version: 1`), adapted to Fe. It is a complete, deterministic recompilation input: rebuilding with the same compiler version, `sources`, and `settings` reproduces the same bytecode. Its shape:
 
 ```

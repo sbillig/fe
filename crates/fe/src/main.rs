@@ -54,6 +54,7 @@ pub enum BuildEmit {
     Metadata,
     Executable,
     Elf,
+    Wasm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -65,6 +66,9 @@ pub enum BuildBackend {
     #[cfg(feature = "sp1")]
     /// RV64IM SP1 guest IR or ELF executables.
     Sp1,
+    #[cfg(feature = "wasm")]
+    /// WebAssembly IR or modules.
+    Wasm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -72,6 +76,8 @@ pub enum TestBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
     Native,
+    #[cfg(feature = "wasm")]
+    Wasm,
 }
 
 impl From<TestBackend> for BuildBackend {
@@ -80,6 +86,8 @@ impl From<TestBackend> for BuildBackend {
             TestBackend::Sonatina => Self::Sonatina,
             #[cfg(feature = "cranelift")]
             TestBackend::Native => Self::Native,
+            #[cfg(feature = "wasm")]
+            TestBackend::Wasm => Self::Wasm,
         }
     }
 }
@@ -92,6 +100,8 @@ impl BuildBackend {
             Self::Native => "native",
             #[cfg(feature = "sp1")]
             Self::Sp1 => "sp1",
+            #[cfg(feature = "wasm")]
+            Self::Wasm => "wasm",
         }
     }
 
@@ -101,6 +111,20 @@ impl BuildBackend {
             return true;
         }
         false
+    }
+
+    pub fn is_wasm(self) -> bool {
+        #[cfg(feature = "wasm")]
+        if matches!(self, Self::Wasm) {
+            return true;
+        }
+        false
+    }
+
+    /// Whether the backend builds programs rooted at `pub fn main` and runs
+    /// tests on a host memory model, rather than EVM contracts.
+    pub fn builds_executables(self) -> bool {
+        self.is_native() || self.is_wasm()
     }
 
     fn default_emit(self) -> Vec<BuildEmit> {
@@ -114,6 +138,8 @@ impl BuildBackend {
             Self::Native => vec![BuildEmit::Executable],
             #[cfg(feature = "sp1")]
             Self::Sp1 => vec![BuildEmit::Elf],
+            #[cfg(feature = "wasm")]
+            Self::Wasm => vec![BuildEmit::Wasm],
         }
     }
 }

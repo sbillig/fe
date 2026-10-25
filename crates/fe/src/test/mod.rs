@@ -1,10 +1,12 @@
 //! Test runner for Fe tests.
 //!
 //! Discovers functions marked with `#[test]` attribute, compiles them, and
-//! executes them using revm or the native host.
+//! executes them using revm, the native host or a wasm interpreter.
 
 #[cfg(feature = "cranelift")]
 mod native;
+#[cfg(feature = "wasm")]
+mod wasm;
 
 use crate::dependency_diagnostics::CompilationDiagnostics;
 use crate::report::{
@@ -166,6 +168,8 @@ enum CompiledTest {
     Evm(Box<TestMetadata>),
     #[cfg(feature = "cranelift")]
     Native(native::NativeTestCase),
+    #[cfg(feature = "wasm")]
+    Wasm(wasm::WasmTestCase),
 }
 
 #[derive(Debug)]
@@ -779,8 +783,11 @@ pub fn run_tests(
     call_trace: bool,
     use_recovery: bool,
 ) -> Result<bool, String> {
-    if backend.is_native() && (show_logs || debug.trace_evm || call_trace) {
-        return Err("native tests do not support EVM logs or tracing options".to_string());
+    if backend.builds_executables() && (show_logs || debug.trace_evm || call_trace) {
+        return Err(format!(
+            "{} tests do not support EVM logs or tracing options",
+            backend.name()
+        ));
     }
     if !backend.is_native() && (native_timeout_secs.is_some() || native_output_limit_kib.is_some())
     {
@@ -1462,7 +1469,7 @@ fn prepare_suite_job(
     };
 
     let mut suite_debug = shared.debug.clone();
-    if report_ctx.is_some() && !shared.backend.is_native() {
+    if report_ctx.is_some() && !shared.backend.builds_executables() {
         suite_debug.trace_evm = true;
         suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
     }
@@ -1574,6 +1581,8 @@ fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> Singl
         ),
         #[cfg(feature = "cranelift")]
         CompiledTest::Native(case) => case.run(report_ctx.as_ref(), shared.native_limits),
+        #[cfg(feature = "wasm")]
+        CompiledTest::Wasm(case) => case.run(report_ctx.as_ref()),
     };
     let elapsed = outcome.elapsed;
     let mut output = String::new();
@@ -1788,7 +1797,22 @@ fn prepare_tests_single_file(
             output,
         );
     }
-    #[cfg(not(feature = "cranelift"))]
+    #[cfg(feature = "wasm")]
+    if backend.is_wasm() {
+        return wasm::prepare_tests(
+            db,
+            vec![top_mod],
+            file_path,
+            suite,
+            suite_key,
+            filter,
+            opt_level,
+            emit,
+            report,
+            output,
+        );
+    }
+    #[cfg(not(any(feature = "cranelift", feature = "wasm")))]
     let _ = backend;
 
     maybe_write_suite_ir(db, top_mod, opt_level, report);
@@ -1972,15 +1996,22 @@ fn prepare_tests_ingot(
         };
     }
 
-    #[cfg(feature = "cranelift")]
-    if backend.is_native() {
+    #[cfg(any(feature = "cranelift", feature = "wasm"))]
+    if backend.builds_executables() {
         let mut top_mods = ingot.all_modules(db).to_vec();
         top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
+        #[cfg(feature = "wasm")]
+        if backend.is_wasm() {
+            return wasm::prepare_tests(
+                db, top_mods, dir_path, suite, suite_key, filter, opt_level, emit, report, output,
+            );
+        }
+        #[cfg(feature = "cranelift")]
         return native::prepare_tests(
             db, top_mods, dir_path, suite, suite_key, filter, opt_level, emit, report, output,
         );
     }
-    #[cfg(not(feature = "cranelift"))]
+    #[cfg(not(any(feature = "cranelift", feature = "wasm")))]
     let _ = backend;
 
     maybe_write_suite_ir(db, root_mod, opt_level, report);
