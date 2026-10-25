@@ -1,27 +1,35 @@
 mod lower_runtime;
-#[cfg(feature = "cranelift")]
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
 mod native_tests;
 pub(crate) mod observability;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+pub use native_tests::NativeTestEntry;
 #[cfg(feature = "cranelift")]
-pub use native_tests::{NativeTestEntry, NativeTestSuite, emit_test_suite_native};
+pub use native_tests::{NativeTestSuite, emit_test_suite_native};
+#[cfg(feature = "wasm")]
+pub use native_tests::{WasmTestSuite, emit_test_suite_wasm};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use common::ingot::Ingot;
 use driver::DriverDataBase;
-#[cfg(feature = "cranelift")]
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
-#[cfg(feature = "cranelift")]
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
 use mir::{RuntimeSectionName, build_native_executable_package, native_executable_entry};
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
 use smallvec1::smallvec;
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_codegen::Compile;
 #[cfg(feature = "cranelift")]
-use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
+use sonatina_codegen::isa::cranelift::CraneliftObjectBackend;
+#[cfg(feature = "wasm")]
+use sonatina_codegen::isa::wasm::WasmBackend;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -31,6 +39,8 @@ use sonatina_codegen::{
         UnmappedReasonCoverage,
     },
 };
+#[cfg(feature = "wasm")]
+use sonatina_ir::isa::wasm32::Wasm32;
 use sonatina_ir::{
     BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -38,9 +48,11 @@ use sonatina_ir::{
     module::FuncRef,
     object::EmbedSymbol,
 };
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+use sonatina_ir::{Linkage, Type, ir_writer::IrWrite, isa::Isa};
 #[cfg(feature = "cranelift")]
 use sonatina_ir::{
-    Linkage, Signature, Type,
+    Signature,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
@@ -50,8 +62,7 @@ use sonatina_ir::{
         control_flow::{Br, Call, Jump, Phi, Return, Unreachable},
         data::{Gep, MemAllocDynamic, Mload, Mstore, ObjAlloc, ObjStore},
     },
-    ir_writer::IrWrite,
-    isa::{Isa, native::Native},
+    isa::native::Native,
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{
@@ -138,6 +149,20 @@ pub enum NativeTarget {
     Host,
     #[cfg(feature = "sp1")]
     Sp1,
+}
+
+#[cfg(feature = "wasm")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WasmOutputSelection {
+    pub ir: bool,
+    pub wasm: bool,
+}
+
+#[cfg(feature = "wasm")]
+#[derive(Debug)]
+pub struct WasmArtifacts {
+    pub ir: Option<String>,
+    pub wasm: Option<Vec<u8>>,
 }
 
 pub(crate) fn create_evm_isa() -> Evm {
@@ -255,8 +280,8 @@ fn format_object_compile_errors(errors: &[sonatina_codegen::object::ObjectCompil
         .join("; ")
 }
 
-#[cfg(feature = "cranelift")]
-fn format_cranelift_errors(errors: &[sonatina_codegen::isa::cranelift::CraneliftError]) -> String {
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+fn format_backend_errors(errors: &[impl std::fmt::Display]) -> String {
     errors
         .iter()
         .map(ToString::to_string)
@@ -735,12 +760,17 @@ pub fn compile_runtime_package_sonatina(
     lower_runtime::compile_runtime_package_sonatina(db, package)
 }
 
-#[cfg(feature = "cranelift")]
-fn compile_executable_sonatina_native(
+/// Lowers the executable rooted at `pub fn main` for a host-memory target.
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+fn compile_executable_sonatina<I>(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-    target: NativeTarget,
-) -> Result<(Module, FuncRef), LowerError> {
+    isa: &I,
+) -> Result<(Module, FuncRef), LowerError>
+where
+    I: Isa,
+    I::InstSet: lower_runtime::LoweringInstSet,
+{
     let package = build_native_executable_package(db, top_mod)?;
     let entry = package
         .primary_object(db)
@@ -753,15 +783,10 @@ fn compile_executable_sonatina_native(
         .ok_or_else(|| LowerError::Internal("native package is missing its main section".into()))?
         .entry
         .instance(db);
-    let isa = match target {
-        NativeTarget::Host => create_native_isa()?,
-        #[cfg(feature = "sp1")]
-        NativeTarget::Sp1 => Native::new(TargetTriple::SP1),
-    };
     let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
         db,
         &package,
-        &isa,
+        isa,
         false,
         Some((entry, "main")),
     )?;
@@ -770,6 +795,21 @@ fn compile_executable_sonatina_native(
         .copied()
         .ok_or_else(|| LowerError::Internal("native main was not lowered".into()))?;
     Ok((module, main))
+}
+
+#[cfg(feature = "cranelift")]
+fn compile_executable_sonatina_native(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    target: NativeTarget,
+) -> Result<(Module, FuncRef), LowerError> {
+    match target {
+        NativeTarget::Host => compile_executable_sonatina(db, top_mod, &create_native_isa()?),
+        #[cfg(feature = "sp1")]
+        NativeTarget::Sp1 => {
+            compile_executable_sonatina(db, top_mod, &Native::new(TargetTriple::SP1))
+        }
+    }
 }
 
 #[cfg(feature = "cranelift")]
@@ -855,7 +895,7 @@ pub fn emit_module_native_artifacts(
             compile
                 .compile()
                 .map(|artifact| artifact.into_bytes())
-                .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))?,
+                .map_err(|errors| LowerError::Internal(format_backend_errors(&errors)))?,
         )
     } else {
         None
@@ -863,14 +903,18 @@ pub fn emit_module_native_artifacts(
     Ok(NativeArtifacts { ir, object })
 }
 
-#[cfg(feature = "cranelift")]
-fn prepare_native_main(
+/// Checks that the lowered entry matches `pub fn main() -> i32`, or with
+/// `allow_args`, `pub fn main(argc: i32, argv: **u8) -> i32`. Returns the
+/// lowered `argc` type when it takes the arguments.
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+fn check_executable_main(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-    target: NativeTarget,
-    module: Module,
+    module: &Module,
     main: FuncRef,
-) -> Result<Module, LowerError> {
+    allow_args: bool,
+    expected_entry: &str,
+) -> Result<Option<Type>, LowerError> {
     let func = native_executable_entry(db, top_mod)
         .ok_or_else(|| LowerError::Internal("native entry disappeared after lowering".into()))?;
     let i32_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::I32)));
@@ -883,8 +927,38 @@ fn prepare_native_main(
             ty.as_view(db).unwrap_or(ty)
         })
         .collect::<Vec<_>>();
-    let with_args = matches!(target, NativeTarget::Host) && args == [i32_ty, argv_ty];
+    let with_args = allow_args && args == [i32_ty, argv_ty];
     let valid = func.return_ty(db) == i32_ty && (args.is_empty() || with_args);
+    let argc_ref = Type::I32.to_obj_ref(&module.ctx);
+    module.ctx.func_sig(main, |signature| {
+        let argc = with_args.then(|| {
+            if signature.args().first() == Some(&argc_ref) {
+                argc_ref
+            } else {
+                Type::I32
+            }
+        });
+        let expected = argc.map_or_else(Vec::new, |argc| vec![argc, Type::I256]);
+        if valid && signature.args() == expected && signature.ret_tys() == [Type::I32] {
+            Ok(argc)
+        } else {
+            Err(LowerError::Unsupported(format!(
+                "{expected_entry}, found lowered `main({}) -> {}`",
+                format_native_types(signature.args(), module),
+                format_native_types(signature.ret_tys(), module)
+            )))
+        }
+    })
+}
+
+#[cfg(feature = "cranelift")]
+fn prepare_native_main(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    target: NativeTarget,
+    module: Module,
+    main: FuncRef,
+) -> Result<Module, LowerError> {
     let expected_entry = match target {
         NativeTarget::Host => {
             "native executable `main` must have signature `pub fn main() -> i32` or `pub fn main(argc: i32, argv: **u8) -> i32`"
@@ -892,30 +966,18 @@ fn prepare_native_main(
         #[cfg(feature = "sp1")]
         NativeTarget::Sp1 => "SP1 executable `main` must have signature `pub fn main() -> i32`",
     };
-    let argc_ref = Type::I32.to_obj_ref(&module.ctx);
-    let argc_by_ref = module.ctx.func_sig(main, |signature| {
-        signature.args().first() == Some(&argc_ref)
-    });
-    module.ctx.func_sig(main, |signature| {
-        let expected = if with_args {
-            vec![if argc_by_ref { argc_ref } else { Type::I32 }, Type::I256]
-        } else {
-            vec![]
-        };
-        if valid && signature.args() == expected && signature.ret_tys() == [Type::I32] {
-            Ok(())
-        } else {
-            Err(LowerError::Unsupported(format!(
-                "{expected_entry}, found lowered `main({}) -> {}`",
-                format_native_types(signature.args(), &module),
-                format_native_types(signature.ret_tys(), &module)
-            )))
-        }
-    })?;
-    if !with_args {
+    let Some(argc_ty) = check_executable_main(
+        db,
+        top_mod,
+        &module,
+        main,
+        matches!(target, NativeTarget::Host),
+        expected_entry,
+    )?
+    else {
         module.ctx.update_func_linkage(main, Linkage::Public);
         return Ok(module);
-    }
+    };
 
     // Preserve ordinary Fe calls to the entry. Only the exported C entry uses
     // native pointer widths; Fe raw addresses continue to use the word ABI.
@@ -985,8 +1047,8 @@ fn prepare_native_main(
     let more = fb.insert_inst(Lt::new(inst_set, next, count), Type::I1);
     fb.insert_inst_no_result(Br::new(inst_set, more, copy, invoke));
     fb.switch_to_block(invoke);
-    let argc = if argc_by_ref {
-        let object = fb.insert_inst(ObjAlloc::new(inst_set, Type::I32), argc_ref);
+    let argc = if argc_ty != Type::I32 {
+        let object = fb.insert_inst(ObjAlloc::new(inst_set, Type::I32), argc_ty);
         fb.insert_inst_no_result(ObjStore::new(inst_set, object, argc));
         object
     } else {
@@ -1003,7 +1065,7 @@ fn prepare_native_main(
     Ok(builder.build())
 }
 
-#[cfg(feature = "cranelift")]
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
 fn format_native_types(types: &[Type], module: &Module) -> String {
     types
         .iter()
@@ -1015,6 +1077,43 @@ fn format_native_types(types: &[Type], module: &Module) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(feature = "wasm")]
+pub fn emit_module_wasm_artifacts(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    outputs: WasmOutputSelection,
+) -> Result<WasmArtifacts, LowerError> {
+    let (module, main) = compile_executable_sonatina(db, top_mod, &Wasm32::default())?;
+    check_executable_main(
+        db,
+        top_mod,
+        &module,
+        main,
+        false,
+        "wasm `main` must have signature `pub fn main() -> i32`",
+    )?;
+    module.ctx.update_func_linkage(main, Linkage::Public);
+    let mut compile =
+        Compile::new(module, WasmBackend::new()).with_opt_level(to_sonatina_opt_level(opt_level));
+    compile.optimize();
+    ensure_module_sonatina_ir_valid(compile.module())?;
+    let ir = outputs
+        .ir
+        .then(|| ModuleWriter::new(compile.module()).dump_string());
+    let wasm = if outputs.wasm {
+        Some(
+            compile
+                .compile()
+                .map(|artifact| artifact.into_bytes())
+                .map_err(|errors| LowerError::Internal(format_backend_errors(&errors)))?,
+        )
+    } else {
+        None
+    };
+    Ok(WasmArtifacts { ir, wasm })
 }
 
 pub(crate) fn select_runtime_package_contract<'db>(

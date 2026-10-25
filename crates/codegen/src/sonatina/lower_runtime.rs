@@ -202,10 +202,14 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
     Ok(lowerer.finish().0)
 }
 
+/// Targets whose memory comes from a host allocator rather than the EVM.
 fn is_native_architecture(architecture: Architecture) -> bool {
     matches!(
         architecture,
-        Architecture::X86_64 | Architecture::Aarch64 | Architecture::Riscv64im
+        Architecture::X86_64
+            | Architecture::Aarch64
+            | Architecture::Riscv64im
+            | Architecture::Wasm32
     )
 }
 
@@ -303,6 +307,11 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn is_native_target(&self) -> bool {
         is_native_architecture(self.builder.ctx.triple.architecture)
+    }
+
+    /// The host C `size_t`, as wide as a pointer.
+    fn size_type(&self) -> Type {
+        self.builder.ctx.type_layout.pointer_repl()
     }
 
     fn function_symbol(&self, instance: RuntimeInstance<'db>) -> String {
@@ -2092,14 +2101,33 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
         self.fb.switch_to_block(allocate);
         let allocated = if fallible {
+            let size_ty = self.module.size_type();
             let malloc = self.host_function(Signature::new_single(
                 "malloc",
                 Linkage::External,
-                &[Type::I64],
+                &[size_ty],
                 pointer,
             ))?;
-            // Callers bound the size to 64 bits.
-            let size = self.coerce_value_to_ty(size, Type::I64)?;
+            // Callers bound the size to 64 bits. A size too large for a
+            // 32-bit `size_t` saturates, so the host rejects it.
+            let mut size = self.coerce_value_to_ty(size, Type::I64)?;
+            if size_ty == Type::I32 {
+                let max = self.fb.make_imm_value(i64::from(u32::MAX));
+                let oversized = self.fb.insert_inst(Gt::new(inst_set, size, max), Type::I1);
+                let oversized = self
+                    .fb
+                    .insert_inst(Zext::new(inst_set, oversized, size_ty), size_ty);
+                let zero = zero_for_type(&mut self.fb, size_ty);
+                let saturated = self
+                    .fb
+                    .insert_inst(Sub::new(inst_set, zero, oversized), size_ty);
+                let truncated = self
+                    .fb
+                    .insert_inst(Trunc::new(inst_set, size, size_ty), size_ty);
+                size = self
+                    .fb
+                    .insert_inst(Or::new(inst_set, truncated, saturated), size_ty);
+            }
             self.fb
                 .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer)
         } else {
@@ -2230,9 +2258,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         copy,
                     ));
                     self.fb.switch_to_block(copy);
-                    // Fe raw addresses and lengths are words; native addresses
-                    // are 64 bits. Reject truncation and wrapping byte ranges.
-                    let max = self.fb.make_imm_value(I256::from(u64::MAX));
+                    // Fe raw addresses and lengths are words; host addresses
+                    // are pointer-sized. Reject truncation and wrapping byte ranges.
+                    let max = if self.module.size_type() == Type::I32 {
+                        u64::from(u32::MAX)
+                    } else {
+                        u64::MAX
+                    };
+                    let max = self.fb.make_imm_value(I256::from(max));
                     for value in [dst, src, len] {
                         let invalid = self
                             .fb
@@ -2253,12 +2286,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     let memmove = self.host_function(Signature::new_single(
                         "memmove",
                         Linkage::External,
-                        &[pointer, pointer, Type::I64],
+                        &[pointer, pointer, self.module.size_type()],
                         pointer,
                     ))?;
                     let dst = self.coerce_value_to_ty(dst, pointer)?;
                     let src = self.coerce_value_to_ty(src, pointer)?;
-                    let len = self.coerce_value_to_ty(len, Type::I64)?;
+                    let len = self.coerce_value_to_ty(len, self.module.size_type())?;
                     self.fb.insert_inst(
                         Call::new(self.module.inst_set(), memmove, smallvec![dst, src, len]),
                         pointer,

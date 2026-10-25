@@ -10,6 +10,8 @@ pub use backend::OptLevel;
 pub use debug::{
     BytecodeDebugError, BytecodePcRange, BytecodeSourceMapEntry, BytecodeSourceMapEntryKind,
 };
+#[cfg(any(feature = "cranelift", feature = "wasm"))]
+pub use sonatina::NativeTestEntry;
 pub use sonatina::{
     LowerError, SonatinaContractBytecode, SonatinaTestOptions, compile_runtime_package_sonatina,
     emit_ingot_sonatina_bytecode, emit_ingot_sonatina_ir, emit_ingot_sonatina_ir_optimized,
@@ -20,8 +22,13 @@ pub use sonatina::{
 };
 #[cfg(feature = "cranelift")]
 pub use sonatina::{
-    NativeArtifacts, NativeOutputSelection, NativeTarget, NativeTestEntry, NativeTestSuite,
+    NativeArtifacts, NativeOutputSelection, NativeTarget, NativeTestSuite,
     emit_module_native_artifacts, emit_module_native_ir, emit_module_native_object,
     emit_test_suite_native,
+};
+#[cfg(feature = "wasm")]
+pub use sonatina::{
+    WasmArtifacts, WasmOutputSelection, WasmTestSuite, emit_module_wasm_artifacts,
+    emit_test_suite_wasm,
 };
 pub use test_output::{ExpectedRevert, TestMetadata, TestModuleOutput, parse_expected_revert};
