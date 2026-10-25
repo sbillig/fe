@@ -9,7 +9,7 @@ use super::{
     format_cranelift_errors, lower_runtime, to_sonatina_opt_level,
 };
 use crate::{
-    OptLevel,
+    ExpectedRevert, OptLevel,
     test_output::{TestRootMetadataError, runtime_test_root_metadata},
 };
 
@@ -17,6 +17,7 @@ use crate::{
 pub struct NativeTestEntry {
     pub name: String,
     pub symbol: String,
+    pub expected_revert: Option<ExpectedRevert>,
 }
 
 /// One compiled object for every selected test in a suite.
@@ -48,13 +49,17 @@ pub fn emit_test_suite_native(
                 TestRootMetadataError::InvalidPackage(message) => LowerError::Internal(message),
                 TestRootMetadataError::Unsupported(message) => LowerError::Unsupported(message),
             })?;
-            if metadata.expected_revert.is_some() || metadata.initial_balance.is_some() {
+            if metadata.initial_balance.is_some() {
                 return Err(LowerError::Unsupported(format!(
-                    "native test `{}` cannot use EVM `should_revert` or `balance` attributes",
+                    "native test `{}` cannot use the EVM `balance` attribute",
                     metadata.display_name
                 )));
             }
-            roots.push((metadata.display_name, section.entry.instance(db)));
+            roots.push((
+                metadata.display_name,
+                metadata.expected_revert,
+                section.entry.instance(db),
+            ));
         }
     }
     let isa = create_native_isa()?;
@@ -64,10 +69,10 @@ pub fn emit_test_suite_native(
         &isa,
         false,
         None,
-        NativePanics::Abort,
+        NativePanics::HostRevert,
     )?;
     let mut tests = Vec::with_capacity(roots.len());
-    for (name, instance) in roots {
+    for (name, expected_revert, instance) in roots {
         let entry = functions[&instance];
         let symbol = module.ctx.func_sig(entry, |signature| {
             if !signature.args().is_empty() || !signature.ret_tys().is_empty() {
@@ -78,7 +83,11 @@ pub fn emit_test_suite_native(
             Ok(signature.name().to_string())
         })?;
         module.ctx.update_func_linkage(entry, Linkage::Public);
-        tests.push(NativeTestEntry { name, symbol });
+        tests.push(NativeTestEntry {
+            name,
+            symbol,
+            expected_revert,
+        });
     }
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));

@@ -27,6 +27,9 @@ use super::{LoweringInstSet, ModuleLowerer};
 pub(crate) enum NativePanics {
     /// Report the panic on stderr and abort.
     Abort,
+    /// As `Abort`, except that revert data goes to the host's `__fe_revert`,
+    /// as the `fe test` launcher defines it.
+    HostRevert,
     /// Trap without a report.
     Trap,
 }
@@ -78,9 +81,11 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
     /// The function that reports `panic`, declared on first use, or `None`
     /// when the module traps instead.
     pub(super) fn native_panic_function(&self, panic: NativePanic) -> Option<FuncRef> {
-        if self.panics == NativePanics::Trap {
-            return None;
-        }
+        let linkage = match (self.panics, panic) {
+            (NativePanics::Trap, _) => return None,
+            (NativePanics::HostRevert, NativePanic::Revert) => Linkage::External,
+            _ => Linkage::Private,
+        };
         let args = match panic {
             NativePanic::Trap => vec![],
             NativePanic::Revert => vec![self.builder.ptr_type(Type::I8), Type::I64],
@@ -88,7 +93,7 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
         };
         let func = self
             .builder
-            .declare_function(Signature::new_unit(panic.symbol(), Linkage::Private, &args))
+            .declare_function(Signature::new_unit(panic.symbol(), linkage, &args))
             .expect("native panic symbols are reserved");
         self.builder.ctx.set_inline_hint(func, InlineHint::Never);
         Some(func)
@@ -101,6 +106,9 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
             let Some(func) = self.builder.lookup_func(panic.symbol()) else {
                 continue;
             };
+            if self.builder.sig(func, |sig| sig.linkage()) == Linkage::External {
+                continue;
+            }
             let mut fb = self.builder.func_builder::<InstInserter>(func);
             let entry = fb.append_block();
             fb.switch_to_block(entry);

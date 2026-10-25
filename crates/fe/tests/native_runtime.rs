@@ -114,6 +114,82 @@ fn native_panics_report_on_stderr_after_flushing_stdout() {
 }
 
 #[test]
+fn native_tests_check_expected_reverts() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("reverts.fe");
+    fs::write(
+        &source,
+        r#"
+fn bump(_ x: u8) -> u8 {
+    x + 1
+}
+
+#[test(should_revert, panic = 0x11)]
+fn panic_code_matches() {
+    let _ = bump(255)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn panic_code_differs() {
+    let _ = bump(255)
+}
+
+#[test(should_revert, selector = 0x08c379a0)]
+fn selector_matches() {
+    assert!(false, "boom")
+}
+
+#[test(should_revert)]
+fn any_revert() {
+    core::panic_code(0x01)
+}
+
+#[test(should_revert)]
+fn trap_is_not_a_revert() {
+    core::panic()
+}
+
+#[test(should_revert)]
+fn no_revert() {}
+
+#[test]
+fn unexpected_revert() {
+    let _ = bump(255)
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert!(!result.status.success(), "O{level}: {output}");
+        for passing in ["panic_code_matches", "selector_matches", "any_revert"] {
+            assert!(
+                output.contains(&format!("] {passing}\n")),
+                "O{level}: {output}"
+            );
+            assert!(
+                !output.contains(&format!("    {passing}\n")),
+                "O{level}: {output}"
+            );
+        }
+        for failure in [
+            "Expected revert data 0x4e487b710000000000000000000000000000000000000000000000000000000000000032, but got: 0x4e487b710000000000000000000000000000000000000000000000000000000000000011",
+            "Expected test to revert, but it failed with: native test failed (signal: 6 (SIGABRT)",
+            "Expected test to revert, but it succeeded",
+            "Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000011",
+            "test result: FAILED. 3 passed; 4 failed",
+        ] {
+            assert!(output.contains(failure), "O{level}: {output}");
+        }
+    }
+}
+
+#[test]
 fn native_buffer_word_writes_preserve_unaligned_values_and_zero_gaps() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("word_writes.fe");
@@ -626,23 +702,17 @@ fn noisy() {
 fn native_runner_rejects_evm_attributes_and_trace_options() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("unsupported.fe");
-    for attribute in ["should_revert", "balance = 10"] {
-        fs::write(
-            &source,
-            format!("#[test({attribute})]\nfn evm_test() {{}}\n"),
-        )
+    fs::write(&source, "#[test(balance = 10)]\nfn evm_test() {}\n").unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["test", "--backend", "native"])
+        .arg(&source)
+        .output()
         .unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
-            .args(["test", "--backend", "native"])
-            .arg(&source)
-            .output()
-            .unwrap();
-        assert!(!result.status.success());
-        assert!(
-            String::from_utf8_lossy(&result.stdout).contains("cannot use EVM"),
-            "{result:?}"
-        );
-    }
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stdout).contains("cannot use the EVM `balance` attribute"),
+        "{result:?}"
+    );
     for option in ["--trace-evm", "--show-logs", "--call-trace"] {
         let result = Command::new(env!("CARGO_BIN_EXE_fe"))
             .args(["test", "--backend", "native", option])
