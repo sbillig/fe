@@ -21,7 +21,7 @@ impl Cell {
 }
 
 fn at(_ words: MemArray<u256>, _ k: u256) -> (u256, ref u256) {
-    (k, ref words[k as usize])
+    (k, ref words[k.downcast_unchecked()])
 }
 
 // S-59. Accepted: `v` is a copy.

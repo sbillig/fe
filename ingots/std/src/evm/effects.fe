@@ -407,16 +407,17 @@ fn contract_init_code<C: Contract>(_ args: own C::InitArgs) -> MemBuffer {
     let init_len = C::init_code_len()
     let init_off = C::init_code_offset()
     if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-        let init_code = unsafe { MemBuffer::alloc_uninit(init_len as usize) }
+        let init_code = unsafe { MemBuffer::alloc_uninit(init_len.downcast_unchecked()) }
         unsafe { ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len) }
         init_code
     } else {
         let encoded = encode_abi_payload<C::InitArgs>(args)
-        let init_code = unsafe { MemBuffer::alloc_uninit(init_len as usize + encoded.len()) }
+        let code_len: usize = init_len.downcast_unchecked()
+        let init_code = unsafe { MemBuffer::alloc_uninit(code_len + encoded.len()) }
         unsafe {
             ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
             ptr::copy(
-                dest: ptr::offset_bytes(init_code.ptr(), init_len),
+                dest: ptr::offset_bytes(init_code.ptr(), code_len),
                 source: encoded.span(),
             )
         }
@@ -512,7 +513,7 @@ impl CallOutcome {
 fn finish_raw_call(_ success: bool, _ ret: mut MemBuffer) -> RawCallOutcome {
     let returndata_len = ops::returndatasize()
     let written = if returndata_len < ret.capacity() as u256 {
-        returndata_len as usize
+        returndata_len.downcast_unchecked()
     } else {
         ret.capacity()
     }
@@ -541,12 +542,12 @@ fn prepare_copy_destination(
     if len != 0 && dest_offset > dest.len() as u256 {
         unsafe {
             ptr::zero_bytes(
-                ptr: ptr::offset_bytes(dest.ptr(), dest.len() as u256),
-                len: dest_offset - dest.len() as u256,
+                ptr: ptr::offset_bytes(dest.ptr(), dest.len()),
+                len: (dest_offset - dest.len() as u256).downcast_unchecked(),
             )
         }
     }
-    ptr::offset_bytes(dest.ptr(), dest_offset)
+    ptr::offset_bytes(dest.ptr(), dest_offset.downcast_unchecked())
 }
 
 /// High-level contract calls with ABI encoding/decoding.
@@ -863,14 +864,14 @@ impl Evm {
 
     /// Return a calldata view over the current Solidity call arguments.
     pub fn args(self) -> CallData {
-        CallData::with_base(size_of<Sol::Selector>())
+        CallData::with_base(size_of<Sol::Selector>() as u256)
     }
 
     /// Decode the current Solidity call arguments, skipping the 4-byte selector.
     pub fn decode_args<T>(self) -> T
         where T: Decode<Sol> + AbiSize
     {
-        decode_input_at(self.input(), size_of<Sol::Selector>())
+        decode_input_at(self.input(), size_of<Sol::Selector>() as u256)
     }
 }
 
@@ -955,7 +956,7 @@ impl Ctx for Evm {
                 len,
             )
         }
-        let end = (dest_offset + len) as usize
+        let end: usize = (dest_offset + len).downcast_unchecked()
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -1006,7 +1007,7 @@ impl RawOps for Evm {
                 len,
             )
         }
-        let end = (dest_offset + len) as usize
+        let end: usize = (dest_offset + len).downcast_unchecked()
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -1037,7 +1038,7 @@ impl RawOps for Evm {
                 len,
             )
         }
-        let end = (dest_offset + len) as usize
+        let end: usize = (dest_offset + len).downcast_unchecked()
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -1065,7 +1066,7 @@ impl RawOps for Evm {
                 len,
             )
         }
-        let end = (dest_offset + len) as usize
+        let end: usize = (dest_offset + len).downcast_unchecked()
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -1146,14 +1147,14 @@ where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
     let payload_size = abi_payload_size(message)
-    let buffer = unsafe { MemBuffer::alloc_uninit(selector_size as usize + payload_size as usize) }
+    let buffer = unsafe { MemBuffer::alloc_uninit(selector_size + payload_size.downcast_unchecked()) }
     let payload = ptr::offset_bytes(buffer.ptr(), selector_size)
     unsafe {
         // The selector word's low bytes are overwritten by the payload, or
         // lie past the buffer's end in unallocated memory.
         ops::mstore(addr: buffer.ptr(), value: (selector as u256) << 224)
         // The payload bytes, zeroed for the encoding to fill.
-        ptr::zero_bytes(payload, payload_size)
+        ptr::zero_bytes(payload, payload_size.downcast_unchecked())
         message.encode(AbiFrame::from_raw_parts(ptr: payload, len: payload_size))
     }
     buffer
@@ -1170,7 +1171,7 @@ where M: MsgVariant<Sol> + Encode<Sol>
 /// Copy the complete current returndata into a fresh owner.
 pub fn copy_returndata() -> MemBuffer {
     let ret_len = ops::returndatasize()
-    let buffer = unsafe { MemBuffer::alloc_uninit(ret_len as usize) }
+    let buffer = unsafe { MemBuffer::alloc_uninit(ret_len.downcast_unchecked()) }
     unsafe { ops::returndatacopy(dest: buffer.ptr(), offset: 0, len: ret_len) }
     buffer
 }
@@ -1302,7 +1303,7 @@ impl ContractHost for Evm {
             self.abort()
         }
         let args_len = code_size - args_offset
-        var args = MemBuffer::alloc(args_len as usize)
+        var args = MemBuffer::alloc(args_len.downcast_unchecked())
         self.codecopy(
             dest: mut args,
             dest_offset: 0,
@@ -1315,7 +1316,7 @@ impl ContractHost for Evm {
     fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
-        var buffer = MemBuffer::alloc(len as usize)
+        var buffer = MemBuffer::alloc(len.downcast_unchecked())
         self.codecopy(
             dest: mut buffer,
             dest_offset: 0,
@@ -1343,7 +1344,7 @@ impl ContractHost for Evm {
                 unsafe {
                     value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
-                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE as usize),
+                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE.downcast_unchecked()),
                     )
                 }
             } else if T::HEAD_SIZE <= 64 {
@@ -1351,11 +1352,11 @@ impl ContractHost for Evm {
                 unsafe {
                     value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
-                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE as usize),
+                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE.downcast_unchecked()),
                     )
                 }
             } else {
-                let out = MemBuffer::alloc(T::HEAD_SIZE as usize)
+                let out = MemBuffer::alloc(T::HEAD_SIZE.downcast_unchecked())
                 value.encode(unsafe { AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE) })
                 self.return_data(data: out.span())
             }

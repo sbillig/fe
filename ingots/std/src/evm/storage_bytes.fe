@@ -6,7 +6,7 @@ use super::effects::{RawStorage, storage_at}
 use super::storage_map::{StorageKey, StorageMap}
 
 fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
-    ptr::offset_bytes(base, bytes)
+    ptr::offset_bytes(base, bytes.downcast_unchecked())
 }
 
 /// Round `len` up to the number of whole EVM words required to store it.
@@ -70,7 +70,7 @@ unsafe fn copy_input_words_to_memory<I: ByteInput>(_ input: I, _ dest: *u8, len:
 /// `data_ptr` is a raw calldata byte offset.
 pub fn encode_bytes_return_from_calldata(data_ptr: u256, len: u256) -> ! {
     let total_len = 64 + ceil_words(len) * 32
-    let ptr = ptr::alloc_bytes(total_len)
+    let ptr = ptr::alloc_bytes(total_len.downcast_saturate())
     unsafe {
         ops::mstore(addr: ptr, value: 32)
         ops::mstore(addr: offset(ptr, 32), value: len)
@@ -84,7 +84,7 @@ pub fn encode_bytes_return_from_calldata(data_ptr: u256, len: u256) -> ! {
 pub fn encode_bytes_return_view<I: ByteInput>(view: I) -> ! {
     let len = view.len()
     let total_len = 64 + ceil_words(len) * 32
-    let ptr = ptr::alloc_bytes(total_len)
+    let ptr = ptr::alloc_bytes(total_len.downcast_saturate())
     unsafe {
         ops::mstore(addr: ptr, value: 32)
         ops::mstore(addr: offset(ptr, 32), value: len)
@@ -98,7 +98,7 @@ pub fn encode_bytes_return_view<I: ByteInput>(view: I) -> ! {
 /// `data_ptr` is a raw calldata byte offset.
 pub fn emit_bytes_event(topic0: u256, data_ptr: u256, data_len: u256) {
     let total_len = 64 + ceil_words(data_len) * 32
-    let ptr = ptr::alloc_bytes(total_len)
+    let ptr = ptr::alloc_bytes(total_len.downcast_saturate())
     unsafe {
         ops::mstore(addr: ptr, value: 32)
         ops::mstore(addr: offset(ptr, 32), value: data_len)
@@ -112,7 +112,7 @@ pub fn emit_bytes_event(topic0: u256, data_ptr: u256, data_len: u256) {
 pub fn emit_bytes_event_view<I: ByteInput>(topic0: u256, view: I) {
     let len = view.len()
     let total_len = 64 + ceil_words(len) * 32
-    let ptr = ptr::alloc_bytes(total_len)
+    let ptr = ptr::alloc_bytes(total_len.downcast_saturate())
     unsafe {
         ops::mstore(addr: ptr, value: 32)
         ops::mstore(addr: offset(ptr, 32), value: len)
@@ -195,20 +195,20 @@ impl<K: StorageKey + Copy> StorageBytes<K> {
     pub fn to_memory(self, key: K) -> ptr::MemBuffer {
         let len = self.lengths[key]
         let word_count = ceil_words(len)
-        var buffer = unsafe { ptr::MemBuffer::alloc_uninit((word_count * 32) as usize) }
+        var buffer = unsafe { ptr::MemBuffer::alloc_uninit((word_count * 32).downcast_unchecked()) }
 
         var i: u256 = 0
         while i < word_count {
             unsafe {
                 ops::mstore(
-                    addr: ptr::offset_bytes(buffer.ptr(), i * 32),
+                    addr: ptr::offset_bytes(buffer.ptr(), (i * 32).downcast_unchecked()),
                     value: self.words[(key, i)],
                 )
             }
             i += 1
         }
 
-        unsafe { buffer.set_len(len as usize) }
+        unsafe { buffer.set_len(len.downcast_unchecked()) }
         buffer
     }
 
@@ -225,7 +225,7 @@ impl<K: StorageKey + Copy> StorageBytes<K> {
         let len = self.lengths[key]
         let word_count = ceil_words(len)
         let total_len = 64 + word_count * 32
-        let ptr = ptr::alloc_bytes(total_len)
+        let ptr = ptr::alloc_bytes(total_len.downcast_saturate())
         unsafe {
             ops::mstore(addr: ptr, value: 32)
             ops::mstore(addr: offset(ptr, 32), value: len)

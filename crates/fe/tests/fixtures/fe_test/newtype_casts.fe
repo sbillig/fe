@@ -79,9 +79,9 @@ fn keeps_an_aggregate_leaf() {
 
 #[test]
 fn rewraps_pointers() {
-    let addr: u256 = 64
+    let addr: usize = 64
     let mem = MemWrap { p: addr as *u256 } as MemOther
-    assert(mem.q as u256 == 64)
+    assert(mem.q as usize == 64)
     let slot: u256 = 7
     let stor = StorWrap { p: slot as StorPtr<u256> } as StorOther
     assert(stor.q as u256 == 7)

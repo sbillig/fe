@@ -5,5 +5,5 @@ struct S<const N: usize> {
 }
 
 fn size() -> u256 {
-    core::size_of<S<0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff>>()
+    core::size_of<S<0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff>>() as u256
 }

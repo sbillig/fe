@@ -156,13 +156,13 @@ impl SolSlot {
     /// Reads the Solidity `bytes` stored in this slot.
     pub fn read_bytes(self) -> Bytes {
         let (data, len, size) = self.load_payload()
-        unsafe { Bytes::from_abi_tail(data, len: len as usize, size) }
+        unsafe { Bytes::from_abi_tail(data, len: len.downcast_unchecked(), size) }
     }
 
     /// Reads the Solidity `string` stored in this slot.
     pub fn read_string(self) -> DynString {
         let (data, len, size) = self.load_payload()
-        unsafe { DynString::from_abi_tail(data, len: len as usize, size) }
+        unsafe { DynString::from_abi_tail(data, len: len.downcast_unchecked(), size) }
     }
 
     /// Assigns Solidity `bytes` to this slot, clearing words a previous,
@@ -180,7 +180,7 @@ impl SolSlot {
         let head = self.payload.head
         let len = stored_len(head)
         let size = 32 + word_count(len) * 32
-        let data = ptr::alloc_bytes(size)
+        let data = ptr::alloc_bytes(size.downcast_saturate())
         unsafe {
             store_word(ptr: data, value: len)
             // Only the `len` data bytes are kept, so the ABI padding is zero.
@@ -192,7 +192,7 @@ impl SolSlot {
                 var i: u256 = 0
                 while i < word_count(len) {
                     let word = leading_bytes(self.payload[i], count: len - i * 32)
-                    store_word(ptr: ptr::offset_bytes(data, 32 + i * 32), value: word)
+                    store_word(ptr: ptr::offset_bytes(data, (32 + i * 32).downcast_unchecked()), value: word)
                     i += 1
                 }
             }

@@ -100,7 +100,7 @@ uses (evm: mut Evm)
     assert!(blob.word() != 0)
 
     let payload_len: u256 = 64
-    let data_ptr = ptr::alloc_bytes(payload_len + 32)
+    let data_ptr = ptr::alloc_bytes((payload_len + 32).downcast_saturate())
     unsafe { store_word(ptr: data_ptr, value: payload_len) }
     unsafe {
         store_word(
@@ -117,7 +117,7 @@ uses (evm: mut Evm)
     unsafe {
         set_bytes(
             addr: blob,
-            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_len + 32),
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: payload_len + 32),
         )
     }
 
@@ -163,7 +163,7 @@ uses (evm: mut Evm)
     unsafe {
         set_bytes(
             addr: blob,
-            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: 128),
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: 128),
         )
     }
 
@@ -208,7 +208,7 @@ uses (evm: mut Evm)
     unsafe {
         set_bytes(
             addr: blob,
-            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: 64),
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: 64),
         )
     }
 

@@ -2154,11 +2154,11 @@ mod tests {
         let ir = native_pointer_object_ir(
             "native_memzero.fe",
             r#"
-fn zero_buffer(ptr: *u8, len: u256) {
+fn zero_buffer(ptr: *u8, len: usize) {
     unsafe { core::ptr::zero_bytes(ptr, len) }
 }
 
-pub fn main(ptr: *u8, len: own u256) -> i32 {
+pub fn main(ptr: *u8, len: own usize) -> i32 {
     zero_buffer(ptr, len)
     0
 }

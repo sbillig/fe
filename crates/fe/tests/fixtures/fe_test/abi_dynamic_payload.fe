@@ -80,7 +80,7 @@ uses (evm: mut Evm)
 {
     let payload_len: u256 = 33
     let payload_size: u256 = 96
-    let data_ptr = ptr::alloc_bytes(payload_size)
+    let data_ptr = ptr::alloc_bytes(payload_size.downcast_saturate())
 
     unsafe { store_word(ptr: data_ptr, value: payload_len) }
     unsafe {
@@ -96,7 +96,7 @@ uses (evm: mut Evm)
         )
     }
 
-    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_size) }
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: payload_size) }
 }
 
 fn one_byte_bytes() -> Bytes
@@ -104,7 +104,7 @@ uses (evm: mut Evm)
 {
     let payload_len: u256 = 1
     let payload_size: u256 = 64
-    let data_ptr = ptr::alloc_bytes(payload_size)
+    let data_ptr = ptr::alloc_bytes(payload_size.downcast_saturate())
 
     unsafe { store_word(ptr: data_ptr, value: payload_len) }
     unsafe {
@@ -114,7 +114,7 @@ uses (evm: mut Evm)
         )
     }
 
-    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_size) }
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len.downcast_unchecked(), size: payload_size) }
 }
 
 fn oversized_one_word_bytes() -> Bytes {

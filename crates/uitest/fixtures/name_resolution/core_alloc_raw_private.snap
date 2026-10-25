@@ -11,7 +11,7 @@ error[2-0003]: `alloc_raw` is not visible
    │
    ┌─ src/ptr.fe:22:8
    │
-22 │     fn alloc_raw(_ size: u256) -> *u8
+22 │     fn alloc_raw(_ size: usize) -> *u8
    │        --------- `alloc_raw` is defined here
 
 error[2-0003]: `alloc_bytes_unchecked` is not visible
@@ -22,5 +22,5 @@ error[2-0003]: `alloc_bytes_unchecked` is not visible
      │
      ┌─ src/ptr.fe:1180:22
      │
-1180 │ pub(ingot) unsafe fn alloc_bytes_unchecked(_ len: u256) -> *u8 {
+1180 │ pub(ingot) unsafe fn alloc_bytes_unchecked(_ len: usize) -> *u8 {
      │                      --------------------- `alloc_bytes_unchecked` is defined here

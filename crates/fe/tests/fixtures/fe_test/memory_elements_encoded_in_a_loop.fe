@@ -17,9 +17,9 @@ impl Copy for Entry {}
 fn encode_entries(_ entries: MemSlice<Entry>) -> *u8 {
     let len = entries.len()
     let size = 32 + len as u256 * 64
-    let data = ptr::alloc_bytes(size)
+    let data = ptr::alloc_bytes(size.downcast_saturate())
     unsafe {
-        ptr::zero_bytes(data, size)
+        ptr::zero_bytes(data, size.downcast_unchecked())
         store_word(ptr: data, value: len as u256)
     }
     let out = unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32), len: size - 32) }

@@ -130,14 +130,14 @@ pub contract Receiver {
         OnErc721Received { operator, from, tokenId, data } -> Bytes4 uses (reply, raw: mut RawOps) {
             let expected = operator.word() == 7 && from.word() == 2 && tokenId == 42 && data.len() == 0
             let alloc = if reply.len < 32 || reply.len == REVERT { 32 } else { reply.len }
-            var out = ptr::MemBuffer::alloc(alloc as usize)
+            var out = ptr::MemBuffer::alloc(alloc.downcast_unchecked())
             if reply.len == REVERT {
                 unsafe { store_word(ptr: out.ptr(), value: 0xdeadbeefcafebabe << 192) }
                 unsafe { out.set_len(32) }
                 raw.revert(data: out.span())
             }
             unsafe { store_word(ptr: out.ptr(), value: if expected { reply.word } else { 0 }) }
-            unsafe { out.set_len(reply.len as usize) }
+            unsafe { out.set_len(reply.len.downcast_unchecked()) }
             raw.return_data(data: out.span())
         }
     }

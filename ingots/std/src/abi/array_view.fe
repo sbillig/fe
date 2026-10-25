@@ -92,7 +92,7 @@ pub fn decode_array_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) ->
     if (stride == 0 && len >= 0x10000000000000000) || (stride != 0 && len > (input_len - elems) / stride) {
         Sol::decode_error()
     }
-    ArrayView { input, elems, len: len as usize }
+    ArrayView { input, elems, len: len.downcast_unchecked() }
 }
 
 impl<I, T> ArrayView<I, T>

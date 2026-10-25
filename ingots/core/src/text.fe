@@ -21,7 +21,7 @@ pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
     i = 0
     while i < N {
         let part = parts[i].payload_span()
-        unsafe { ptr::copy(dest: ptr::offset_bytes(data, offset as u256), source: part) }
+        unsafe { ptr::copy(dest: ptr::offset_bytes(data, offset), source: part) }
         offset += part.len()
         i += 1
     }
@@ -42,7 +42,7 @@ pub fn decimal(_ value: u256) -> DynString {
     var i = digits
     while i > 0 {
         i -= 1
-        unsafe { *ptr::offset_bytes(data, i as u256) = ((remaining % 10) + 48).downcast_truncate() }
+        unsafe { *ptr::offset_bytes(data, i) = ((remaining % 10) + 48).downcast_truncate() }
         remaining /= 10
     }
     out
@@ -59,7 +59,7 @@ pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i as u256) = if nibble < 10 { nibble + 48 } else { nibble + 87 } }
+        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + 48 } else { nibble + 87 } }
         remaining >>= 4
     }
     out
@@ -75,7 +75,7 @@ pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i as u256) = if nibble < 10 { nibble + 48 } else { nibble + 55 } }
+        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + 48 } else { nibble + 55 } }
         remaining >>= 4
     }
     out
@@ -160,7 +160,7 @@ pub fn base64(_ data: MemSpan) -> DynString {
     let out = DynString::zeroed(4 * ((len + 2) / 3))
     let dest = out.payload_span().ptr()
     var i: usize = 0
-    var j: u256 = 0
+    var j: usize = 0
     while i < len {
         let a = data.byte_at(i)
         let b = if i + 1 < len { data.byte_at(i + 1) } else { 0 }
@@ -193,7 +193,7 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
         padding = if input.byte_at(len - 2) == 61 { 2 } else { 1 }
     }
     let out_len = len / 4 * 3 - padding
-    let out = ptr::alloc_bytes(out_len as u256)
+    let out = ptr::alloc_bytes(out_len)
     var i: usize = 0
     var j: usize = 0
     while i < len {
@@ -205,12 +205,12 @@ pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
             return Option::None
         }
         let group = (a << 18) | (b << 12) | (c << 6) | d
-        unsafe { *ptr::offset_bytes(out, j as u256) = (group >> 16).downcast_truncate() }
+        unsafe { *ptr::offset_bytes(out, j) = (group >> 16).downcast_truncate() }
         if j + 1 < out_len {
-            unsafe { *ptr::offset_bytes(out, (j + 1) as u256) = (group >> 8).downcast_truncate() }
+            unsafe { *ptr::offset_bytes(out, j + 1) = (group >> 8).downcast_truncate() }
         }
         if j + 2 < out_len {
-            unsafe { *ptr::offset_bytes(out, (j + 2) as u256) = group.downcast_truncate() }
+            unsafe { *ptr::offset_bytes(out, j + 2) = group.downcast_truncate() }
         } else if (group & 0xff) != 0 || (padding == 2 && (group & 0xffff) != 0) {
             return Option::None
         }
@@ -295,7 +295,7 @@ pub fn base58(_ data: MemSpan) -> DynString {
     let dest = out.payload_span().ptr()
     i = 0
     while i < zeros {
-        unsafe { *ptr::offset_bytes(dest, i as u256) = 49 }
+        unsafe { *ptr::offset_bytes(dest, i) = 49 }
         i += 1
     }
     var pos = zeros + digits
@@ -305,7 +305,7 @@ pub fn base58(_ data: MemSpan) -> DynString {
         var n: u256 = 0
         while n < 10 && pos > zeros {
             pos -= 1
-            unsafe { *ptr::offset_bytes(dest, pos as u256) = base58_digit((limb % 58).downcast_truncate()) }
+            unsafe { *ptr::offset_bytes(dest, pos) = base58_digit((limb % 58).downcast_truncate()) }
             limb /= 58
             n += 1
         }
@@ -356,8 +356,8 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         }
         bytes += (used - 1) * 24
     }
-    let out = ptr::alloc_bytes((zeros + bytes) as u256)
-    unsafe { ptr::zero_bytes(out, zeros as u256) }
+    let out = ptr::alloc_bytes(zeros + bytes)
+    unsafe { ptr::zero_bytes(out, zeros) }
     var pos = zeros + bytes
     var k: usize = 0
     while pos > zeros {
@@ -365,7 +365,7 @@ pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
         var n: u256 = 0
         while n < 24 && pos > zeros {
             pos -= 1
-            unsafe { *ptr::offset_bytes(out, pos as u256) = limb.downcast_truncate() }
+            unsafe { *ptr::offset_bytes(out, pos) = limb.downcast_truncate() }
             limb >>= 8
             n += 1
         }
@@ -442,7 +442,7 @@ pub fn concat_slice(_ parts: ptr::MemSlice<DynString>) -> DynString {
         let part = unsafe { (*parts.ptr_at(i)).payload_span() }
         unsafe {
             ptr::copy(
-                dest: ptr::offset_bytes(out.payload_span().ptr(), offset as u256),
+                dest: ptr::offset_bytes(out.payload_span().ptr(), offset),
                 source: part,
             )
         }

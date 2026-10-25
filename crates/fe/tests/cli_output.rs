@@ -338,11 +338,11 @@ fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
     fs::write(
         &file,
         r#"
-fn type_size<T>() -> u256 {
+fn type_size<T>() -> usize {
     core::size_of<T>()
 }
 
-fn trigger() -> u256 {
+fn trigger() -> usize {
     type_size<[u256; 0x8000000000000000]>()
 }
 "#,
