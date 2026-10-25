@@ -2919,7 +2919,6 @@ fn runtime_abstract_param_ty<'db>(
 
 #[cfg(test)]
 mod tests {
-    use crate::RuntimeTarget;
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::{
@@ -2989,13 +2988,9 @@ mod tests {
         top_mod: hir::hir_def::TopLevelMod<'db>,
         name: &str,
     ) -> RuntimeInterfaceSignature<'db> {
-        runtime_instance_for_semantic(
-            db,
-            semantic_instance_for_named_func(db, top_mod, name),
-            RuntimeTarget::Evm,
-        )
-        .interface_signature(db)
-        .clone()
+        runtime_instance_for_semantic(db, semantic_instance_for_named_func(db, top_mod, name))
+            .interface_signature(db)
+            .clone()
     }
 
     fn func_by_name<'db>(
@@ -3259,7 +3254,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
         // fixture green while silently changing the calling convention; these assertions fail
         // loudly instead.
         let semantic = semantic_instance_for_named_func(&db, top_mod, "permute");
-        let instance = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
+        let instance = runtime_instance_for_semantic(&db, semantic);
         let signature = instance.interface_signature(&db);
         let body = instance.body(&db);
 
@@ -3324,7 +3319,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
         // unrooted-read optimization must not rewrite that signature-pinned carrier to an
         // aggregate value merely because the `while let` pattern reads it by place.
         let semantic = semantic_instance_for_named_func(&db, top_mod, "sum_descending_while_let");
-        let instance = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
+        let instance = runtime_instance_for_semantic(&db, semantic);
         let signature = instance.interface_signature(&db);
         let body = instance.body(&db);
         let param = signature
@@ -3423,7 +3418,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "pick_ac_mut");
-        let instance = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
+        let instance = runtime_instance_for_semantic(&db, semantic);
         let normalized = normalize_semantic_body(&db, semantic)
             .unwrap_or_else(|err| panic!("failed to normalize pick_ac_mut: {err:?}"));
         let facts = BodyStaticFacts::new(&db, &normalized);
@@ -3496,11 +3491,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
             .expect("erc20 fixture should define a contract");
         let init_key = root_semantic_instance_key(&db, BodyOwner::ContractInit { contract })
             .unwrap_or_else(|err| panic!("failed to build root init semantic key: {err:?}"));
-        let init = runtime_instance_for_semantic(
-            &db,
-            SemanticInstance::new(&db, init_key),
-            RuntimeTarget::Evm,
-        );
+        let init = runtime_instance_for_semantic(&db, SemanticInstance::new(&db, init_key));
         let grant = init
             .calls(&db)
             .iter()
@@ -3586,19 +3577,15 @@ fn takes_empty(_ host: Empty, value: u256) -> u256 {
             role: ScalarRole::Plain,
         });
         let mut override_calls = 0;
-        let instance = runtime_instance_for_semantic_with_visible_param_overrides(
-            &db,
-            semantic,
-            RuntimeTarget::Evm,
-            |entry| {
+        let instance =
+            runtime_instance_for_semantic_with_visible_param_overrides(&db, semantic, |entry| {
                 if matches!(entry.binding, LocalBinding::Param { idx: 0, .. }) {
                     override_calls += 1;
                     Some(forced_host_class.clone())
                 } else {
                     None
                 }
-            },
-        );
+            });
         let params = instance.key(&db).params(&db);
         let normalized = normalize_semantic_body(&db, semantic)
             .unwrap_or_else(|err| panic!("failed to normalize takes_empty: {err:?}"));
@@ -3743,7 +3730,7 @@ uses (slot: Slot<u256>)
                 BoundaryMatcher::class_satisfies_boundary(&db, &plan.class, &plan.boundary),
                 "provider-backed effect binding plan should keep an actualized boundary matching its chosen runtime class:\nplan={plan:#?}"
             );
-            let _ = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm).body(&db);
+            let _ = runtime_instance_for_semantic(&db, semantic).body(&db);
         }
     }
 
@@ -3782,7 +3769,7 @@ uses (slot: Slot<u256>)
             )
             .unwrap_or_else(|err| panic!("failed to build recv-arm semantic key: {err:?}")),
         );
-        let instance = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
+        let instance = runtime_instance_for_semantic(&db, semantic);
         let normalized = normalize_semantic_body(&db, semantic)
             .unwrap_or_else(|err| panic!("failed to normalize LockAndCheck: {err:?}"));
         let facts = BodyStaticFacts::new(&db, &normalized);
@@ -3934,7 +3921,7 @@ fn caller() -> u256 {
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
         let semantic = semantic_instance_for_named_func(&db, top_mod, "caller");
-        let instance = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
+        let instance = runtime_instance_for_semantic(&db, semantic);
         let normalized = normalize_semantic_body(&db, semantic)
             .unwrap_or_else(|err| panic!("failed to normalize caller: {err:?}"));
         let facts = BodyStaticFacts::new(&db, &normalized);
@@ -4036,7 +4023,7 @@ fn caller() -> u256 {
             )
             .unwrap_or_else(|err| panic!("failed to build recv-arm semantic key: {err:?}")),
         );
-        let instance = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm);
+        let instance = runtime_instance_for_semantic(&db, semantic);
         let normalized = normalize_semantic_body(&db, semantic)
             .unwrap_or_else(|err| panic!("failed to normalize SelectAndMutate: {err:?}"));
         let facts = BodyStaticFacts::new(&db, &normalized);

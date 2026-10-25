@@ -32,6 +32,7 @@ tracing.workspace = true
 [dev-dependencies]
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
 dir-test.workspace = true
+salsa.workspace = true
 test-utils.workspace = true
 url.workspace = true
 hir = { workspace = true, features = ["testutils"] }

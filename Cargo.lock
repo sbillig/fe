@@ -2308,6 +2308,7 @@ dependencies = [
  "rayon",
  "ruint",
  "rustc-hash 2.1.1",
+ "salsa",
  "serde",
  "serde_json",
  "smallvec 1.15.1",

@@ -3,10 +3,11 @@
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 
-use common::InputDb;
+use common::{InputDb, compilation::Target};
 use driver::DriverDataBase;
 use fe_codegen::{NativeOutputSelection, NativeTarget, OptLevel, emit_module_native_artifacts};
 use mir::{build_native_executable_package, runtime::format_runtime_package};
+use salsa::Setter;
 use url::Url;
 
 fn with_top_mod_for_source<T>(
@@ -15,6 +16,9 @@ fn with_top_mod_for_source<T>(
     f: impl for<'db> FnOnce(&'db DriverDataBase, hir::hir_def::TopLevelMod<'db>) -> T,
 ) -> T {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let url = Url::parse(&format!("file:///{name}")).expect("test URL should parse");
     let file = db.workspace().touch(&mut db, url, Some(source.to_string()));
     let top_mod = db.top_mod(file);

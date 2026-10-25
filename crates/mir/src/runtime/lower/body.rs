@@ -1,3 +1,4 @@
+use common::compilation::Target;
 use hir::analysis::ty::AddressSpace;
 use std::mem::size_of;
 
@@ -41,7 +42,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     db::MirDb,
-    instance::{RuntimeInstance, RuntimeInstanceKey, RuntimeTarget, get_or_build_runtime_instance},
+    instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
     resolve_runtime_place_address_class,
     runtime::place::{
         project_field_class, project_index_class, project_variant_field_class, runtime_place_lane,
@@ -756,8 +757,8 @@ impl<'db> RmirEmitter<'db> {
         layout_for_ty_in_env(self.db, self.env, ty)
     }
 
-    fn target(&self) -> RuntimeTarget {
-        self.instance.target(self.db)
+    fn target(&self) -> Target {
+        self.db.compilation_settings().target(self.db)
     }
 
     fn current_semantic_key(&self) -> SemanticInstanceKey<'db> {
@@ -3161,7 +3162,7 @@ impl<'db> RmirEmitter<'db> {
             runtime_classes,
         );
         let signature = runtime_declaration_signature(self.db, runtime_key);
-        let callee = get_or_build_runtime_instance(self.db, runtime_key, self.target());
+        let callee = get_or_build_runtime_instance(self.db, runtime_key);
         if callee.exit_behavior(self.db) == RuntimeExitBehavior::NeverReturns {
             self.set_terminator(
                 bb,
@@ -3342,7 +3343,7 @@ impl<'db> RmirEmitter<'db> {
         // The argument moved into the call, which destroys nothing; EVM
         // memory is never reclaimed.
         if kind == RuntimeBuiltinFuncKind::Forget
-            || kind == RuntimeBuiltinFuncKind::Free && self.target() == RuntimeTarget::Evm
+            || kind == RuntimeBuiltinFuncKind::Free && self.target() == Target::Evm
         {
             return Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased));
         }
@@ -3351,7 +3352,7 @@ impl<'db> RmirEmitter<'db> {
         if matches!(
             kind,
             RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian
-        ) && self.target() == RuntimeTarget::Evm
+        ) && self.target() == Target::Evm
             && let [value] = args.as_slice()
         {
             let class = self.value_class(*value)?.clone();
@@ -3496,11 +3497,7 @@ impl<'db> RmirEmitter<'db> {
         let semantic_key =
             generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
                 .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
-        runtime_instance_for_semantic(
-            self.db,
-            SemanticInstance::new(self.db, semantic_key),
-            self.target(),
-        )
+        runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
     }
 
     fn assert_panic_payload_encodable(
@@ -5696,7 +5693,7 @@ impl<'db> RmirEmitter<'db> {
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
             params,
         );
-        let callee = get_or_build_runtime_instance(self.db, callee_key, self.target());
+        let callee = get_or_build_runtime_instance(self.db, callee_key);
         let carrier = runtime_declaration_signature(self.db, callee_key)
             .ret
             .map_or(RuntimeCarrier::Erased, RuntimeCarrier::Value);
@@ -6484,7 +6481,6 @@ fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use crate::RuntimeTarget;
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::analysis::{
@@ -6548,7 +6544,7 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
                 &db,
                 identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
             );
-            let body = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm).body(&db);
+            let body = runtime_instance_for_semantic(&db, semantic).body(&db);
             assert_eq!(body.signature.params.len(), 1);
             assert_eq!(
                 body.signature.ret.as_ref(),
