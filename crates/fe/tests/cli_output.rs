@@ -3570,6 +3570,315 @@ fn test_fe_test(fixture: Fixture<&str>) {
     );
 }
 
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+/// `fe_test` fixtures that need the EVM: contracts, storage or EVM
+/// instructions. Sorted.
+const EVM_ONLY_FE_TESTS: &[&str] = &[
+    "abi_array_overflow_revert",
+    "abi_array_view",
+    "abi_bounded_input_len_untrusted",
+    "abi_decode_input_len_bound",
+    "abi_dynamic_payload",
+    "abi_nested_msg_decode_bounds",
+    "abi_signed_int_boundary",
+    "abi_struct",
+    "abi_unpadded_dynamic_payload",
+    "acceptance",
+    "address_call_method",
+    "address_checksum",
+    "address_static_method",
+    "address_validation",
+    "assignment_order",
+    "assoc_type_fields",
+    "assoc_type_lanes",
+    "associated_shape_forwarding",
+    "black_box",
+    "buffer_capacity_bound",
+    "bytes_view_overflow_revert",
+    "call_with_default",
+    "clear_place",
+    "clear_zero_sized",
+    "closure_effects",
+    "closure_trait_effects",
+    "code_backed_array_storage_copy",
+    "code_backed_scalar_field",
+    "code_struct_field_offsets",
+    "coin",
+    "composed_abi_decoder",
+    "const_numeric_extern_intrinsics",
+    "const_trait_provider_contract",
+    "contract_field_explicit_slot",
+    "contract_field_mut_borrow_matrix",
+    "contract_init_fixed_array_arg",
+    "copied_state_words",
+    "ctx",
+    "delegatecall_state_effects",
+    "deploy_and_call",
+    "deposit_contract",
+    "dyn_array_from_slice",
+    "dyn_array_get",
+    "dynamic_offset_overflow",
+    "effect_handle_field_deref",
+    "eip712_domain",
+    "encode_msg_calldata",
+    "entry_space_numbering",
+    "enum",
+    "enum_state_machine",
+    "erc1167_clones",
+    "erc20",
+    "erc20_try_transfer",
+    "erc4337",
+    "erc721_erc1155_try_transfer",
+    "escrow",
+    "event_bytes",
+    "event_dyn_array_address",
+    "event_dyn_array_u256",
+    "event_dyn_string",
+    "event_dynamic_mixed",
+    "event_many_fields",
+    "event_zero_fields",
+    "evm_hashing",
+    "evm_init_code_hash",
+    "factory",
+    "fixed_bytes_constant_return",
+    "for_mut_index_base",
+    "gcd",
+    "generated_type_param_names",
+    "immutable_aggregate_forwarding",
+    "impl_method_does_not_shadow_free_fn",
+    "keccak_words",
+    "lane_accesses",
+    "lane_projection_spaces",
+    "leading_zeros",
+    "library_state_index",
+    "long_error_event_names",
+    "long_string_literals",
+    "loop_base_mutation",
+    "mandelbrot",
+    "mandelbrot_minimal",
+    "maybe_mut_effect_calls",
+    "mem_buffer_word_writes",
+    "mem_replace_take",
+    "mem_vec",
+    "merkle_proof",
+    "method_forwards_memory_mut_borrow",
+    "minimum_gas_calls",
+    "mixed_space_forwarding",
+    "mode_receivers_contract",
+    "msg_array_arg",
+    "msg_enum_field",
+    "msg_multiple_dynamic_bytes",
+    "msg_nested_array_arg",
+    "mul_div",
+    "multicall",
+    "mut_self_storage_receiver_regression",
+    "mutex_lock_slot_no_transient_collision",
+    "nested_index_assignment",
+    "never_returning_recv_returns",
+    "newtype_casts",
+    "non_mem_effect_provider_mut_struct_receiver",
+    "option_mut_scalar_match_regression",
+    "ownable",
+    "packed_encoding",
+    "packed_width_mismatch",
+    "param_patterns",
+    "pattern_accesses",
+    "payable",
+    "payable_return",
+    "per_type_pins",
+    "pinned_bound_layout",
+    "pinned_field_spaces",
+    "pinned_slots",
+    "pointer_first_class",
+    "precompile_in_mut_method",
+    "precompile_wrappers",
+    "product_params",
+    "projected_storage_map_effect_forwarding",
+    "projection_slides",
+    "random",
+    "raw_slot_constructors",
+    "receiver_returns_non_mem_with_same_typed_memory_arg",
+    "recv_arm_variant_paths",
+    "recv_fallback",
+    "recv_short_calldata_selector_guard",
+    "reentrancy_mutex",
+    "reentrancy_mutex_storage_map",
+    "reentrancy_tstor_ptr",
+    "revert_helpers",
+    "runtime_handle_preservation",
+    "runtime_packed_bytes",
+    "safe_erc20",
+    "shape",
+    "signature",
+    "simple_amm",
+    "snapshot_effects",
+    "sol_array_lanes",
+    "sol_compat_int_abi_roundtrip",
+    "sol_compat_int_wrapping",
+    "sol_slot",
+    "sol_storage_collections",
+    "specialized_adt_array_extent",
+    "state_only_sum_shapes",
+    "state_pointers",
+    "staticcall_decode",
+    "storage_bytes_encode_return",
+    "storage_bytes_to_memory",
+    "storage_collection_loops",
+    "storage_heap",
+    "storage_lane_grants",
+    "storage_layout_agreement",
+    "storage_layout_helpers",
+    "storage_map",
+    "storage_map_aggregate_effects",
+    "storage_map_allocating_key",
+    "storage_map_array",
+    "storage_map_effect_projection",
+    "storage_map_enum_payload_methods",
+    "storage_map_field_methods",
+    "storage_map_field_projection",
+    "storage_map_generic_pair_fields",
+    "storage_map_generic_struct_methods",
+    "storage_map_index",
+    "storage_map_key_types",
+    "storage_map_native_values",
+    "storage_map_projection_forwarding",
+    "storage_map_receiver_projection",
+    "storage_map_record_patterns",
+    "storage_map_recursive_views",
+    "storage_map_struct_entries",
+    "storage_map_tuple_keys",
+    "storage_map_tuple_patterns",
+    "storage_map_variant_projection",
+    "storage_nested_array_stride",
+    "storage_packed_array",
+    "storage_packed_projections",
+    "storage_packing",
+    "storage_slots_closures",
+    "text_parse",
+    "time_units",
+    "tslot_values",
+    "tstorptr_field_projection_shapes",
+    "tstorptr_struct_field",
+    "tuple_return_abi_params",
+    "tuple_struct",
+    "typed_calls",
+    "unchecked_signed_negation",
+    "unsafe_splits",
+    "vault",
+    "voting",
+    "wei_units",
+    "wide_function_arguments",
+    "zero_length_array_projections",
+    "zero_option_result",
+];
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+/// `fe_test` fixtures that fail natively at the listed optimization levels,
+/// and why.
+const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[
+    (
+        "raw_record_layout",
+        &["0", "2"],
+        "packed record fields are little-endian natively and big-endian on EVM",
+    ),
+    (
+        "associated_shape_signatures",
+        &["0"],
+        "O0 cannot prove that a local passed to a product's `ref` part stays local",
+    ),
+    (
+        "callable_shape_table",
+        &["0"],
+        "O0 cannot prove that a local passed to a product's `ref` part stays local",
+    ),
+    (
+        "closure_product_params",
+        &["0"],
+        "O0 cannot prove that a local passed to a product's `ref` part stays local",
+    ),
+    (
+        "loop_steps",
+        &["0"],
+        "O0 cannot prove that a local passed to a product's `ref` part stays local",
+    ),
+    (
+        "shape_equalities",
+        &["0"],
+        "O0 cannot prove that a local passed to a product's `ref` part stays local",
+    ),
+    (
+        "spread_params",
+        &["0"],
+        "O0 cannot prove that a local passed to a product's `ref` part stays local",
+    ),
+];
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
+    glob: "*.fe",
+)]
+fn test_fe_test_native(fixture: Fixture<&str>) {
+    let path = fixture.path();
+    let name = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .expect("fixture name");
+    if EVM_ONLY_FE_TESTS.binary_search(&name).is_ok() {
+        let (output, exit_code) = run_fe_main(&["test", "--backend", "native", path]);
+        assert!(
+            exit_code != 0
+                && (output.contains("needs the Evm compilation target")
+                    || output.contains("does not support instruction")),
+            "{name} no longer needs the EVM; remove it from EVM_ONLY_FE_TESTS:\n{output}"
+        );
+        return;
+    }
+    for level in ["0", "2"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--backend",
+            "native",
+            "-O",
+            level,
+            "--jobs",
+            "1",
+            path,
+        ]);
+        match NATIVE_FE_TEST_FAILURES
+            .iter()
+            .find(|(fixture, levels, _)| *fixture == name && levels.contains(&level))
+        {
+            Some((_, _, reason)) => assert_ne!(
+                exit_code, 0,
+                "{name} now passes natively at O{level} ({reason}); remove it from NATIVE_FE_TEST_FAILURES"
+            ),
+            None => assert_eq!(
+                exit_code, 0,
+                "native fe test failed for {path} at O{level}:\n{output}\n\nTo reproduce:\n  cargo run --features cranelift --bin fe -- test --backend native -O {level} --jobs 1 {path}",
+            ),
+        }
+    }
+}
+
 #[test]
 fn test_fe_test_rejects_oversized_balance_literal() {
     let temp = tempdir().expect("tempdir");

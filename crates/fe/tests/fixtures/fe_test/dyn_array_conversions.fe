@@ -108,14 +108,12 @@ fn test_empty_get_panics() {
 
 #[test(should_revert, panic = 0x11)]
 fn test_allocation_size_overflow_panics() {
-    let one: usize = 1
     // Multiplying the element count by 32 must fail before allocation.
-    let _values = MemVec<u256>::with_capacity(one << 251)
+    let _values = MemVec<u256>::with_capacity(usize::max() >> 4)
 }
 
 #[test(should_revert, panic = 0x32)]
 fn test_huge_index_panics_before_offset_calculation() {
     let values = DynArray::from_slice(MemArray<u256>::new_zeroed(1).as_slice())
-    let one: usize = 1
-    let _ = values.get(one << 251)
+    let _ = values.get(usize::max() >> 4)
 }
