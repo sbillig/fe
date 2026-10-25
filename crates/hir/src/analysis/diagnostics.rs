@@ -4345,6 +4345,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::RefutableRecvArmPattern { primary } => primary_diag(
+                Severity::Error,
+                "refutable pattern in a recv arm",
+                "this pattern may not match every value of its variant",
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::LoopDriverBase {
                 primary,
                 driver,
