@@ -18,6 +18,7 @@ use crate::hir_def::{
     Field, FieldIndex, FieldParent, FuncParamMode, IdentId, Partial, Pat, PatId, Stmt, StmtId,
     UnOp,
 };
+use common::ingot::IngotKind;
 use rustc_hash::FxHashSet;
 use std::iter;
 
@@ -361,13 +362,21 @@ impl<'db> UnsafeChecker<'db, '_> {
     }
 
     /// Reports a call, method call or operator whose callee is an
-    /// `unsafe fn`, and a `with` provider through an `unsafe` field that one
-    /// of its `mut` effects writes. A trait method call resolves to the
-    /// trait's declaration, whose unsafety every implementation shares.
+    /// `unsafe fn` or a foreign function, and a `with` provider through an
+    /// `unsafe` field that one of its `mut` effects writes. A trait method
+    /// call resolves to the trait's declaration, whose unsafety every
+    /// implementation shares. A runtime function of an `extern` block
+    /// outside core and std is foreign: nothing checks what it does.
     fn check_call(&mut self, expr: ExprId) {
         if let Some(callable) = self.typed_body.callable_expr(expr)
             && let callee @ CallableDef::Func(func) = callable.callable_def()
-            && func.is_unsafe(self.db)
+            && (func.is_unsafe(self.db)
+                || func.is_extern(self.db)
+                    && !func.is_const(self.db)
+                    && !matches!(
+                        func.top_mod(self.db).ingot(self.db).kind(self.db),
+                        IngotKind::Core | IngotKind::Std
+                    ))
         {
             self.push_unsafe(BodyDiag::UnsafeCallRequiresUnsafe {
                 primary: expr.span(self.body).into(),
