@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::Arc;
 
+use common::InputDb;
 use common::layout::StorageLane;
 use common::origin::OriginExportKey;
 use driver::DriverDataBase;
@@ -303,6 +304,16 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn is_native_target(&self) -> bool {
         is_native_architecture(self.builder.ctx.triple.architecture)
+    }
+
+    /// An address in `space`: a `usize` for memory, whose width is the
+    /// compilation target's, and a word for the EVM's word-addressed spaces.
+    fn address_ty(&self, space: AddressSpace) -> Type {
+        if space == AddressSpace::Memory {
+            int_ty(self.db.compilation_settings().target(self.db).usize_bits() as u16)
+        } else {
+            Type::I256
+        }
     }
 
     fn function_symbol(&self, instance: RuntimeInstance<'db>) -> String {
@@ -782,9 +793,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     let pointee_ty = self.ty_for_class(pointee)?;
                     self.builder.objref_type(pointee_ty)
                 }
-                RefKind::Native | RefKind::Provider { .. } => Type::I256,
+                RefKind::Native => self.address_ty(AddressSpace::Memory),
+                RefKind::Provider { space, .. } => self.address_ty(*space),
             },
-            RuntimeClass::RawAddr { .. } => Type::I256,
+            RuntimeClass::RawAddr { space, .. } => self.address_ty(*space),
         })
     }
 
@@ -2146,11 +2158,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         // The copy writes the bytes alone; zero the last word
                         // first for the padding after them.
                         if bytes.len() % 32 != 0 {
-                            let last = self.index_value((bytes.len() / 32 * 32) as u64);
-                            let addr = self.fb.insert_inst(
-                                Add::new(self.module.inst_set(), dst, last),
-                                Type::I256,
-                            );
+                            let addr =
+                                self.offset_address_unscaled(dst, (bytes.len() / 32 * 32) as u64)?;
                             let zero = self.fb.make_imm_value(I256::zero());
                             self.fb.insert_inst_no_result(Mstore::new(
                                 self.module.inst_set(),
@@ -2180,15 +2189,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             } else {
                                 I256::from_be_bytes(&word)
                             });
-                            let addr = if idx == 0 {
-                                dst
-                            } else {
-                                let offset = self.index_value(32 * idx as u64);
-                                self.fb.insert_inst(
-                                    Add::new(self.module.inst_set(), dst, offset),
-                                    Type::I256,
-                                )
-                            };
+                            let addr = self.offset_address_unscaled(dst, 32 * idx as u64)?;
                             self.fb.insert_inst_no_result(Mstore::new(
                                 self.module.inst_set(),
                                 addr,
@@ -2230,20 +2231,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         copy,
                     ));
                     self.fb.switch_to_block(copy);
-                    // Fe raw addresses and lengths are words; native addresses
-                    // are 64 bits. Reject truncation and wrapping byte ranges.
-                    let max = self.fb.make_imm_value(I256::from(u64::MAX));
-                    for value in [dst, src, len] {
-                        let invalid = self
-                            .fb
-                            .insert_inst(Gt::new(self.module.inst_set(), value, max), Type::I1);
-                        self.emit_empty_revert(invalid)?;
-                    }
+                    // Reject a byte range that wraps the address space.
+                    let max = self.fb.make_imm_value(u64::MAX);
                     for address in [dst, src] {
-                        let available = self.fb.insert_inst(
-                            Sub::new(self.module.inst_set(), max, address),
-                            Type::I256,
-                        );
+                        let available = self
+                            .fb
+                            .insert_inst(Sub::new(self.module.inst_set(), max, address), Type::I64);
                         let invalid = self
                             .fb
                             .insert_inst(Gt::new(self.module.inst_set(), len, available), Type::I1);
@@ -2661,12 +2654,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
+                let address = self.module.address_ty(AddressSpace::Memory);
                 let ptr = self.local_value(*ptr)?;
-                let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
+                let ptr = self.coerce_value_to_ty(ptr, address)?;
                 let offset = self.local_value(*offset)?;
-                let offset = self.cast_scalar(offset, Type::I256)?;
+                let offset = self.cast_scalar(offset, address)?;
                 self.fb
-                    .insert_inst(Add::new(self.module.inst_set(), ptr, offset), Type::I256)
+                    .insert_inst(Add::new(self.module.inst_set(), ptr, offset), address)
             }
             RuntimeBuiltin::Call {
                 gas,
@@ -3619,20 +3613,24 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
+                    let address = self.module.address_ty(space);
                     let idx = self.checked_index_value(&base_class, index)?;
+                    let idx = self.cast_scalar(idx, address)?;
                     let scale = self.ptr_index_stride_for_space(&base_class, space)?;
                     let scaled = if scale == 1 {
                         idx
                     } else {
-                        let scale = self.index_value(scale);
+                        let scale = self
+                            .fb
+                            .make_imm_value(Immediate::from_i256(I256::from(scale), address));
                         self.fb
-                            .insert_inst(Mul::new(self.module.inst_set(), idx, scale), Type::I256)
+                            .insert_inst(Mul::new(self.module.inst_set(), idx, scale), address)
                     };
+                    let addr = self.coerce_value_to_ty(addr, address)?;
                     PlaceTerminal::Ptr {
-                        addr: self.fb.insert_inst(
-                            Add::new(self.module.inst_set(), addr, scaled),
-                            Type::I256,
-                        ),
+                        addr: self
+                            .fb
+                            .insert_inst(Add::new(self.module.inst_set(), addr, scaled), address),
                         space,
                         class: class.clone(),
                         lane: None,
@@ -6460,7 +6458,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         {
             return Ok(self.index_value(constant));
         }
-        let len_value = self.index_value(len);
+        let len_value = self.fb.make_imm_value(Immediate::from_i256(
+            I256::from(len),
+            self.fb.type_of(index),
+        ));
         let in_bounds = self
             .fb
             .insert_inst(Lt::new(self.module.inst_set(), index, len_value), Type::I1);
@@ -6517,11 +6518,18 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         if units == 0 {
             return Ok(base);
         }
-        let base = self.coerce_value_to_ty(base, Type::I256)?;
-        let offset = self.index_value(units);
+        // An address keeps its integer type: a memory address is a `usize`,
+        // a storage slot a word. A typed pointer steps as a memory address.
+        let ty = Some(self.fb.type_of(base))
+            .filter(|ty| ty.is_integral())
+            .unwrap_or_else(|| self.module.address_ty(AddressSpace::Memory));
+        let base = self.coerce_value_to_ty(base, ty)?;
+        let offset = self
+            .fb
+            .make_imm_value(Immediate::from_i256(I256::from(units), ty));
         Ok(self
             .fb
-            .insert_inst(Add::new(self.module.inst_set(), base, offset), Type::I256))
+            .insert_inst(Add::new(self.module.inst_set(), base, offset), ty))
     }
 
     fn offset_ptr_array_elem_address(

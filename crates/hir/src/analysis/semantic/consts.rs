@@ -1,4 +1,4 @@
-use common::{compilation::Target, layout::enum_tag_bits};
+use common::layout::enum_tag_bits;
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
@@ -8,6 +8,7 @@ use crate::analysis::{
     HirAnalysisDb,
     semantic::SemanticInstance,
     ty::{
+        AddressSpace,
         adt_def::{AdtDef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand},
         const_ty::{
             ConcreteArrayLengthError, ConstTyData, ConstTyId, const_ty_from_sem_const,
@@ -898,31 +899,9 @@ pub fn normalize_int_to_shape(value: BigInt, bits: u16, signed: bool) -> BigInt 
 pub fn int_ty_shape<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<(u16, bool)> {
     // A view of an integer has the integer's value shape.
     let ty = ty.as_view(db).unwrap_or(ty);
-    let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
-        return None;
-    };
-    Some(match prim {
-        PrimTy::U8 => (8, false),
-        PrimTy::U16 => (16, false),
-        PrimTy::U32 => (32, false),
-        PrimTy::U64 => (64, false),
-        PrimTy::U128 => (128, false),
-        PrimTy::U256 | PrimTy::Usize => (256, false),
-        PrimTy::I8 => (8, true),
-        PrimTy::I16 => (16, true),
-        PrimTy::I32 => (32, true),
-        PrimTy::I64 => (64, true),
-        PrimTy::I128 => (128, true),
-        PrimTy::I256 | PrimTy::Isize => (256, true),
-        PrimTy::Bool
-        | PrimTy::String
-        | PrimTy::Array
-        | PrimTy::Tuple(_)
-        | PrimTy::Ptr(_)
-        | PrimTy::View
-        | PrimTy::BorrowMut
-        | PrimTy::BorrowRef => return None,
-    })
+    let prim = ty.as_prim(db)?;
+    let bits = prim_int_bits(prim, db.compilation_settings().target(db))?;
+    Some((bits as u16, prim.is_signed_int()))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1018,6 +997,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         if !visiting.insert(ty) {
             return Ok(None);
         }
+        let target = db.compilation_settings().target(db);
 
         let result = if let Some(cause) = ty.invalid_cause(db) {
             return Err(RuntimeSizeError::InvalidType(cause));
@@ -1070,13 +1050,15 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         } else if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
             match prim {
                 PrimTy::Bool => Some(1),
-                PrimTy::String
-                | PrimTy::Ptr(_)
+                // A memory address or a reference is a `usize`; a state
+                // pointer is its slot word.
+                PrimTy::Ptr(AddressSpace::Memory)
                 | PrimTy::View
                 | PrimTy::BorrowMut
-                | PrimTy::BorrowRef => Some(WORD_SIZE_BYTES),
+                | PrimTy::BorrowRef => Some(target.usize_bits() as u64 / 8),
+                PrimTy::String | PrimTy::Ptr(_) => Some(WORD_SIZE_BYTES),
                 PrimTy::Array | PrimTy::Tuple(_) => None,
-                _ => prim_int_bits(*prim, Target::Evm).map(|bits| bits as u64 / 8),
+                _ => prim_int_bits(*prim, target).map(|bits| bits as u64 / 8),
             }
         } else if ty.is_struct(db) {
             let adt = ty.adt_def(db).expect("struct has an ADT definition");

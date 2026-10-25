@@ -1,6 +1,6 @@
 // Pin the mapping preimage independently of the numeric conversion helpers.
 // Native storage packing must never change these bytes or the resulting slots.
-use core::ptr
+use core::{ptr, size_of}
 use std::evm::{Address, StorageKey}
 
 fn assert_word<K: StorageKey>(_ key: K, _ expected: u256) {
@@ -33,9 +33,14 @@ fn unsigned_keys_are_zero_extended() {
         0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
     )
     assert_word(0 as usize, 0)
+    // `usize` is 256 bits on EVM and 64 bits natively.
     assert_word(
         usize::max(),
-        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        if size_of<usize>() == 32 {
+            0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        } else {
+            0xffffffffffffffff
+        },
     )
 }
 
@@ -102,15 +107,23 @@ fn signed_keys_are_sign_extended() {
     let negative: isize = -1
     assert_word(negative, ones)
     let minimum = isize::min()
-    assert_word(
-        minimum,
-        0x8000000000000000000000000000000000000000000000000000000000000000,
-    )
     let maximum = isize::max()
-    assert_word(
-        maximum,
-        0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
-    )
+    if size_of<isize>() == 32 {
+        assert_word(
+            minimum,
+            0x8000000000000000000000000000000000000000000000000000000000000000,
+        )
+        assert_word(
+            maximum,
+            0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        )
+    } else {
+        assert_word(
+            minimum,
+            0xffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000,
+        )
+        assert_word(maximum, 0x7fffffffffffffff)
+    }
 }
 
 #[test]

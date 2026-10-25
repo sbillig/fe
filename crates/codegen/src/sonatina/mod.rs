@@ -19,8 +19,6 @@ use mir::{RuntimeSectionName, build_native_executable_package, native_executable
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
-use smallvec1::smallvec;
-#[cfg(feature = "cranelift")]
 use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
@@ -44,11 +42,9 @@ use sonatina_ir::{
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
-        arith::{Add, Mul},
-        cast::{PtrToInt, Zext},
-        cmp::{Lt, Slt},
-        control_flow::{Br, Call, Jump, Phi, Return, Unreachable},
-        data::{Gep, MemAllocDynamic, Mload, Mstore, ObjAlloc, ObjStore},
+        cast::PtrToInt,
+        control_flow::{Call, Return},
+        data::{ObjAlloc, ObjStore},
     },
     ir_writer::IrWrite,
     isa::{Isa, native::Native},
@@ -898,7 +894,7 @@ fn prepare_native_main(
     });
     module.ctx.func_sig(main, |signature| {
         let expected = if with_args {
-            vec![if argc_by_ref { argc_ref } else { Type::I32 }, Type::I256]
+            vec![if argc_by_ref { argc_ref } else { Type::I32 }, Type::I64]
         } else {
             vec![]
         };
@@ -917,8 +913,8 @@ fn prepare_native_main(
         return Ok(module);
     }
 
-    // Preserve ordinary Fe calls to the entry. Only the exported C entry uses
-    // native pointer widths; Fe raw addresses continue to use the word ABI.
+    // Preserve ordinary Fe calls to the entry. The exported C entry takes the
+    // host's typed pointer vector, which is a `**u8` as Fe lays it out.
     let names = module
         .funcs()
         .into_iter()
@@ -947,44 +943,9 @@ fn prepare_native_main(
     let inst_set = isa.inst_set();
     let mut fb = builder.func_builder::<InstInserter>(wrapper);
     let entry = fb.append_block();
-    let invalid = fb.append_block();
-    let allocate = fb.append_block();
-    let copy = fb.append_block();
-    let invoke = fb.append_block();
     fb.switch_to_block(entry);
     let argc = fb.func.arg_values[0];
     let argv = fb.func.arg_values[1];
-    let zero_i32 = fb.make_imm_value(0i32);
-    let negative = fb.insert_inst(Slt::new(inst_set, argc, zero_i32), Type::I1);
-    fb.insert_inst_no_result(Br::new(inst_set, negative, invalid, allocate));
-    fb.switch_to_block(invalid);
-    fb.insert_inst_no_result(Unreachable::new(inst_set));
-    fb.switch_to_block(allocate);
-
-    // Convert the C pointer vector once at the host boundary. Fe pointer slots
-    // occupy a word, so passing the host table unchanged would break ordinary
-    // typed **u8 indexing. Preserve each string's address and the null sentinel.
-    let count = fb.insert_inst(Zext::new(inst_set, argc, Type::I64), Type::I64);
-    let one = fb.make_imm_value(1i64);
-    let count = fb.insert_inst(Add::new(inst_set, count, one), Type::I64);
-    let stride = fb.make_imm_value(32i64);
-    let size = fb.insert_inst(Mul::new(inst_set, count, stride), Type::I64);
-    let table_ty = builder.ptr_type(Type::I256);
-    let table = fb.insert_inst(MemAllocDynamic::new(inst_set, size), table_ty);
-    let zero = fb.make_imm_value(0i64);
-    fb.insert_inst_no_result(Jump::new(inst_set, copy));
-    fb.switch_to_block(copy);
-    let index = fb.insert_inst(Phi::new(inst_set, smallvec![(zero, allocate)]), Type::I64);
-    let source = fb.insert_inst(Gep::new(inst_set, vec![argv, index].into()), argv_ptr);
-    let pointer = fb.insert_inst(Mload::new(inst_set, source, byte_ptr), byte_ptr);
-    let word = fb.insert_inst(PtrToInt::new(inst_set, pointer, Type::I256), Type::I256);
-    let target = fb.insert_inst(Gep::new(inst_set, vec![table, index].into()), table_ty);
-    fb.insert_inst_no_result(Mstore::new(inst_set, target, word, Type::I256));
-    let next = fb.insert_inst(Add::new(inst_set, index, one), Type::I64);
-    fb.append_phi_arg(index, next, copy);
-    let more = fb.insert_inst(Lt::new(inst_set, next, count), Type::I1);
-    fb.insert_inst_no_result(Br::new(inst_set, more, copy, invoke));
-    fb.switch_to_block(invoke);
     let argc = if argc_by_ref {
         let object = fb.insert_inst(ObjAlloc::new(inst_set, Type::I32), argc_ref);
         fb.insert_inst_no_result(ObjStore::new(inst_set, object, argc));
@@ -992,9 +953,9 @@ fn prepare_native_main(
     } else {
         argc
     };
-    let wide = fb.insert_inst(PtrToInt::new(inst_set, table, Type::I256), Type::I256);
+    let argv = fb.insert_inst(PtrToInt::new(inst_set, argv, Type::I64), Type::I64);
     let result = fb.insert_inst(
-        Call::new(inst_set, main, vec![argc, wide].into()),
+        Call::new(inst_set, main, vec![argc, argv].into()),
         Type::I32,
     );
     fb.insert_inst_no_result(Return::new_single(inst_set, result));

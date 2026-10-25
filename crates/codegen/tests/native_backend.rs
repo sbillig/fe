@@ -278,9 +278,10 @@ fn native_argv_entry_has_a_host_pointer_bridge() {
         )
         .unwrap();
         assert!(ir.contains("func public %main("), "{ir}");
+        // The host vector is a `**u8` as Fe lays it out, so it passes as is.
         assert!(ir.contains("**i8"), "{ir}");
         assert!(ir.contains("ptr_to_int"), "{ir}");
-        assert!(ir.contains("zext"), "{ir}");
+        assert!(!ir.contains("mem.alloc_dynamic"), "{ir}");
     }
 }
 

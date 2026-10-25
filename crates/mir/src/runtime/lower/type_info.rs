@@ -5,7 +5,10 @@ use hir::analysis::{
         const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
         normalize::normalize_ty,
         trait_resolution::PredicateListId,
-        ty_def::{BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId, TyVarSort},
+        ty_def::{
+            BorrowKind, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData, TyId, TyVarSort,
+            prim_int_bits,
+        },
     },
 };
 use num_traits::ToPrimitive;
@@ -429,65 +432,16 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
     let repr = match ty.base_ty(db).data(db) {
         TyData::TyBase(TyBase::Prim(prim)) => match prim {
             PrimTy::Bool => ScalarRepr::Bool,
-            PrimTy::U8 => ScalarRepr::Int {
-                bits: 8,
-                signed: false,
-            },
-            PrimTy::U16 => ScalarRepr::Int {
-                bits: 16,
-                signed: false,
-            },
-            PrimTy::U32 => ScalarRepr::Int {
-                bits: 32,
-                signed: false,
-            },
-            PrimTy::U64 => ScalarRepr::Int {
-                bits: 64,
-                signed: false,
-            },
-            PrimTy::U128 => ScalarRepr::Int {
-                bits: 128,
-                signed: false,
-            },
-            // A pointer is the address word.
-            PrimTy::U256 | PrimTy::Usize | PrimTy::Ptr(_) => ScalarRepr::Int {
-                bits: 256,
-                signed: false,
-            },
-            PrimTy::I8 => ScalarRepr::Int {
-                bits: 8,
-                signed: true,
-            },
-            PrimTy::I16 => ScalarRepr::Int {
-                bits: 16,
-                signed: true,
-            },
-            PrimTy::I32 => ScalarRepr::Int {
-                bits: 32,
-                signed: true,
-            },
-            PrimTy::I64 => ScalarRepr::Int {
-                bits: 64,
-                signed: true,
-            },
-            PrimTy::I128 => ScalarRepr::Int {
-                bits: 128,
-                signed: true,
-            },
-            PrimTy::I256 | PrimTy::Isize => ScalarRepr::Int {
-                bits: 256,
-                signed: true,
-            },
+            PrimTy::Ptr(space) => return Some(address_int_class(db, *space)),
             PrimTy::String => ScalarRepr::FixedBytes {
                 // Fixed strings have at most 31 payload bytes, but casts and
                 // `to_word` operate on the full EVM word.
                 len: (MAX_INLINE_STRING_BYTES + 1) as u16,
             },
-            PrimTy::Array
-            | PrimTy::Tuple(_)
-            | PrimTy::View
-            | PrimTy::BorrowMut
-            | PrimTy::BorrowRef => return None,
+            _ => ScalarRepr::Int {
+                bits: prim_int_bits(*prim, db.compilation_settings().target(db))? as u16,
+                signed: prim.is_signed_int(),
+            },
         },
         TyData::TyBase(TyBase::Contract(_)) => ScalarRepr::Address { bits: 256 },
         TyData::TyVar(var) if matches!(var.sort, TyVarSort::Integral) => ScalarRepr::Int {
@@ -501,6 +455,24 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
         repr,
         role: ScalarRole::Plain,
     })
+}
+
+/// The integer an address in `space` converts to. A memory address is a
+/// `usize`, which takes the target's width; the EVM's other spaces are
+/// addressed by word.
+pub(crate) fn address_int_class<'db>(db: &dyn MirDb, space: AddressSpace) -> ScalarClass<'db> {
+    let bits = if space == AddressSpace::Memory {
+        db.compilation_settings().target(db).usize_bits() as u16
+    } else {
+        256
+    };
+    ScalarClass {
+        repr: ScalarRepr::Int {
+            bits,
+            signed: false,
+        },
+        role: ScalarRole::Plain,
+    }
 }
 
 /// The transport a pointer of type `pointer_ty` converts to when

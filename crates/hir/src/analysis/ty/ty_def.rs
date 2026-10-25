@@ -516,6 +516,10 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)))
     }
 
+    pub fn usize(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)))
+    }
+
     pub(super) fn array(db: &'db dyn HirAnalysisDb, elem: TyId<'db>) -> Self {
         let base = TyBase::Prim(PrimTy::Array);
         let array = Self::new(db, TyData::TyBase(base));

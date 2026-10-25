@@ -1,3 +1,4 @@
+use common::compilation::Target;
 use cranelift_entity::EntityRef;
 use hir::analysis::semantic::SemOrigin;
 use hir::analysis::ty::AddressSpace;
@@ -42,7 +43,7 @@ use crate::{
             tuple::{
                 RuntimeTupleFieldEmitter, extract_runtime_tuple_fields, memory_fallback_class,
             },
-            type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
+            type_info::{RuntimeTypeEnv, address_int_class, top_level_class_for_ty_in_env},
         },
         package::resolve_trait_runtime_instance,
     },
@@ -76,6 +77,17 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
     instance: RuntimeInstance<'db>,
     spec: RuntimeSyntheticSpec<'db>,
 ) -> Result<RuntimeBody<'db>, LowerError> {
+    let target = db.compilation_settings().target(db);
+    if target != Target::Evm
+        && !matches!(
+            spec,
+            RuntimeSyntheticSpec::MainRoot { .. } | RuntimeSyntheticSpec::TestRoot { .. }
+        )
+    {
+        return Err(LowerError::Unsupported(format!(
+            "contract code needs the Evm compilation target, not {target:?}"
+        )));
+    }
     let mut builder = SyntheticBodyBuilder::new(db, instance);
     match spec {
         RuntimeSyntheticSpec::MainRoot { callee, entry_args }
@@ -1246,7 +1258,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         self.push_builtin_value(
             bb,
             TyId::ptr_to(self.db, TyId::u8(self.db)),
-            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeClass::Scalar(address_int_class(self.db, AddressSpace::Memory)),
             RuntimeBuiltin::Malloc { size },
         )
     }
@@ -1363,19 +1375,31 @@ impl<'db> SyntheticBodyBuilder<'db> {
         layout: crate::LayoutId<'db>,
     ) -> Result<RLocalId, LowerError> {
         let size = RuntimeMemoryLayout::raw(self.db).layout_size(layout)?;
-        let size = self.push_const_scalar(
+        let size_class = address_int_class(self.db, AddressSpace::Memory);
+        let ScalarRepr::Int { bits, .. } = size_class.repr else {
+            unreachable!("a memory integer is an integer");
+        };
+        let size_local = self.push_local(
+            TyId::usize(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(size_class)),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
             bb,
-            ConstScalar::Int {
-                bits: 256,
-                signed: false,
-                words: size
-                    .to_be_bytes()
-                    .into_iter()
-                    .skip_while(|byte| *byte == 0)
-                    .collect(),
+            RStmt::Assign {
+                dst: size_local,
+                expr: RExpr::ConstScalar(ConstScalar::Int {
+                    bits,
+                    signed: false,
+                    words: size
+                        .to_be_bytes()
+                        .into_iter()
+                        .skip_while(|byte| *byte == 0)
+                        .collect(),
+                }),
             },
         );
-        let addr = self.push_malloc_bytes(bb, size);
+        let addr = self.push_malloc_bytes(bb, size_local);
         let raw_class = RuntimeClass::raw_addr(
             self.db,
             AddressSpace::Memory,
