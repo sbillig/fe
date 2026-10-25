@@ -735,7 +735,7 @@ func private %downcast_truncate(v0.i256) -> i64 {
         return v12;
 }
 
-func private %encode(v0.i64, v1.@layout_6) {
+func inline(always) private %encode(v0.i64, v1.@layout_6) {
     block0:
         jump block1;
 

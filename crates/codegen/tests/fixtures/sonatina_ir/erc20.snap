@@ -2201,7 +2201,7 @@ func inline(always) private %impl_trait_TransferEvent__emit__gcd5c(v0.@layout_4)
         jump block8;
 }
 
-func private %impl_trait_u8__encode__gf13e(v0.i8, v1.@layout_2) {
+func inline(always) private %impl_trait_u8__encode__gf13e(v0.i8, v1.@layout_2) {
     block0:
         jump block1;
 
@@ -2211,7 +2211,7 @@ func private %impl_trait_u8__encode__gf13e(v0.i8, v1.@layout_2) {
         return;
 }
 
-func private %impl_trait_bool__encode__gf13e(v0.i1, v1.@layout_2) {
+func inline(always) private %impl_trait_bool__encode__gf13e(v0.i1, v1.@layout_2) {
     block0:
         jump block1;
 
@@ -2221,7 +2221,7 @@ func private %impl_trait_bool__encode__gf13e(v0.i1, v1.@layout_2) {
         return;
 }
 
-func private %impl_trait_u256__encode__gf13e(v0.i256, v1.@layout_2) {
+func inline(always) private %impl_trait_u256__encode__gf13e(v0.i256, v1.@layout_2) {
     block0:
         jump block1;
 

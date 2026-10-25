@@ -177,7 +177,7 @@ func inline(always) private %encode__gac80(v0.@layout_0, v1.@layout_3) {
         return;
 }
 
-func private %encode__gf13e(v0.i256, v1.@layout_3) {
+func inline(always) private %encode__gf13e(v0.i256, v1.@layout_3) {
     block0:
         jump block1;
 

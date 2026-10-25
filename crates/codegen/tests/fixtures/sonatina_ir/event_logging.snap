@@ -157,7 +157,7 @@ func private %emit_transfer(v0.@layout_0, v1.@layout_0, v2.i256) {
         return;
 }
 
-func private %encode__gf13e(v0.i256, v1.@layout_3) {
+func inline(always) private %encode__gf13e(v0.i256, v1.@layout_3) {
     block0:
         jump block1;
 

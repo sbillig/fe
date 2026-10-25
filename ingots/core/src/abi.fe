@@ -2018,6 +2018,7 @@ impl<A: Abi> Decode<A> for u256 {
 }
 
 impl<A: Abi> Encode<A> for u256 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self)
     }
@@ -2148,6 +2149,7 @@ impl<A: Abi> Decode<A> for bool {
 }
 
 impl<A: Abi> Encode<A> for bool {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
@@ -2165,6 +2167,7 @@ impl<A: Abi> Decode<A> for u8 {
 }
 
 impl<A: Abi> Encode<A> for u8 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
@@ -2182,6 +2185,7 @@ impl<A: Abi> Decode<A> for u16 {
 }
 
 impl<A: Abi> Encode<A> for u16 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
@@ -2199,6 +2203,7 @@ impl<A: Abi> Decode<A> for u32 {
 }
 
 impl<A: Abi> Encode<A> for u32 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
@@ -2216,6 +2221,7 @@ impl<A: Abi> Decode<A> for u64 {
 }
 
 impl<A: Abi> Encode<A> for u64 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
@@ -2233,6 +2239,7 @@ impl<A: Abi> Decode<A> for u128 {
 }
 
 impl<A: Abi> Encode<A> for u128 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
@@ -2250,6 +2257,7 @@ impl<A: Abi> Decode<A> for i8 {
 }
 
 impl<A: Abi> Encode<A> for i8 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
@@ -2267,6 +2275,7 @@ impl<A: Abi> Decode<A> for i16 {
 }
 
 impl<A: Abi> Encode<A> for i16 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
@@ -2284,6 +2293,7 @@ impl<A: Abi> Decode<A> for i32 {
 }
 
 impl<A: Abi> Encode<A> for i32 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
@@ -2301,6 +2311,7 @@ impl<A: Abi> Decode<A> for i64 {
 }
 
 impl<A: Abi> Encode<A> for i64 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
@@ -2318,6 +2329,7 @@ impl<A: Abi> Decode<A> for i128 {
 }
 
 impl<A: Abi> Encode<A> for i128 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
@@ -2335,6 +2347,7 @@ impl<A: Abi> Decode<A> for i256 {
 }
 
 impl<A: Abi> Encode<A> for i256 {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
@@ -2352,6 +2365,7 @@ impl<A: Abi> Decode<A> for usize {
 }
 
 impl<A: Abi> Encode<A> for usize {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self as u256)
     }
@@ -2369,6 +2383,7 @@ impl<A: Abi> Decode<A> for isize {
 }
 
 impl<A: Abi> Encode<A> for isize {
+    #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.store_word(at: 0, value: self.downcast_unchecked())
     }
