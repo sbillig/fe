@@ -934,7 +934,8 @@ impl DynString {
     }
 
     /// Wraps a complete ABI tail. `data` must point to `size` valid,
-    /// initialized bytes in a live allocation.
+    /// initialized bytes in an allocation that outlives the value, which
+    /// never frees it.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         let expected_size = 32 + round_up_words(len as u256)
         if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {
@@ -1057,7 +1058,8 @@ impl Bytes {
     }
 
     /// Wraps a complete ABI tail. `data` must point to `size` valid,
-    /// initialized bytes in a live allocation.
+    /// initialized bytes in an allocation that outlives the value, which
+    /// never frees it.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         let expected_size = 32 + round_up_words(len as u256)
         if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {

@@ -67,7 +67,8 @@ impl<T> DynArray<T> {
 
     /// Construct an array handle over a complete ABI tail.
     ///
-    /// `data` must point to `size` valid bytes. Static-element arrays are
+    /// `data` must point to `size` valid bytes in an allocation that outlives
+    /// the array, which never frees it. Static-element arrays are
     /// validated exactly; callers constructing dynamic-element arrays must
     /// ensure their nested tails are valid and end at `size`.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self

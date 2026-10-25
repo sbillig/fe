@@ -9,7 +9,7 @@ error[6-0003]: trait bound is not satisfied
  25 │     DynArray::from_slice(values)
     │     ^^^^^^^^^^^^^^^^^^^^ `WithBytes` doesn't implement `Copy`
     │
-    ┌─ src/abi/dyn_array.fe:165:42
+    ┌─ src/abi/dyn_array.fe:166:42
     │
-165 │         where T: Encode<Sol> + AbiSize + Copy
+166 │         where T: Encode<Sol> + AbiSize + Copy
     │                                          ---- required by this bound on `from_slice`
