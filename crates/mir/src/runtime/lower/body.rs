@@ -3448,40 +3448,8 @@ impl<'db> RmirEmitter<'db> {
 
     /// Reverts with Solidity `Panic(uint256)` data for a runtime `code`.
     fn lower_panic_code(&mut self, bb: RBlockId, code: RLocalId) -> RLocalId {
-        // The call reverts, so the payload can use scratch memory at 0 like
-        // the checked-arithmetic panics do.
-        let word = RuntimeClass::Scalar(word_scalar_class());
-        let code = self.coerce_value(bb, code, &word);
-        let ptr = self.alloc_memory_int_const(bb, 0);
-        let selector = self.alloc_runtime_temp(TyId::u256(self.db), RuntimeCarrier::Value(word));
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: selector,
-                expr: RExpr::ConstScalar(ConstScalar::Int {
-                    bits: 256,
-                    signed: false,
-                    words: padded_word_bytes(&solidity_panic_payload(0)[..4]),
-                }),
-            },
-        );
-        self.push_ignored_builtin(
-            bb,
-            crate::runtime::RuntimeBuiltin::Mstore {
-                addr: ptr,
-                value: selector,
-            },
-        );
-        let code_addr = self.alloc_memory_int_const(bb, 4);
-        self.push_ignored_builtin(
-            bb,
-            crate::runtime::RuntimeBuiltin::Mstore {
-                addr: code_addr,
-                value: code,
-            },
-        );
-        let len = self.alloc_u256_const(bb, 36);
-        self.set_terminator(bb, RTerminator::Revert { offset: ptr, len });
+        let code = self.coerce_value(bb, code, &RuntimeClass::Scalar(word_scalar_class()));
+        self.set_terminator(bb, RTerminator::Panic { code });
         self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased)
     }
 
@@ -6470,12 +6438,6 @@ fn push_abi_word_usize(out: &mut Vec<u8>, value: usize) {
     let mut word = [0; 32];
     word[32 - size_of::<usize>()..].copy_from_slice(&value.to_be_bytes());
     out.extend(word);
-}
-
-fn padded_word_bytes(bytes: &[u8]) -> Vec<u8> {
-    let mut word = [0; 32];
-    word[..bytes.len()].copy_from_slice(bytes);
-    trim_leading_zero_bytes(&word)
 }
 
 fn usize_word_bytes(value: usize) -> Vec<u8> {

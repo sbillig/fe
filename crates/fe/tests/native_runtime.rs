@@ -61,10 +61,55 @@ fn native_usize_and_pointers_are_64_bits() {
         let result = Command::new(&executable).output().unwrap();
         assert!(result.status.success(), "O{level}: {result:?}");
         let overflow = Command::new(&executable).arg("x").output().unwrap();
-        assert!(
-            matches!(overflow.status.signal(), Some(4 | 5)),
+        assert_eq!(
+            overflow.status.signal(),
+            Some(libc::SIGABRT),
             "O{level}: {overflow:?}"
         );
+        assert_eq!(
+            overflow.stderr, b"panicked: arithmetic overflow\n",
+            "O{level}: {overflow:?}"
+        );
+    }
+}
+
+#[test]
+fn native_panics_report_on_stderr_after_flushing_stdout() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/panics.fe");
+    let reports = [
+        "panicked\n",
+        "panicked: index out of bounds\n",
+        "panicked: arithmetic overflow\n",
+        "panicked: custom message\n",
+        "panicked: reverted with 0x4e487b710000000000000000000000000000000000000000000000000000000000000077\n",
+        "panicked: division by zero\n",
+        "panicked: reverted without data\n",
+    ];
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("panics");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        for (kind, report) in reports.iter().enumerate() {
+            // Piped stdout is fully buffered; the panic flushes it.
+            let result = Command::new(&executable)
+                .args(vec!["x"; kind + 1])
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.signal(),
+                Some(libc::SIGABRT),
+                "O{level}/{kind}: {result:?}"
+            );
+            assert_eq!(result.stdout, b"A\n", "O{level}/{kind}: {result:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&result.stderr),
+                *report,
+                "O{level}/{kind}"
+            );
+        }
     }
 }
 
@@ -1257,9 +1302,9 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_extern_declarations_cannot_claim_host_allocator_symbols() {
+fn native_extern_declarations_cannot_claim_runtime_symbols() {
     let temp = tempdir().unwrap();
-    for symbol in ["malloc", "free"] {
+    for symbol in ["malloc", "free", "write", "__fe_revert"] {
         let source = temp.path().join(format!("{symbol}.fe"));
         fs::write(
             &source,
@@ -1278,7 +1323,7 @@ fn native_extern_declarations_cannot_claim_host_allocator_symbols() {
         assert!(!result.status.success(), "{result:?}");
         assert!(
             output.contains(&format!(
-                "native extern symbol `{symbol}` is reserved for core memory operations"
+                "native extern symbol `{symbol}` is reserved for the native runtime"
             )),
             "{output}"
         );
@@ -1312,10 +1357,15 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
                 "{name}/O{level}: {result:?}"
             );
             if !success {
-                // Unreachable traps are SIGILL/SIGTRAP on the supported hosts;
-                // an invalid libc access would instead be SIGSEGV/SIGBUS.
-                assert!(
-                    matches!(result.status.signal(), Some(4 | 5)),
+                // The range check reverts before the copy; an invalid libc
+                // access would instead be SIGSEGV/SIGBUS.
+                assert_eq!(
+                    result.status.signal(),
+                    Some(libc::SIGABRT),
+                    "{name}/O{level}: {result:?}"
+                );
+                assert_eq!(
+                    result.stderr, b"panicked: reverted without data\n",
                     "{name}/O{level}: {result:?}"
                 );
             }

@@ -632,6 +632,7 @@ fn format_terminator<'db>(db: &'db dyn MirDb, term: &RTerminator<'db>) -> String
             format_local_id(*len)
         ),
         RTerminator::RevertEmpty => "revert_empty".to_string(),
+        RTerminator::Panic { code } => format!("panic {}", format_local_id(*code)),
         RTerminator::SelfDestruct { beneficiary } => {
             format!("selfdestruct {}", format_local_id(*beneficiary))
         }

@@ -69,7 +69,8 @@ impl Drop for Guarded {
 - Compile-time code cannot destroy a value whose destruction might run a
   `drop`: a `const fn` may move such a value, but not let it go out of scope.
 
-A panic runs no destructors: it reverts on EVM and traps natively.
+A panic runs no destructors: it reverts on EVM, and natively it reports the
+panic on stderr and aborts.
 
 ## Raw places
 

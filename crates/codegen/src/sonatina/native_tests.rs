@@ -5,8 +5,8 @@ use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
 use sonatina_ir::{Linkage, ir_writer::ModuleWriter};
 
 use super::{
-    LowerError, create_native_isa, debug_ensure_module_sonatina_ir_valid, format_cranelift_errors,
-    lower_runtime, to_sonatina_opt_level,
+    LowerError, NativePanics, create_native_isa, debug_ensure_module_sonatina_ir_valid,
+    format_cranelift_errors, lower_runtime, to_sonatina_opt_level,
 };
 use crate::{
     OptLevel,
@@ -58,8 +58,14 @@ pub fn emit_test_suite_native(
         }
     }
     let isa = create_native_isa()?;
-    let (module, functions) =
-        lower_runtime::compile_runtime_package_sonatina_for_isa(db, &package, &isa, false, None)?;
+    let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
+        db,
+        &package,
+        &isa,
+        false,
+        None,
+        NativePanics::Abort,
+    )?;
     let mut tests = Vec::with_capacity(roots.len());
     for (name, instance) in roots {
         let entry = functions[&instance];

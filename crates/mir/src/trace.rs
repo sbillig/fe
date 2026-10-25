@@ -430,6 +430,7 @@ fn runtime_terminator_display(terminator: &RTerminator<'_>) -> String {
         RTerminator::ReturnData { offset, len } => format!("return_data {offset:?}, {len:?}"),
         RTerminator::Revert { offset, len } => format!("revert {offset:?}, {len:?}"),
         RTerminator::RevertEmpty => "revert_empty".to_string(),
+        RTerminator::Panic { code } => format!("panic {code:?}"),
         RTerminator::SelfDestruct { beneficiary } => format!("selfdestruct {beneficiary:?}"),
         RTerminator::Trap => "trap".to_string(),
         RTerminator::Return(value) => format!("return {value:?}"),
@@ -562,6 +563,7 @@ fn terminator_edges(from: RBlockId, terminator: &RTerminator<'_>) -> Vec<Runtime
         | RTerminator::ReturnData { .. }
         | RTerminator::Revert { .. }
         | RTerminator::RevertEmpty
+        | RTerminator::Panic { .. }
         | RTerminator::SelfDestruct { .. }
         | RTerminator::Trap
         | RTerminator::Return(_)
