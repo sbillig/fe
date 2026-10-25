@@ -10,7 +10,7 @@ use std::{
 };
 
 use camino::Utf8PathBuf;
-use codegen::{OptLevel, emit_test_suite_native};
+use codegen::{ExpectedRevert, OptLevel, emit_test_suite_native};
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use tempfile::{Builder, TempDir};
@@ -20,13 +20,15 @@ use crate::native::link_executable;
 use super::{
     CompiledTest, NativeTestLimits, ReportContext, SingleTestJob, SuitePreparation,
     TestEmitSelection, TestOutcome, TestResult, default_test_emit_dir, emit_with_catch_unwind,
-    test_emit_stem, write_test_emit_artifact,
+    revert_mismatch, test_emit_stem, write_test_emit_artifact,
 };
 
 #[cfg(target_os = "linux")]
 const NATIVE_TEST_ADDRESS_SPACE_LIMIT: libc::rlim_t = 2 * 1024 * 1024 * 1024;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const NATIVE_TEST_DIAGNOSTIC_LIMIT: usize = 4096;
+/// The launcher's exit status after it records a test's revert data.
+const NATIVE_TEST_REVERT_STATUS: i32 = 101;
 
 #[derive(Debug)]
 struct NativeExecutable {
@@ -37,6 +39,7 @@ struct NativeExecutable {
 pub(super) struct NativeTestCase {
     name: String,
     entry_index: usize,
+    expected_revert: Option<ExpectedRevert>,
     executable: Arc<NativeExecutable>,
 }
 
@@ -48,10 +51,16 @@ impl NativeTestCase {
         limits: NativeTestLimits,
     ) -> TestOutcome {
         let started = Instant::now();
+        let revert_path = self
+            .executable
+            .directory
+            .path()
+            .join(format!("revert-{}", self.entry_index));
         let result = (|| -> io::Result<_> {
             let mut command = Command::new(self.executable.directory.path().join("tests"));
             command
                 .arg(self.entry_index.to_string())
+                .arg(&revert_path)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -206,7 +215,7 @@ impl NativeTestCase {
             let reason = execution?;
             Ok((status, stdout_bytes, stderr_bytes, reason))
         })();
-        let (passed, error_message) = match result {
+        let error_message = match result {
             Ok((status, stdout, stderr, reason)) => {
                 if let Some(report) = report {
                     let dir = report
@@ -217,28 +226,59 @@ impl NativeTestCase {
                     let _ = fs::write(dir.join("stderr.txt"), &stderr);
                     let _ = fs::write(dir.join("status.txt"), status.to_string());
                 }
-                (
-                    status.success() && reason.is_none(),
-                    (!status.success() || reason.is_some()).then(|| {
-                        let stdout_preview = String::from_utf8_lossy(
-                            &stdout[..stdout.len().min(NATIVE_TEST_DIAGNOSTIC_LIMIT)],
-                        );
-                        let stderr_preview = String::from_utf8_lossy(
-                            &stderr[..stderr.len().min(NATIVE_TEST_DIAGNOSTIC_LIMIT)],
-                        );
-                        format!(
-                            "native test failed ({status}){}\nstdout:\n{stdout_preview}{}\nstderr:\n{stderr_preview}{}",
-                            reason
-                                .map(|reason| format!(": {reason}"))
-                                .unwrap_or_default(),
-                            if stdout.len() > NATIVE_TEST_DIAGNOSTIC_LIMIT { "\n[output truncated]" } else { "" },
-                            if stderr.len() > NATIVE_TEST_DIAGNOSTIC_LIMIT { "\n[output truncated]" } else { "" },
-                        )
-                    }),
-                )
+                let describe = |summary: String| {
+                    let stdout_preview = String::from_utf8_lossy(
+                        &stdout[..stdout.len().min(NATIVE_TEST_DIAGNOSTIC_LIMIT)],
+                    );
+                    let stderr_preview = String::from_utf8_lossy(
+                        &stderr[..stderr.len().min(NATIVE_TEST_DIAGNOSTIC_LIMIT)],
+                    );
+                    format!(
+                        "{summary}\nstdout:\n{stdout_preview}{}\nstderr:\n{stderr_preview}{}",
+                        if stdout.len() > NATIVE_TEST_DIAGNOSTIC_LIMIT {
+                            "\n[output truncated]"
+                        } else {
+                            ""
+                        },
+                        if stderr.len() > NATIVE_TEST_DIAGNOSTIC_LIMIT {
+                            "\n[output truncated]"
+                        } else {
+                            ""
+                        },
+                    )
+                };
+                let failure = || {
+                    describe(format!(
+                        "native test failed ({status}){}",
+                        reason
+                            .map(|reason| format!(": {reason}"))
+                            .unwrap_or_default()
+                    ))
+                };
+                // A test that exits with the revert status without the
+                // launcher's record of its data failed otherwise.
+                let revert = (reason.is_none() && status.code() == Some(NATIVE_TEST_REVERT_STATUS))
+                    .then(|| fs::read(&revert_path).ok())
+                    .flatten();
+                let succeeded = status.success() && reason.is_none();
+                match (revert, &self.expected_revert) {
+                    (Some(data), Some(expected)) => revert_mismatch(expected, &data),
+                    (Some(data), None) => {
+                        Some(describe(format!("Test reverted: 0x{}", hex::encode(data))))
+                    }
+                    (None, Some(_)) if succeeded => {
+                        Some("Expected test to revert, but it succeeded".to_string())
+                    }
+                    (None, Some(_)) => Some(format!(
+                        "Expected test to revert, but it failed with: {}",
+                        failure()
+                    )),
+                    (None, None) => (!succeeded).then(failure),
+                }
             }
-            Err(err) => (false, Some(format!("failed to execute native test: {err}"))),
+            Err(err) => Some(format!("failed to execute native test: {err}")),
         };
+        let passed = error_message.is_none();
         TestOutcome {
             result: TestResult {
                 name: self.name.clone(),
@@ -318,13 +358,31 @@ pub(super) fn prepare_tests(
                 .map_err(|err| format!("failed to write native test object: {err}"))?;
 
             // Each test starts in its own process; every test in this suite
-            // shares the same compiled object and linked dispatcher.
-            let mut source = String::from("#include <string.h>\n");
+            // shares the same compiled object and linked dispatcher. A revert
+            // ends the test in `__fe_revert`, which records the revert data
+            // in the file the runner names.
+            let mut source = format!(
+                r#"#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static const char *revert_path;
+void __fe_revert(const unsigned char *data, int64_t len) {{
+fflush(NULL);
+FILE *file = fopen(revert_path, "wb");
+if (!file || fwrite(data, 1, (size_t)len, file) != (size_t)len || fclose(file) != 0) abort();
+_exit({NATIVE_TEST_REVERT_STATUS});
+}}
+"#
+            );
             for test in &module.tests {
                 let symbol = &test.symbol;
                 let _ = writeln!(source, "extern void {symbol}(void);");
             }
-            source.push_str("int main(int argc, char **argv) {\nif (argc != 2) return 2;\n");
+            source.push_str(
+                "int main(int argc, char **argv) {\nif (argc != 3) return 2;\nrevert_path = argv[2];\n",
+            );
             for (index, test) in module.tests.iter().enumerate() {
                 let symbol = &test.symbol;
                 let _ = writeln!(
@@ -374,6 +432,7 @@ pub(super) fn prepare_tests(
                     case: CompiledTest::Native(NativeTestCase {
                         name: test.name,
                         entry_index,
+                        expected_revert: test.expected_revert,
                         executable: Arc::clone(&executable),
                     }),
                     evm_trace: None,
@@ -446,6 +505,7 @@ mod tests {
         let case = NativeTestCase {
             name: "forking".to_string(),
             entry_index: 0,
+            expected_revert: None,
             executable: Arc::new(NativeExecutable { directory }),
         };
         let outcome = case.run(
