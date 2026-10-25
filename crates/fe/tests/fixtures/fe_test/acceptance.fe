@@ -121,7 +121,7 @@ pub contract StoredWords {
 
     recv Words {
         Get { i } -> u256 uses (words) {
-            words[i as usize]
+            words[i.downcast_unchecked()]
         }
     }
 }

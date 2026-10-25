@@ -22,7 +22,7 @@ pub fn checksum_address(_ address: Address) -> DynString {
         let digit = lower.byte_at(i)
         let uppercase = digit >= 97 && ((hash >> ((63 - i as u256) * 4)) & 15) >= 8
         let cased = if uppercase { digit - 32 } else { digit }
-        unsafe { *ptr::offset_bytes(digits, i as u256) = cased }
+        unsafe { *ptr::offset_bytes(digits, i) = cased }
     }
     unsafe { DynString::from_payload(source: ptr::MemSpan::from_raw_parts(ptr: data, len: 42)) }
 }

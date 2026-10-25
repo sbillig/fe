@@ -149,7 +149,7 @@ fn hash_words(_ a: u256, _ b: u256, _ n: u256) -> u256 {
     let buffer = ptr::alloc_bytes(64)
     unsafe { store_word(ptr: buffer, value: a) }
     unsafe { store_word(ptr: ptr::offset_bytes(buffer, 32), value: b) }
-    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: (n * 32) as usize)) }
+    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: (n * 32).downcast_unchecked())) }
 }
 
 #[test]

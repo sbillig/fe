@@ -8,5 +8,5 @@ struct S<const N: usize> {
 const MAX: usize = usize::max()
 
 fn size() -> u256 {
-    core::size_of<S<MAX>>()
+    core::size_of<S<MAX>>() as u256
 }

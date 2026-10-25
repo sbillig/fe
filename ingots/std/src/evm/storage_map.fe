@@ -267,7 +267,7 @@ where A: StorageKey,
     unsafe fn write_key(ptr: *u8, self) {
         let a_len = A::encoded_len(self.0)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
     }
 }
 
@@ -286,8 +286,8 @@ where A: StorageKey,
         let a_len = A::encoded_len(self.0)
         let b_len = B::encoded_len(self.1)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
     }
 }
 
@@ -308,9 +308,9 @@ where A: StorageKey,
         let b_len = B::encoded_len(self.1)
         let c_len = C::encoded_len(self.2)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
-        D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
+        D::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len).downcast_unchecked()), self.3)
     }
 }
 
@@ -333,10 +333,10 @@ where A: StorageKey,
         let c_len = C::encoded_len(self.2)
         let d_len = D::encoded_len(self.3)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
-        D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
-        E::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len), self.4)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
+        D::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len).downcast_unchecked()), self.3)
+        E::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len + d_len).downcast_unchecked()), self.4)
     }
 }
 
@@ -361,10 +361,10 @@ where A: StorageKey,
         let d_len = D::encoded_len(self.3)
         let e_len = E::encoded_len(self.4)
         A::write_key(ptr: ptr, self.0)
-        B::write_key(ptr: ptr::offset_bytes(ptr, a_len), self.1)
-        C::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len), self.2)
-        D::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len), self.3)
-        E::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len), self.4)
-        F::write_key(ptr: ptr::offset_bytes(ptr, a_len + b_len + c_len + d_len + e_len), self.5)
+        B::write_key(ptr: ptr::offset_bytes(ptr, a_len.downcast_unchecked()), self.1)
+        C::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len).downcast_unchecked()), self.2)
+        D::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len).downcast_unchecked()), self.3)
+        E::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len + d_len).downcast_unchecked()), self.4)
+        F::write_key(ptr: ptr::offset_bytes(ptr, (a_len + b_len + c_len + d_len + e_len).downcast_unchecked()), self.5)
     }
 }

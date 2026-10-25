@@ -1231,7 +1231,11 @@ impl<'db> TyChecker<'db> {
         } else if from.as_ptr(self.db).is_some() && to.as_ptr(self.db).is_some() {
             Some("a pointer cannot change its address space".to_string())
         } else if from.as_ptr(self.db).is_some() || to.as_ptr(self.db).is_some() {
-            Some("a pointer converts only to and from its `u256` address".to_string())
+            Some(
+                "a memory pointer converts only to and from its `usize` address, and a state \
+                 pointer to and from its `u256` slot or offset"
+                    .to_string(),
+            )
         } else {
             None
         };
@@ -1249,16 +1253,25 @@ impl<'db> TyChecker<'db> {
     // Allow eg `(some_u256 >> 224) as u32`
     fn is_provably_lossless_cast_expr(&self, expr: ExprId, from: TyId<'db>, to: TyId<'db>) -> bool {
         let body = self.body();
-        if let Some((false, from_bits)) =
-            self.prim_int_signed_bits(self.peel_transparent_newtypes(from))
-            && let Some((false, to_bits)) =
-                self.prim_int_signed_bits(self.peel_transparent_newtypes(to))
-            && let Partial::Present(Expr::Bin(_, rhs, BinOp::Arith(ArithBinOp::RShift))) =
-                expr.data(self.db, body)
+        let (from, to) = (
+            self.peel_transparent_newtypes(from),
+            self.peel_transparent_newtypes(to),
+        );
+        if let Partial::Present(Expr::Bin(_, rhs, BinOp::Arith(ArithBinOp::RShift))) =
+            expr.data(self.db, body)
             && let Partial::Present(Expr::Lit(LitKind::Int(shift_int))) = rhs.data(self.db, body)
             && let Some(shift) = shift_int.data(self.db).to_usize()
         {
-            to_bits >= from_bits.saturating_sub(shift)
+            Target::ALL.into_iter().all(|target| {
+                matches!(
+                    (
+                        self.prim_int_signed_bits(from, target),
+                        self.prim_int_signed_bits(to, target),
+                    ),
+                    (Some((false, from_bits)), Some((false, to_bits)))
+                        if to_bits >= from_bits.saturating_sub(shift)
+                )
+            })
         } else {
             false
         }
@@ -1277,7 +1290,7 @@ impl<'db> TyChecker<'db> {
         }
 
         if from_leaf.is_bool(self.db) {
-            return self.prim_int_signed_bits(to_leaf).is_some();
+            return self.prim_int_signed_bits(to_leaf, Target::Evm).is_some();
         }
 
         if to_leaf.is_bool(self.db) {
@@ -1288,7 +1301,8 @@ impl<'db> TyChecker<'db> {
             return true;
         }
 
-        if self.is_pointer_cast(from_leaf, to_leaf) || self.is_pointer_word_cast(from_leaf, to_leaf)
+        if self.is_pointer_cast(from_leaf, to_leaf)
+            || self.is_pointer_address_cast(from_leaf, to_leaf)
         {
             return true;
         }
@@ -1309,10 +1323,19 @@ impl<'db> TyChecker<'db> {
         )
     }
 
-    /// A pointer is its address word.
-    fn is_pointer_word_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
-        (from.as_ptr(self.db).is_some() && self.is_plain_u256(to))
-            || (self.is_plain_u256(from) && to.as_ptr(self.db).is_some())
+    /// A memory pointer is its `usize` address; a state pointer is the `u256`
+    /// slot or offset it names.
+    fn is_pointer_address_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
+        let is_address = |ptr: TyId<'db>, address: TyId<'db>| {
+            ptr.as_ptr(self.db).is_some_and(|(_, space)| {
+                if space == AddressSpace::Memory {
+                    address.as_prim(self.db) == Some(PrimTy::Usize)
+                } else {
+                    self.is_plain_u256(address)
+                }
+            })
+        };
+        is_address(from, to) || is_address(to, from)
     }
 
     fn is_plain_u256(&self, ty: TyId<'db>) -> bool {
@@ -1354,39 +1377,29 @@ impl<'db> TyChecker<'db> {
         ty
     }
 
-    fn prim_int_signed_bits(&self, ty: TyId<'db>) -> Option<(bool, usize)> {
-        let base = ty.base_ty(self.db);
-        let TyData::TyBase(TyBase::Prim(prim)) = base.data(self.db) else {
-            return None;
-        };
-        let bits = prim_int_bits(*prim, Target::Evm)?;
-        let signed = matches!(
-            prim,
-            PrimTy::I8
-                | PrimTy::I16
-                | PrimTy::I32
-                | PrimTy::I64
-                | PrimTy::I128
-                | PrimTy::I256
-                | PrimTy::Isize
-        );
-        Some((signed, bits))
+    fn prim_int_signed_bits(&self, ty: TyId<'db>, target: Target) -> Option<(bool, usize)> {
+        let prim = ty.as_prim(self.db)?;
+        Some((prim.is_signed_int(), prim_int_bits(prim, target)?))
     }
 
+    /// `usize` and `isize` take the target's width, so a cast must be
+    /// lossless on every target.
     fn is_lossless_int_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
-        let Some((from_signed, from_bits)) = self.prim_int_signed_bits(from) else {
-            return false;
-        };
-        let Some((to_signed, to_bits)) = self.prim_int_signed_bits(to) else {
-            return false;
-        };
-
-        match (from_signed, to_signed) {
-            (false, false) => to_bits >= from_bits,
-            (true, true) => to_bits >= from_bits,
-            (false, true) => to_bits > from_bits,
-            (true, false) => false,
-        }
+        Target::ALL.into_iter().all(|target| {
+            match (
+                self.prim_int_signed_bits(from, target),
+                self.prim_int_signed_bits(to, target),
+            ) {
+                (Some((from_signed, from_bits)), Some((to_signed, to_bits))) => {
+                    match (from_signed, to_signed) {
+                        (false, false) | (true, true) => to_bits >= from_bits,
+                        (false, true) => to_bits > from_bits,
+                        (true, false) => false,
+                    }
+                }
+                _ => false,
+            }
+        })
     }
 
     fn int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {

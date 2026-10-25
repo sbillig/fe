@@ -78,23 +78,23 @@ pub contract Viewer {
 
         GetU256 {} -> u256 {
             let cd = CallData::with_base(4)
-            cd.array_view<u256>(0).get(cd.word_at(32) as usize)
+            cd.array_view<u256>(0).get(cd.word_at(32).downcast_unchecked())
         }
 
         GetAddress {} -> Address {
             let cd = CallData::with_base(4)
-            cd.array_view<Address>(0).get(cd.word_at(32) as usize)
+            cd.array_view<Address>(0).get(cd.word_at(32).downcast_unchecked())
         }
 
         GetTransfer {} -> u256 {
             let cd = CallData::with_base(4)
-            let transfer = cd.array_view<Transfer>(0).get(cd.word_at(32) as usize)
+            let transfer = cd.array_view<Transfer>(0).get(cd.word_at(32).downcast_unchecked())
             transfer.2 + transfer.0 as u256
         }
 
         BytesAt {} -> u256 {
             let cd = CallData::with_base(4)
-            let item = cd.array_view<Bytes>(0).bytes_at(cd.word_at(32) as usize)
+            let item = cd.array_view<Bytes>(0).bytes_at(cd.word_at(32).downcast_unchecked())
             if item.is_empty() {
                 return 0
             }
@@ -103,7 +103,7 @@ pub contract Viewer {
 
         BytesGet {} -> u256 {
             let cd = CallData::with_base(4)
-            let item = cd.array_view<Bytes>(0).get(cd.word_at(32) as usize)
+            let item = cd.array_view<Bytes>(0).get(cd.word_at(32).downcast_unchecked())
             if item.len() == 0 {
                 return 0
             }
@@ -113,7 +113,7 @@ pub contract Viewer {
         Matrix {} -> u256 {
             let cd = CallData::with_base(4)
             let rows = cd.array_view<DynArray<u256>>(0)
-            rows.array_at(cd.word_at(32) as usize).get(cd.word_at(64) as usize)
+            rows.array_at(cd.word_at(32).downcast_unchecked()).get(cd.word_at(64).downcast_unchecked())
         }
 
         SecondLen {} -> u256 {
@@ -122,22 +122,22 @@ pub contract Viewer {
 
         StringLen {} -> u256 {
             let cd = CallData::with_base(4)
-            cd.array_view<DynString>(0).string_at(cd.word_at(32) as usize).len() as u256
+            cd.array_view<DynString>(0).string_at(cd.word_at(32).downcast_unchecked()).len() as u256
         }
 
         HeadWord {} -> u256 {
             let cd = CallData::with_base(4)
-            cd.array_view<Bytes>(0).head_word(cd.word_at(32) as usize)
+            cd.array_view<Bytes>(0).head_word(cd.word_at(32).downcast_unchecked())
         }
 
         UncheckedPos {} -> u256 {
             let cd = CallData::with_base(4)
-            cd.array_view<Bytes>(0).unchecked_element_pos(cd.word_at(32) as usize)
+            cd.array_view<Bytes>(0).unchecked_element_pos(cd.word_at(32).downcast_unchecked())
         }
 
         ElementPos {} -> u256 {
             let cd = CallData::with_base(4)
-            cd.array_view<Bytes>(0).element_pos(cd.word_at(32) as usize)
+            cd.array_view<Bytes>(0).element_pos(cd.word_at(32).downcast_unchecked())
         }
 
         HeadsPos {} -> u256 {
@@ -154,12 +154,12 @@ fn call_words<const N: usize>(_ addr: Address, selector: u256, words: [u256; N])
 uses (evm: mut Evm)
 {
     let len = 4 + (N as u256) * 32
-    let data = MemBuffer::alloc((len + 32) as usize)
+    let data = MemBuffer::alloc((len + 32).downcast_unchecked())
     unsafe { store_word(ptr: data.ptr(), value: selector << 224) }
     var i: usize = 0
     while i < N {
         unsafe {
-            store_word(ptr: ptr::offset_bytes(data.ptr(), 4 + (i as u256) * 32), value: words[i])
+            store_word(ptr: ptr::offset_bytes(data.ptr(), (4 + (i as u256) * 32).downcast_unchecked()), value: words[i])
         }
         i += 1
     }
@@ -169,7 +169,7 @@ uses (evm: mut Evm)
             addr: addr,
             gas: 1000000,
             value: Wei::zero(),
-            args: unsafe { MemSpan::from_raw_parts(ptr: data.ptr(), len: len as usize) },
+            args: unsafe { MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked()) },
             ret: mut ret,
         )
     let rlen = outcome.returndata_len()
@@ -464,7 +464,7 @@ struct MemInput { ptr: *u8, len: u256 }
 impl Copy for MemInput {}
 impl MemInput {
     fn span(self) -> ref MemSpan {
-        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len as usize) }
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
     }
     fn truncated(self, len: u256) -> Self {
         assert!(len <= self.len)
@@ -474,7 +474,7 @@ impl MemInput {
 impl ByteSource for MemInput {
     fn size(self) -> u64 { self.len.downcast_truncate() }
     fn word_at(self, _ offset: u256) -> u256 { self.span().word_at(offset) }
-    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset as usize) }
+    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset.downcast_unchecked()) }
     unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
         self.span().copy_to_memory(dest, src_offset, len)
     }
@@ -483,11 +483,11 @@ impl ByteSource for MemInput {
 fn mem_input<const N: usize>(_ words: [u256; N]) -> MemInput
 uses (evm: mut Evm)
 {
-    let data = ptr::alloc_bytes((N as u256) * 32)
+    let data = ptr::alloc_bytes(((N as u256) * 32).downcast_saturate())
     var i: usize = 0
     while i < N {
         unsafe {
-            store_word(ptr: ptr::offset_bytes(data, (i as u256) * 32), value: words[i])
+            store_word(ptr: ptr::offset_bytes(data, ((i as u256) * 32).downcast_unchecked()), value: words[i])
         }
         i += 1
     }
@@ -623,13 +623,13 @@ fn test_raw_head_access_zero_sized_elements() uses (evm: mut Evm) {
 #[test(should_revert)]
 fn test_zero_stride_length_limit() uses (evm: mut Evm) {
     let view: ArrayView<MemInput, ()> = decode_array_view(mem_input([0x20, TWO_64]))
-    assert!(view.len() == TWO_64 as usize)
+    assert!(view.len() == TWO_64.downcast_unchecked())
 }
 
 #[test(should_revert)]
 fn test_zero_stride_max_length_rejected() uses (evm: mut Evm) {
     let view: ArrayView<MemInput, ()> = decode_array_view(mem_input([0x20, MAX]))
-    assert!(view.len() == MAX as usize)
+    assert!(view.len() == MAX.downcast_unchecked())
 }
 
 // Model the longest input, `2**64 - 1` bytes, without allocating it: three

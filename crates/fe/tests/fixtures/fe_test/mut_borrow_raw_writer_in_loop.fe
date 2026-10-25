@@ -16,14 +16,14 @@ impl<T> Copy for Arr<T> {}
 
 impl<T> Arr<T> {
     fn alloc(_ len: u256) -> Self {
-        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes(len * 64)), len }
+        Arr { ptr: ptr::cast<u8, T>(ptr::alloc_bytes((len * 64).downcast_saturate())), len }
     }
 
     fn at(self, _ i: u256) -> *T {
         if i >= self.len {
             core::panic()
         }
-        ptr::offset(self.ptr, i)
+        ptr::offset(self.ptr, i.downcast_unchecked())
     }
 }
 
@@ -53,7 +53,7 @@ impl Writer {
         self.buffer.reserve(size)
         let len = self.buffer.len()
         unsafe { self.buffer.set_len(len + size) }
-        ptr::offset_bytes(self.buffer.ptr(), len as u256)
+        ptr::offset_bytes(self.buffer.ptr(), len)
     }
 
     fn word(mut self, _ value: u256) {
@@ -89,7 +89,7 @@ fn write_items(_ book: Book, w: mut Writer) {
 fn sum_into(_ data: MemSpan, ret: mut u256) {
     var offset: usize = 0
     while offset < data.len() {
-        ret += load_word(ptr::offset_bytes(data.ptr(), offset as u256))
+        ret += load_word(ptr::offset_bytes(data.ptr(), offset))
         offset += 32
     }
 }
@@ -125,7 +125,7 @@ fn local_writer_lent_to_a_loop_over_pointer_params() {
     unsafe { *expected.at(7) = 2 + 1 + 2 + 3 + 4 + 32 + 0xabcd }
     var i: u256 = 0
     while i < 8 {
-        unsafe { assert(load_word(ptr::offset_bytes(out.ptr(), i * 32)) == *expected.at(i)) }
+        unsafe { assert(load_word(ptr::offset_bytes(out.ptr(), (i * 32).downcast_unchecked())) == *expected.at(i)) }
         i += 1
     }
     unsafe { assert((*items.at(1)).b == 4) }

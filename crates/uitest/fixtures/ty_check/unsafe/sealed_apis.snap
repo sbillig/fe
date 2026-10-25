@@ -11,7 +11,7 @@ error[8-0097]: call to unsafe function `copy_raw` requires an `unsafe` block or 
      │
      ┌─ src/ptr.fe:1258:15
      │
-1258 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: u256) {
+1258 │ pub unsafe fn copy_raw(_ dest: *u8, _ source: *u8, _ len: usize) {
      │               -------- callee defined here
 
 error[8-0097]: call to unsafe function `from_raw_parts` requires an `unsafe` block or function

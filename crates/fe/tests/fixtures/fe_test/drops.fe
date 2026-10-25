@@ -412,7 +412,7 @@ struct Tally {
 
 impl Drop for Tally {
     fn drop(own self) {
-        if self.counter as u256 != 0 {
+        if self.counter as usize != 0 {
             unsafe { *self.counter += 1 }
         }
     }

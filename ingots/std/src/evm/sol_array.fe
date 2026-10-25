@@ -161,19 +161,19 @@ impl<T> SolArray<T> {
     {
         let len = self.len
         let size = 32 + len * 32
-        let data = ptr::alloc_bytes(size)
+        let data = ptr::alloc_bytes(size.downcast_saturate())
         unsafe {
-            ptr::zero_bytes(data, size)
+            ptr::zero_bytes(data, size.downcast_unchecked())
             store_word(ptr: data, value: len)
         }
         var i: u256 = 0
         while i < len {
             let value = self[i]
             // The element's zeroed word, which only this encoding writes.
-            value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32 + i * 32), len: 32) })
+            value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, (32 + i * 32).downcast_unchecked()), len: 32) })
             i += 1
         }
-        unsafe { DynArray::from_abi_tail(data, len: len as usize, size) }
+        unsafe { DynArray::from_abi_tail(data, len: len.downcast_unchecked(), size) }
     }
 }
 

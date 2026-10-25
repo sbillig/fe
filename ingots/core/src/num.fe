@@ -396,6 +396,13 @@ const I64_SIGN_BIT: u256 = 0x8000000000000000
 const I128_SIGN_BIT: u256 = 0x80000000000000000000000000000000
 const I256_SIGN_BIT: u256 = 0x8000000000000000000000000000000000000000000000000000000000000000
 
+/// `word` as a `usize`, which it must fit: on EVM the same word, elsewhere
+/// its low bits.
+#[inline(always)]
+pub(ingot) const fn word_to_usize(_ word: u256) -> usize {
+    __bitcast(word)
+}
+
 pub trait IntDowncast<T> {
     const fn downcast(self) -> Option<T>
     const fn downcast_truncate(self) -> T
