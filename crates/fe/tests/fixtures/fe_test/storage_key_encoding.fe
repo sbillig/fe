@@ -1,6 +1,7 @@
 // Pin the mapping preimage independently of the numeric conversion helpers.
 // Native storage packing must never change these bytes or the resulting slots.
 use core::{ptr, size_of}
+use core::abi::load_word
 use std::evm::{Address, StorageKey}
 
 fn assert_word<K: StorageKey>(_ key: K, _ expected: u256) {
@@ -8,7 +9,7 @@ fn assert_word<K: StorageKey>(_ key: K, _ expected: u256) {
     let buf = ptr::alloc_bytes(32)
     unsafe {
         K::write_key(ptr: buf, key)
-        assert(*ptr::cast<u8, u256>(buf) == expected)
+        assert(load_word(buf) == expected)
     }
 }
 
@@ -141,11 +142,11 @@ fn tuple_keys_keep_separate_word_components() {
     let buf = ptr::alloc_bytes(96)
     unsafe {
         <(u8, i8, bool) as StorageKey>::write_key(ptr: buf, key)
-        assert(*ptr::cast<u8, u256>(buf) == 1)
+        assert(load_word(buf) == 1)
         assert(
-            *ptr::cast<u8, u256>(ptr::offset_bytes(buf, 32))
+            load_word(ptr::offset_bytes(buf, 32))
                 == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
         )
-        assert(*ptr::cast<u8, u256>(ptr::offset_bytes(buf, 64)) == 1)
+        assert(load_word(ptr::offset_bytes(buf, 64)) == 1)
     }
 }

@@ -2155,16 +2155,29 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
 
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
         Ok(match builtin {
+            // The EVM's word loads and stores are big-endian; native ones
+            // swap the bytes of the little-endian word.
             RuntimeBuiltin::Mload { addr } => {
                 let addr = self.local_value(*addr)?;
-                self.fb.insert_inst(
+                let word = self.fb.insert_inst(
                     Mload::new(self.module.inst_set(), addr, Type::I256),
                     Type::I256,
-                )
+                );
+                if self.module.is_native_target() {
+                    self.fb
+                        .insert_inst(Bswap::new(self.module.inst_set(), word), Type::I256)
+                } else {
+                    word
+                }
             }
             RuntimeBuiltin::Mstore { addr, value } => {
                 let addr = self.local_value(*addr)?;
-                let value = self.local_value(*value)?;
+                let mut value = self.local_value(*value)?;
+                if self.module.is_native_target() {
+                    value = self
+                        .fb
+                        .insert_inst(Bswap::new(self.module.inst_set(), value), Type::I256);
+                }
                 self.fb.insert_inst_no_result(Mstore::new(
                     self.module.inst_set(),
                     addr,
