@@ -104,9 +104,9 @@ func inline(always) private %core__lib__ptr__alloc_bytes_4704(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func inline(always) private %core__lib__ptr__alloc_bytes_8b3e(v0.i256) -> i256 {
@@ -126,9 +126,9 @@ func inline(always) private %core__lib__ptr__alloc_bytes_8b3e(v0.i256) -> i256 {
         jump block4;
 
     block4:
-        v12.*i8 = evm_malloc v0;
-        v13.i256 = ptr_to_int v12 i256;
-        return v13;
+        v10.*i8 = evm_malloc v0;
+        v11.i256 = ptr_to_int v10 i256;
+        return v11;
 }
 
 func private %alloc_uninit(v0.i256) -> @layout_0 {
@@ -853,8 +853,8 @@ func private %new(v0.i256) -> @layout_1 {
         jump block4;
 
     block4:
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
-        return v15;
+        v13.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
+        return v13;
 }
 
 func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -> i256 {

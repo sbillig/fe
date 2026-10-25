@@ -74,7 +74,13 @@ fn native_entry_symbol_is_reserved_when_reachable_helpers_are_named_main() {
         3,
         "associated, trait, and module helpers should have qualified symbols:\n{ir}"
     );
-    assert_eq!(ir.matches(" = call %").count(), 3, "missing calls:\n{ir}");
+    assert_eq!(
+        ir.lines()
+            .filter(|line| line.contains(" = call %") && line.contains("__main"))
+            .count(),
+        3,
+        "missing calls:\n{ir}"
+    );
 }
 
 #[test]

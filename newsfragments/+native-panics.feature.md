@@ -1,0 +1,1 @@
+Native panics now report on stderr and abort, after flushing output written before them: `panicked: arithmetic overflow` for a Solidity panic code, the message of an `assert!` that has one, other revert data in hex, and `panicked` for `core::panic`. They used to stop at a bare `SIGILL`, losing buffered output. SP1 guests still trap.
