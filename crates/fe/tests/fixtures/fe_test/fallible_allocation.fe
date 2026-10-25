@@ -17,7 +17,7 @@ fn exercise() {
         *ptr::offset(block, 1023) = local::malloc() + local::free()
         core::assert(*ptr::offset(block, 1023) == 42)
     }
-    match ptr::try_alloc_bytes(1 << 64) {
+    match ptr::try_alloc_bytes(usize::max()) {
         Option::Some(_) => core::panic()
         Option::None => {}
     }
