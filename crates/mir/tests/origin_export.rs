@@ -42,7 +42,7 @@ fn runtime_instance_for_func<'db>(
     let semantic = SemanticInstance::new(db, semantic_key);
     let runtime_key =
         RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), Vec::new());
-    get_or_build_runtime_instance(db, runtime_key, fe_mir::RuntimeTarget::Evm)
+    get_or_build_runtime_instance(db, runtime_key)
 }
 
 #[test]

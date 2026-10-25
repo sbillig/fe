@@ -1,13 +1,17 @@
 #![cfg(feature = "sp1")]
 
-use common::InputDb;
+use common::{InputDb, compilation::Target};
 use driver::DriverDataBase;
 use fe_codegen::{NativeOutputSelection, NativeTarget, OptLevel, emit_module_native_artifacts};
+use salsa::Setter;
 use url::Url;
 
 #[test]
 fn sp1_guest_io_emits_rv64_object_with_external_adapters() {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let file = db.workspace().touch(
         &mut db,
         Url::parse("file:///sp1_increment.fe").unwrap(),
@@ -66,6 +70,9 @@ fn sp1_guest_io_emits_rv64_object_with_external_adapters() {
 #[test]
 fn sp1_memory_copy_reserves_the_runtime_symbol() {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let file = db.workspace().touch(
         &mut db,
         Url::parse("file:///sp1_memory_copy.fe").unwrap(),
@@ -114,6 +121,9 @@ fn sp1_memory_copy_reserves_the_runtime_symbol() {
 #[test]
 fn sp1_rejects_host_argv_entry() {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let file = db.workspace().touch(
         &mut db,
         Url::parse("file:///sp1_argv.fe").unwrap(),
@@ -141,6 +151,9 @@ fn sp1_rejects_host_argv_entry() {
 #[test]
 fn sp1_keeps_entry_identity_when_helpers_are_named_main() {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let source = include_str!("../../fe/tests/fixtures/cli_output/native/entry_name_collision.fe")
         .to_string();
     let file = db.workspace().touch(

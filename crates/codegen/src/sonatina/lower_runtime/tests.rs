@@ -1,4 +1,9 @@
 use common::InputDb;
+#[cfg(all(
+    feature = "cranelift",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use common::compilation::Target;
 use contract_harness::{ExecutionOptions, RuntimeInstance as EvmRuntime};
 use driver::DriverDataBase;
 use mir::{
@@ -11,6 +16,11 @@ use mir::{
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 use mir::{RuntimeLinkage, build_native_executable_package};
+#[cfg(all(
+    feature = "cranelift",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+use salsa::Setter;
 use sonatina_ir::{builder::ModuleBuilder, isa::Isa, module::ModuleCtx};
 use url::Url;
 
@@ -27,6 +37,9 @@ use crate::{
 #[test]
 fn native_extern_cannot_claim_the_memory_copy_symbol() {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let file = db.workspace().touch(
         &mut db,
         Url::parse("file:///native_memmove_extern_collision.fe").unwrap(),

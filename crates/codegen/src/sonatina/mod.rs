@@ -2106,7 +2106,17 @@ pub fn emit_test_ingot_sonatina(
 mod tests {
     use super::*;
     use common::InputDb;
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    use common::compilation::Target;
     use driver::DriverDataBase;
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    use salsa::Setter;
     use std::{fs, path::PathBuf};
     use url::Url;
 
@@ -2121,6 +2131,9 @@ mod tests {
     ))]
     fn native_pointer_object_ir(name: &str, source: &str) -> String {
         let mut db = DriverDataBase::default();
+        db.compilation_settings()
+            .set_target(&mut db)
+            .to(Target::Native);
         let file = db
             .workspace()
             .touch(&mut db, temp_fixture_url(name), Some(source.to_string()));
