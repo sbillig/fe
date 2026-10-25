@@ -68,7 +68,7 @@ extern {
 }
 
 fn trigger() {
-    for x in revert() {}
+    for x in unsafe { revert() } {}
 }
 "#,
     );
@@ -412,7 +412,7 @@ extern {
 }
 
 fn pick<T, U: Pick<T>>(_value: U) -> T {
-    todo()
+    unsafe { todo() }
 }
 
 fn probe(subject: Subject) {
@@ -465,7 +465,7 @@ extern {
 }
 
 fn pick<T, U: Pick<T>>(_value: U) -> T {
-    todo()
+    unsafe { todo() }
 }
 
 fn probe(subject: Subject) {
@@ -522,7 +522,7 @@ extern {
 }
 
 fn pick<T, U: Pick<T>>(_value: U) -> T {
-    todo()
+    unsafe { todo() }
 }
 
 fn probe(subject: Subject) {
@@ -579,7 +579,7 @@ extern {
 }
 
 fn pick<T, U: Pick<T>>(_value: U) -> T {
-    todo()
+    unsafe { todo() }
 }
 
 fn probe(subject: Subject) {
@@ -678,12 +678,12 @@ extern {
 }
 
 fn pick<T, U: Pick<T>>(_ value: U) -> T {
-    todo()
+    unsafe { todo() }
 }
 
 impl Picker {
     fn pick<T, U: Pick<T>>(self, _ value: U) -> T {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -732,12 +732,12 @@ extern {
 }
 
 fn pick<T: HasOutput, U: Pick<T>>(_ value: U) -> T::Output {
-    todo()
+    unsafe { todo() }
 }
 
 impl Picker {
     fn pick<T: HasOutput, U: Pick<T>>(self, _ value: U) -> T::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -833,13 +833,13 @@ trait Foo<M> {
 
 impl Foo<u8> for S {
     fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: u8, _ value: Q) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
 impl Foo<bool> for S {
     fn foo<P: HasOutput, Q: Pick<P>>(self, _ marker: bool, _ value: Q) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -909,7 +909,7 @@ extern {
 }
 
 fn pick<T: HasOutput, U: Pick<T>>(_ value: U) -> T::Output {
-    todo()
+    unsafe { todo() }
 }
 
 fn probe() {
@@ -967,7 +967,7 @@ impl Foo<u8> for S {
         _ marker: u8,
         _ value: Q,
     ) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -977,7 +977,7 @@ impl Foo<bool> for S {
         _ marker: bool,
         _ value: Q,
     ) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -1036,7 +1036,7 @@ impl Foo<u8> for S {
         _ marker: u8,
         _ value: Q,
     ) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 
@@ -1046,7 +1046,7 @@ impl Foo<bool> for S {
         _ marker: bool,
         _ value: Q,
     ) -> P::Output {
-        todo()
+        unsafe { todo() }
     }
 }
 

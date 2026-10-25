@@ -1294,7 +1294,7 @@ fn native_extern_declarations_cannot_claim_runtime_symbols() {
         fs::write(
             &source,
             format!(
-                "extern {{\n    fn {symbol}(_ value: i64) -> i64\n}}\npub fn main() -> i32 {{\n    let _ = {symbol}(1)\n    0\n}}\n"
+                "extern {{\n    fn {symbol}(_ value: i64) -> i64\n}}\npub fn main() -> i32 {{\n    let _ = unsafe {{ {symbol}(1) }}\n    0\n}}\n"
             ),
         )
         .unwrap();
@@ -1911,7 +1911,7 @@ fn same_name() { core::assert(shared_answer() == 42) }
 #[test]
 fn keep_alpha() {
     core::assert(shared_answer() == 42)
-    core::assert(abs(-42) == 42)
+    core::assert(unsafe { abs(-42) } == 42)
 }
 "#,
     )
@@ -1928,7 +1928,7 @@ fn same_name() { core::assert(shared_answer() == 0) }
 #[test]
 fn keep_beta() {
     core::assert(shared_answer() == 42)
-    core::assert(abs(-7) == 7)
+    core::assert(unsafe { abs(-7) } == 7)
 }
 "#,
     )
