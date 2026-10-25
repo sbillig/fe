@@ -87,7 +87,7 @@ fn test_get_on_empty_panics() {
 #[test(should_revert, panic = 0x32)]
 fn test_get_large_index_panics_before_offset_arithmetic() {
     let values = make_arr(a: 1, b: 2, c: 3)
-    let _ = values.get(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+    let _ = values.get(usize::max())
 }
 
 #[test(should_revert, panic = 0x11)]

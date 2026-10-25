@@ -11,6 +11,18 @@ pub enum Target {
     Native,
 }
 
+impl Target {
+    pub const ALL: [Target; 2] = [Target::Evm, Target::Native];
+
+    /// The width of `usize`, `isize` and memory addresses.
+    pub fn usize_bits(self) -> usize {
+        match self {
+            Target::Evm => 256,
+            Target::Native => 64,
+        }
+    }
+}
+
 #[salsa::input]
 #[derive(Debug)]
 pub struct CompilationSettings {

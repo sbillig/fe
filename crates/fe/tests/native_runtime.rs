@@ -1431,7 +1431,7 @@ pub fn main() -> i32 {
             core::assert(buffer[i] == (i + 1).downcast_truncate())
         }
         let capacity = buffer.capacity()
-        core::assert(!buffer.try_resize(0x10000000000000000))
+        core::assert(!buffer.try_resize(usize::max()))
         core::assert(buffer.len() == 3000 && buffer.capacity() == capacity)
         core::assert(buffer[32] == 33)
         core::assert(buffer.try_resize(8))

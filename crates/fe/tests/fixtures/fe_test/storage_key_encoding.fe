@@ -34,7 +34,7 @@ fn unsigned_keys_are_zero_extended() {
     )
     assert_word(0 as usize, 0)
     assert_word(
-        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff as usize,
+        usize::max(),
         0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
     )
 }
@@ -101,12 +101,12 @@ fn signed_keys_are_sign_extended() {
     )
     let negative: isize = -1
     assert_word(negative, ones)
-    let minimum: isize = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    let minimum = isize::min()
     assert_word(
         minimum,
         0x8000000000000000000000000000000000000000000000000000000000000000,
     )
-    let maximum: isize = 57896044618658097711785492504343953926634992332820282019728792003956564819967
+    let maximum = isize::max()
     assert_word(
         maximum,
         0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,

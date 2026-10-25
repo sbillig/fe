@@ -2667,6 +2667,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::IntLiteralOutOfRange { span, literal, ty } => primary_diag(
+                Severity::Error,
+                "integer literal out of range",
+                format!("`{literal}` is not representable in `{}`", ty.pretty_print(db)),
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ConstEvalStepLimitExceeded(span) => primary_diag(
                 Severity::Error,
                 "const evaluation exceeded the step limit",

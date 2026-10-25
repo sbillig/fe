@@ -4,8 +4,8 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, Expr, ExprId, GenericParamOwner, HirIngot, IdentId, ImplTrait, LitKind,
-    Partial, PathId, Stmt, UnOp,
+    BinOp, Body, Const, Expr, ExprId, GenericParamOwner, HirIngot, IdentId, ImplTrait, IntegerId,
+    LitKind, Partial, PathId, Stmt, UnOp,
 };
 use salsa::SalsaValue;
 
@@ -25,7 +25,7 @@ use super::{
     },
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{BodyOwner, infer_body},
-    ty_def::{InvalidCause, TyId, TyParam, TyVar},
+    ty_def::{InvalidCause, TyId, TyParam, TyVar, int_literal_fits_prim},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
         CompleteSubst, ParamBasis, ParamDomainId, SourceParamIndex, SubstError,
@@ -1622,17 +1622,24 @@ fn bigint_to_u256_word(value: &BigInt) -> Option<BigUint> {
 
 /// A fault names the expression that raised it, so the diagnostic points where
 /// full CTFE of the same body would.
-#[derive(Clone, Copy, Debug)]
-enum ConstIntError {
+#[derive(Clone, Debug)]
+enum ConstIntError<'db> {
     Overflow(ExprId),
     DivisionByZero(ExprId),
     NegativeExponent(ExprId),
+    /// A literal, as written, does not fit its expected type on every
+    /// target.
+    LiteralOutOfRange {
+        expr: ExprId,
+        literal: String,
+        ty: TyId<'db>,
+    },
     /// The expression is not a pure integer expression. Callers may fall
     /// through to full CTFE rather than reporting an arithmetic error.
     NotIntExpr,
 }
 
-fn const_int_error(fault: PrimitiveFault, expr: ExprId) -> ConstIntError {
+fn const_int_error<'db>(fault: PrimitiveFault, expr: ExprId) -> ConstIntError<'db> {
     match fault {
         PrimitiveFault::ArithmeticOverflow => ConstIntError::Overflow(expr),
         PrimitiveFault::DivisionByZero => ConstIntError::DivisionByZero(expr),
@@ -1646,7 +1653,7 @@ fn const_int_error(fault: PrimitiveFault, expr: ExprId) -> ConstIntError {
 
 fn invalid_cause_from_const_int_error<'db>(
     body: Body<'db>,
-    err: ConstIntError,
+    err: ConstIntError<'db>,
 ) -> Option<InvalidCause<'db>> {
     match err {
         ConstIntError::Overflow(expr) => {
@@ -1658,6 +1665,14 @@ fn invalid_cause_from_const_int_error<'db>(
         ConstIntError::NegativeExponent(expr) => {
             Some(InvalidCause::ConstEvalNegativeExponent { body, expr })
         }
+        ConstIntError::LiteralOutOfRange { expr, literal, ty } => {
+            Some(InvalidCause::IntLiteralOutOfRange {
+                body,
+                expr,
+                literal,
+                ty,
+            })
+        }
         ConstIntError::NotIntExpr => None,
     }
 }
@@ -1668,7 +1683,7 @@ fn eval_int_expr<'db>(
     expr: ExprId,
     expected: Option<TyId<'db>>,
     has_captures: &dyn Fn() -> bool,
-) -> Result<BigInt, ConstIntError> {
+) -> Result<BigInt, ConstIntError<'db>> {
     let Partial::Present(data) = expr.data(db, body) else {
         return Err(ConstIntError::NotIntExpr);
     };
@@ -1682,12 +1697,18 @@ fn eval_int_expr<'db>(
             };
             eval_int_expr(db, body, *inner, expected, has_captures)
         }
-        Expr::Lit(LitKind::Int(value)) => Ok(BigInt::from(value.data(db).clone())),
+        Expr::Lit(LitKind::Int(value)) => int_literal_value(db, expr, *value, expected, false),
         Expr::Un(inner, op) => {
-            let Partial::Present(_) = inner.data(db, body) else {
+            let Partial::Present(inner_data) = inner.data(db, body) else {
                 return Err(ConstIntError::Overflow(expr));
             };
-            let value = eval_int_expr(db, body, *inner, expected, has_captures)?;
+            // A negated literal is checked as negative: `-128` fits `i8`.
+            let value = match (op, inner_data) {
+                (UnOp::Minus, Expr::Lit(LitKind::Int(value))) => {
+                    int_literal_value(db, expr, *value, expected, true)?
+                }
+                _ => eval_int_expr(db, body, *inner, expected, has_captures)?,
+            };
             if matches!(op, UnOp::Minus) && expected.is_none() {
                 return Err(ConstIntError::Overflow(expr));
             }
@@ -1755,6 +1776,31 @@ fn eval_int_expr<'db>(
         }
         _ => Err(ConstIntError::NotIntExpr),
     }
+}
+
+/// The magnitude of the literal `int`, which must fit the `expected` integer
+/// type, negated by `expr` or not, on every target.
+fn int_literal_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ExprId,
+    int: IntegerId<'db>,
+    expected: Option<TyId<'db>>,
+    negated: bool,
+) -> Result<BigInt, ConstIntError<'db>> {
+    let value = int.data(db);
+    if let Some(ty) = expected
+        && let Some(prim) = ty.as_prim(db)
+        && prim.is_integral()
+        && !int_literal_fits_prim(prim, value, negated)
+    {
+        let sign = if negated { "-" } else { "" };
+        return Err(ConstIntError::LiteralOutOfRange {
+            expr,
+            literal: format!("{sign}{value}"),
+            ty,
+        });
+    }
+    Ok(BigInt::from(value.clone()))
 }
 
 pub(super) fn try_eval_const_int_expr<'db>(
@@ -2089,16 +2135,10 @@ pub(crate) fn evaluate_const_ty<'db>(
                     };
                 }
             }
-            Err(ConstIntError::NotIntExpr) => {
-                // Expression contains constructs we can't evaluate with BigInt
-                // (e.g. function calls). Fall through to CTFE.
-            }
+            // An expression BigInt evaluation cannot handle, such as a call,
+            // falls through to CTFE.
             Err(err) => {
-                // Genuine arithmetic error (overflow, division by zero, etc.).
-                // For Block/Un/Bin, report error. For plain int literals, fall through to CTFE.
-                if matches!(expr, Expr::Block(..) | Expr::Un(..) | Expr::Bin(..))
-                    && let Some(cause) = invalid_cause_from_const_int_error(body, err)
-                {
+                if let Some(cause) = invalid_cause_from_const_int_error(body, err) {
                     return ConstTyId::invalid(db, cause);
                 }
             }
