@@ -24,7 +24,7 @@ use salsa::Setter;
 use sonatina_ir::{builder::ModuleBuilder, isa::Isa, module::ModuleCtx};
 use url::Url;
 
-use super::{FunctionLowerer, ModuleLowerer};
+use super::{FunctionLowerer, ModuleLowerer, NativePanics};
 use crate::{
     OptLevel,
     sonatina::{create_evm_isa, emit_runtime_module_sonatina_bytecode_with_options},
@@ -72,6 +72,7 @@ pub fn main() -> i32 {
         isa.inst_set(),
         &package,
         Some((host_import.instance(&db), "memmove")),
+        NativePanics::Abort,
     );
     let error = lowerer
         .declare_functions()
@@ -79,7 +80,7 @@ pub fn main() -> i32 {
     assert!(
         error
             .to_string()
-            .contains("native extern symbol `memmove` is reserved for core memory operations"),
+            .contains("native extern symbol `memmove` is reserved for the native runtime"),
         "unexpected error: {error}"
     );
 }
@@ -246,6 +247,7 @@ pub contract SlotContract {
             isa.inst_set(),
             &package,
             None,
+            NativePanics::Trap,
         );
         lowerer.declare_functions().unwrap();
         lowerer.lower_const_regions().unwrap();

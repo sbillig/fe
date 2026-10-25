@@ -22,7 +22,8 @@ extern {
     pub fn panic_with_value<T>(_: own T) -> !
     /// Aborts with a Solidity-compatible panic code (see `core::panics`).
     ///
-    /// On EVM targets this reverts with `Panic(uint256)` data; native targets trap.
+    /// On EVM targets this reverts with `Panic(uint256)` data; native targets
+    /// report the code's reason on stderr and abort.
     pub const fn panic_code(_ code: u256) -> !
     pub fn todo() -> !
 }

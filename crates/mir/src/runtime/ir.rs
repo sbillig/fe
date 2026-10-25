@@ -1686,6 +1686,10 @@ pub enum RTerminator<'db> {
         len: RValueId,
     },
     RevertEmpty,
+    /// Reverts with Solidity `Panic(uint256)` data for the word `code`.
+    Panic {
+        code: RValueId,
+    },
     SelfDestruct {
         beneficiary: RValueId,
     },
@@ -2066,6 +2070,7 @@ impl<'db> RTerminator<'db> {
             | Self::SwitchScalar { discr: value, .. }
             | Self::MatchEnumTag { tag: value, .. }
             | Self::SelfDestruct { beneficiary: value }
+            | Self::Panic { code: value }
             | Self::Return(Some(value))
             | Self::Yield {
                 value: Some(value), ..
@@ -2109,6 +2114,7 @@ impl<'db> RTerminator<'db> {
             | Self::ReturnData { .. }
             | Self::Revert { .. }
             | Self::RevertEmpty
+            | Self::Panic { .. }
             | Self::SelfDestruct { .. }
             | Self::Trap
             | Self::Return(_)

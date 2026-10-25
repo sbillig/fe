@@ -1,9 +1,12 @@
 mod memory_reference;
+mod native_panic;
 
 #[cfg(test)]
 mod tests;
 
 use memory_reference::{MemoryReference, ReferentLayout};
+use native_panic::NativePanic;
+pub(super) use native_panic::NativePanics;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -79,9 +82,19 @@ use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 // Sonatina's EVM calling convention can carry at most 16 arguments.
 const MAX_DIRECT_CALL_ARGS: usize = 16;
 
-// Host C functions that native core memory operations call. Fe items cannot
-// claim these symbols.
-const HOST_SYMBOLS: &[&str] = &["memmove", "malloc", "free"];
+// Host C functions that native core memory operations and panics call, and
+// the functions panics call. Fe items cannot claim these symbols.
+const HOST_SYMBOLS: &[&str] = &[
+    "memmove",
+    "malloc",
+    "free",
+    "fflush",
+    "write",
+    "abort",
+    "__fe_trap",
+    "__fe_revert",
+    "__fe_panic_code",
+];
 
 // The native address of every zero-size allocation, which takes nothing from
 // the host. It is aligned for any value and lies in the unmapped first page,
@@ -174,7 +187,7 @@ pub(super) fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
-    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, None)
+    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, None, NativePanics::Trap)
         .map(|(module, _)| module)
 }
 
@@ -194,7 +207,14 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
-    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package, None);
+    let mut lowerer = ModuleLowerer::new(
+        db,
+        builder,
+        isa.inst_set(),
+        package,
+        None,
+        NativePanics::Trap,
+    );
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.declare_external_code(external_code);
@@ -216,16 +236,19 @@ pub(super) fn compile_runtime_package_sonatina_for_isa<'db, I>(
     isa: &I,
     declare_objects: bool,
     fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+    panics: NativePanics,
 ) -> Result<(Module, FxHashMap<RuntimeInstance<'db>, FuncRef>), LowerError>
 where
     I: Isa,
     I::InstSet: LoweringInstSet,
 {
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
-    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol);
+    let mut lowerer =
+        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol, panics);
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
+    lowerer.define_native_panic_functions();
     if declare_objects {
         lowerer.declare_objects()?;
     }
@@ -249,6 +272,7 @@ struct ModuleLowerer<'db, 'a, I: 'static> {
     external_code: FxHashMap<(String, mir::RuntimeSectionName), GlobalVariableRef>,
     /// The constant byte strings code copies, one global each.
     const_bytes: FxHashMap<Box<[u8]>, GlobalVariableRef>,
+    panics: NativePanics,
 }
 
 impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
@@ -258,6 +282,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         inst_set: &'static I,
         package: &'a RuntimePackage<'db>,
         fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+        panics: NativePanics,
     ) -> Self {
         let native = is_native_architecture(builder.ctx.triple.architecture);
         Self {
@@ -281,6 +306,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             explicit_code_region_sections: FxHashSet::default(),
             external_code: FxHashMap::default(),
             const_bytes: FxHashMap::default(),
+            panics,
         }
     }
 
@@ -359,7 +385,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             && HOST_SYMBOLS.contains(&symbol.as_str())
         {
             return Err(LowerError::Unsupported(format!(
-                "native extern symbol `{symbol}` is reserved for core memory operations"
+                "native extern symbol `{symbol}` is reserved for the native runtime"
             )));
         }
         if function.linkage(self.db) == RuntimeLinkage::External
@@ -1205,7 +1231,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.checked_indices.clear();
             self.block_ends_with_payload = matches!(
                 block.terminator,
-                RTerminator::ReturnData { .. } | RTerminator::Revert { .. }
+                RTerminator::ReturnData { .. }
+                    | RTerminator::Revert { .. }
+                    | RTerminator::Panic { .. }
             );
             self.fb
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
@@ -3074,29 +3102,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     len,
                 ));
             }
-            // Native targets have no revert data; a revert aborts like a trap.
-            RTerminator::Revert { .. } | RTerminator::RevertEmpty
-                if self.module.is_native_target() =>
-            {
-                self.fb
-                    .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
-            }
             RTerminator::Revert { offset, len } => {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
-                self.fb.insert_inst_no_result(EvmRevert::new(
-                    self.module.required_inst::<EvmRevert>()?,
-                    offset,
-                    len,
-                ));
+                if self.module.is_native_target() {
+                    let pointer = self.fb.ptr_type(Type::I8);
+                    let data = self.coerce_value_to_ty(offset, pointer)?;
+                    let len = self.coerce_value_to_ty(len, Type::I64)?;
+                    self.insert_native_panic(NativePanic::Revert, smallvec![data, len]);
+                } else {
+                    self.fb.insert_inst_no_result(EvmRevert::new(
+                        self.module.required_inst::<EvmRevert>()?,
+                        offset,
+                        len,
+                    ));
+                }
             }
-            RTerminator::RevertEmpty => {
-                let zero = self.fb.make_imm_value(I256::zero());
-                self.fb.insert_inst_no_result(EvmRevert::new(
-                    self.module.required_inst::<EvmRevert>()?,
-                    zero,
-                    zero,
-                ));
+            RTerminator::RevertEmpty => self.insert_empty_revert(),
+            RTerminator::Panic { code } => {
+                let code = self.local_value(*code)?;
+                self.insert_panic_revert(code);
             }
             RTerminator::SelfDestruct { beneficiary } => {
                 let beneficiary = self.local_value(*beneficiary)?;
@@ -3107,8 +3132,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RTerminator::Trap => {
                 if self.module.is_native_target() {
-                    self.fb
-                        .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                    self.insert_native_panic(NativePanic::Trap, smallvec![]);
                 } else {
                     self.fb.insert_inst_no_result(EvmInvalid::new(
                         self.module.required_inst::<EvmInvalid>()?,
@@ -6252,17 +6276,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .expect("shared helper requires current block");
             this.fb.switch_to_block(block);
             match kind {
-                SharedHelperKind::EmptyRevert => {
-                    if let Some(has_revert) = EvmRevert::belongs_to(this.module.inst_set()) {
-                        let zero = zero_for_type(&mut this.fb, Type::I256);
-                        this.fb
-                            .insert_inst_no_result(EvmRevert::new(has_revert, zero, zero));
-                    } else {
-                        this.fb
-                            .insert_inst_no_result(Unreachable::new(this.module.inst_set()));
-                    }
+                SharedHelperKind::EmptyRevert => this.insert_empty_revert(),
+                SharedHelperKind::Panic(code) => {
+                    let code = this.fb.make_imm_value(I256::from(code));
+                    this.insert_panic_revert(code);
                 }
-                SharedHelperKind::Panic(code) => this.emit_panic_revert_payload(code),
             }
             this.fb.switch_to_block(current);
             block
@@ -6272,16 +6290,33 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         block
     }
 
-    fn emit_panic_revert_payload(&mut self, code: u64) {
-        let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+    /// Ends the block at a revert without data.
+    fn insert_empty_revert(&mut self) {
+        let inst_set = self.module.inst_set();
+        if let Some(has_revert) = EvmRevert::belongs_to(inst_set) {
+            let zero = zero_for_type(&mut self.fb, Type::I256);
             self.fb
-                .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                .insert_inst_no_result(EvmRevert::new(has_revert, zero, zero));
+        } else {
+            let pointer = self.fb.ptr_type(Type::I8);
+            let zero = self.fb.make_imm_value(0i64);
+            let null = self
+                .fb
+                .insert_inst(IntToPtr::new(inst_set, zero, pointer), pointer);
+            self.insert_native_panic(NativePanic::Revert, smallvec![null, zero]);
+        }
+    }
+
+    /// Ends the block at a revert with Solidity `Panic(code)` data for the
+    /// word `code`. On the EVM, the data is in scratch memory at 0.
+    fn insert_panic_revert(&mut self, code: ValueId) {
+        let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+            self.insert_native_panic(NativePanic::Code, smallvec![code]);
             return;
         };
         let zero = self.fb.make_imm_value(I256::zero());
         let selector = self.fb.make_imm_value(panic_selector_immediate());
         let code_offset = self.fb.make_imm_value(I256::from(4u64));
-        let code = self.fb.make_imm_value(I256::from(code));
         let len = self.fb.make_imm_value(I256::from(36u64));
         self.fb.insert_inst_no_result(Mstore::new(
             self.module.inst_set(),
@@ -6297,6 +6332,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         ));
         self.fb
             .insert_inst_no_result(EvmRevert::new(has_revert, zero, len));
+    }
+
+    /// Ends the block at a native panic through `panic`'s function, or at a
+    /// trap when the module traps.
+    fn insert_native_panic(&mut self, panic: NativePanic, args: SmallVec<[ValueId; 8]>) {
+        if let Some(func) = self.module.native_panic_function(panic) {
+            self.fb
+                .insert_inst_no_result(Call::new(self.module.inst_set(), func, args));
+        }
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
     }
 
     fn emit_empty_revert(&mut self, overflow_flag: ValueId) -> Result<(), LowerError> {

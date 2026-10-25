@@ -7,6 +7,9 @@ pub use native_tests::{NativeTestEntry, NativeTestSuite, emit_test_suite_native}
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
+#[cfg(feature = "cranelift")]
+use lower_runtime::NativePanics;
+
 use common::ingot::Ingot;
 use driver::DriverDataBase;
 #[cfg(feature = "cranelift")]
@@ -749,10 +752,11 @@ fn compile_executable_sonatina_native(
         .ok_or_else(|| LowerError::Internal("native package is missing its main section".into()))?
         .entry
         .instance(db);
-    let isa = match target {
-        NativeTarget::Host => create_native_isa()?,
+    // SP1 guests have no stderr; a failed execution is their report.
+    let (isa, panics) = match target {
+        NativeTarget::Host => (create_native_isa()?, NativePanics::Abort),
         #[cfg(feature = "sp1")]
-        NativeTarget::Sp1 => Native::new(TargetTriple::SP1),
+        NativeTarget::Sp1 => (Native::new(TargetTriple::SP1), NativePanics::Trap),
     };
     let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
         db,
@@ -760,6 +764,7 @@ fn compile_executable_sonatina_native(
         &isa,
         false,
         Some((entry, "main")),
+        panics,
     )?;
     let main = functions
         .get(&entry)
