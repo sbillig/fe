@@ -44,9 +44,9 @@ use crate::hir_def::{
 use crate::{
     hir_def::{
         BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
-        GenericParam, GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId,
-        PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
-        TypeKind, UnOp, WhereClauseOwner,
+        GenericParam, GenericParamOwner, IntegerId, LitKind, ManualContractRootAttr, Partial, Pat,
+        PatId, PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId,
+        TypeId as HirTyId, TypeKind, UnOp, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -100,6 +100,7 @@ use super::{
     },
     ty_def::{
         BorrowKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback, TyId, TyVarSort,
+        int_literal_fits_prim,
     },
     ty_lower::{CompleteSubst, collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
@@ -7093,6 +7094,8 @@ struct TyCheckerFinalizer<'db> {
     ty_vars: FxHashSet<InferenceKey<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     direct_call_callees: FxHashSet<ExprId>,
+    /// Literals a cast or negation already checked against its type.
+    range_checked_literals: FxHashSet<ExprId>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -7101,11 +7104,16 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         &mut self,
         ctxt: &mut VisitorCtxt<'db, LazyPatSpan<'db>>,
         pat: PatId,
-        _: &Pat<'db>,
+        pat_data: &Pat<'db>,
     ) {
         let ty = self.body.pat_ty(self.db, pat);
         let span = ctxt.span().unwrap();
         self.check_unknown(ty, span.clone().into());
+        if let Pat::Lit(Partial::Present(LitKind::Int(int))) = pat_data
+            && self.body.body() == Some(ctxt.body())
+        {
+            self.check_int_literal_range(*int, ty, span.clone().into());
+        }
         if self.body.pat_binding(pat).is_some()
             && !matches!(
                 self.body.pat_binding_mode(pat),
@@ -7142,6 +7150,13 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
                     given: *given,
                 };
                 self.diags.push(TyDiagCollection::from(diag).into());
+            }
+            // A nested body, such as an array length, is typed apart.
+            if let Expr::Lit(LitKind::Int(int)) = expr_data
+                && self.body.body() == Some(ctxt.body())
+                && !self.range_checked_literals.contains(&expr)
+            {
+                self.check_int_literal_range(*int, prop.ty, span.clone().into());
             }
             let is_direct_call_callee =
                 matches!(expr_data, Expr::Path(..)) && self.direct_call_callees.contains(&expr);
@@ -7312,6 +7327,18 @@ impl<'db> TyCheckerFinalizer<'db> {
                 })
                 .collect()
         });
+        let range_checked_literals = body.body().map_or_else(FxHashSet::default, |body_id| {
+            body_id
+                .exprs(checker.db)
+                .iter()
+                .filter_map(|(_expr, expr_data)| match expr_data {
+                    Partial::Present(Expr::Cast(operand, _) | Expr::Un(operand, UnOp::Minus)) => {
+                        Some(*operand)
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
 
         Self {
             db: checker.db,
@@ -7320,6 +7347,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             ty_vars: FxHashSet::default(),
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,
+            range_checked_literals,
             diags: checker.diags,
         }
     }
@@ -7333,6 +7361,29 @@ impl<'db> TyCheckerFinalizer<'db> {
         if let Some(body) = self.body.body() {
             let mut ctxt = VisitorCtxt::with_body(self.db, body);
             self.visit_body(&mut ctxt, body);
+        }
+    }
+
+    /// A literal must fit its type on every target.
+    fn check_int_literal_range(
+        &mut self,
+        int: IntegerId<'db>,
+        ty: TyId<'db>,
+        span: DynLazySpan<'db>,
+    ) {
+        let value = int.data(self.db);
+        if let Some(prim) = ty.as_prim(self.db)
+            && prim.is_integral()
+            && !int_literal_fits_prim(prim, value, false)
+        {
+            self.diags.push(
+                BodyDiag::IntLiteralOutOfRange {
+                    primary: span,
+                    literal: value.to_string(),
+                    ty,
+                }
+                .into(),
+            );
         }
     }
 

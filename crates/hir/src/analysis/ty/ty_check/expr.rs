@@ -80,7 +80,10 @@ use crate::analysis::ty::{
         GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
-    ty_def::{BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, prim_int_bits},
+    ty_def::{
+        BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, int_literal_fits_prim,
+        prim_int_bits,
+    },
     ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
     unify::UnificationTable,
 };
@@ -112,7 +115,7 @@ use crate::analysis::{
 use crate::core::semantic::storage_slot_span;
 use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
 use crate::semantic::{ProviderBinding, ProviderSource};
-use common::indexmap::IndexMap;
+use common::{compilation::Target, indexmap::IndexMap};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct KeyedWitnessBuildScope<'db> {
@@ -1356,7 +1359,7 @@ impl<'db> TyChecker<'db> {
         let TyData::TyBase(TyBase::Prim(prim)) = base.data(self.db) else {
             return None;
         };
-        let bits = prim_int_bits(*prim)?;
+        let bits = prim_int_bits(*prim, Target::Evm)?;
         let signed = matches!(
             prim,
             PrimTy::I8
@@ -1387,31 +1390,15 @@ impl<'db> TyChecker<'db> {
     }
 
     fn int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
-        let leaf = self.peel_transparent_newtypes(target_ty);
-        let Some((signed, bits)) = self.prim_int_signed_bits(leaf) else {
-            return false;
-        };
-
-        if signed {
-            let max = (BigUint::from(1u8) << (bits - 1)) - BigUint::from(1u8);
-            value <= &max
-        } else {
-            let max = (BigUint::from(1u8) << bits) - BigUint::from(1u8);
-            value <= &max
-        }
+        self.peel_transparent_newtypes(target_ty)
+            .as_prim(self.db)
+            .is_some_and(|prim| int_literal_fits_prim(prim, value, false))
     }
 
     fn negated_int_literal_fits_in_ty(&self, value: &BigUint, target_ty: TyId<'db>) -> bool {
-        let leaf = self.peel_transparent_newtypes(target_ty);
-        let Some((signed, bits)) = self.prim_int_signed_bits(leaf) else {
-            return false;
-        };
-        if !signed {
-            return false;
-        }
-
-        let max = BigUint::from(1u8) << (bits - 1);
-        value <= &max
+        self.peel_transparent_newtypes(target_ty)
+            .as_prim(self.db)
+            .is_some_and(|prim| int_literal_fits_prim(prim, value, true))
     }
 
     fn check_binary(

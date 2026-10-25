@@ -1,4 +1,4 @@
-use common::layout::enum_tag_bits;
+use common::{compilation::Target, layout::enum_tag_bits};
 use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
@@ -1076,7 +1076,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
                 | PrimTy::BorrowMut
                 | PrimTy::BorrowRef => Some(WORD_SIZE_BYTES),
                 PrimTy::Array | PrimTy::Tuple(_) => None,
-                _ => prim_int_bits(*prim).map(|bits| bits as u64 / 8),
+                _ => prim_int_bits(*prim, Target::Evm).map(|bits| bits as u64 / 8),
             }
         } else if ty.is_struct(db) {
             let adt = ty.adt_def(db).expect("struct has an ADT definition");
