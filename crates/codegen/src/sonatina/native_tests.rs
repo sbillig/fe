@@ -5,7 +5,7 @@ use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
 use sonatina_ir::{Linkage, ir_writer::ModuleWriter};
 
 use super::{
-    LowerError, create_native_isa, ensure_module_sonatina_ir_valid, format_cranelift_errors,
+    LowerError, create_native_isa, debug_ensure_module_sonatina_ir_valid, format_cranelift_errors,
     lower_runtime, to_sonatina_opt_level,
 };
 use crate::{
@@ -77,7 +77,7 @@ pub fn emit_test_suite_native(
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
     compile.optimize();
-    ensure_module_sonatina_ir_valid(compile.module())?;
+    debug_ensure_module_sonatina_ir_valid(compile.module())?;
     let ir = emit_ir.then(|| ModuleWriter::new(compile.module()).dump_string());
     let object = compile
         .compile()
