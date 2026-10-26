@@ -4507,6 +4507,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     }
                 }
             }
+            RuntimeClass::AggregateValue { .. } if self.memory_matches_value(memory, class)? => {
+                let ty = self.module.ty_for_class(class)?;
+                self.fb
+                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
+                Ok(())
+            }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.module.db) {
                 Layout::Struct(data) => {
                     // Packed fields of one word are combined and stored once.
@@ -4883,6 +4889,79 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
     }
 
+    /// Whether `class` has the same bytes in `memory` as a Sonatina value of
+    /// its type, so it moves between them in one load or store. Raw memory
+    /// packs fields without alignment, which matches only where no field is
+    /// padded; enums and handles keep encodings of their own.
+    fn memory_matches_value(
+        &mut self,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+    ) -> Result<bool, LowerError> {
+        if !self.module.is_native_target() {
+            return Ok(false);
+        }
+        let raw = match memory {
+            ReferentLayout::Object => None,
+            ReferentLayout::Raw(AddressSpace::Memory) => {
+                Some(RuntimeMemoryLayout::raw(self.module.db))
+            }
+            ReferentLayout::Raw(_) => return Ok(false),
+        };
+        let ty = self.module.ty_for_class(class)?;
+        let size = self.fb.module_builder.ctx.size_of(ty).ok();
+        let offset = |lowerer: &Self, idx: usize| {
+            lowerer
+                .fb
+                .module_builder
+                .ctx
+                .aggregate_elem_offset(ty, idx)
+                .map(|(offset, _)| offset as u64)
+        };
+        let layout = match class {
+            RuntimeClass::Scalar(scalar) => {
+                return Ok(
+                    raw.is_none() || size == Some(scalar_raw_memory_size_bytes(scalar) as usize)
+                );
+            }
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => return Ok(raw.is_none()),
+            RuntimeClass::AggregateValue { layout } => *layout,
+        };
+        let fields = match layout.data(self.module.db) {
+            Layout::Enum(_) => return Ok(false),
+            Layout::Struct(data) => {
+                let mut offsets = Vec::with_capacity(data.fields.len());
+                for (idx, field) in data.fields.iter().enumerate() {
+                    if !self.memory_matches_value(memory, field)? {
+                        return Ok(false);
+                    }
+                    if let Some(raw) = raw {
+                        offsets.push((raw.struct_field_offset(&data, idx)?, idx));
+                    }
+                }
+                offsets
+            }
+            Layout::Array(data) => {
+                if !self.memory_matches_value(memory, &data.elem)? {
+                    return Ok(false);
+                }
+                match raw {
+                    Some(raw) if data.len > 1 => vec![(raw.array_element_offset(&data, 1)?, 1)],
+                    _ => Vec::new(),
+                }
+            }
+        };
+        Ok(match raw {
+            None => true,
+            Some(raw) => {
+                size == Some(raw.layout_size(layout)? as usize)
+                    && fields
+                        .into_iter()
+                        .all(|(raw_offset, idx)| offset(self, idx) == Some(raw_offset))
+            }
+        })
+    }
+
     fn load_aggregate_from_ptr(
         &mut self,
         addr: ValueId,
@@ -4890,6 +4969,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
         let class = RuntimeClass::AggregateValue { layout };
+        if self.memory_matches_value(memory, &class)? {
+            let ty = self.module.ty_for_layout(layout)?;
+            return Ok(self
+                .fb
+                .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+        }
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;

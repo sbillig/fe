@@ -227,6 +227,69 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_boxed_values_move_whole_where_raw_and_native_layouts_agree() {
+    // A box stores its value packed. `words` follows a one-byte bool, so the
+    // frame's raw layout differs from its native one and moves field by
+    // field, but `words`, `small` and `pair` each move in one load and store.
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("boxed.fe");
+    fs::write(
+        &source,
+        r#"
+use core::Box
+
+struct Pair { a: u64, b: u64 }
+
+struct Frame {
+    flag: bool,
+    words: [u256; 64],
+    count: u64,
+    small: [u8; 3],
+    pair: Pair,
+}
+
+pub fn main() -> i32 {
+    var words: [u256; 64] = [0; 64]
+    var i: usize = 0
+    while i < 64 {
+        words[i] = (i as u256 + 1) * 0x0101010101010101010101010101010101010101010101010101010101010101
+        i += 1
+    }
+    let frame = Frame { flag: true, words, count: 7, small: [1, 2, 3], pair: Pair { a: 5, b: 6 } }
+    let moved = Box::new(frame).into_inner()
+    assert!(moved.flag && moved.count == 7 && moved.pair.a == 5 && moved.pair.b == 6)
+    assert!(moved.small[0] == 1 && moved.small[1] == 2 && moved.small[2] == 3)
+    i = 0
+    while i < 64 {
+        assert!(moved.words[i] == (i as u256 + 1) * 0x0101010101010101010101010101010101010101010101010101010101010101)
+        i += 1
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("boxed")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        if level == "0" {
+            let ir = fs::read_to_string(out.join("boxed.native.sona")).unwrap();
+            for ty in ["[i256; 64]", "[i8; 3]"] {
+                for op in ["= mload", "mstore"] {
+                    assert!(
+                        ir.lines()
+                            .any(|line| line.contains(op) && line.ends_with(&format!(" {ty};"))),
+                        "{op} {ty}\n{ir}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn native_long_string_literals_hold_their_bytes() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("long_strings.fe");
