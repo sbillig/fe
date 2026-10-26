@@ -27,7 +27,7 @@ error[16-0017]: compile-time destructor in `fn discard`
 32 │ const fn discard<T>(_ value: own T) {}
    │                                     ^^ destroying `T` may run a `Drop` implementation, which compile-time code cannot
 
-error[16-0017]: compile-time destructor in `fn ID`
+error[16-0017]: compile-time destructor in `const ID`
    ┌─ const_destructors.fe:38:18
    │
 38 │ const ID: u256 = make(1).id
