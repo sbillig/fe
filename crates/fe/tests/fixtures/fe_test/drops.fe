@@ -1,4 +1,4 @@
-use core::{Box, MemArray, MemBuffer, MemVec, Option}
+use core::{Box, MemArray, MemBuffer, MemVec, Option, Result}
 use core::ops::Drop
 use core::ptr
 
@@ -239,6 +239,20 @@ fn matched_payloads_are_destroyed() {
             Option::None => {}
         }
         assert(count(counter) == 1)
+    }
+    assert(count(counter) == 2)
+}
+
+// Querying an `Option` or `Result` reads it, destroying nothing.
+#[test]
+fn queries_read_without_destroying() {
+    let counter = counter()
+    {
+        let option = Option::Some(Counted { counter })
+        assert(option.is_some() && !option.is_none())
+        let result: Result<u256, Counted> = Result::Ok(Counted { counter })
+        assert(result.is_ok() && !result.is_err())
+        assert(count(counter) == 0)
     }
     assert(count(counter) == 2)
 }

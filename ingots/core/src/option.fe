@@ -17,14 +17,14 @@ impl<T> ingot::marker::Copy for Option<T>
 {}
 
 impl<T> Option<T> {
-    pub fn is_some(own self) -> bool {
+    pub fn is_some(self) -> bool {
         match self {
             Self::Some(_) => true
             Self::None => false
         }
     }
 
-    pub fn is_none(own self) -> bool {
+    pub fn is_none(self) -> bool {
         !self.is_some()
     }
 
