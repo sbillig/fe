@@ -543,7 +543,7 @@ func inline(always) private %decode_msg_field_from(v0.@layout_0, v1.i256, v2.i25
         return v13;
 }
 
-func inline(always) private %decode_runtime_args__g01e9(v0.objref<@layout_4>) -> @layout_0 {
+func inline(always) private %decode_runtime_args__g01e9(noalias v0.objref<@layout_4>) -> @layout_0 {
     block0:
         jump block1;
 
@@ -555,7 +555,7 @@ func inline(always) private %decode_runtime_args__g01e9(v0.objref<@layout_4>) ->
         return v6;
 }
 
-func inline(always) private %decode_runtime_args__g5aad(v0.objref<@layout_4>) -> @layout_2 {
+func inline(always) private %decode_runtime_args__g5aad(noalias v0.objref<@layout_4>) -> @layout_2 {
     block0:
         jump block1;
 
@@ -567,7 +567,7 @@ func inline(always) private %decode_runtime_args__g5aad(v0.objref<@layout_4>) ->
         return v6;
 }
 
-func inline(always) private %decode_runtime_args__g0392(v0.objref<@layout_4>) -> @layout_0 {
+func inline(always) private %decode_runtime_args__g0392(noalias v0.objref<@layout_4>) -> @layout_0 {
     block0:
         jump block1;
 
@@ -866,7 +866,7 @@ func private %input() -> @layout_0 {
         return v0;
 }
 
-func private %len__g79ff(v0.objref<@layout_2>) -> i256 {
+func private %len__g79ff(noalias v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -912,7 +912,7 @@ func private %payload_size(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %ptr__g79ff(v0.objref<@layout_2>) -> i256 {
+func private %ptr__g79ff(noalias v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
 
@@ -968,7 +968,7 @@ func private %read_cell(v0.i256) -> i256 {
         return v2;
 }
 
-func private %return_bytes(v0.objref<@layout_2>) {
+func private %return_bytes(noalias v0.objref<@layout_2>) {
     block0:
         jump block1;
 
@@ -977,7 +977,7 @@ func private %return_bytes(v0.objref<@layout_2>) {
         unreachable;
 }
 
-func private %return_data(v0.objref<@layout_2>) {
+func private %return_data(noalias v0.objref<@layout_2>) {
     block0:
         jump block1;
 

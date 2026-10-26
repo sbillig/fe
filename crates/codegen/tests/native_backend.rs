@@ -368,3 +368,55 @@ pub fn main() -> i32 {
         assert!(!artifacts.object.unwrap().is_empty());
     });
 }
+
+#[test]
+fn native_access_parameters_are_noalias() {
+    let ir = with_top_mod_for_source(
+        "noalias_parameters.fe",
+        r#"
+use core::option::Option
+struct Big { a: i32, b: i32, c: i32 }
+struct Ctx { n: i32 }
+impl Big {
+    fn total(self) -> i32 { self.a + self.b + self.c }
+    fn bump(mut self) { self.a += 1 }
+}
+fn tick() uses (ctx: mut Ctx) { ctx.n += 1 }
+fn consume(var _ current: own Option<i32>) -> i32 {
+    var sum = 0
+    while let Option::Some(value) = current {
+        sum += value
+        current = if value == 0 { Option::None } else { Option::Some(value - 1) }
+    }
+    sum
+}
+pub fn main() -> i32 {
+    var big = Big { a: 1, b: 2, c: 3 }
+    big.bump()
+    var ctx = Ctx { n: 0 }
+    with (ctx) { tick() }
+    big.total() + consume(Option::Some(3)) + ctx.n
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native noalias parameter IR");
+    let signature = |name: &str| {
+        ir.lines()
+            .find(|line| line.starts_with("func ") && line.contains(name))
+            .unwrap_or_else(|| panic!("missing {name}:\n{ir}"))
+    };
+    // A view, `mut` or effect parameter is an access of its caller's place.
+    for name in ["total", "bump", "tick"] {
+        assert!(
+            signature(name).contains("(noalias v0.objref<"),
+            "{name}:\n{ir}"
+        );
+    }
+    // An owned parameter is not, even when passed by reference.
+    let consume = signature("consume");
+    assert!(
+        consume.contains("(v0.objref<") && !consume.contains("noalias"),
+        "{ir}"
+    );
+}
