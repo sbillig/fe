@@ -119,3 +119,10 @@ revm-state = { opt-level = 3 }
 sonatina-ir = { opt-level = 3 }
 sonatina-codegen = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }
+
+[patch."https://github.com/fe-lang/sonatina"]
+sonatina-ir = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/ir" }
+sonatina-triple = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/triple" }
+sonatina-codegen = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/codegen" }
+sonatina-verifier = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/verifier" }
+sonatina-sp1 = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/sp1" }
