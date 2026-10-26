@@ -57,11 +57,11 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "fcdbdc4d8706f7b93415d605ed8e9aa277179f98" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "fcdbdc4d8706f7b93415d605ed8e9aa277179f98" }
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "fcdbdc4d8706f7b93415d605ed8e9aa277179f98" }
-sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "fcdbdc4d8706f7b93415d605ed8e9aa277179f98" }
-sonatina-sp1 = { git = "https://github.com/fe-lang/sonatina", rev = "fcdbdc4d8706f7b93415d605ed8e9aa277179f98" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "bbbcafe35467ff05dde206f8397cce4d2c52a711" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "bbbcafe35467ff05dde206f8397cce4d2c52a711" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "bbbcafe35467ff05dde206f8397cce4d2c52a711" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "bbbcafe35467ff05dde206f8397cce4d2c52a711" }
+sonatina-sp1 = { git = "https://github.com/fe-lang/sonatina", rev = "bbbcafe35467ff05dde206f8397cce4d2c52a711" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
@@ -119,10 +119,3 @@ revm-state = { opt-level = 3 }
 sonatina-ir = { opt-level = 3 }
 sonatina-codegen = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }
-
-[patch."https://github.com/fe-lang/sonatina"]
-sonatina-ir = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/ir" }
-sonatina-triple = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/triple" }
-sonatina-codegen = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/codegen" }
-sonatina-verifier = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/verifier" }
-sonatina-sp1 = { path = "/home/sean/code/sonatina-worktrees/native-pipeline-profile/crates/sp1" }
