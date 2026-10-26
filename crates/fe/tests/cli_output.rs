@@ -3787,13 +3787,11 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
 ))]
 /// `fe_test` fixtures that fail natively at the listed optimization levels,
 /// and why.
-const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[
-    (
-        "raw_record_layout",
-        &["0", "2"],
-        "packed record fields are little-endian natively and big-endian on EVM",
-    ),
-];
+const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[(
+    "raw_record_layout",
+    &["0", "2"],
+    "packed record fields are little-endian natively and big-endian on EVM",
+)];
 
 #[cfg(all(
     feature = "cranelift",
