@@ -3793,36 +3793,6 @@ const NATIVE_FE_TEST_FAILURES: &[(&str, &[&str], &str)] = &[
         &["0", "2"],
         "packed record fields are little-endian natively and big-endian on EVM",
     ),
-    (
-        "associated_shape_signatures",
-        &["0"],
-        "O0 cannot prove that a local passed to a product's `ref` part stays local",
-    ),
-    (
-        "callable_shape_table",
-        &["0"],
-        "O0 cannot prove that a local passed to a product's `ref` part stays local",
-    ),
-    (
-        "closure_product_params",
-        &["0"],
-        "O0 cannot prove that a local passed to a product's `ref` part stays local",
-    ),
-    (
-        "loop_steps",
-        &["0"],
-        "O0 cannot prove that a local passed to a product's `ref` part stays local",
-    ),
-    (
-        "shape_equalities",
-        &["0"],
-        "O0 cannot prove that a local passed to a product's `ref` part stays local",
-    ),
-    (
-        "spread_params",
-        &["0"],
-        "O0 cannot prove that a local passed to a product's `ref` part stays local",
-    ),
 ];
 
 #[cfg(all(
