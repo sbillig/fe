@@ -18,7 +18,7 @@ use crate::{
     runtime::{
         Layout, RExpr, RLocalId, RefKind, RefView, RuntimeBody, RuntimeBuiltin, RuntimeClass,
         RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole,
-        lower::type_info::address_int_class,
+        lower::type_info::{address_int_class, pointer_class},
         place::{
             enum_extract_class, enum_tag_class, enum_tag_class_from_value, project_place,
             resolve_runtime_place_address_class, runtime_value_class, scalar_class_from_const,
@@ -202,7 +202,7 @@ pub fn expr_result_class<'db>(
         }
         RExpr::WordToRawAddr { value, space } => {
             if runtime_value_class(body, *value)?
-                != &RuntimeClass::Scalar(address_int_class(db, *space))
+                != &RuntimeClass::Scalar(pointer_class(db, *space))
             {
                 return Err(VerifyError::InvalidExprClass(dst));
             }
@@ -532,7 +532,7 @@ fn builtin_result_class<'db>(
         }
         RuntimeBuiltin::Malloc { size } | RuntimeBuiltin::TryMalloc { size } => {
             verify_memory_int(db, body, *size)?;
-            Ok(Some(RuntimeClass::Scalar(address_int_class(
+            Ok(Some(RuntimeClass::Scalar(pointer_class(
                 db,
                 AddressSpace::Memory,
             ))))
@@ -542,12 +542,12 @@ fn builtin_result_class<'db>(
             Ok(None)
         }
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
-            verify_memory_int(db, body, *ptr)?;
+            let pointer = RuntimeClass::Scalar(pointer_class(db, AddressSpace::Memory));
+            if runtime_value_class(body, *ptr)? != &pointer {
+                return Err(VerifyError::InvalidExprClass(*ptr));
+            }
             verify_memory_int(db, body, *offset)?;
-            Ok(Some(RuntimeClass::Scalar(address_int_class(
-                db,
-                AddressSpace::Memory,
-            ))))
+            Ok(Some(pointer))
         }
         RuntimeBuiltin::Call {
             gas,

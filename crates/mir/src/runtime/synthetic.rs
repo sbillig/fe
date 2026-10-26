@@ -43,7 +43,9 @@ use crate::{
             tuple::{
                 RuntimeTupleFieldEmitter, extract_runtime_tuple_fields, memory_fallback_class,
             },
-            type_info::{RuntimeTypeEnv, address_int_class, top_level_class_for_ty_in_env},
+            type_info::{
+                RuntimeTypeEnv, address_int_class, pointer_class, top_level_class_for_ty_in_env,
+            },
         },
         package::resolve_trait_runtime_instance,
     },
@@ -628,7 +630,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 len: runtime_len,
             },
         );
-        let immut_dst = self.push_binary_word(entry, ArithBinOp::Add, out_ptr, runtime_len);
+        let immut_dst = self.push_ptr_offset_bytes(entry, out_ptr, runtime_len);
         self.push_side_effect_builtin(
             entry,
             RuntimeBuiltin::Mcopy {
@@ -695,7 +697,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 .expect("a code field's word offset is within the code-space layout");
             let slot_words = self.push_const_word(bb, slot_words);
             let slot_bytes = self.push_binary_word(bb, ArithBinOp::Mul, slot_words, thirty_two);
-            let dst_addr = self.push_binary_word(bb, ArithBinOp::Add, buffer_ptr, slot_bytes);
+            let dst_addr = self.push_ptr_offset_bytes(bb, buffer_ptr, slot_bytes);
             let dst_raw_class =
                 RuntimeClass::raw_addr(self.db, AddressSpace::Memory, pointee_class.clone());
             let dst_raw_addr = self.push_local(
@@ -1258,8 +1260,17 @@ impl<'db> SyntheticBodyBuilder<'db> {
         self.push_builtin_value(
             bb,
             TyId::ptr_to(self.db, TyId::u8(self.db)),
-            RuntimeClass::Scalar(address_int_class(self.db, AddressSpace::Memory)),
+            RuntimeClass::Scalar(pointer_class(self.db, AddressSpace::Memory)),
             RuntimeBuiltin::Malloc { size },
+        )
+    }
+
+    fn push_ptr_offset_bytes(&mut self, bb: RBlockId, ptr: RLocalId, offset: RLocalId) -> RLocalId {
+        self.push_builtin_value(
+            bb,
+            TyId::ptr_to(self.db, TyId::u8(self.db)),
+            RuntimeClass::Scalar(pointer_class(self.db, AddressSpace::Memory)),
+            RuntimeBuiltin::PtrOffsetBytes { ptr, offset },
         )
     }
 

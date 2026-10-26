@@ -98,7 +98,7 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, address_int_class, deref_transport_class_in_env,
+        RuntimeTypeEnv, address_int_class, deref_transport_class_in_env, pointer_class,
         provider_class_for_target_in_env, runtime_array_len, runtime_interface_ty_in_env,
         stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
@@ -1767,8 +1767,8 @@ impl<'db> RmirEmitter<'db> {
         if !bytes.is_empty() {
             let thirty_two = self.alloc_memory_int_const(bb, 32);
             let data = self.alloc_runtime_temp(
-                TyId::usize(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(self.memory_int_class())),
+                TyId::ptr_to(self.db, TyId::u8(self.db)),
+                RuntimeCarrier::Value(RuntimeClass::Scalar(self.memory_pointer_class())),
             );
             self.push_stmt(
                 bb,
@@ -1794,7 +1794,7 @@ impl<'db> RmirEmitter<'db> {
     fn malloc_bytes(&mut self, bb: RBlockId, size: RLocalId) -> RLocalId {
         let ptr = self.alloc_runtime_temp(
             TyId::ptr_to(self.db, TyId::u8(self.db)),
-            RuntimeCarrier::Value(RuntimeClass::Scalar(self.memory_int_class())),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(self.memory_pointer_class())),
         );
         self.push_stmt(
             bb,
@@ -1836,6 +1836,11 @@ impl<'db> RmirEmitter<'db> {
     /// The class of a memory address, size or offset as an integer.
     fn memory_int_class(&self) -> ScalarClass<'db> {
         address_int_class(self.db, AddressSpace::Memory)
+    }
+
+    /// The class of a memory address as a pointer.
+    fn memory_pointer_class(&self) -> ScalarClass<'db> {
+        pointer_class(self.db, AddressSpace::Memory)
     }
 
     fn alloc_memory_int_const(&mut self, bb: RBlockId, value: usize) -> RLocalId {
@@ -3434,9 +3439,6 @@ impl<'db> RmirEmitter<'db> {
             }
             LoweredBuiltinCall::Binary { op, lhs, rhs } => {
                 let class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
-                let address = RuntimeClass::Scalar(self.memory_int_class());
-                let lhs = self.coerce_value(bb, lhs, &address);
-                let rhs = self.coerce_value(bb, rhs, &address);
                 let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(class));
                 self.push_stmt(
                     bb,
@@ -3839,7 +3841,7 @@ impl<'db> RmirEmitter<'db> {
                         ptr: *ptr,
                         offset: *offset,
                     },
-                    Some(RuntimeClass::Scalar(self.memory_int_class())),
+                    Some(RuntimeClass::Scalar(self.memory_pointer_class())),
                 )
             }
             RuntimeBuiltinFuncKind::PtrEq => {

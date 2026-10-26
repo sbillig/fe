@@ -2280,6 +2280,7 @@ fn scalar_role_sort_key<'db>(db: &'db dyn MirDb, role: &ScalarRole<'db>) -> Stri
         ScalarRole::EnumTag { enum_layout } => {
             format!("enum_tag:{}", layout_sort_key(db, *enum_layout))
         }
+        ScalarRole::Pointer => "pointer".to_string(),
     }
 }
 

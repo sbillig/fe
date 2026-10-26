@@ -19,7 +19,7 @@ func private %abi_encode(v0.i256) {
 
     block1:
         v3.@layout_0 = call %alloc 32.i256;
-        v4.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_3f77 v3;
+        v4.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0ea5 v3;
         call %store_word v4 v0;
         jump block3;
 
@@ -372,7 +372,7 @@ func private %prepare_copy_destination(noalias v0.objref<@layout_0>, v1.i256, v2
         br v15 block10 block11;
 
     block6:
-        v23.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_5b3b v0;
+        v23.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_7567 v0;
         v24.i256 = call %impl_MemBuffer__len v0;
         v25.i256 = add v23 v24;
         v27.i256 = call %impl_MemBuffer__len v0;
@@ -383,7 +383,7 @@ func private %prepare_copy_destination(noalias v0.objref<@layout_0>, v1.i256, v2
         jump block8;
 
     block8:
-        v34.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_5b3b v0;
+        v34.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_7567 v0;
         v36.i256 = call %downcast_unchecked v1;
         v37.i256 = add v34 v36;
         return v37;
@@ -408,7 +408,7 @@ func private %prepare_copy_destination(noalias v0.objref<@layout_0>, v1.i256, v2
         jump block8;
 }
 
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_3f77(v0.@layout_0) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0ea5(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
@@ -417,7 +417,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_3f77(v0.@layout_0) -> i25
         return v3;
 }
 
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_5b3b(noalias v0.objref<@layout_0>) -> i256 {
+func private %ptr__g79ff(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -427,7 +427,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_5b3b(noalias v0.objref<@l
         return v4;
 }
 
-func private %ptr__g79ff(noalias v0.objref<@layout_1>) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_7567(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
