@@ -211,9 +211,11 @@ impl<T> MemArray<T> {
         self.len * size_of<T>() as usize
     }
 
-    /// The same allocation, counted in bytes. The elements are not
-    /// destroyed.
-    pub fn into_bytes(own self) -> MemArray<u8> {
+    /// The same allocation, counted in bytes. The elements are `Copy`, so
+    /// none is left undestroyed.
+    pub fn into_bytes(own self) -> MemArray<u8>
+        where T: Copy
+    {
         // The bytes take over the allocation from the array, which is gone.
         let bytes = unsafe {
             MemArray {
@@ -233,9 +235,11 @@ impl<T> MemArray<T> {
         self.as_slice().as_bytes()
     }
 
-    /// The array's bytes, in the same allocation. The elements are not
-    /// destroyed.
-    pub fn into_buffer(own self) -> MemBuffer {
+    /// The array's bytes, in the same allocation. The elements are `Copy`,
+    /// so none is left undestroyed.
+    pub fn into_buffer(own self) -> MemBuffer
+        where T: Copy
+    {
         let len = self.byte_len()
         // The array's initialized bytes fill its allocation, which the
         // buffer takes over from the array.
