@@ -1,1 +1,0 @@
-EVM memory miscompiles are fixed: a loop's stack allocation could be reused while a pointer to the previous iteration's object was still live, heap allocations could overlap live objects written after them, and a function could free a buffer it returned.

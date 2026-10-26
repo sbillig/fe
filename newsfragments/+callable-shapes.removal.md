@@ -1,1 +1,0 @@
-`core::functional::Fn<T, U>` is replaced by `Fn<shape A>`: write `F: Fn(own T) -> U` for `F: Fn<T, U>`, and `impl Fn(own T) -> U for X` for `impl Fn<T, U> for X` (its `fn call(self, _ x: own T) -> U` is unchanged). `Option::ok_or_else` and `Option::unwrap_or_else` take a callable without parameters, `Fn() -> E`, called as `f()`, instead of a `Fn<(), E>` called as `f(())`.

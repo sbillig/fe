@@ -1,1 +1,0 @@
-A middle segment of a `use` path no longer reports an ambiguity among values. With `use a::*` and `use b::*` both bringing in a function `m`, and a module `m`, `use m::S` reported "`m` is ambiguous" though only the module can be a middle segment.
