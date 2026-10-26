@@ -3,7 +3,7 @@ use super::marker::{Clearable, Copy}
 use super::mem::{drop, forget, needs_drop}
 use super::num::{from_be, to_be, word_to_usize}
 use super::option::Option
-use super::ops::{Drop, Eq, Index, Len}
+use super::ops::{Drop, Eq, Index, Len, WrappingAdd, WrappingMul, WrappingSub}
 use super::result::Result
 use super::panic_code
 use super::panics::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY}
@@ -383,9 +383,15 @@ impl<T> MemVec<T> {
     /// Ensure that `additional` more elements fit without growing.
     pub fn reserve(mut self, _ additional: usize) {
         let needed = self.len + additional
-        if needed <= self.capacity {
-            return
+        if needed > self.capacity {
+            self.grow(needed)
         }
+    }
+
+    /// Grows the allocation to hold `needed` elements. Out of line, so that
+    /// `reserve`'s check stays small where it is inlined.
+    #[inline(never)]
+    fn grow(mut self, needed: usize) {
         var capacity = if self.capacity == 0 { 4 } else { self.capacity }
         while capacity < needed {
             capacity *= 2
@@ -397,9 +403,13 @@ impl<T> MemVec<T> {
     /// As `reserve`, but `false`, leaving the vector as it was, when the
     /// allocation fails or would exceed `MAX_ALLOCATION` bytes.
     pub fn try_reserve(mut self, _ additional: usize) -> bool {
-        if additional <= self.capacity - self.len {
-            return true
-        }
+        // `len` never exceeds `capacity`.
+        additional <= self.capacity.wrapping_sub(self.len) || self.try_grow(additional)
+    }
+
+    /// As `grow`, for `try_reserve`.
+    #[inline(never)]
+    fn try_grow(mut self, _ additional: usize) -> bool {
         let size = size_of<T>()
         let max = if size == 0 { MAX_ALLOCATION } else { MAX_ALLOCATION / size }
         if additional > max - self.len {
@@ -431,24 +441,27 @@ impl<T> MemVec<T> {
 
     /// Append `value`, growing the allocation when it is full.
     pub fn push(mut self, _ value: own T) {
-        self.reserve(1)
-        // `reserve` made room for element `len`, which the write initializes.
+        if self.len == self.capacity {
+            self.grow(needed: self.len + 1)
+        }
+        // There is room for element `len`, which the write initializes. It
+        // lies within the allocation, so `len + 1` cannot overflow.
         unsafe {
             *elem(self.ptr, self.len) = value
-            self.len += 1
+            self.len = self.len.wrapping_add(1)
         }
     }
 
     /// As `push`, or `value` back when growing the allocation fails.
     pub fn try_push(mut self, _ value: own T) -> Result<T, ()> {
-        if !self.try_reserve(1) {
+        if self.len == self.capacity && !self.try_grow(1) {
             return Result::Err(value)
         }
-        // `try_reserve` made room for element `len`, which the write
-        // initializes.
+        // There is room for element `len`, which the write initializes. It
+        // lies within the allocation, so `len + 1` cannot overflow.
         unsafe {
             *elem(self.ptr, self.len) = value
-            self.len += 1
+            self.len = self.len.wrapping_add(1)
         }
         Result::Ok(())
     }
@@ -1286,9 +1299,11 @@ fn mem_vec_elem<T>(_ vec: MemVec<T>, _ index: usize) -> *T {
     elem(vec.ptr, index)
 }
 
+/// Element `index` of an allocation, which every caller keeps `index` in, so
+/// the product of its offset cannot overflow.
 #[inline(always)]
 fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
-    offset(ptr, index)
+    offset_bytes(ptr, index.wrapping_mul(size_of<T>()))
 }
 
 impl<T> Index<usize> for MemArray<T> {
