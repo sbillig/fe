@@ -31,7 +31,7 @@ use mir::{
     ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
     RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
     RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr,
-    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses,
     scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1580,6 +1580,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ),
                     };
                     self.slot_roots.insert(local_id, root);
+                }
+            }
+        }
+
+        // A view, `mut` or effect parameter's object belongs to this call
+        // alone, or nothing writes it during the call.
+        if !self.module.argument_packs.contains_key(&self.body.owner) {
+            let accesses = runtime_param_accesses(self.module.db, self.body.key);
+            for (idx, access) in accesses.into_iter().enumerate() {
+                if access
+                    && let Some(&arg) = self.fb.func.arg_values.get(idx)
+                    && self.fb.type_of(arg).is_obj_ref(&self.fb.module_builder.ctx)
+                {
+                    self.fb.func.set_noalias_arg(arg);
                 }
             }
         }

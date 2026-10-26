@@ -121,7 +121,7 @@ func private %standalone_revert__revert__fail__gcd5c_b920() {
         jump block4;
 }
 
-func private %len(v0.objref<@layout_1>) -> i256 {
+func private %len(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -158,7 +158,7 @@ func private %impl_MemBuffer__ptr(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
+func private %ptr__g79ff(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -168,7 +168,7 @@ func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %revert(v0.objref<@layout_1>) {
+func private %revert(noalias v0.objref<@layout_1>) {
     block0:
         jump block1;
 
