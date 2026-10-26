@@ -52,6 +52,8 @@ pub enum BuildEmit {
     Ir,
     Abi,
     Metadata,
+    /// Code bytes of each function in a contract (`<Contract>.sizes.txt`).
+    Sizes,
     Executable,
     Elf,
 }

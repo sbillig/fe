@@ -66,6 +66,7 @@ struct EmitSelection {
     ir: bool,
     abi: bool,
     metadata: bool,
+    sizes: bool,
     executable: bool,
     elf: bool,
 }
@@ -78,6 +79,7 @@ impl EmitSelection {
             ir: false,
             abi: false,
             metadata: false,
+            sizes: false,
             executable: false,
             elf: false,
         };
@@ -88,6 +90,7 @@ impl EmitSelection {
                 BuildEmit::Ir => selection.ir = true,
                 BuildEmit::Abi => selection.abi = true,
                 BuildEmit::Metadata => selection.metadata = true,
+                BuildEmit::Sizes => selection.sizes = true,
                 BuildEmit::Executable => selection.executable = true,
                 BuildEmit::Elf => selection.elf = true,
             }
@@ -96,7 +99,7 @@ impl EmitSelection {
     }
 
     fn writes_any_bytecode(self) -> bool {
-        self.bytecode || self.runtime_bytecode
+        self.bytecode || self.runtime_bytecode || self.sizes
     }
 }
 
@@ -1317,11 +1320,19 @@ fn build_ingot(
             }
         }
         if emit.writes_any_bytecode() {
-            let bytecode = match target_mod {
-                Some(top_mod) => {
+            let bytecode = match (target_mod, emit.sizes) {
+                (Some(top_mod), false) => {
                     codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
                 }
-                None => codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract),
+                (Some(top_mod), true) => codegen::emit_module_sonatina_bytecode_with_observability(
+                    db, top_mod, opt_level, contract,
+                ),
+                (None, false) => {
+                    codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract)
+                }
+                (None, true) => codegen::emit_ingot_sonatina_bytecode_with_observability(
+                    db, ingot, opt_level, contract,
+                ),
             };
             let bytecode = match bytecode {
                 Ok(bytecode) => bytecode,
@@ -1452,14 +1463,20 @@ fn build_top_mod(
             }
         }
         if emit.writes_any_bytecode() {
-            let bytecode =
-                match codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract) {
-                    Ok(bytecode) => bytecode,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
-                        return BuildSummary { had_errors: true };
-                    }
-                };
+            let bytecode = if emit.sizes {
+                codegen::emit_module_sonatina_bytecode_with_observability(
+                    db, top_mod, opt_level, contract,
+                )
+            } else {
+                codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
+            };
+            let bytecode = match bytecode {
+                Ok(bytecode) => bytecode,
+                Err(err) => {
+                    eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
+                    return BuildSummary { had_errors: true };
+                }
+            };
             had_errors |= write_sonatina_bytecode_artifacts(
                 &names_to_build,
                 &bytecode,
@@ -2216,19 +2233,28 @@ fn write_sonatina_bytecode_artifacts(
 ) -> bool {
     let mut had_errors = false;
     for name in names_to_build {
-        let Some(SonatinaContractBytecode {
-            deploy, runtime, ..
-        }) = bytecode.get(name)
-        else {
+        let Some(contract_bytecode) = bytecode.get(name) else {
             eprintln!("Error: Sonatina did not emit bytecode for contract \"{name}\"");
             had_errors = true;
             continue;
         };
-        let deploy_hex = hex::encode(deploy);
-        let runtime_hex = hex::encode(runtime);
-        if let Err(err) =
-            write_contract_artifacts(out_dir, report_dir, name, &deploy_hex, &runtime_hex, emit)
-        {
+        let deploy_hex = hex::encode(&contract_bytecode.deploy);
+        let runtime_hex = hex::encode(&contract_bytecode.runtime);
+        let sizes = contract_bytecode.size_report();
+        if emit.sizes && sizes.is_none() {
+            eprintln!("Error: Sonatina did not emit code sizes for contract \"{name}\"");
+            had_errors = true;
+            continue;
+        }
+        if let Err(err) = write_contract_artifacts(
+            out_dir,
+            report_dir,
+            name,
+            &deploy_hex,
+            &runtime_hex,
+            sizes.as_deref(),
+            emit,
+        ) {
             eprintln!("Error: {err}");
             had_errors = true;
         } else {
@@ -2272,6 +2298,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     }
     if emit.metadata {
         parts.push("metadata");
+    }
+    if emit.sizes {
+        parts.push("sizes");
     }
     if emit.executable {
         parts.push("executable");
@@ -2319,6 +2348,7 @@ fn write_contract_artifacts(
     contract_name: &str,
     bytecode: &str,
     runtime_bytecode: &str,
+    sizes: Option<&str>,
     emit: EmitSelection,
 ) -> Result<(), String> {
     let base = sanitize_filename(contract_name);
@@ -2340,6 +2370,15 @@ fn write_contract_artifacts(
             let _ = fs::write(runtime_path.as_std_path(), runtime_bytecode);
         }
     }
+    if let Some(sizes) = sizes {
+        let sizes_path = out_dir.join(format!("{base}.sizes.txt"));
+        fs::write(sizes_path.as_std_path(), sizes)
+            .map_err(|err| format!("Failed to write {sizes_path}: {err}"))?;
+        if let Some(dir) = report_dir {
+            let sizes_path = dir.join(format!("{base}.sizes.txt"));
+            let _ = fs::write(sizes_path.as_std_path(), sizes);
+        }
+    }
     Ok(())
 }
 
@@ -2350,6 +2389,9 @@ fn print_contract_artifact_paths(out_dir: &Utf8Path, contract_name: &str, emit: 
     }
     if emit.runtime_bytecode {
         println!("Wrote {out_dir}/{base}.runtime.bin");
+    }
+    if emit.sizes {
+        println!("Wrote {out_dir}/{base}.sizes.txt");
     }
 }
 
@@ -2390,6 +2432,7 @@ mod tests {
             ir: false,
             abi: true,
             metadata: false,
+            sizes: false,
             executable: false,
             elf: false,
         };
