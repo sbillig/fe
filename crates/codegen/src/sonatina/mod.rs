@@ -47,7 +47,7 @@ use sonatina_ir::{
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
-        cast::PtrToInt,
+        cast::Bitcast,
         control_flow::{Call, Return},
         data::{ObjAlloc, ObjStore},
     },
@@ -906,12 +906,13 @@ fn prepare_native_main(
         NativeTarget::Sp1 => "SP1 executable `main` must have signature `pub fn main() -> i32`",
     };
     let argc_ref = Type::I32.to_obj_ref(&module.ctx);
+    let byte_ptr = Type::I8.to_ptr(&module.ctx);
     let argc_by_ref = module.ctx.func_sig(main, |signature| {
         signature.args().first() == Some(&argc_ref)
     });
     module.ctx.func_sig(main, |signature| {
         let expected = if with_args {
-            vec![if argc_by_ref { argc_ref } else { Type::I32 }, Type::I64]
+            vec![if argc_by_ref { argc_ref } else { Type::I32 }, byte_ptr]
         } else {
             vec![]
         };
@@ -946,7 +947,6 @@ fn prepare_native_main(
     });
     module.ctx.declared_funcs.insert(main, signature);
     let builder = ModuleBuilder::from_module(module);
-    let byte_ptr = builder.ptr_type(Type::I8);
     let argv_ptr = builder.ptr_type(byte_ptr);
     let wrapper = builder
         .declare_function(Signature::new_single(
@@ -970,7 +970,7 @@ fn prepare_native_main(
     } else {
         argc
     };
-    let argv = fb.insert_inst(PtrToInt::new(inst_set, argv, Type::I64), Type::I64);
+    let argv = fb.insert_inst(Bitcast::new(inst_set, argv, byte_ptr), byte_ptr);
     let result = fb.insert_inst(
         Call::new(inst_set, main, vec![argc, argv].into()),
         Type::I32,

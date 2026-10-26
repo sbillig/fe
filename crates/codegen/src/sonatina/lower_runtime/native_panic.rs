@@ -9,10 +9,10 @@ use sonatina_ir::{
     func_cursor::InstInserter,
     inst::{
         arith::{Add, Mul, Shr, Sub},
-        cast::{IntToPtr, PtrToInt, Trunc, Zext},
+        cast::{Bitcast, IntToPtr, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt},
         control_flow::{Br, BrTable, Call, Jump, Phi, Unreachable},
-        data::{Alloca, Mload, Mstore},
+        data::{Alloca, Gep, Mload, Mstore},
         logic::{And, Bswap, Or},
     },
     module::FuncRef,
@@ -145,15 +145,14 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
         let data_ty = fb.declare_array_type(Type::I8, 36);
         let data_ptr_ty = fb.ptr_type(data_ty);
         let data = fb.insert_inst(Alloca::new(inst_set, data_ty), data_ptr_ty);
-        let address = fb.insert_inst(PtrToInt::new(inst_set, data, Type::I64), Type::I64);
+        let pointer = fb.ptr_type(Type::I8);
+        let data = fb.insert_inst(Bitcast::new(inst_set, data, pointer), pointer);
         let selector = fb.make_imm_value(i32::from_le_bytes(PANIC_SELECTOR));
-        fb.insert_inst_no_result(Mstore::new(inst_set, address, selector, Type::I32));
+        fb.insert_inst_no_result(Mstore::new(inst_set, data, selector, Type::I32));
         // The code is a big-endian word after the selector.
         let code = fb.insert_inst(Bswap::new(inst_set, code), Type::I256);
-        let code_address = offset(fb, inst_set, address, 4);
+        let code_address = offset(fb, inst_set, data, 4);
         fb.insert_inst_no_result(Mstore::new(inst_set, code_address, code, Type::I256));
-        let pointer = fb.ptr_type(Type::I8);
-        let data = fb.insert_inst(IntToPtr::new(inst_set, address, pointer), pointer);
         let len = fb.make_imm_value(36i64);
         fb.insert_inst_no_result(Call::new(inst_set, revert, smallvec![data, len]));
         fb.insert_inst_no_result(Unreachable::new(inst_set));
@@ -164,7 +163,6 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
     fn define_revert(&self, fb: &mut FunctionBuilder<InstInserter>) -> Result<(), LowerError> {
         let inst_set = self.inst_set;
         let [data, len] = [fb.func.arg_values[0], fb.func.arg_values[1]];
-        let data = fb.insert_inst(PtrToInt::new(inst_set, data, Type::I64), Type::I64);
         let mut report = Report::new(fb, self)?;
         let [
             has_selector,
@@ -291,7 +289,7 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
 struct Report<'a, I: 'static> {
     fb: &'a mut FunctionBuilder<InstInserter>,
     inst_set: &'static I,
-    /// The address of the text buffer.
+    /// The text buffer's first byte.
     buffer: ValueId,
     write: FuncRef,
     abort: FuncRef,
@@ -316,7 +314,7 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
         let buffer_ty = fb.declare_array_type(Type::I8, TEXT_BUFFER_BYTES);
         let buffer_ptr_ty = fb.ptr_type(buffer_ty);
         let buffer = fb.insert_inst(Alloca::new(inst_set, buffer_ty), buffer_ptr_ty);
-        let buffer = fb.insert_inst(PtrToInt::new(inst_set, buffer, Type::I64), Type::I64);
+        let buffer = fb.insert_inst(Bitcast::new(inst_set, buffer, pointer), pointer);
         Ok(Self {
             fb,
             inst_set,
@@ -343,12 +341,8 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
         self.write(self.buffer, len);
     }
 
-    /// Writes `len` bytes at `address`. A failed or short write is ignored.
-    fn write(&mut self, address: ValueId, len: ValueId) {
-        let pointer = self.fb.ptr_type(Type::I8);
-        let bytes = self
-            .fb
-            .insert_inst(IntToPtr::new(self.inst_set, address, pointer), pointer);
+    /// Writes the `len` bytes at `bytes`. A failed or short write is ignored.
+    fn write(&mut self, bytes: ValueId, len: ValueId) {
         let stderr = self.fb.make_imm_value(2i32);
         self.fb.insert_inst(
             Call::new(self.inst_set, self.write, smallvec![stderr, bytes, len]),
@@ -373,9 +367,10 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
         self.branch(more, body, done);
 
         self.fb.switch_to_block(body);
+        let pointer = self.fb.type_of(data);
         let address = self
             .fb
-            .insert_inst(Add::new(inst_set, data, index), Type::I64);
+            .insert_inst(Gep::new(inst_set, smallvec![data, index]), pointer);
         let byte = self
             .fb
             .insert_inst(Mload::new(inst_set, address, Type::I8), Type::I8);
@@ -396,9 +391,10 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
         let digits = self
             .fb
             .insert_inst(Mul::new(inst_set, slot, two), Type::I64);
+        let pointer = self.fb.type_of(self.buffer);
         let digits = self
             .fb
-            .insert_inst(Add::new(inst_set, self.buffer, digits), Type::I64);
+            .insert_inst(Gep::new(inst_set, smallvec![self.buffer, digits]), pointer);
         for (position, nibble) in [high, low].into_iter().enumerate() {
             let digit = self.hex_digit(nibble);
             let address = offset(self.fb, inst_set, digits, position as i64);
@@ -487,6 +483,7 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
     }
 }
 
+/// The byte `bytes` past the byte pointer `address`.
 fn offset<I: LoweringInstSet>(
     fb: &mut FunctionBuilder<InstInserter>,
     inst_set: &'static I,
@@ -497,5 +494,6 @@ fn offset<I: LoweringInstSet>(
         return address;
     }
     let bytes = fb.make_imm_value(bytes);
-    fb.insert_inst(Add::new(inst_set, address, bytes), Type::I64)
+    let pointer = fb.type_of(address);
+    fb.insert_inst(Gep::new(inst_set, smallvec![address, bytes]), pointer)
 }

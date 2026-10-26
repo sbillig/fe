@@ -286,7 +286,8 @@ fn native_argv_entry_has_a_host_pointer_bridge() {
         assert!(ir.contains("func public %main("), "{ir}");
         // The host vector is a `**u8` as Fe lays it out, so it passes as is.
         assert!(ir.contains("**i8"), "{ir}");
-        assert!(ir.contains("ptr_to_int"), "{ir}");
+        assert!(ir.contains("bitcast"), "{ir}");
+        assert!(!ir.contains("ptr_to_int"), "{ir}");
         assert!(!ir.contains("mem.alloc_dynamic"), "{ir}");
     }
 }
@@ -367,6 +368,31 @@ pub fn main() -> i32 {
         );
         assert!(!artifacts.object.unwrap().is_empty());
     });
+}
+
+#[test]
+fn native_memory_addresses_are_pointers() {
+    let ir = with_top_mod_for_source(
+        "memory_pointers.fe",
+        r#"
+use core::ptr::MemVec
+pub fn main() -> i32 {
+    var values: MemVec<u64> = MemVec::new()
+    values.push(1)
+    values.push(2)
+    if values.len() == 2 { 0 } else { 1 }
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native memory pointer IR");
+    // A vector holds a pointer, and an element's address steps from it.
+    assert!(ir.contains(" = {*i8, i64, i64};"), "{ir}");
+    assert!(ir.contains(" = gep "), "{ir}");
+    // Only constants, such as null, become pointers from integers.
+    for line in ir.lines().filter(|line| line.contains("int_to_ptr")) {
+        assert!(!line.contains("int_to_ptr v"), "{line}\n{ir}");
+    }
 }
 
 #[test]

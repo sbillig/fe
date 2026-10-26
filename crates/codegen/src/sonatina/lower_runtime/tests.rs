@@ -257,8 +257,8 @@ pub fn main() -> i32 {
         .split("func ")
         .find(|function| function.contains("%address("))
         .expect("lowered address helper");
-    // The slot, its store and its load all take 64 bits.
-    assert!(function.contains("alloca i64"), "{function}");
+    // The slot, its store and its load all take a 64-bit pointer.
+    assert!(function.contains("alloca *i8"), "{function}");
     assert!(!function.contains("i256"), "{function}");
 }
 
