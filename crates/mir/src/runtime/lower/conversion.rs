@@ -5,7 +5,8 @@ use crate::{
     db::MirDb,
     runtime::{
         LayoutId, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RefKind, RefView, RuntimeClass,
-        RuntimePlace, ScalarClass, ScalarRepr, ScalarRole, lower::type_info::address_int_class,
+        RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
+        lower::type_info::{address_int_class, pointer_class},
     },
 };
 
@@ -555,7 +556,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 Ok(())
             }
             (RuntimeClass::Scalar(scalar), RuntimeClass::RawAddr { space, .. })
-                if *scalar == address_int_class(self.db, *space) =>
+                if *scalar == pointer_class(self.db, *space) =>
             {
                 steps.push(RuntimeConversionStep::WordToRawAddr {
                     class: target.clone(),

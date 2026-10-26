@@ -149,15 +149,6 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %impl_MemBuffer__ptr(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
-}
-
 func private %ptr__g79ff(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
@@ -166,6 +157,15 @@ func private %ptr__g79ff(noalias v0.objref<@layout_1>) -> i256 {
         v3.objref<i256> = obj.proj v0 0.i256;
         v4.i256 = obj.load v3;
         return v4;
+}
+
+func private %impl_MemBuffer__ptr(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
 }
 
 func private %revert(noalias v0.objref<@layout_1>) {

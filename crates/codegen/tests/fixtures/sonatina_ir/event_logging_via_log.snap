@@ -198,15 +198,6 @@ func inline(always) private %encode__gac80(v0.@layout_0, v1.@layout_3) {
         return;
 }
 
-func inline(always) private %encode__gf13e(v0.i256, v1.@layout_3) {
-    block0:
-        jump block1;
-
-    block1:
-        call %impl_AbiFrame__store_word v1 0.i256 v0;
-        return;
-}
-
 func inline(always) private %encode_abi_payload(v0.@layout_0) -> @layout_1 {
     block0:
         jump block1;
@@ -228,6 +219,15 @@ func inline(always) private %encode_alloc(v0.@layout_0) -> @layout_1 {
         v6.@layout_3 = call %from_raw_parts v5 v2;
         call %encode__gac80 v0 v6;
         return v4;
+}
+
+func inline(always) private %encode__gf13e(v0.i256, v1.@layout_3) {
+    block0:
+        jump block1;
+
+    block1:
+        call %impl_AbiFrame__store_word v1 0.i256 v0;
+        return;
 }
 
 func inline(always) private %encode_field(v0.i256, v1.@layout_3, v2.i256, v3.@layout_3) -> @layout_3 {

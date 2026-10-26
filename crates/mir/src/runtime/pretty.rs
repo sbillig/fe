@@ -1025,6 +1025,7 @@ fn format_scalar_class<'db>(db: &'db dyn MirDb, class: &ScalarClass<'db>) -> Str
         ScalarRole::EnumTag { enum_layout } => {
             format!("{repr}<tag {}>", format_layout(db, *enum_layout))
         }
+        ScalarRole::Pointer => format!("{repr}<ptr>"),
     }
 }
 

@@ -177,7 +177,7 @@ func private %init() {
         jump block4;
 }
 
-func private %impl_MemBuffer__len(noalias v0.objref<@layout_0>) -> i256 {
+func private %len__g79ff(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -187,7 +187,7 @@ func private %impl_MemBuffer__len(noalias v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func private %len__g79ff(noalias v0.objref<@layout_1>) -> i256 {
+func private %impl_MemBuffer__len(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
