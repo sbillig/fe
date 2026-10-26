@@ -1079,13 +1079,15 @@ fn native_fallible_allocation_reports_failure_and_releases_blocks() {
 }
 
 /// Runs a native fixture under an allocator that requires every allocation to
-/// be freed exactly once, and reports its counts on stderr.
-fn run_balanced(fixture: &str, out: &Path, level: &str) -> Output {
+/// be freed exactly once, and reports its counts on stderr. `defines`
+/// configure the allocator.
+fn run_balanced(fixture: &str, out: &Path, level: &str, defines: &[&str]) -> Output {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native");
     let object = build_native_object(&fixtures.join(fixture), out, level);
     let executable = out.join("balanced");
     let linked = Command::new("cc")
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
+        .args(defines)
         .arg(&object)
         .arg(fixtures.join("balanced_allocator.c"))
         .arg("-o")
@@ -1106,6 +1108,7 @@ fn native_owners_destroy_what_they_hold_and_free_it_once() {
             "owners.fe",
             &temp.path().join(format!("out-{level}")),
             level,
+            &[],
         );
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
@@ -1116,11 +1119,21 @@ fn native_owners_destroy_what_they_hold_and_free_it_once() {
 }
 
 #[test]
+fn native_failed_allocations_hand_values_back() {
+    let temp = tempdir().unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let result = run_balanced("handed_back.fe", &out, level, &["-DREFUSE_FROM=1024"]);
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "-A-B", "O{level}");
+    }
+}
+
+#[test]
 fn native_empty_owners_take_nothing_from_the_host() {
     let temp = tempdir().unwrap();
     for level in ["0", "1", "2"] {
         let out = temp.path().join(format!("out-{level}"));
-        let result = run_balanced("empty_owners.fe", &out, level);
+        let result = run_balanced("empty_owners.fe", &out, level, &[]);
         assert_eq!(
             String::from_utf8_lossy(&result.stderr),
             "allocations=1 releases=1\n",
@@ -1150,6 +1163,45 @@ fn native_values_are_destroyed_once_in_scope_order() {
             .output()
             .unwrap();
         assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_out_of_bounds_index_store_destroys_nothing() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("index_store.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ops::Drop
+extern {
+    fn exit(_ code: i32)
+}
+struct Exits {
+    code: i32,
+}
+impl Drop for Exits {
+    fn drop(own self) {
+        exit(self.code)
+    }
+}
+#[inline(never)]
+fn index() -> usize {
+    2
+}
+pub fn main() -> i32 {
+    var exits = [Exits { code: 3 }, Exits { code: 4 }]
+    exits[index()] = Exits { code: 5 }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("index_store")).output().unwrap();
+        assert!(result.status.signal().is_some(), "O{level}: {result:?}");
     }
 }
 

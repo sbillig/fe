@@ -326,6 +326,34 @@ fn owners_destroy_what_they_hold() {
     assert(count(counter) == 5)
 }
 
+// `set` destroys the element it overwrites; `replace` hands it back, and
+// `swap` destroys nothing.
+#[test]
+fn element_writes_destroy_only_what_they_overwrite() {
+    let counter = counter()
+    {
+        var values = MemVec::new()
+        values.push(Counted { counter })
+        values.push(Counted { counter })
+        values.set(0, Counted { counter })
+        assert(count(counter) == 1)
+        let old = values.replace(1, Counted { counter })
+        assert(count(counter) == 1)
+        consume(old)
+        assert(count(counter) == 2)
+        values.swap(0, 1)
+        var array = MemArray::from_fn(2, |_| Counted { counter })
+        array.set(1, Counted { counter })
+        assert(count(counter) == 3)
+        let old = array.replace(0, Counted { counter })
+        array.swap(0, 1)
+        assert(count(counter) == 3)
+        consume(old)
+        assert(count(counter) == 4)
+    }
+    assert(count(counter) == 8)
+}
+
 struct Node {
     counted: Counted,
     next: Option<Box<Node>>,
