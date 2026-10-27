@@ -136,6 +136,9 @@ fn assumption_answers<'db>(
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
 ) -> bool {
+    // The goal is normalized, so a projection the assumption names, such as
+    // `<Two as HasItem>::Item`, must be too.
+    let assumption = normalize_trait_inst_preserving_validity(db, assumption, scope, assumptions);
     (!goal.is_mut(db) || assumption.is_mut(db))
         && unify_trait_inst_with_normalized_assoc_bindings(
             db,

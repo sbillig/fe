@@ -1,0 +1,37 @@
+// A bound may name a concrete type's associated type: the bound satisfies the
+// goal its use raises, which names the type the projection resolves to.
+trait HasItem {
+    type Item
+}
+
+struct Two {}
+
+impl HasItem for Two {
+    type Item = u256
+}
+
+trait Take<T> {
+    fn take(self, _ x: T) -> u256
+}
+
+struct Q {}
+
+impl Take<u256> for Q {
+    fn take(self, _ x: u256) -> u256 {
+        x + 1
+    }
+}
+
+fn take_with<F: Take<<Two as HasItem>::Item>>(_ f: F) -> u256 {
+    f.take(1)
+}
+
+fn call_with<F: Fn(<Two as HasItem>::Item) -> u256>(_ f: F) -> u256 uses F::E {
+    f(1)
+}
+
+#[test]
+fn test_bounds_on_concrete_projections() {
+    assert(take_with(Q {}) == 2)
+    assert(call_with(|x: u256| x + 2) == 3)
+}
