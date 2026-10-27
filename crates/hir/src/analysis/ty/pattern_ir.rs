@@ -1,15 +1,19 @@
 use cranelift_entity::{EntityRef, entity_impl};
+use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use salsa::SalsaValue;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::semantic::int_ty_shape;
 use crate::analysis::ty::adt_def::{AdtRef, instantiate_adt_field_shape};
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::pattern_analysis::is_exhaustive;
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor};
-use crate::core::hir_def::{EnumVariant, FieldParent, IdentId, LitKind, PatId, VariantKind};
+use crate::core::hir_def::{
+    EnumVariant, FieldParent, IdentId, IntegerId, LitKind, PatId, VariantKind,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct BindingRef<'db> {
@@ -221,10 +225,17 @@ impl<'db> ConstructorKind<'db> {
         }
     }
 
-    fn with_ty(self, ty: TyId<'db>) -> Self {
+    /// This constructor at `ty`. An integer literal is narrowed to the width
+    /// of `ty`, once known, as lowering reads it, so that literals of the same
+    /// value, like `0` and `256` at `u8`, are the same constructor.
+    fn with_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
         match self {
             Self::Variant(variant, _) => Self::Variant(variant, ty),
             Self::Type(_) => Self::Type(ty),
+            Self::Literal(LitKind::Int(int), _) if let Some((bits, _)) = int_ty_shape(db, ty) => {
+                let int = int.data(db) % (BigUint::from(1u8) << usize::from(bits));
+                Self::Literal(LitKind::Int(IntegerId::new(db, int)), ty)
+            }
             Self::Literal(lit, _) => Self::Literal(lit, ty),
         }
     }
@@ -252,7 +263,7 @@ impl<'db> TyFoldable<'db> for PatternStore<'db> {
         for node in &mut self.nodes {
             node.match_ty = node.match_ty.fold_with(db, folder);
             if let ValidatedPatKind::Constructor { ctor, .. } = &mut node.kind {
-                *ctor = ctor.with_ty(ctor.ty().fold_with(db, folder));
+                *ctor = ctor.with_ty(db, ctor.ty().fold_with(db, folder));
             }
         }
         self
