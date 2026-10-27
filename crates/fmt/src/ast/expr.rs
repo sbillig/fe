@@ -157,9 +157,10 @@ fn format_bin_expr_inner<'a>(
             operand.to_doc(ctx)
         };
 
-        if matches!(op_str.as_str(), "*" | "-") {
-            // These operators can also begin unary expressions. Keep them on
-            // the preceding line so formatted output reparses unambiguously.
+        if matches!(op_str.as_str(), "*" | "-" | "<" | "<<") {
+            // These operators can also begin unary expressions or generic
+            // arguments, and the parser rejects a line-start `<` or `<<`. Keep
+            // them on the preceding line so formatted output reparses.
             result = result
                 .append(alloc.text(" "))
                 .append(alloc.text(op_str.clone()))

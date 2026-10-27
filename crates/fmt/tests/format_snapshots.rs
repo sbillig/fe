@@ -284,3 +284,11 @@ mod strings {
     let reformatted = format_str(&formatted, &Config::default()).expect("reformat should succeed");
     assert_eq!(reformatted, formatted, "formatting is not stable");
 }
+
+#[test]
+fn broken_shift_and_less_than_reparse() {
+    let source = "pub fn f(name_value_with_long_name: u256, n: u256) -> bool {\n    let some_rather_long_binding_name_here: u256 = (name_value_with_long_name as u256) << (((32 - n) * 8) as u256)\n    some_rather_long_binding_name_here < name_value_with_long_name + name_value_with_long_name + name_value_with_long_name\n}\n";
+    let formatted = format_str(source, &Config::default()).unwrap();
+    let (_, errors) = parse_source_file(&formatted, RecoveryMode::NoRecover);
+    assert!(errors.is_empty(), "{errors:#?}\n{formatted}");
+}
