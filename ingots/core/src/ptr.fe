@@ -1,7 +1,7 @@
 use super::intrinsic::size_of
 use super::marker::{Clearable, Copy}
 use super::mem::{drop, forget, needs_drop}
-use super::num::{from_be, to_be, word_to_usize}
+use super::num::{IntWord, from_be, from_le, to_be, to_le, word_to_usize}
 use super::option::Option
 use super::ops::{Drop, Eq, Index, Len, WrappingAdd, WrappingMul, WrappingSub}
 use super::result::Result
@@ -760,20 +760,42 @@ impl MemSlice<u8> {
         }
     }
 
-    /// The 32 bytes from `offset` on, which need not be word-aligned, as a
-    /// big-endian word. Reverts unless all 32 lie in the span.
+    /// The `size_of<T>()` bytes from `offset` on, which need not be aligned,
+    /// as a big-endian integer. Reverts unless all of them lie in the span.
+    pub fn read_be<T: IntWord>(self, _ offset: usize) -> T {
+        from_be(unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) })
+    }
+
+    /// As `read_be`, reading the bytes little-endian.
+    pub fn read_le<T: IntWord>(self, _ offset: usize) -> T {
+        from_le(unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) })
+    }
+
+    /// Writes `value` big-endian over the `size_of<T>()` bytes from `offset`
+    /// on, which need not be aligned. Reverts unless all of them lie in the
+    /// span.
+    pub fn write_be<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) = to_be(value) }
+    }
+
+    /// As `write_be`, writing `value` little-endian.
+    pub fn write_le<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) = to_le(value) }
+    }
+
+    /// The 32 bytes from `offset` on as a big-endian word; see `read_be`.
     pub fn read_word(self, _ offset: usize) -> u256 {
-        from_be(unsafe { *cast<u8, u256>(self.word_ptr(offset)) })
+        self.read_be<u256>(offset)
     }
 
-    /// Writes `value` big-endian over the 32 bytes from `offset` on, which
-    /// need not be word-aligned. Reverts unless all 32 lie in the span.
+    /// Writes `value` big-endian over the 32 bytes from `offset` on; see
+    /// `write_be`.
     pub fn write_word(mut self, offset: usize, value: u256) {
-        unsafe { *cast<u8, u256>(self.word_ptr(offset)) = to_be(value) }
+        self.write_be<u256>(offset, value)
     }
 
-    fn word_ptr(self, _ offset: usize) -> *u8 {
-        if offset > self.len || 32 > self.len - offset {
+    fn value_ptr<T>(self, _ offset: usize) -> *u8 {
+        if offset > self.len || size_of<T>() > self.len - offset {
             index_out_of_bounds()
         }
         offset_bytes(self.ptr, offset)
@@ -869,8 +891,19 @@ impl MemBuffer {
         self.span().slice(offset, len)
     }
 
-    /// The 32 bytes from `offset` on, which need not be word-aligned, as a
-    /// big-endian word. Reverts unless all 32 lie in the logical extent.
+    /// The `size_of<T>()` bytes from `offset` on, which need not be aligned,
+    /// as a big-endian integer. Reverts unless all of them lie in the
+    /// logical extent.
+    pub fn read_be<T: IntWord>(self, _ offset: usize) -> T {
+        self.span().read_be<T>(offset)
+    }
+
+    /// As `read_be`, reading the bytes little-endian.
+    pub fn read_le<T: IntWord>(self, _ offset: usize) -> T {
+        self.span().read_le<T>(offset)
+    }
+
+    /// The 32 bytes from `offset` on as a big-endian word; see `read_be`.
     pub fn read_word(self, _ offset: usize) -> u256 {
         self.span().read_word(offset)
     }
@@ -991,32 +1024,46 @@ impl MemBuffer {
         }
     }
 
-    /// Write a full word at a byte offset, which need not be word-aligned.
+    /// Write `value` big-endian at a byte offset, which need not be aligned.
     ///
-    /// The complete 32-byte word must fit within this buffer's capacity.
-    /// Extends the logical extent to include the word and zeroes any gap
-    /// between the previous extent and the write. Existing bytes outside
-    /// the word are preserved. The allocation never grows.
+    /// All `size_of<T>()` bytes must fit within this buffer's capacity.
+    /// Extends the logical extent to include them and zeroes any gap between
+    /// the previous extent and the write. Existing bytes outside the write
+    /// are preserved. The allocation never grows.
+    #[inline(always)]
+    pub fn write_be<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.extend_over<T>(offset)) = to_be(value) }
+    }
+
+    /// As `write_be`, writing `value` little-endian.
+    #[inline(always)]
+    pub fn write_le<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.extend_over<T>(offset)) = to_le(value) }
+    }
+
+    /// Write a full word big-endian at a byte offset; see `write_be`.
+    #[inline(always)]
+    pub fn write_word(mut self, offset: usize, value: u256) {
+        self.write_be<u256>(offset, value)
+    }
+
+    /// The `size_of<T>()` bytes at `offset`, which must fit within the
+    /// capacity, after zeroing any gap before them and extending the logical
+    /// extent over them. The caller writes every one of them.
     #[inline(always)]
     #[arithmetic(unchecked)]
-    pub fn write_word(mut self, offset: usize, value: u256) {
-        if offset > self.capacity || 32 > self.capacity - offset {
+    unsafe fn extend_over<T>(mut self, _ offset: usize) -> *u8 {
+        let size = size_of<T>()
+        if offset > self.capacity || size > self.capacity - offset {
             index_out_of_bounds()
         }
-        unsafe {
-            if offset > self.len {
-                zero_bytes(
-                    ptr: offset_bytes(self.ptr, self.len),
-                    len: (offset - self.len),
-                )
-            }
-            *cast<u8, u256>(offset_bytes(self.ptr, offset)) = to_be(value)
+        if offset > self.len {
+            zero_bytes(ptr: offset_bytes(self.ptr, self.len), len: (offset - self.len))
         }
-        let end = offset + 32
-        if end > self.len {
-            // The word and any gap initialized every byte up to the new extent.
-            unsafe { self.len = end }
+        if offset + size > self.len {
+            self.len = offset + size
         }
+        offset_bytes(self.ptr, offset)
     }
 
     /// Set the logical extent after initializing the added bytes.
