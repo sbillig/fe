@@ -1,7 +1,10 @@
 use super::intrinsic::size_of
 use super::marker::{Clearable, Copy}
+use super::mem::{drop, forget, needs_drop}
+use super::num::{from_be, to_be}
 use super::option::Option
-use super::ops::{Eq, Index, Len}
+use super::ops::{Drop, Eq, Index, Len}
+use super::result::Result
 use super::panic_code
 use super::panics::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY}
 
@@ -14,7 +17,19 @@ extern {
     /// Native `ref`/`mut` slots require a valid typed store before they are read.
     /// Every allocation goes through `alloc_bytes`, which bounds the size, or
     /// `alloc_bytes_unchecked`, whose callers bound it.
+    /// A zero-size allocation takes no memory, so it never fails, need not be
+    /// released, and may share its address with other allocations.
     fn alloc_raw(_ size: u256) -> *u8
+
+    /// As `alloc_raw`, but returns a null address when the native host cannot
+    /// allocate. EVM memory runs out only with the gas, so there it is
+    /// `alloc_raw`. Every call goes through `try_alloc_bytes`, which bounds the
+    /// size.
+    fn try_alloc_raw(_ size: u256) -> *u8
+
+    /// Releases an allocation that `alloc_raw` or `try_alloc_raw` made. Native
+    /// hosts free it; EVM memory is never reclaimed.
+    unsafe fn dealloc_raw(_ ptr: *u8)
 
     /// Copies `len` bytes between linear-memory regions.
     ///
@@ -33,6 +48,9 @@ extern {
 }
 
 /// A dynamically sized array in linear memory.
+///
+/// The array owns its allocation and its elements: destroying it destroys
+/// the elements, then frees the allocation.
 pub struct MemArray<T> {
     unsafe ptr: *T,
     unsafe len: usize,
@@ -43,7 +61,8 @@ pub struct MemArray<T> {
 /// The first `len` of the `capacity` elements its allocation holds are in
 /// use. An allocation cannot grow in place, so growing past the capacity
 /// moves the elements to a larger one; growth takes `mut self`, so no element
-/// access is open across it.
+/// access is open across it. Destroying the vector destroys the elements in
+/// use, then frees the allocation.
 pub struct MemVec<T> {
     unsafe ptr: *T,
     unsafe len: usize,
@@ -69,7 +88,8 @@ pub type MemSpan = MemSlice<u8>
 /// An owned allocation in linear memory.
 ///
 /// `len` is the logical extent and `capacity` is the full writable allocation.
-/// Neither can exceed the original allocation.
+/// Neither can exceed the original allocation. Destroying the buffer frees
+/// the allocation.
 pub struct MemBuffer {
     unsafe ptr: *u8,
     unsafe len: usize,
@@ -79,9 +99,19 @@ pub struct MemBuffer {
 /// A fixed-size owned allocation in linear memory.
 ///
 /// Keeping the size in the type lets the backend see constant, nonescaping
-/// allocations and place them in its transient static arena.
+/// allocations and place them in its transient static arena. Destroying the
+/// buffer frees the allocation.
 pub struct FixedMemBuffer<const N: usize> {
     unsafe ptr: *u8,
+}
+
+/// A value in an allocation of its own, which the box owns.
+///
+/// Moving a box moves only its pointer, so a box can hold a large value
+/// cheaply, or a value of a type that holds itself. Destroying the box
+/// destroys the value, then frees the allocation.
+pub struct Box<T> {
+    unsafe ptr: *T,
 }
 
 impl<T> Copy for *T {}
@@ -111,7 +141,8 @@ impl<T> Eq for *T {
 impl<T> MemArray<T> {
     /// Allocates space for `len` values without initializing their contents.
     ///
-    /// The caller must initialize each element before it is read.
+    /// The caller must initialize each element before it is read, and before
+    /// the array is destroyed.
     pub unsafe fn new_uninit(_ len: usize) -> Self {
         Self {
             ptr: cast<u8, T>(alloc_bytes(len as u256 * size_of<T>())),
@@ -119,25 +150,53 @@ impl<T> MemArray<T> {
         }
     }
 
+    /// As `new_uninit`, or `None` when the allocation fails.
+    pub unsafe fn try_new_uninit(_ len: usize) -> Option<Self> {
+        Option::Some(Self { ptr: try_alloc_elems(len)?, len })
+    }
+
     /// `len` zero values: the allocated bytes zeroed, which is a value of a
     /// `Clearable` type. Zero bytes do not establish native references.
     pub fn new_zeroed(_ len: usize) -> Self
         where T: Clearable
     {
-        var array = unsafe { Self::new_uninit(len) }
-        array.zero()
+        let array = unsafe { Self::new_uninit(len) }
+        // The elements are not yet values, so there is nothing to destroy.
+        unsafe { zero_bytes(cast<T, u8>(array.ptr), array.byte_len() as u256) }
         array
+    }
+
+    /// As `new_zeroed`, or `None` when the allocation fails.
+    pub fn try_new_zeroed(_ len: usize) -> Option<Self>
+        where T: Clearable
+    {
+        let array = unsafe { Self::try_new_uninit(len)? }
+        unsafe { zero_bytes(cast<T, u8>(array.ptr), array.byte_len() as u256) }
+        Option::Some(array)
     }
 
     /// `len` elements, element `i` being `f(i)`.
     pub fn from_fn<F: FnMut(usize) -> T>(_ len: usize, _ f: mut F) -> Self uses F::E {
+        let array = unsafe { Self::new_uninit(len) }
+        array.init_with(mut f)
+    }
+
+    /// As `from_fn`, or `None`, without calling `f`, when the allocation
+    /// fails.
+    pub fn try_from_fn<F: FnMut(usize) -> T>(_ len: usize, _ f: mut F) -> Option<Self> uses F::E {
+        let array = unsafe { Self::try_new_uninit(len)? }
+        Option::Some(array.init_with(mut f))
+    }
+
+    /// Initializes element `i` of this uninitialized array with `f(i)`.
+    fn init_with<F: FnMut(usize) -> T>(own self, _ f: mut F) -> Self uses F::E {
         // Each element is written before anything reads it: `f` is given
-        // only an index, and a revert inside it discards the array.
-        var array = unsafe { Self::new_uninit(len) }
-        for i in 0..len {
-            array[i] = f(i)
+        // only an index, and a revert inside it discards the array. The
+        // writes go through raw places, which destroy nothing.
+        for i in 0..self.len {
+            unsafe { *elem(self.ptr, i) = f(i) }
         }
-        array
+        self
     }
 
     pub fn ptr(self) -> *T {
@@ -152,14 +211,20 @@ impl<T> MemArray<T> {
         self.len * size_of<T>() as usize
     }
 
-    pub fn into_bytes(own self) -> MemArray<u8> {
-        // The same allocation, counted in bytes.
-        unsafe {
+    /// The same allocation, counted in bytes. The elements are `Copy`, so
+    /// none is left undestroyed.
+    pub fn into_bytes(own self) -> MemArray<u8>
+        where T: Copy
+    {
+        // The bytes take over the allocation from the array, which is gone.
+        let bytes = unsafe {
             MemArray {
                 ptr: cast<T, u8>(self.ptr),
                 len: self.byte_len(),
             }
         }
+        forget(self)
+        bytes
     }
 
     pub fn as_slice(mut? self) -> mut? MemSlice<T> {
@@ -170,16 +235,23 @@ impl<T> MemArray<T> {
         self.as_slice().as_bytes()
     }
 
-    pub fn into_buffer(own self) -> MemBuffer {
+    /// The array's bytes, in the same allocation. The elements are `Copy`,
+    /// so none is left undestroyed.
+    pub fn into_buffer(own self) -> MemBuffer
+        where T: Copy
+    {
         let len = self.byte_len()
-        // The array's initialized bytes fill its allocation.
-        unsafe {
+        // The array's initialized bytes fill its allocation, which the
+        // buffer takes over from the array.
+        let buffer = unsafe {
             MemBuffer {
                 ptr: cast<T, u8>(self.ptr),
                 len,
                 capacity: len,
             }
         }
+        forget(self)
+        buffer
     }
 
     pub fn is_empty(self) -> bool {
@@ -208,7 +280,7 @@ impl<T> MemArray<T> {
         self.as_slice().replace(index, value)
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self.as_slice().set(index, value)
     }
@@ -218,12 +290,12 @@ impl<T> MemArray<T> {
         self.as_slice().swap(i, j)
     }
 
-    /// Sets every element to its zero value: its bytes zeroed, which is a
-    /// value of a `Clearable` type.
+    /// Sets every element to its zero value, destroying the one it held; see
+    /// `MemSlice::zero`.
     pub fn zero(mut self)
         where T: Clearable
     {
-        unsafe { zero_bytes(cast<T, u8>(self.ptr), self.byte_len() as u256) }
+        self.as_slice().zero()
     }
 }
 
@@ -243,6 +315,13 @@ impl<T> MemVec<T> {
                 capacity,
             }
         }
+    }
+
+    /// As `with_capacity`, or `None` when the allocation fails.
+    pub fn try_with_capacity(_ capacity: usize) -> Option<Self> {
+        let ptr = try_alloc_elems<T>(capacity)?
+        // A fresh allocation of `capacity` elements, none in use.
+        Option::Some(unsafe { Self { ptr, len: 0, capacity } })
     }
 
     pub fn ptr(self) -> *T {
@@ -272,6 +351,14 @@ impl<T> MemVec<T> {
         Option::Some(unsafe { mut? *elem(self.ptr, index) })
     }
 
+    /// The last element, or `None` when empty.
+    pub fn last(mut? self) -> Option<mut? T> {
+        if self.len == 0 {
+            return Option::None
+        }
+        self.get(self.len - 1)
+    }
+
     /// Two distinct elements at once; see `MemSlice::pair_mut`.
     pub fn pair_mut(mut self, _ i: usize, _ j: usize) -> (mut T, mut T) {
         self.as_slice().pair_mut(i, j)
@@ -283,7 +370,7 @@ impl<T> MemVec<T> {
         self.as_slice().replace(index, value)
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self.as_slice().set(index, value)
     }
@@ -304,12 +391,42 @@ impl<T> MemVec<T> {
             capacity *= 2
         }
         let replacement = cast<u8, T>(alloc_bytes(capacity as u256 * size_of<T>()))
-        // The replacement holds every element in use, in `capacity` elements.
-        unsafe {
-            copy(dest: byte_ptr(replacement), source: self.as_slice().as_bytes())
-            self.ptr = replacement
-            self.capacity = capacity
+        unsafe { self.move_to(replacement, capacity) }
+    }
+
+    /// As `reserve`, but `false`, leaving the vector as it was, when the
+    /// allocation fails or would exceed `MAX_ALLOCATION` bytes.
+    pub fn try_reserve(mut self, _ additional: usize) -> bool {
+        if additional <= self.capacity - self.len {
+            return true
         }
+        let size = size_of<T>() as usize
+        let max = if size == 0 { MAX_ALLOCATION as usize } else { MAX_ALLOCATION as usize / size }
+        if additional > max - self.len {
+            return false
+        }
+        let capacity = grown_capacity(self.capacity, needed: self.len + additional, initial: 4, max)
+        match try_alloc_elems<T>(capacity) {
+            Option::Some(replacement) => {
+                unsafe { self.move_to(replacement, capacity) }
+                true
+            }
+            Option::None => false
+        }
+    }
+
+    /// Moves the elements in use to `replacement` and frees the old
+    /// allocation.
+    ///
+    /// `replacement` must be a fresh allocation of `capacity` elements, at
+    /// least `len`.
+    #[inline(always)]
+    unsafe fn move_to(mut self, _ replacement: *T, _ capacity: usize) {
+        // The replacement holds every element in use, in `capacity` elements.
+        copy(dest: byte_ptr(replacement), source: self.as_slice().as_bytes())
+        dealloc(self.ptr)
+        self.ptr = replacement
+        self.capacity = capacity
     }
 
     /// Append `value`, growing the allocation when it is full.
@@ -320,6 +437,20 @@ impl<T> MemVec<T> {
             *elem(self.ptr, self.len) = value
             self.len += 1
         }
+    }
+
+    /// As `push`, or `value` back when growing the allocation fails.
+    pub fn try_push(mut self, _ value: own T) -> Result<T, ()> {
+        if !self.try_reserve(1) {
+            return Result::Err(value)
+        }
+        // `try_reserve` made room for element `len`, which the write
+        // initializes.
+        unsafe {
+            *elem(self.ptr, self.len) = value
+            self.len += 1
+        }
+        Result::Ok(())
     }
 
     /// Remove the last element and return it, or `None` when empty.
@@ -334,13 +465,58 @@ impl<T> MemVec<T> {
         }
     }
 
-    /// Keep the first `len` elements.
+    /// Keep the first `len` elements, destroying the rest.
     pub fn truncate(mut self, _ len: usize) {
         if len > self.len {
             index_out_of_bounds()
         }
-        // Shrinking keeps every element in use initialized.
-        unsafe { self.len = len }
+        let end = self.len
+        // The elements past `len` leave the vector before they are destroyed.
+        unsafe {
+            self.len = len
+            drop_range(self.ptr, start: len, end)
+        }
+    }
+
+    /// Destroys every element, keeping the allocation.
+    pub fn clear(mut self) {
+        self.truncate(0)
+    }
+
+    /// Set the length to `len`, destroying the elements past it or
+    /// appending zero values.
+    pub fn resize(mut self, _ len: usize)
+        where T: Clearable
+    {
+        if len > self.len {
+            self.reserve(len - self.len)
+        }
+        unsafe { self.resize_within(len) }
+    }
+
+    /// As `resize`, but `false`, leaving the vector as it was, when growing
+    /// the allocation fails.
+    pub fn try_resize(mut self, _ len: usize) -> bool
+        where T: Clearable
+    {
+        if len > self.len && !self.try_reserve(len - self.len) {
+            return false
+        }
+        unsafe { self.resize_within(len) }
+        true
+    }
+
+    /// `resize` within the capacity, which must hold `len` elements.
+    unsafe fn resize_within(mut self, _ len: usize)
+        where T: Clearable
+    {
+        if len <= self.len {
+            self.truncate(len)
+        } else {
+            // The added elements are zero values, within the capacity.
+            zero_bytes(byte_ptr(elem(self.ptr, self.len)), (len - self.len) as u256 * size_of<T>())
+            self.len = len
+        }
     }
 
     /// Append copies of `source`'s elements.
@@ -357,8 +533,11 @@ impl<T> MemVec<T> {
 
     /// The elements as a fixed-length array, in the same allocation.
     pub fn into_array(own self) -> MemArray<T> {
-        // The first `len` elements are in use.
-        unsafe { MemArray { ptr: self.ptr, len: self.len } }
+        // The first `len` elements are in use, and the array takes over the
+        // allocation from the vector, which is gone.
+        let array = unsafe { MemArray { ptr: self.ptr, len: self.len } }
+        forget(self)
+        array
     }
 }
 
@@ -497,7 +676,7 @@ impl<T> MemSlice<T> {
         old
     }
 
-    /// Moves `value` into element `index`.
+    /// Moves `value` into element `index`, destroying the one it replaces.
     pub fn set(mut self, _ index: usize, _ value: own T) {
         self[index] = value
     }
@@ -514,6 +693,50 @@ impl<T> MemSlice<T> {
         a = b
         b = tmp
     }
+
+    /// Copies `source`'s elements over this slice's. Reverts unless the
+    /// lengths are equal.
+    pub fn copy_from(mut self, _ source: MemSlice<T>)
+        where T: Copy
+    {
+        if source.len != self.len {
+            index_out_of_bounds()
+        }
+        // Both ranges are live views of `len` elements; they may overlap.
+        unsafe { copy(dest: byte_ptr(self.ptr), source: source.as_bytes()) }
+    }
+
+    /// Copies the `len` elements from `source` on over those from `dest`
+    /// on. The ranges may overlap. Reverts unless both lie in the slice.
+    pub fn copy_within(mut self, source: usize, dest: usize, len: usize)
+        where T: Copy
+    {
+        let from = self.slice(offset: source, len).ptr
+        let to = self.slice(offset: dest, len).ptr
+        // Both ranges lie in this slice, which this call writes.
+        unsafe { copy_raw(dest: byte_ptr(to), source: byte_ptr(from), len: len as u256 * size_of<T>()) }
+    }
+
+    /// Sets every element to `value`.
+    pub fn fill(mut self, _ value: T)
+        where T: Copy
+    {
+        for i in 0..self.len {
+            self[i] = value
+        }
+    }
+
+    /// Sets every element to its zero value: its bytes zeroed, which is a
+    /// value of a `Clearable` type. Each element's previous value is
+    /// destroyed first, as an assignment destroys what it overwrites.
+    pub fn zero(mut self)
+        where T: Clearable
+    {
+        unsafe {
+            drop_in_place_n(self.ptr, self.len)
+            zero_bytes(byte_ptr(self.ptr), self.byte_len() as u256)
+        }
+    }
 }
 
 impl MemSlice<u8> {
@@ -527,13 +750,13 @@ impl MemSlice<u8> {
     /// The 32 bytes from `offset` on, which need not be word-aligned, as a
     /// big-endian word. Reverts unless all 32 lie in the span.
     pub fn read_word(self, _ offset: usize) -> u256 {
-        unsafe { *cast<u8, u256>(self.word_ptr(offset)) }
+        from_be(unsafe { *cast<u8, u256>(self.word_ptr(offset)) })
     }
 
     /// Writes `value` big-endian over the 32 bytes from `offset` on, which
     /// need not be word-aligned. Reverts unless all 32 lie in the span.
     pub fn write_word(mut self, offset: usize, value: u256) {
-        unsafe { *cast<u8, u256>(self.word_ptr(offset)) = value }
+        unsafe { *cast<u8, u256>(self.word_ptr(offset)) = to_be(value) }
     }
 
     fn word_ptr(self, _ offset: usize) -> *u8 {
@@ -576,6 +799,13 @@ impl MemBuffer {
         }
     }
 
+    /// As `with_capacity`, or `None` when the allocation fails.
+    pub fn try_with_capacity(_ capacity: usize) -> Option<Self> {
+        let ptr = try_alloc_bytes(capacity as u256)?
+        // A fresh allocation of `capacity` bytes, none yet in the extent.
+        Option::Some(unsafe { Self { ptr, len: 0, capacity } })
+    }
+
     pub fn empty() -> Self {
         Self::with_capacity(0)
     }
@@ -584,6 +814,13 @@ impl MemBuffer {
         var buffer = Self::with_capacity(source.len())
         buffer.extend_from(source)
         buffer
+    }
+
+    /// As `from_span`, or `None` when the allocation fails.
+    pub fn try_from_span(_ source: MemSpan) -> Option<Self> {
+        var buffer = Self::try_with_capacity(source.len())?
+        buffer.extend_from(source)
+        Option::Some(buffer)
     }
 
     pub fn ptr(self) -> *u8 {
@@ -644,12 +881,67 @@ impl MemBuffer {
         }
 
         let replacement = alloc_bytes(capacity as u256)
-        // The replacement holds every initialized byte, in `capacity` bytes.
-        unsafe {
-            copy(dest: replacement, source: self.span())
-            self.ptr = replacement
-            self.capacity = capacity
+        unsafe { self.move_to(replacement, capacity) }
+    }
+
+    /// As `reserve`, but `false`, leaving the buffer as it was, when the
+    /// allocation fails or would exceed `MAX_ALLOCATION` bytes.
+    pub fn try_reserve(mut self, _ additional: usize) -> bool {
+        if additional <= self.capacity - self.len {
+            return true
         }
+        let max = MAX_ALLOCATION as usize
+        if additional > max - self.len {
+            return false
+        }
+        let capacity = grown_capacity(self.capacity, needed: self.len + additional, initial: 32, max)
+        match try_alloc_bytes(capacity as u256) {
+            Option::Some(replacement) => {
+                unsafe { self.move_to(replacement, capacity) }
+                true
+            }
+            Option::None => false
+        }
+    }
+
+    /// Moves the logical extent to `replacement` and frees the old
+    /// allocation.
+    ///
+    /// `replacement` must be a fresh allocation of `capacity` bytes, at least
+    /// `len`.
+    #[inline(always)]
+    unsafe fn move_to(mut self, _ replacement: *u8, _ capacity: usize) {
+        // The replacement holds every initialized byte, in `capacity` bytes.
+        copy(dest: replacement, source: self.span())
+        dealloc(self.ptr)
+        self.ptr = replacement
+        self.capacity = capacity
+    }
+
+    /// Set the logical extent to `len`, appending zero bytes when it grows.
+    pub fn resize(mut self, _ len: usize) {
+        if len > self.len {
+            self.reserve(len - self.len)
+        }
+        unsafe { self.resize_within(len) }
+    }
+
+    /// As `resize`, but `false`, leaving the buffer as it was, when growing
+    /// the allocation fails.
+    pub fn try_resize(mut self, _ len: usize) -> bool {
+        if len > self.len && !self.try_reserve(len - self.len) {
+            return false
+        }
+        unsafe { self.resize_within(len) }
+        true
+    }
+
+    /// `resize` within the capacity, which must hold `len` bytes.
+    unsafe fn resize_within(mut self, _ len: usize) {
+        if len > self.len {
+            zero_bytes(offset_bytes(self.ptr, self.len as u256), (len - self.len) as u256)
+        }
+        self.len = len
     }
 
     /// Append bytes, growing the allocation when necessary.
@@ -705,7 +997,7 @@ impl MemBuffer {
                     len: (offset - self.len) as u256,
                 )
             }
-            *cast<u8, u256>(offset_bytes(self.ptr, offset as u256)) = value
+            *cast<u8, u256>(offset_bytes(self.ptr, offset as u256)) = to_be(value)
         }
         let end = offset + 32
         if end > self.len {
@@ -730,6 +1022,11 @@ impl MemBuffer {
         }
         // Shrinking keeps every byte of the extent initialized.
         unsafe { self.len = len }
+    }
+
+    /// Empty the logical extent, keeping the allocation.
+    pub fn clear(mut self) {
+        self.truncate(0)
     }
 
     pub fn is_empty(self) -> bool {
@@ -772,14 +1069,57 @@ impl<const N: usize> FixedMemBuffer<N> {
     }
 
     pub fn into_buffer(own self) -> MemBuffer {
-        // The fixed allocation holds `N` initialized bytes.
-        unsafe {
+        // The fixed allocation holds `N` initialized bytes, and the buffer
+        // takes it over.
+        let buffer = unsafe {
             MemBuffer {
                 ptr: self.ptr,
                 len: N,
                 capacity: N,
             }
         }
+        forget(self)
+        buffer
+    }
+}
+
+impl<T> Box<T> {
+    /// Moves `value` into a new allocation.
+    pub fn new(_ value: own T) -> Self {
+        let ptr = alloc<T>()
+        // The fresh allocation fits a `T`, which the write initializes.
+        unsafe {
+            *ptr = value
+            Self { ptr }
+        }
+    }
+
+    /// As `new`, or `value` back when the allocation fails.
+    pub fn try_new(_ value: own T) -> Result<T, Self> {
+        let ptr = match try_alloc_elems<T>(1) {
+            Option::Some(ptr) => ptr
+            Option::None => return Result::Err(value)
+        }
+        // The fresh allocation fits a `T`, which the write initializes.
+        unsafe {
+            *ptr = value
+            Result::Ok(Self { ptr })
+        }
+    }
+
+    /// The boxed value.
+    pub fn get(mut? self) -> mut? T {
+        unsafe { mut? *self.ptr }
+    }
+
+    /// Moves the value out, freeing its allocation.
+    pub fn into_inner(own self) -> T {
+        // The value leaves the allocation before it is freed, and the box
+        // is gone.
+        let value = unsafe { *self.ptr }
+        unsafe { dealloc(self.ptr) }
+        forget(self)
+        value
     }
 }
 
@@ -820,6 +1160,24 @@ pub fn alloc_bytes(_ len: u256) -> *u8 {
     alloc_raw(len)
 }
 
+/// Allocates `len` bytes without initializing them, or `None` when `len`
+/// exceeds `MAX_ALLOCATION` or the native host is out of memory.
+pub fn try_alloc_bytes(_ len: u256) -> Option<*u8> {
+    if len > MAX_ALLOCATION {
+        return Option::None
+    }
+    let ptr = try_alloc_raw(len)
+    if ptr as u256 == 0 { Option::None } else { Option::Some(ptr) }
+}
+
+/// Releases an allocation made by `alloc_bytes` or `try_alloc_bytes`.
+///
+/// The caller must own the allocation, `ptr` must be its first byte, and
+/// nothing may access it afterwards.
+pub unsafe fn dealloc<T>(_ ptr: *T) {
+    dealloc_raw(cast<T, u8>(ptr))
+}
+
 /// Allocates `len` bytes, without initializing them or bounding `len`. The
 /// caller must ensure `len <= MAX_ALLOCATION`.
 #[inline(always)]
@@ -827,10 +1185,53 @@ pub(ingot) unsafe fn alloc_bytes_unchecked(_ len: u256) -> *u8 {
     alloc_raw(len)
 }
 
+/// Allocates room for `len` values of `T`, without initializing them, or
+/// `None` when they would exceed `MAX_ALLOCATION` bytes or the allocation
+/// fails.
+fn try_alloc_elems<T>(_ len: usize) -> Option<*T> {
+    let size = size_of<T>()
+    if size != 0 && len as u256 > MAX_ALLOCATION / size {
+        return Option::None
+    }
+    Option::Some(cast<u8, T>(try_alloc_bytes(len as u256 * size)?))
+}
+
+/// The capacity growing from `capacity` to fit `needed` takes, at most
+/// `max`: doubling, from `initial` when empty.
+fn grown_capacity(_ capacity: usize, needed: usize, initial: usize, max: usize) -> usize {
+    var capacity = if capacity == 0 { initial } else { capacity }
+    while capacity < needed {
+        capacity = if capacity > max / 2 { needed } else { capacity * 2 }
+    }
+    capacity
+}
+
 /// Allocates an array without initializing its contents. The caller must
-/// initialize each element before it is read.
+/// initialize each element before it is read or the array is destroyed.
 pub unsafe fn alloc_array<T>(_ len: usize) -> MemArray<T> {
     MemArray::new_uninit(len)
+}
+
+/// Destroys the value at `ptr`, leaving its memory uninitialized.
+///
+/// `ptr` must hold an initialized `T` that nothing reads or destroys again.
+pub unsafe fn drop_in_place<T>(_ ptr: *T) {
+    drop(*ptr)
+}
+
+/// Destroys the `len` values from `ptr` on, in order; see `drop_in_place`.
+pub unsafe fn drop_in_place_n<T>(_ ptr: *T, _ len: usize) {
+    drop_range(ptr, start: 0, end: len)
+}
+
+/// Destroys values `start..end` of those from `ptr` on, in order.
+#[inline(always)]
+unsafe fn drop_range<T>(_ ptr: *T, start: usize, end: usize) {
+    if needs_drop<T>() {
+        for i in start..end {
+            drop_in_place(elem(ptr, i))
+        }
+    }
 }
 
 /// Zeroes a raw range. The caller must ensure all `len` bytes fit without
@@ -903,6 +1304,48 @@ impl<T> Index<usize> for MemSlice<T> {
     #[inline(always)]
     fn index(mut? self, _ index: usize) -> mut? T {
         unsafe { mut? *self.ptr_at(index) }
+    }
+}
+
+impl<T> Drop for MemArray<T> {
+    fn drop(own self) {
+        // The array owns its elements and its allocation.
+        unsafe {
+            drop_in_place_n(self.ptr, self.len)
+            dealloc(self.ptr)
+        }
+    }
+}
+
+impl<T> Drop for MemVec<T> {
+    fn drop(own self) {
+        // The vector owns its elements in use and its allocation.
+        unsafe {
+            drop_in_place_n(self.ptr, self.len)
+            dealloc(self.ptr)
+        }
+    }
+}
+
+impl Drop for MemBuffer {
+    fn drop(own self) {
+        unsafe { dealloc(self.ptr) }
+    }
+}
+
+impl<const N: usize> Drop for FixedMemBuffer<N> {
+    fn drop(own self) {
+        unsafe { dealloc(self.ptr) }
+    }
+}
+
+impl<T> Drop for Box<T> {
+    fn drop(own self) {
+        // The box owns its value and the allocation.
+        unsafe {
+            drop_in_place(self.ptr)
+            dealloc(self.ptr)
+        }
     }
 }
 

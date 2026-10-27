@@ -66,7 +66,7 @@ pub fn main() -> i32 {
     assert!(
         error
             .to_string()
-            .contains("native extern symbol `memmove` is reserved for memory copies"),
+            .contains("native extern symbol `memmove` is reserved for core memory operations"),
         "unexpected error: {error}"
     );
 }

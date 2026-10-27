@@ -4,11 +4,11 @@ use std::mem::size_of;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        EvalOutcome, FieldIndex, RuntimeSizeError, SConst, SLocalId, SStmtId, SemConstId,
-        SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
-        SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance, SemanticInstanceKey,
-        SemanticLocalRole, VariantIndex, core_method_callee_key, eval_const_ref,
-        generated_callee_key,
+        DropFlagPoint, EvalOutcome, FieldIndex, RuntimeSizeError, SConst, SLocalId, SStmtId,
+        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticCalleeRef,
+        SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef, SemanticInstance,
+        SemanticInstanceKey, SemanticLocalRole, VariantIndex, core_method_callee_key,
+        eval_const_ref, generated_callee_key,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
             NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
@@ -41,7 +41,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     db::MirDb,
-    instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
+    instance::{RuntimeInstance, RuntimeInstanceKey, RuntimeTarget, get_or_build_runtime_instance},
     resolve_runtime_place_address_class,
     runtime::place::{
         project_field_class, project_index_class, project_variant_field_class, runtime_place_lane,
@@ -102,6 +102,8 @@ use super::{
         top_level_class_for_ty_in_env, validate_runtime_array_extents_in_env,
     },
 };
+
+mod drops;
 
 pub fn lower_to_rmir<'db>(
     db: &'db dyn MirDb,
@@ -482,6 +484,11 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) terminator_origins: Vec<SemOrigin<'db>>,
     pub(super) current_origin: SemOrigin<'db>,
     pub(super) terminated_blocks: Vec<bool>,
+    /// The local of each drop flag the body consults on its target
+    /// (`drops`).
+    drop_flags: Vec<Option<RLocalId>>,
+    /// The flags each point of the body sets.
+    drop_flag_updates: FxHashMap<DropFlagPoint, Vec<(u32, bool)>>,
 }
 
 /// An element a collection packs into a lane (`StateIndex::Lanes`): the
@@ -719,6 +726,8 @@ impl<'db> RmirEmitter<'db> {
             terminator_origins,
             current_origin: SemOrigin::Synthetic,
             terminated_blocks,
+            drop_flags: Vec::new(),
+            drop_flag_updates: FxHashMap::default(),
         })
     }
 
@@ -745,6 +754,10 @@ impl<'db> RmirEmitter<'db> {
 
     fn layout_for_ty(&self, ty: TyId<'db>) -> LayoutId<'db> {
         layout_for_ty_in_env(self.db, self.env, ty)
+    }
+
+    fn target(&self) -> RuntimeTarget {
+        self.instance.target(self.db)
     }
 
     fn current_semantic_key(&self) -> SemanticInstanceKey<'db> {
@@ -774,14 +787,21 @@ impl<'db> RmirEmitter<'db> {
             vec![SemOrigin::Synthetic; self.semantic_body.normalized.blocks.len()];
         self.terminated_blocks = vec![false; self.semantic_body.normalized.blocks.len()];
         let blocks = self.semantic_body.normalized.blocks.clone();
+        self.prepare_drop_flags();
         for (idx, block) in blocks.iter().enumerate() {
-            let bb = RBlockId::from_u32(idx as u32);
+            let block_id = NBlockId::new(idx);
+            let mut bb = RBlockId::from_u32(idx as u32);
+            self.update_drop_flags(bb, DropFlagPoint::BlockStart(block_id));
             for (stmt_idx, stmt) in block.statements.iter().enumerate() {
-                self.with_current_origin(stmt.origin, |this| this.lower_stmt(bb, stmt_idx, stmt));
+                bb = self.with_current_origin(stmt.origin, |this| {
+                    this.lower_stmt(bb, block_id, stmt_idx, stmt)
+                });
+                self.update_drop_flags(bb, DropFlagPoint::After(stmt.id));
                 if self.terminated_blocks[bb.index()] {
                     break;
                 }
             }
+            self.update_drop_flags(bb, DropFlagPoint::BeforeTerminator(block_id));
             if !self.terminated_blocks[bb.index()] {
                 self.with_current_origin(block.terminator.origin, |this| {
                     this.blocks[bb.index()].terminator =
@@ -810,15 +830,25 @@ impl<'db> RmirEmitter<'db> {
         result
     }
 
-    fn lower_stmt(&mut self, bb: RBlockId, stmt_idx: usize, stmt: &NStatement<'db>) {
+    /// Lowers `stmt`, the statement at `stmt_idx` of `block`, into `bb`;
+    /// lowering goes on in the block it returns. A drop splits blocks, so
+    /// `bb` need not be `block`'s own.
+    fn lower_stmt(
+        &mut self,
+        bb: RBlockId,
+        block: NBlockId,
+        stmt_idx: usize,
+        stmt: &NStatement<'db>,
+    ) -> RBlockId {
         self.lower_stmt_index_checks(bb, &stmt.kind);
         if self.terminated_blocks[bb.index()] {
-            return;
+            return bb;
         }
         match &stmt.kind {
             NStatementKind::Define { result, expr } => {
-                self.lower_assign(bb, stmt_idx, stmt.source, *result, expr)
+                self.lower_assign(bb, block, stmt_idx, stmt.source, *result, expr)
             }
+            NStatementKind::Drop { target } => return self.lower_drop(bb, stmt.id, target),
             NStatementKind::End { access } => {
                 if !self.end_lane_extent(bb, LaneExtent::Access(*access))
                     && let NValueDefinition::Statement { block, statement } =
@@ -891,6 +921,7 @@ impl<'db> RmirEmitter<'db> {
                 }
             }
         }
+        bb
     }
 
     fn lower_local_root_assignment(
@@ -947,6 +978,7 @@ impl<'db> RmirEmitter<'db> {
     fn lower_assign(
         &mut self,
         bb: RBlockId,
+        block: NBlockId,
         stmt_idx: usize,
         stmt_id: Option<SStmtId>,
         result: NValueId,
@@ -963,7 +995,7 @@ impl<'db> RmirEmitter<'db> {
             .expect("normalized assignment result must exist")
             .ty;
         let normalized_id =
-            self.semantic_body.normalized.blocks[bb.index()].statements[stmt_idx].id;
+            self.semantic_body.normalized.blocks[block.index()].statements[stmt_idx].id;
         // A call that never returns ends its executable block and produces no
         // value, so carrier inference gives its result no class.
         if let NExpr::Call {
@@ -977,7 +1009,7 @@ impl<'db> RmirEmitter<'db> {
             self.lower_call(bb, normalized_id, *callee, args, effect_args);
             return;
         }
-        let direct_class = self.current_expr_direct_class(bb.index(), stmt_idx, expr);
+        let direct_class = self.current_expr_direct_class(block.index(), stmt_idx, expr);
         if self.root_provider_value_load_is_lazy(dst, expr)
             || ((matches!(expr, NExpr::MakeView { .. })
                 || (stmt_id.is_none()
@@ -1003,7 +1035,7 @@ impl<'db> RmirEmitter<'db> {
                 .semantic_body
                 .normalized
                 .blocks
-                .get(bb.index())
+                .get(block.index())
                 .and_then(|block| block.statements.get(stmt_idx + 1))
                 .is_some_and(|statement| {
                     let NStatementKind::Store { destination, value } = &statement.kind else {
@@ -1110,7 +1142,7 @@ impl<'db> RmirEmitter<'db> {
                     return;
                 }
                 let carrier = self
-                    .current_expr_direct_class(bb.index(), stmt_idx, expr)
+                    .current_expr_direct_class(block.index(), stmt_idx, expr)
                     .map(RuntimeCarrier::Value)
                     .unwrap_or(RuntimeCarrier::Erased);
                 let sink = self.alloc_runtime_temp(result_ty, RuntimeCarrier::Erased);
@@ -3129,7 +3161,7 @@ impl<'db> RmirEmitter<'db> {
             runtime_classes,
         );
         let signature = runtime_declaration_signature(self.db, runtime_key);
-        let callee = get_or_build_runtime_instance(self.db, runtime_key);
+        let callee = get_or_build_runtime_instance(self.db, runtime_key, self.target());
         if callee.exit_behavior(self.db) == RuntimeExitBehavior::NeverReturns {
             self.set_terminator(
                 bb,
@@ -3187,7 +3219,7 @@ impl<'db> RmirEmitter<'db> {
             NStatementKind::Store { destination, .. } => {
                 self.lower_place_index_checks(bb, destination)
             }
-            NStatementKind::End { .. } => {}
+            NStatementKind::End { .. } | NStatementKind::Drop { .. } => {}
         }
     }
 
@@ -3306,6 +3338,42 @@ impl<'db> RmirEmitter<'db> {
                 return None;
             };
             return Some(self.lower_panic_code(bb, *code));
+        }
+        // The argument moved into the call, which destroys nothing; EVM
+        // memory is never reclaimed.
+        if kind == RuntimeBuiltinFuncKind::Forget
+            || kind == RuntimeBuiltinFuncKind::Free && self.target() == RuntimeTarget::Evm
+        {
+            return Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased));
+        }
+        // EVM memory is big-endian, so there a word is its own big-endian
+        // representation.
+        if matches!(
+            kind,
+            RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian
+        ) && self.target() == RuntimeTarget::Evm
+            && let [value] = args.as_slice()
+        {
+            let class = self.value_class(*value)?.clone();
+            let ret = self.alloc_runtime_temp(
+                semantic_return_ty(self.db, semantic),
+                RuntimeCarrier::Value(class),
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: ret,
+                    expr: RExpr::Use(*value),
+                },
+            );
+            return Some(ret);
+        }
+        if kind == RuntimeBuiltinFuncKind::NeedsDrop {
+            let ty = semantic.key(self.db).subst(self.db).generic_args(self.db)[0];
+            let needs_drop = self.needs_drop(ty);
+            let ret = self.alloc_bool_temp();
+            self.assign_bool(bb, ret, needs_drop);
+            return Some(ret);
         }
         if kind == RuntimeBuiltinFuncKind::Clear {
             // A zero-sized place is erased: clearing it stores nothing.
@@ -3428,7 +3496,11 @@ impl<'db> RmirEmitter<'db> {
         let semantic_key =
             generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
                 .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
-        runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
+        runtime_instance_for_semantic(
+            self.db,
+            SemanticInstance::new(self.db, semantic_key),
+            self.target(),
+        )
     }
 
     fn assert_panic_payload_encodable(
@@ -3747,25 +3819,24 @@ impl<'db> RmirEmitter<'db> {
         });
         let builtin = |builtin, class| LoweredBuiltinCall::Expr { builtin, class };
         Some(match kind {
-            RuntimeBuiltinFuncKind::Malloc => {
+            RuntimeBuiltinFuncKind::Malloc | RuntimeBuiltinFuncKind::TryMalloc => {
                 let [size] = args else { return None };
+                let size = *size;
                 builtin(
-                    crate::runtime::RuntimeBuiltin::Malloc { size: *size },
+                    if kind == RuntimeBuiltinFuncKind::Malloc {
+                        crate::runtime::RuntimeBuiltin::Malloc { size }
+                    } else {
+                        crate::runtime::RuntimeBuiltin::TryMalloc { size }
+                    },
                     self.top_level_class_for_ty(
                         semantic_return_ty(self.db, semantic),
                         AddressSpace::Memory,
                     ),
                 )
             }
-            RuntimeBuiltinFuncKind::NativePtrIsNull => {
+            RuntimeBuiltinFuncKind::Free => {
                 let [ptr] = args else { return None };
-                builtin(
-                    crate::runtime::RuntimeBuiltin::NativePtrIsNull { ptr: *ptr },
-                    self.top_level_class_for_ty(
-                        semantic_return_ty(self.db, semantic),
-                        AddressSpace::Memory,
-                    ),
-                )
+                builtin(crate::runtime::RuntimeBuiltin::Free { ptr: *ptr }, None)
             }
             RuntimeBuiltinFuncKind::PtrOffsetBytes => {
                 let [ptr, offset] = args else { return None };
@@ -3987,6 +4058,13 @@ impl<'db> RmirEmitter<'db> {
                 let [value] = args else { return None };
                 builtin(
                     crate::runtime::RuntimeBuiltin::LeadingZeros { value: *value },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian => {
+                let [value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::SwapBytes { value: *value },
                     Some(word.clone()),
                 )
             }
@@ -4296,9 +4374,12 @@ impl<'db> RmirEmitter<'db> {
                 let [_value] = args else { return None };
                 LoweredBuiltinCall::Terminator(RTerminator::Trap)
             }
-            // Lowered with its payload in `lower_panic_code`, and by
-            // `lower_clear`.
-            RuntimeBuiltinFuncKind::PanicCode | RuntimeBuiltinFuncKind::Clear => return None,
+            // Lowered with its payload in `lower_panic_code`, by
+            // `lower_clear`, as nothing, and as a constant.
+            RuntimeBuiltinFuncKind::PanicCode
+            | RuntimeBuiltinFuncKind::Clear
+            | RuntimeBuiltinFuncKind::Forget
+            | RuntimeBuiltinFuncKind::NeedsDrop => return None,
             RuntimeBuiltinFuncKind::IntrinsicKeccak256
             | RuntimeBuiltinFuncKind::IntrinsicKeccakWords => return None,
         })
@@ -4613,12 +4694,8 @@ impl<'db> RmirEmitter<'db> {
         if params.is_empty() {
             return target;
         }
-        let edge = RBlockId::from_u32(self.blocks.len() as u32);
-        self.blocks.push(RBlock {
-            stmts: Vec::new(),
-            terminator: RTerminator::Goto(target),
-        });
-        self.terminated_blocks.push(false);
+        let edge = self.new_block();
+        self.blocks[edge.index()].terminator = RTerminator::Goto(target);
         let values = params
             .iter()
             .map(|(_, arg)| {
@@ -5619,14 +5696,11 @@ impl<'db> RmirEmitter<'db> {
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
             params,
         );
-        let callee = get_or_build_runtime_instance(self.db, callee_key);
-        let class = runtime_declaration_signature(self.db, callee_key)
+        let callee = get_or_build_runtime_instance(self.db, callee_key, self.target());
+        let carrier = runtime_declaration_signature(self.db, callee_key)
             .ret
-            .expect("a compiler-inserted call returns a value");
-        let result = self.alloc_runtime_temp(
-            semantic_return_ty(self.db, semantic),
-            RuntimeCarrier::Value(class),
-        );
+            .map_or(RuntimeCarrier::Erased, RuntimeCarrier::Value);
+        let result = self.alloc_runtime_temp(semantic_return_ty(self.db, semantic), carrier);
         self.push_stmt(
             bb,
             RStmt::Assign {
@@ -6410,6 +6484,7 @@ fn intrinsic_numeric_name_parts(name: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
+    use crate::RuntimeTarget;
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::analysis::{
@@ -6473,7 +6548,7 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
                 &db,
                 identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
             );
-            let body = runtime_instance_for_semantic(&db, semantic).body(&db);
+            let body = runtime_instance_for_semantic(&db, semantic, RuntimeTarget::Evm).body(&db);
             assert_eq!(body.signature.params.len(), 1);
             assert_eq!(
                 body.signature.ret.as_ref(),

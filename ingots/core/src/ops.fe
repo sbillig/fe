@@ -340,3 +340,16 @@ pub trait BitOrAssign<T = Self> {
 pub trait BitXorAssign<T = Self> {
     fn bitxor_assign(mut self, _ other: own T)
 }
+
+/// Destroys a value when its owner gives it up: at the end of the owner's
+/// scope, when the value is overwritten, or for the fields a partial move
+/// leaves behind. `drop` runs once, then the fields it did not move out are
+/// destroyed in declaration order.
+///
+/// A drop runs where no call is written, so `drop` declares no effects, and
+/// nothing calls it directly: `core::mem::drop` ends a value early. An
+/// implementation covers the whole type, as `impl<T> Drop for Buf<T>` does,
+/// and a type with one is never `Copy`.
+pub trait Drop {
+    fn drop(own self)
+}

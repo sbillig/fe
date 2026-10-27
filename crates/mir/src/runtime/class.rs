@@ -485,7 +485,7 @@ fn builtin_result_class<'db>(
             verify_word_value(body, *modulus)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
-        RuntimeBuiltin::LeadingZeros { value } => {
+        RuntimeBuiltin::LeadingZeros { value } | RuntimeBuiltin::SwapBytes { value } => {
             verify_word_value(body, *value)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
@@ -534,16 +534,13 @@ fn builtin_result_class<'db>(
             let _ = program.code_region(*region);
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
-        RuntimeBuiltin::Malloc { size } => {
+        RuntimeBuiltin::Malloc { size } | RuntimeBuiltin::TryMalloc { size } => {
             verify_word_value(body, *size)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
-        RuntimeBuiltin::NativePtrIsNull { ptr } => {
-            verify_word_value(body, *ptr)?;
-            Ok(Some(RuntimeClass::Scalar(ScalarClass {
-                repr: ScalarRepr::Bool,
-                role: ScalarRole::Plain,
-            })))
+        RuntimeBuiltin::Free { ptr } => {
+            verify_address_operand(body, *ptr, AddressSpace::Memory)?;
+            Ok(None)
         }
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
             verify_word_value(body, *ptr)?;

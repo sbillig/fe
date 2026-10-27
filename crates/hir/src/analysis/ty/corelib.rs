@@ -185,9 +185,12 @@ macro_rules! define_runtime_intrinsics {
 
 define_runtime_intrinsics! {
     Malloc => (Core, ["ptr", "alloc_raw"]),
+    TryMalloc => (Core, ["ptr", "try_alloc_raw"]),
+    Free => (Core, ["ptr", "dealloc_raw"]),
+    Forget => (Core, ["mem", "forget"]),
+    NeedsDrop => (Core, ["mem", "needs_drop"]),
     PtrOffsetBytes => (Core, ["ptr", "offset_bytes"]),
     PtrEq => (Core, ["ptr", "addr_eq"]),
-    NativePtrIsNull => (Std, ["native", "bytes", "is_null"]),
     Mload => (Std, ["evm", "ops", "mload"]),
     Mstore => (Std, ["evm", "ops", "mstore"]),
     Mstore8 => (Std, ["evm", "ops", "mstore8"]),
@@ -212,6 +215,8 @@ define_runtime_intrinsics! {
     AddMod => (Core, ["num", "addmod"]),
     MulMod => (Core, ["num", "mulmod"]),
     LeadingZeros => (Core, ["num", "leading_zeros"]),
+    ToBigEndian => (Core, ["num", "to_be"]),
+    FromBigEndian => (Core, ["num", "from_be"]),
     BlackBox => (Core, ["hint", "black_box"]),
     Byte => (Std, ["evm", "ops", "byte"]),
     SignExtend => (Std, ["evm", "ops", "signextend"]),

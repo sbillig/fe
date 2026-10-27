@@ -1486,6 +1486,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     self.finish_session(session)?;
                 }
             }
+            // Access checking rejects compile-time code whose drops may run a
+            // `Drop` implementation, so what a drop here destroys needs none.
+            SStmtKind::Drop { .. } => {}
         }
         Ok(())
     }

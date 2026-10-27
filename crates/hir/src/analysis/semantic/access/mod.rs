@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt, iter};
 
 use common::diagnostics::CompleteDiagnostic;
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::SalsaValue;
 
 pub use self::control::{
@@ -41,8 +41,9 @@ use crate::{
             },
             identity_semantic_instance_key,
             normalized::{
-                NDataProjection, NExpr, NPlace, NStatementKind, SemanticBodyAdmission,
-                normalize_semantic_body, semantic_body_admission,
+                NBlockId, NDataProjection, NDropTarget, NExpr, NPlace, NStatementId,
+                NStatementKind, NormalizedBody, SemanticBodyAdmission, normalize_semantic_body,
+                runtime_semantic_body_admission, semantic_body_admission,
             },
             root_semantic_instance_key,
         },
@@ -62,14 +63,177 @@ use self::{
 
 #[derive(Clone, Debug, PartialEq, Eq, SalsaValue)]
 pub enum SemanticAccessCheckResult<'db> {
-    /// Checked, with the body's warnings and, for a projection, the address
-    /// space each access component yields: its result spaces.
+    /// Checked, with the body's warnings, for a projection the address
+    /// space each access component yields (its result spaces), and what its
+    /// drops destroy.
     Ok {
         warnings: Vec<SemanticDiagnosticId<'db>>,
         spaces: Vec<Option<AddressSpace>>,
+        drops: DropElaboration,
     },
     Blocked(BlockedSemanticBody<'db>),
     Err(SemanticDiagnosticId<'db>),
+}
+
+/// What a body's drops destroy, as the moves before each decide.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, SalsaValue)]
+pub struct DropElaboration {
+    /// The parts each `Drop` statement destroys, by statement; a drop with
+    /// nothing initialized destroys none.
+    pub drops: Vec<(NStatementId, Vec<DropPart>)>,
+    /// Each flag's value where the body begins: whether the path it tracks
+    /// is initialized there.
+    pub flags: Vec<bool>,
+    /// Where the moves and initializations of a flagged path happen.
+    pub flag_updates: Vec<DropFlagUpdate>,
+}
+
+impl DropElaboration {
+    /// This elaboration of `checked`, keyed by the statements of `body`,
+    /// another normalization of the same raw body, as constant folding makes
+    /// for runtime lowering. Folding renumbers normalized statements, but
+    /// each keeps the raw statement it comes from, and the blocks stay the
+    /// same.
+    fn rekeyed(&self, checked: &NormalizedBody<'_>, body: &NormalizedBody<'_>) -> Self {
+        // Where each raw statement's normalized statements begin in `body`,
+        // and its last one.
+        let mut before = FxHashMap::default();
+        let mut last = FxHashMap::default();
+        for (block, data) in body.blocks.iter().enumerate() {
+            let mut point = DropFlagPoint::BlockStart(NBlockId::new(block));
+            for statement in &data.statements {
+                if let Some(source) = statement.source {
+                    before.entry(source).or_insert(point);
+                    last.insert(source, statement.id);
+                }
+                point = DropFlagPoint::After(statement.id);
+            }
+        }
+        // The point after each checked statement, in `body`: after its raw
+        // statement, or, for one normalization introduced, before the next
+        // raw statement of its block.
+        let mut after = FxHashMap::default();
+        for (block, data) in checked.blocks.iter().enumerate() {
+            let mut next = DropFlagPoint::BeforeTerminator(NBlockId::new(block));
+            for statement in data.statements.iter().rev() {
+                match statement
+                    .source
+                    .and_then(|source| Some((before.get(&source)?, last[&source])))
+                {
+                    Some((&first, last)) => {
+                        after.insert(statement.id, DropFlagPoint::After(last));
+                        next = first;
+                    }
+                    None => {
+                        after.insert(statement.id, next);
+                    }
+                }
+            }
+        }
+        let mut drops: Vec<_> = self
+            .drops
+            .iter()
+            .map(|(statement, parts)| {
+                let DropFlagPoint::After(statement) = after[statement] else {
+                    unreachable!("a drop is a raw statement that folding keeps")
+                };
+                (statement, parts.clone())
+            })
+            .collect();
+        drops.sort_by_key(|(statement, _)| *statement);
+        let flag_updates = self
+            .flag_updates
+            .iter()
+            .map(|update| DropFlagUpdate {
+                at: match update.at {
+                    DropFlagPoint::After(statement) => after[&statement],
+                    point => point,
+                },
+                ..*update
+            })
+            .collect();
+        Self {
+            drops,
+            flags: self.flags.clone(),
+            flag_updates,
+        }
+    }
+
+    pub fn parts(&self, statement: NStatementId) -> &[DropPart] {
+        self.drops
+            .binary_search_by_key(&statement, |(id, _)| *id)
+            .map_or(&[], |index| &self.drops[index].1)
+    }
+}
+
+/// A part of a drop's target to destroy, by its path from the target. It is
+/// destroyed where all its flags hold: one per path on its way that only
+/// some paths through the body move.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub struct DropPart {
+    pub path: Vec<DropStep>,
+    pub flags: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum DropStep {
+    Field(u16),
+    /// A variant's field, which the value holds only as that variant.
+    Variant {
+        variant: u16,
+        field: u16,
+    },
+    Index(usize),
+}
+
+/// A flagged path becomes initialized, or is moved, at `at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub struct DropFlagUpdate {
+    pub at: DropFlagPoint,
+    pub flag: u32,
+    pub initialized: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum DropFlagPoint {
+    After(NStatementId),
+    /// The start of a block, whose parameters are defined there.
+    BlockStart(NBlockId),
+    /// The end of a block, whose terminator moves its operand or, on every
+    /// edge, an argument.
+    BeforeTerminator(NBlockId),
+}
+
+/// What `instance`'s drops destroy, keyed by the statements of the body
+/// runtime lowering uses.
+#[salsa::tracked]
+pub fn runtime_drop_elaboration<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<DropElaboration> {
+    let elaboration = drop_elaboration(db, instance)?;
+    let (SemanticBodyAdmission::Ready(checked), SemanticBodyAdmission::Ready(runtime)) = (
+        semantic_body_admission(db, instance),
+        runtime_semantic_body_admission(db, instance),
+    ) else {
+        return None;
+    };
+    Some(if checked == runtime {
+        elaboration.clone()
+    } else {
+        elaboration.rekeyed(checked.body(db), runtime.body(db))
+    })
+}
+
+/// What `instance`'s drops destroy, once its body is checked.
+pub fn drop_elaboration<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<&'db DropElaboration> {
+    match body_check(db, instance) {
+        SemanticAccessCheckResult::Ok { drops, .. } => Some(drops),
+        SemanticAccessCheckResult::Blocked(_) | SemanticAccessCheckResult::Err(_) => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,12 +330,17 @@ fn body_check<'db>(
         ) => return SemanticAccessCheckResult::Err(SemanticDiagnosticId::new(db, diag)),
     };
     match check::check_body(db, instance, &artifacts.body) {
-        Ok((warnings, spaces)) => SemanticAccessCheckResult::Ok {
+        Ok(check::CheckedBody {
+            warnings,
+            spaces,
+            drops,
+        }) => SemanticAccessCheckResult::Ok {
             warnings: warnings
                 .into_iter()
                 .map(|diag| SemanticDiagnosticId::new(db, diag))
                 .collect(),
             spaces,
+            drops,
         },
         Err(diag) => SemanticAccessCheckResult::Err(SemanticDiagnosticId::new(db, diag)),
     }
@@ -185,6 +354,7 @@ fn body_check_cycle_initial<'db>(
     SemanticAccessCheckResult::Ok {
         warnings: Vec::new(),
         spaces: Vec::new(),
+        drops: DropElaboration::default(),
     }
 }
 
@@ -456,8 +626,14 @@ fn generated_callees<'db>(
                     );
                 }
             }
-            NStatementKind::Store { destination, .. } => visit(destination),
-            NStatementKind::End { .. } => {}
+            NStatementKind::Store { destination, .. }
+            | NStatementKind::Drop {
+                target: NDropTarget::Place(destination),
+            } => visit(destination),
+            NStatementKind::End { .. }
+            | NStatementKind::Drop {
+                target: NDropTarget::Value(_),
+            } => {}
         }
     }
     callees

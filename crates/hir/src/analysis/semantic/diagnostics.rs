@@ -198,6 +198,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::ProjectionRecursion => 13,
             SemanticDiagnosticKind::RawPlaceViolation => 14,
             SemanticDiagnosticKind::InstanceLimit => 16,
+            SemanticDiagnosticKind::ConstDestructor => 17,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -227,49 +228,28 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
 
 impl SemanticDiagnosticKind {
     fn header<'db>(self, db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) -> String {
+        let name = checker_name(db, instance);
+        let item = match instance.key(db).owner(db) {
+            BodyOwner::Const(_) => format!("const {name}"),
+            BodyOwner::AnonConstBody { .. } => name,
+            _ => format!("fn {name}"),
+        };
         match self {
-            Self::AccessConflict => {
-                format!("access conflict in `fn {}`", checker_name(db, instance))
-            }
-            Self::MoveConflict => format!("move conflict in `fn {}`", checker_name(db, instance)),
-            Self::Internal => {
-                format!(
-                    "internal access checking error in `fn {}`",
-                    checker_name(db, instance)
-                )
-            }
-            Self::TransportViolation => {
-                format!("transport violation in `fn {}`", checker_name(db, instance))
-            }
-            Self::StorageViolation => {
-                format!("storage violation in `fn {}`", checker_name(db, instance))
-            }
+            Self::AccessConflict => format!("access conflict in `{item}`"),
+            Self::MoveConflict => format!("move conflict in `{item}`"),
+            Self::Internal => format!("internal access checking error in `{item}`"),
+            Self::TransportViolation => format!("transport violation in `{item}`"),
+            Self::StorageViolation => format!("storage violation in `{item}`"),
             Self::ProviderProvenanceConflict => {
-                format!(
-                    "provider provenance conflict in `fn {}`",
-                    checker_name(db, instance)
-                )
+                format!("provider provenance conflict in `{item}`")
             }
-            Self::InvalidConcreteType => format!(
-                "invalid concrete type in `fn {}`",
-                checker_name(db, instance)
-            ),
-            Self::YieldViolation => format!("invalid yield in `fn {}`", checker_name(db, instance)),
-            Self::ProjectionRecursion => format!(
-                "recursion through a projection in `fn {}`",
-                checker_name(db, instance)
-            ),
-            Self::DiscardedWrites => {
-                format!("discarded writes in `fn {}`", checker_name(db, instance))
-            }
-            Self::RawPlaceViolation => format!(
-                "invalid `#[raw_place]` projection `fn {}`",
-                checker_name(db, instance)
-            ),
-            Self::InstanceLimit => format!(
-                "instantiation limit exceeded in `fn {}`",
-                checker_name(db, instance)
-            ),
+            Self::InvalidConcreteType => format!("invalid concrete type in `{item}`"),
+            Self::YieldViolation => format!("invalid yield in `{item}`"),
+            Self::ProjectionRecursion => format!("recursion through a projection in `{item}`"),
+            Self::DiscardedWrites => format!("discarded writes in `{item}`"),
+            Self::RawPlaceViolation => format!("invalid `#[raw_place]` projection `{item}`"),
+            Self::InstanceLimit => format!("instantiation limit exceeded in `{item}`"),
+            Self::ConstDestructor => format!("compile-time destructor in `{item}`"),
         }
     }
 }
@@ -452,4 +432,7 @@ pub enum SemanticDiagnosticKind {
     /// A call instantiating its callee with generic arguments past the
     /// instance limits, as recursion that grows them does.
     InstanceLimit,
+    /// A body evaluated at compile time destroying a value whose
+    /// destruction may run a `Drop` implementation.
+    ConstDestructor,
 }
