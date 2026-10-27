@@ -1,0 +1,37 @@
+// A diverging branch does not decide a conditional's type: the other branch's
+// inferred type comes from its use.
+fn zero<T: Default>() -> T {
+    T::default()
+}
+
+fn take(_ x: u64) -> u64 {
+    x + 7
+}
+
+fn pick(_ c: bool) -> u64 {
+    let w = if c { return 1 } else { zero() }
+    take(w)
+}
+
+fn swapped(_ c: bool) -> u64 {
+    let w = if c { zero() } else { return 1 }
+    take(w)
+}
+
+fn matched(_ c: bool) -> u64 {
+    let w = match c {
+        true => return 3
+        false => zero()
+    }
+    take(w)
+}
+
+#[test]
+fn t() {
+    assert(pick(true) == 1)
+    assert(pick(false) == 7)
+    assert(swapped(false) == 1)
+    assert(swapped(true) == 7)
+    assert(matched(true) == 3)
+    assert(matched(false) == 7)
+}

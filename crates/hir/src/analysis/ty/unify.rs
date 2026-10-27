@@ -556,7 +556,8 @@ where
         match (var1.sort, var2.sort) {
             (sort1, sort2) if sort1 == sort2 => self.table.unify_var_var(var1.key, var2.key),
 
-            (TyVarSort::General, _) | (_, TyVarSort::General) => {
+            (TyVarSort::General | TyVarSort::Diverging, _)
+            | (_, TyVarSort::General | TyVarSort::Diverging) => {
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
@@ -603,7 +604,13 @@ where
         };
 
         match root_var.sort {
-            TyVarSort::General => self
+            // `!` coerces to any type, so it leaves the variable open.
+            TyVarSort::General if value.is_never(self.db) => self.table.unify_var_value(
+                root_var.key,
+                InferenceValue::Unbound(root_var.kind, TyVarSort::Diverging),
+            ),
+            TyVarSort::Diverging if value.is_never(self.db) => Ok(()),
+            TyVarSort::General | TyVarSort::Diverging => self
                 .table
                 .unify_var_value(root_var.key, InferenceValue::Bound(value)),
 
@@ -700,7 +707,7 @@ where
             return false;
         };
         let min_len = match sort {
-            TyVarSort::General => min_len,
+            TyVarSort::General | TyVarSort::Diverging => min_len,
             TyVarSort::StringLen { min_len: current } => current.max(min_len),
             TyVarSort::Integral | TyVarSort::String { .. } => return false,
         };

@@ -1838,6 +1838,11 @@ pub enum TyVarSort {
     /// Type variable that can be unified with any other types.
     General,
 
+    /// A general type variable that has met `!`, as the type of a
+    /// conditional with a diverging branch. `!` coerces to any type, so it
+    /// does not fix the variable; if nothing else does, it becomes `!`.
+    Diverging,
+
     /// Type variable that can be unified with only string types that has at
     /// least the given length.
     String {
@@ -1866,6 +1871,9 @@ impl PartialOrd for TyVarSort {
             (Self::General, Self::General) => Some(std::cmp::Ordering::Equal),
             (Self::General, _) => Some(std::cmp::Ordering::Less),
             (_, Self::General) => Some(std::cmp::Ordering::Greater),
+            (Self::Diverging, Self::Diverging) => Some(std::cmp::Ordering::Equal),
+            (Self::Diverging, _) => Some(std::cmp::Ordering::Less),
+            (_, Self::Diverging) => Some(std::cmp::Ordering::Greater),
             (
                 Self::String {
                     min_len: min_len1,
@@ -1892,7 +1900,9 @@ impl PartialOrd for TyVarSort {
 impl TyVar<'_> {
     pub(super) fn pretty_print(&self) -> String {
         match self.sort {
-            TyVarSort::General | TyVarSort::StringLen { .. } => ("_").to_string(),
+            TyVarSort::General | TyVarSort::Diverging | TyVarSort::StringLen { .. } => {
+                ("_").to_string()
+            }
             TyVarSort::Integral => "{integer}".to_string(),
             TyVarSort::String { min_len, fallback } => match fallback {
                 StringFallback::Dynamic => format!("DynString({min_len})"),
