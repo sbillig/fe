@@ -3892,8 +3892,15 @@ impl<'db> TyChecker<'db> {
         span: DynLazySpan<'db>,
     ) -> TyId<'db> {
         // FIXME: This is a temporary workaround, this should be removed when we
-        // implement subtyping.
-        if expected.is_never(self.db) && !actual.is_never(self.db) {
+        // implement subtyping. A variable still open may diverge too:
+        // unification leaves it open, as `Diverging`.
+        if expected.is_never(self.db)
+            && !actual.is_never(self.db)
+            && !matches!(
+                actual.fold_with(self.db, &mut self.table).data(self.db),
+                TyData::TyVar(var) if matches!(var.sort, TyVarSort::General | TyVarSort::Diverging)
+            )
+        {
             if !actual.has_invalid(self.db) && !expected.has_invalid(self.db) {
                 let diag = BodyDiag::TypeMismatch {
                     span,

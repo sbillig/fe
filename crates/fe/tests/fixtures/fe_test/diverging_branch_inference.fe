@@ -18,6 +18,11 @@ fn swapped(_ c: bool) -> u64 {
     take(w)
 }
 
+fn all_diverge(_ c: bool) -> u64 {
+    let w = if c { return 1 } else { return 2 }
+    take(w)
+}
+
 fn matched(_ c: bool) -> u64 {
     let w = match c {
         true => return 3
@@ -32,6 +37,8 @@ fn t() {
     assert(pick(false) == 7)
     assert(swapped(false) == 1)
     assert(swapped(true) == 7)
+    assert(all_diverge(true) == 1)
+    assert(all_diverge(false) == 2)
     assert(matched(true) == 3)
     assert(matched(false) == 7)
 }
