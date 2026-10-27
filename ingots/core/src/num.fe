@@ -988,15 +988,24 @@ extern {
     /// Lowers to the EVM `CLZ` instruction (EIP-7939).
     pub const fn leading_zeros(_ x: u256) -> u256
 
-    /// The word whose representation in the target's memory holds `x`'s
+    /// The integer whose representation in the target's memory holds `x`'s
     /// bytes in big-endian order: `x` itself on EVM, whose memory is
-    /// big-endian, and `x` with its bytes reversed on native targets. Store
-    /// it through a raw `*u256` to write `x` big-endian.
-    pub fn to_be(_ x: u256) -> u256
+    /// big-endian, and `x` with its bytes reversed on native targets, whose
+    /// memory is little-endian. Store it through a raw `*T` to write `x`
+    /// big-endian.
+    pub fn to_be<T: IntWord>(_ x: T) -> T
 
-    /// The value of a word loaded through a raw `*u256` from big-endian
+    /// The value of an integer loaded through a raw `*T` from big-endian
     /// bytes; see `to_be`, whose inverse it is.
-    pub fn from_be(_ x: u256) -> u256
+    pub fn from_be<T: IntWord>(_ x: T) -> T
+
+    /// As `to_be`, for little-endian order: `x` itself on native targets and
+    /// `x` with its bytes reversed on EVM.
+    pub fn to_le<T: IntWord>(_ x: T) -> T
+
+    /// The value of an integer loaded through a raw `*T` from little-endian
+    /// bytes; see `to_le`, whose inverse it is.
+    pub fn from_le<T: IntWord>(_ x: T) -> T
 }
 
 /// Returns the number of trailing zero bits in `x`, or 256 if `x == 0`.

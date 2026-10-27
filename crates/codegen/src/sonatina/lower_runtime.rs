@@ -2509,8 +2509,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::SwapBytes { value } => {
                 let value = self.local_value(*value)?;
+                let ty = self.fb.type_of(value);
                 self.fb
-                    .insert_inst(Bswap::new(self.module.inst_set(), value), Type::I256)
+                    .insert_inst(Bswap::new(self.module.inst_set(), value), ty)
             }
             RuntimeBuiltin::BlackBox { value } => {
                 let value = self.local_value(*value)?;
