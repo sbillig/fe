@@ -738,6 +738,7 @@ fn build_native_program(source: &str, level: &str, temp: &Path) -> PathBuf {
     )
 ))]
 fn native_program_exit_code(executable: &Path, args: &[&str], level: &str) -> Option<i32> {
+    test_utils::skip_crash_reports();
     let mut child = Command::new(executable)
         .args(args)
         .spawn()

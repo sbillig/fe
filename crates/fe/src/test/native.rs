@@ -66,7 +66,12 @@ impl NativeTestCase {
                             libc::RLIMIT_CPU,
                             limits.timeout.as_secs().saturating_add(1) as libc::rlim_t,
                         ),
-                        (libc::RLIMIT_CORE, 0),
+                        // A core limit of 1 writes no core file and, unlike 0, keeps
+                        // the kernel from piping each trap's core to a crash reporter
+                        // such as apport, which takes about a second per trap.
+                        (libc::RLIMIT_CORE, 1),
+                        #[cfg(target_os = "linux")]
+                        (libc::RLIMIT_AS, NATIVE_TEST_ADDRESS_SPACE_LIMIT),
                     ];
                     for (resource, limit) in limits {
                         let mut value = libc::rlimit {
@@ -76,24 +81,14 @@ impl NativeTestCase {
                         if libc::getrlimit(resource, &mut value) != 0 {
                             return Err(io::Error::last_os_error());
                         }
-                        value.rlim_cur = value.rlim_cur.min(limit);
                         value.rlim_max = value.rlim_max.min(limit);
-                        if libc::setrlimit(resource, &value) != 0 {
-                            return Err(io::Error::last_os_error());
-                        }
-                    }
-                    #[cfg(target_os = "linux")]
-                    {
-                        let mut value = libc::rlimit {
-                            rlim_cur: 0,
-                            rlim_max: 0,
+                        // Raise a lower soft core limit, such as 0, to exactly 1.
+                        value.rlim_cur = if resource == libc::RLIMIT_CORE {
+                            value.rlim_max
+                        } else {
+                            value.rlim_cur.min(limit)
                         };
-                        if libc::getrlimit(libc::RLIMIT_AS, &mut value) != 0 {
-                            return Err(io::Error::last_os_error());
-                        }
-                        value.rlim_cur = value.rlim_cur.min(NATIVE_TEST_ADDRESS_SPACE_LIMIT);
-                        value.rlim_max = value.rlim_max.min(NATIVE_TEST_ADDRESS_SPACE_LIMIT);
-                        if libc::setrlimit(libc::RLIMIT_AS, &value) != 0 {
+                        if libc::setrlimit(resource, &value) != 0 {
                             return Err(io::Error::last_os_error());
                         }
                     }

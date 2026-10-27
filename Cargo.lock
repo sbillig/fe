@@ -2587,6 +2587,7 @@ dependencies = [
  "fe-common",
  "glob",
  "insta",
+ "libc",
  "regex",
  "tracing",
  "tracing-subscriber 0.3.22",

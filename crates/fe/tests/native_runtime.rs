@@ -25,6 +25,8 @@ use num_bigint::BigUint;
 use tempfile::tempdir;
 
 fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
+    // Several tests run built programs that trap.
+    test_utils::skip_crash_reports();
     let result = Command::new(env!("CARGO_BIN_EXE_fe"))
         .args([
             "build",
