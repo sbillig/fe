@@ -39,10 +39,10 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     semantic::{
         BinaryOp, ConstDesc, ConstRepr, CtfeConfig, CtfeError, EffectProviderSubst, EvalFailure,
-        EvalOutcome, GenericSubst, ImplEnv, Overflow, PrimitiveFault, SConst, SemConstId,
-        SemConstScalar, SemConstValue, SemOrigin, SemanticInstanceKey, UnaryOp, VariantIndex,
-        VerifiedConstValueId, const_computation_for_instance, describe_const_computation,
-        enum_const, eval_body_owner_const, execute_source_int_binary, execute_source_int_unary,
+        EvalOutcome, GenericSubst, ImplEnv, PrimitiveFault, SConst, SemConstId, SemConstScalar,
+        SemConstValue, SemOrigin, SemanticInstanceKey, UnaryOp, VariantIndex, VerifiedConstValueId,
+        const_computation_for_instance, describe_const_computation, enum_const,
+        eval_body_owner_const, execute_source_int_binary, execute_source_int_unary,
         force_const_description, force_const_term_value, int_const, int_ty_shape,
         normalize_int_to_shape, sem_const_from_ty,
     },
@@ -1651,7 +1651,7 @@ fn invalid_cause_from_const_int_error<'db>(
 }
 
 /// The value of an integer expression of literals, constants and arithmetic,
-/// before type checking, with the arithmetic checked.
+/// before type checking, in the arithmetic mode of the body's scope.
 fn eval_int_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -1684,8 +1684,10 @@ fn eval_int_expr<'db>(
                     let Some(expected) = expected else {
                         return Err(ConstIntError::Overflow(expr));
                     };
-                    execute_source_int_unary(db, expected, UnaryOp::Neg(Overflow::Checked), value)
-                        .map_err(|fault| const_int_error(fault, expr))
+                    let op = UnaryOp::Neg(body.scope().arithmetic_mode(db).into());
+                    let value = execute_source_int_unary(db, expected, op, value)
+                        .map_err(|fault| const_int_error(fault, expr))?;
+                    wrap_int(db, expected, value)
                 }
                 _ => Err(ConstIntError::NotIntExpr),
             }
@@ -1699,9 +1701,11 @@ fn eval_int_expr<'db>(
             let expected = expected.unwrap_or_else(|| TyId::u256(db));
             let lhs = eval_int_expr(db, body, *lhs, Some(expected), has_captures)?;
             let rhs = eval_int_expr(db, body, *rhs, Some(expected), has_captures)?;
-            let op = BinaryOp::new(*op, Overflow::Checked).ok_or(ConstIntError::NotIntExpr)?;
-            execute_source_int_binary(db, expected, op, lhs, rhs)
-                .map_err(|fault| const_int_error(fault, expr))
+            let op = BinaryOp::new(*op, body.scope().arithmetic_mode(db).into())
+                .ok_or(ConstIntError::NotIntExpr)?;
+            let value = execute_source_int_binary(db, expected, op, lhs, rhs)
+                .map_err(|fault| const_int_error(fault, expr))?;
+            wrap_int(db, expected, value)
         }
         // A path's meaning under captured generic arguments needs full CTFE.
         Expr::Path(path) => {
@@ -1737,12 +1741,16 @@ fn eval_int_expr<'db>(
             let Some(value) = const_ty.evaluate(db, None).integer_value(db) else {
                 return Err(ConstIntError::NotIntExpr);
             };
-            let (bits, signed) = int_ty_shape(db, expected.unwrap_or_else(|| TyId::u256(db)))
-                .ok_or(ConstIntError::NotIntExpr)?;
-            Ok(normalize_int_to_shape(value, bits, signed))
+            wrap_int(db, expected.unwrap_or_else(|| TyId::u256(db)), value)
         }
         _ => Err(ConstIntError::NotIntExpr),
     }
+}
+
+/// `value` reduced to the range of `ty`, as a wrapping operation's result is.
+fn wrap_int(db: &dyn HirAnalysisDb, ty: TyId<'_>, value: BigInt) -> Result<BigInt, ConstIntError> {
+    let (bits, signed) = int_ty_shape(db, ty).ok_or(ConstIntError::NotIntExpr)?;
+    Ok(normalize_int_to_shape(value, bits, signed))
 }
 
 pub(super) fn try_eval_const_int_expr<'db>(
