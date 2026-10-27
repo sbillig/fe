@@ -4,8 +4,8 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, Expr, ExprId, GenericParamOwner, HirIngot, IdentId, ImplTrait, LitKind,
-    Partial, PathId, Stmt, UnOp,
+    BinOp, Body, Const, Expr, ExprId, GenericParam, GenericParamOwner, HirIngot, IdentId,
+    ImplTrait, LitKind, Partial, PathId, Stmt, UnOp,
 };
 use salsa::SalsaValue;
 
@@ -2347,7 +2347,7 @@ pub(crate) fn const_body_assumptions<'db>(
         parent_item = parent.scope().parent_item(db);
     }
 
-    match parent_item {
+    let assumptions = match parent_item {
         // A const body has no mode: a `mut?` bound is plain in it.
         Some(ItemKind::Func(func)) => {
             crate::semantic::func_body_assumptions(db, func).at_mode(db, None)
@@ -2362,7 +2362,48 @@ pub(crate) fn const_body_assumptions<'db>(
             || PredicateListId::empty_list(db),
             |owner| collect_constraints(db, owner).instantiate_identity(),
         ),
-    }
+    };
+
+    // A parameter's default is evaluated with only the parameters before it,
+    // so it can't assume a predicate on its own or a later parameter, such as
+    // a trait's `Self: Trait<.., L>` in the default of `L`.
+    let ScopeId::Item(ItemKind::Body(body)) = scope else {
+        return assumptions;
+    };
+    let Some(prefix) = defaulted_param(db, body).and_then(|(owner, index)| {
+        ConstCaptureEnv::Identity(ConstCaptureDomain::before(owner, ParamBasis::Full, index))
+            .complete(db)
+    }) else {
+        return assumptions;
+    };
+    PredicateListId::new(
+        db,
+        assumptions
+            .list(db)
+            .iter()
+            .copied()
+            .filter(|&predicate| {
+                !matches!(
+                    substitute_complete(db, predicate, &prefix),
+                    Err(SubstError::MissingArgument { .. })
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The generic parameter whose default is `body`.
+fn defaulted_param<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+) -> Option<(GenericParamOwner<'db>, SourceParamIndex)> {
+    let owner = GenericParamOwner::from_item_opt(body.scope().parent_item(db)?)?;
+    owner
+        .params(db)
+        .position(
+            |view| matches!(view.param, GenericParam::Const(param) if param.default == Some(body)),
+        )
+        .map(|index| (owner, SourceParamIndex(index)))
 }
 
 fn evaluate_const_ty_cycle_initial<'db>(

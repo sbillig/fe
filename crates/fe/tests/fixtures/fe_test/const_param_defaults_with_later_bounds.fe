@@ -1,0 +1,68 @@
+const fn double(_ x: usize) -> usize {
+    x * 2
+}
+
+trait Sized<const N: usize, const L: usize = { double(N) }> {
+    fn len(self) -> usize {
+        L
+    }
+}
+
+trait Next<const N: usize, const L: usize = { N + 1 }> {
+    fn next(self) -> usize {
+        L
+    }
+}
+
+trait Same<const N: usize, const L: usize = { N }> {
+    fn same(self) -> usize {
+        L + N
+    }
+}
+
+struct S {}
+
+trait Tag<const X: usize> {}
+
+impl Tag<6> for S {}
+
+struct Picker<T, const N: usize, const L: usize = { double(N) }>
+where
+    T: Tag<L>,
+{
+    t: T,
+}
+
+impl<T: Tag<6>> Picker<T, 3> {
+    fn get(self) -> usize {
+        6
+    }
+}
+impl Sized<3> for S {}
+impl Next<4> for S {}
+impl Same<5> for S {}
+
+fn len_of<T: Sized<3>>(_ t: T) -> usize {
+    t.len()
+}
+
+fn next_of<T: Next<4>>(_ t: T) -> usize {
+    t.next()
+}
+
+fn same_of<T: Same<5>>(_ t: T) -> usize {
+    t.same()
+}
+
+#[test]
+fn test_trait_bounds_with_defaulted_const_params() {
+    assert(len_of(S {}) == 6)
+    assert(next_of(S {}) == 5)
+    assert(same_of(S {}) == 10)
+}
+
+#[test]
+fn test_struct_bound_on_defaulted_const_param() {
+    let p = Picker<S, 3> { t: S {} }
+    assert(p.get() == 6)
+}
