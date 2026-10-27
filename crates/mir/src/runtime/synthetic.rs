@@ -517,7 +517,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
             RuntimeReturnPlan::Value {
                 host, return_value, ..
             } => {
-                let ret_value = ret.expect("value-returning recv wrapper should produce a value");
                 let semantic = return_value
                     .key(self.db)
                     .semantic(self.db)
@@ -529,7 +528,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     };
                     args.push(match idx {
                         0 => self.emit_target_root_provider(cont_bb, &host)?,
-                        1 => ret_value,
+                        // A zero-sized result has no runtime value and no
+                        // runtime parameter to take one.
+                        1 => ret.expect("value-returning recv wrapper should produce a value"),
                         _ => panic!("unexpected ContractHost::return_value parameter {idx}"),
                     });
                 }
