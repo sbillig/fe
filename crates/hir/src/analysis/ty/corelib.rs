@@ -219,6 +219,7 @@ define_runtime_intrinsics! {
     FromBigEndian => (Core, ["num", "from_be"]),
     ToLittleEndian => (Core, ["num", "to_le"]),
     FromLittleEndian => (Core, ["num", "from_le"]),
+    SwapBytes => (Core, ["num", "swap_bytes"]),
     BlackBox => (Core, ["hint", "black_box"]),
     Byte => (Std, ["evm", "ops", "byte"]),
     SignExtend => (Std, ["evm", "ops", "signextend"]),

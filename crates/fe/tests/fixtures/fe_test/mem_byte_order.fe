@@ -1,4 +1,4 @@
-use core::num::{from_be, from_le, to_be, to_le}
+use core::num::{from_be, from_le, swap_bytes, to_be, to_le}
 use core::ptr::MemBuffer
 
 fn counting_bytes(_ len: usize) -> MemBuffer {
@@ -62,6 +62,21 @@ fn byte_order_conversions_invert() {
     assert!(to_be(byte) == 7 && to_le(byte) == 7)
     let word: u256 = 1
     assert!(to_be(word) == 1 && to_le(word) == 1 << 248 || to_be(word) == 1 << 248 && to_le(word) == 1)
+}
+
+#[test]
+fn swaps_bytes_of_every_width() {
+    let byte: u8 = 0xab
+    assert!(swap_bytes(byte) == 0xab)
+    let short: u16 = 0x0102
+    assert!(swap_bytes(short) == 0x0201)
+    let lane: u64 = 0x0102030405060708
+    assert!(swap_bytes(lane) == 0x0807060504030201)
+    let signed: i32 = -2
+    assert!(swap_bytes(signed) == -16777217)
+    let word: u256 = 0x0102
+    assert!(swap_bytes(word) == 0x0201 << 240)
+    assert!(swap_bytes(lane) == from_le(to_be(lane)))
 }
 
 #[test(should_revert, panic = 0x32)]
