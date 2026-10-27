@@ -8,7 +8,7 @@ use crate::core::{
     hir_def::{
         ArithBinOp, BinOp, BindingMarker, CallArg as HirCallArg, CallableDef, Cond, CondId, Expr,
         ExprId, FieldIndex, Func, FuncParam, FuncParamListId, FuncParamMode, IdentId, IntegerId,
-        LitKind, LogicalBinOp, ModeMarker, Partial, Pat, PatId, PathId, Stmt, StmtId,
+        LitKind, LogicalBinOp, ModeMarker, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId,
         TypeId as HirTyId, TypeKind, TypeMode, UnOp, VariantKind, WithBinding,
     },
     semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
@@ -4318,10 +4318,16 @@ impl<'db> TyChecker<'db> {
                         return ExprProp::new(existing.ty(self.db), true);
                     }
 
-                    let inst = if matches!(
-                        trait_inst.self_ty(self.db).data(self.db),
-                        TyData::TyParam(param) if param.is_trait_self()
-                    ) {
+                    // `A::f` leaves `Self` to inference; `<Self as A>::f`, in
+                    // the trait, names the trait's own `Self`.
+                    let written_self = path.parent(self.db).is_some_and(|parent| {
+                        matches!(parent.kind(self.db), PathKind::QualifiedType { .. })
+                    });
+                    let inst = if !written_self
+                        && matches!(
+                            trait_inst.self_ty(self.db).data(self.db),
+                            TyData::TyParam(param) if param.is_trait_self()
+                        ) {
                         let old_self = trait_inst.self_ty(self.db);
                         let new_self = self.table.new_var_from_param(old_self);
 

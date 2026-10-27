@@ -1,0 +1,26 @@
+// A trait's default method may name its own `Self` in a qualified path.
+trait A {
+    fn a_base() -> u256
+
+    fn a_twice() -> u256 {
+        <Self as A>::a_base() * 2
+    }
+
+    fn a_thrice() -> u256 {
+        Self::a_base() * 3
+    }
+}
+
+struct S {}
+
+impl A for S {
+    fn a_base() -> u256 {
+        1
+    }
+}
+
+#[test]
+fn test_self_qualified_trait_fn_in_default() {
+    assert(S::a_twice() == 2)
+    assert(S::a_thrice() == 3)
+}
