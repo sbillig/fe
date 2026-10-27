@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/deferred_method_no_viable_candidate.fe
+---
+error[8-0000]: type mismatch
+   ┌─ deferred_method_no_viable_candidate.fe:27:34
+   │
+27 │     let b: u256 = P { v: k }.pin(x)
+   │                                  ^ expected `String<8>`, but `String<4>` is given

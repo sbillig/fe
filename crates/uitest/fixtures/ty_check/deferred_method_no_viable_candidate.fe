@@ -1,0 +1,37 @@
+struct P<T> {
+    v: T,
+}
+
+trait Pin {
+    fn pin(self, _ s: String<8>) -> u256
+}
+
+impl Pin for P<u8> {
+    fn pin(self, _ s: String<8>) -> u256 {
+        10
+    }
+}
+
+impl Pin for P<u16> {
+    fn pin(self, _ s: String<8>) -> u256 {
+        20
+    }
+}
+
+// The call waits for `k`'s type; once it is `u8`, no implementation takes a
+// `String<4>`.
+fn no_viable() -> u256 {
+    let x = "a"
+    let y: String<4> = x
+    let k = 5
+    let b: u256 = P { v: k }.pin(x)
+    let z: u8 = k
+    b
+}
+
+fn viable() -> u256 {
+    let k = 5
+    let b = P { v: k }.pin("abc")
+    let z: u16 = k
+    b
+}
