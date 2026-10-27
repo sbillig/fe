@@ -286,6 +286,39 @@ fn aggregate_fixtures_run_at_every_level() {
 }
 
 #[test]
+fn reference_holders_and_joins_run_natively_at_every_level() {
+    // Products and shapes hold references to frame objects in other objects,
+    // and joins of raw-pointer and object places export an object's address.
+    for (name, expected_count) in [
+        ("absent_projection_payloads.fe", 6),
+        ("associated_shape_signatures.fe", 1),
+        ("callable_shape_table.fe", 2),
+        ("closure_product_params.fe", 2),
+        ("loop_steps.fe", 7),
+        ("nonreturning_borrow_joins.fe", 1),
+        ("projection_temporaries.fe", 1),
+        ("shape_equalities.fe", 1),
+        ("spread_params.fe", 3),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(name);
+        for level in ["0", "1", "2"] {
+            let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+                .args(["test", "--backend", "native", "-O", level])
+                .arg(&fixture)
+                .output()
+                .unwrap();
+            assert!(
+                String::from_utf8_lossy(&result.stdout)
+                    .contains(&format!("{expected_count} passed; 0 failed")),
+                "{name} -O{level}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_host_io_and_assertions_execute_at_o0_and_o1() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("echo.fe");

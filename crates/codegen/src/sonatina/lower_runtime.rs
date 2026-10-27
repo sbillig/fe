@@ -47,7 +47,7 @@ use sonatina_ir::{
             Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, MemAllocDynamic,
-            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeHeap, ObjProj,
+            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj,
             ObjStore, SymAddr, SymSize, SymbolRef,
         },
         downcast,
@@ -151,7 +151,7 @@ define_lowering_inst_set!(
     ObjAlloc,
     ObjIndex,
     ObjLoad,
-    ObjMaterializeHeap,
+    ObjMaterializeStack,
     ObjProj,
     ObjStore,
     SymAddr,
@@ -1441,7 +1441,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             ..
                         } => {
                             // Native slot borrows can publish their address in a
-                            // descriptor, so they need identity-preserving heap export.
+                            // descriptor, so the slot is an object to export.
                             SlotRoot::Object(
                                 self.fb.insert_inst(
                                     ObjAlloc::new(self.module.inst_set(), class_ty),
