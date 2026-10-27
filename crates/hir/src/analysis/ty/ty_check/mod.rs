@@ -4333,6 +4333,7 @@ pub enum SmirLoweringIssue {
     InvalidStmt(StmtId),
     IncompleteStmt(StmtId),
     InvalidCond(CondId),
+    InvalidPat(PatId),
 }
 
 impl SmirLoweringIssue {
@@ -4952,6 +4953,29 @@ impl<'db> TypedBody<'db> {
         issues.extend(body.conds(db).iter().filter_map(|(cond, cond_data)| {
             matches!(cond_data, Partial::Absent).then_some(SmirLoweringIssue::InvalidCond(cond))
         }));
+        // Lowering tests and binds a whole pattern, one no other pattern
+        // holds, through its checked form. Checking leaves none for a pattern
+        // it rejects, so the body is never lowered.
+        let mut sub_pats = FxHashSet::default();
+        for (_, pat) in body.pats(db).iter() {
+            match pat {
+                Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+                    sub_pats.extend(pats.iter().copied())
+                }
+                Partial::Present(Pat::Record(_, fields)) => {
+                    sub_pats.extend(fields.iter().map(|field| field.pat))
+                }
+                Partial::Present(Pat::Or(lhs, rhs)) => sub_pats.extend([*lhs, *rhs]),
+                Partial::Present(Pat::WildCard | Pat::Rest | Pat::Lit(_) | Pat::Path(..))
+                | Partial::Absent => {}
+            }
+        }
+        issues.extend(
+            body.pats(db)
+                .keys()
+                .filter(|pat| !sub_pats.contains(pat) && self.pattern_root(*pat).is_none())
+                .map(SmirLoweringIssue::InvalidPat),
+        );
         issues
     }
 
@@ -5039,13 +5063,6 @@ impl<'db> TypedBody<'db> {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
             Expr::Match(_, Partial::Absent) => Some(SmirLoweringIssue::InvalidExpr(expr)),
-            Expr::Match(_, Partial::Present(arms))
-                if arms.iter().any(|arm| {
-                    matches!(self.pattern_status(arm.pat), PatternAnalysisStatus::Invalid)
-                }) =>
-            {
-                Some(SmirLoweringIssue::InvalidExpr(expr))
-            }
             _ => None,
         }
     }
@@ -7575,9 +7592,10 @@ fn target() -> u256 {
             !diags.is_empty(),
             "fixture must have an unrelated type error"
         );
+        // The error leaves `wrong` unchecked, which alone blocks lowering.
         assert_eq!(
             checked.smir_lowering_readiness(&db),
-            SmirLoweringReadiness::Ready
+            SmirLoweringReadiness::BlockedByInvalidProgram
         );
 
         let mut incomplete = checked.clone();
