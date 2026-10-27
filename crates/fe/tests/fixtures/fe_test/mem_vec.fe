@@ -80,6 +80,16 @@ fn push_grows_and_keeps_elements() {
 }
 
 #[test]
+fn push_unchecked_fills_reserved_capacity() {
+    var v = MemVec<u256>::with_capacity(4)
+    for i in 0..4 {
+        unsafe { v.push_unchecked(i as u256 + 1) }
+    }
+    assert!(v.len() == 4 && v.capacity() == 4)
+    assert!(v[0] == 1 && v[3] == 4)
+}
+
+#[test]
 fn pop_truncate_and_access() {
     var v = MemVec<u256>::new()
     v.extend_from_slice(MemArray::from_fn(4, |i| i as u256 + 1).as_slice())
