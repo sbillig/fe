@@ -24,6 +24,14 @@ fn reads_integers_in_either_byte_order() {
 }
 
 #[test]
+fn reads_without_bounds_checks_within_the_span() {
+    let buffer = counting_bytes(40)
+    let span = buffer.span()
+    assert!(unsafe { span.read_be_unchecked<u64>(1) } == 0x0203040506070809)
+    assert!(unsafe { span.read_be_unchecked<u256>(8) } == buffer.read_word(8))
+}
+
+#[test]
 fn reads_signed_integers() {
     var buffer = MemBuffer::alloc(4)
     buffer[0] = 0xff

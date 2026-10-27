@@ -452,6 +452,13 @@ impl<T> MemVec<T> {
         }
     }
 
+    /// Append `value` without checking the capacity, which must have room
+    /// for it, such as a stack that reserves its limit up front.
+    pub unsafe fn push_unchecked(mut self, _ value: own T) {
+        *elem(self.ptr, self.len) = value
+        self.len = self.len.wrapping_add(1)
+    }
+
     /// As `push`, or `value` back when growing the allocation fails.
     pub fn try_push(mut self, _ value: own T) -> Result<T, ()> {
         if self.len == self.capacity && !self.try_grow(1) {
@@ -764,6 +771,12 @@ impl MemSlice<u8> {
     /// as a big-endian integer. Reverts unless all of them lie in the span.
     pub fn read_be<T: IntWord>(self, _ offset: usize) -> T {
         from_be(unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) })
+    }
+
+    /// As `read_be`, without the bounds check: the caller ensures all
+    /// `size_of<T>()` bytes from `offset` on lie in the span.
+    pub unsafe fn read_be_unchecked<T: IntWord>(self, _ offset: usize) -> T {
+        from_be(*cast<u8, T>(offset_bytes(self.ptr, offset)))
     }
 
     /// As `read_be`, reading the bytes little-endian.
