@@ -1584,6 +1584,23 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 {
                     return Err(CtfeError::NonConstCall { origin }.into());
                 }
+                // A trait's method on a `Self` still symbolic here, as `T::base()`
+                // in a generic body, runs the implementation `Self` selects.
+                if let BodyOwner::Func(func, _) = instance.key(self.db).owner(self.db)
+                    && func.containing_trait(self.db).is_some()
+                    && let Some(&self_ty) = instance
+                        .key(self.db)
+                        .subst(self.db)
+                        .generic_args(self.db)
+                        .first()
+                    && (self_ty.has_param(self.db) || self_ty.has_var(self.db))
+                {
+                    return Err(EvalStop::Blocked(BlockedInfo::new(
+                        ConstDemandKind::CallableSelection,
+                        ConstDependency::Type(self_ty),
+                        origin,
+                    )));
+                }
                 match self.eval_instance(instance, args, effects, origin) {
                     Ok(value) => Ok(value),
                     Err(EvalStop::Blocked(mut info)) => {

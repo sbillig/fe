@@ -1,0 +1,1 @@
+A generic implementation's associated constant may call its bound's `const fn`, as in `impl<T: Base> HasD for Wrap<T> { const D: u256 = T::base() }`, instead of failing with a compiler invariant error.

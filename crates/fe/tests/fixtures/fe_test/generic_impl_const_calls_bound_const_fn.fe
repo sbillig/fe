@@ -1,0 +1,33 @@
+// A generic implementation's constant may call its bound's `const fn`: with `T`
+// symbolic the call waits for an implementation, and each instance evaluates it.
+trait Base {
+    const fn base() -> u256
+}
+
+impl Base for u256 {
+    const fn base() -> u256 {
+        7
+    }
+}
+
+trait HasD {
+    const D: u256
+}
+
+struct Wrap<T> {
+    t: T,
+}
+
+impl<T: Base> HasD for Wrap<T> {
+    const D: u256 = T::base()
+}
+
+fn d_of<T: HasD>() -> u256 {
+    T::D
+}
+
+#[test]
+fn test_generic_impl_const_calls_bound_const_fn() {
+    assert(Wrap<u256>::D == 7)
+    assert(d_of<Wrap<u256>>() == 7)
+}
