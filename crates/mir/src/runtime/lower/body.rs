@@ -4066,7 +4066,8 @@ impl<'db> RmirEmitter<'db> {
             RuntimeBuiltinFuncKind::ToBigEndian
             | RuntimeBuiltinFuncKind::FromBigEndian
             | RuntimeBuiltinFuncKind::ToLittleEndian
-            | RuntimeBuiltinFuncKind::FromLittleEndian => {
+            | RuntimeBuiltinFuncKind::FromLittleEndian
+            | RuntimeBuiltinFuncKind::SwapBytes => {
                 let [value] = args else { return None };
                 let class @ RuntimeClass::Scalar(_) = self.value_class(*value)? else {
                     return None;
