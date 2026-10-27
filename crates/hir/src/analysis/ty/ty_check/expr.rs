@@ -36,7 +36,7 @@ use crate::analysis::ty::{
     AddressSpace,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonicalized, Solution},
-    const_ty::{LoweringContext, instantiate_inherent_const_decl_ty},
+    const_ty::{ConstTyData, LoweringContext, instantiate_inherent_const_decl_ty},
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
@@ -2037,12 +2037,14 @@ impl<'db> TyChecker<'db> {
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                let inst = evaluate_header_consts(self.db, inst);
                 let func_ty = self.instantiate_trait_method_to_term(cand.method, receiver_ty, inst);
                 (func_ty, Some(inst))
             }
             MethodCandidate::NeedsConfirmation(cand) => {
                 let inst = canonical.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                let inst = evaluate_header_consts(self.db, inst);
                 self.env.register_trait_obligation(TraitObligation {
                     goal: inst,
                     origin: TraitObligationOrigin::GenericConfirmation,
@@ -2084,6 +2086,7 @@ impl<'db> TyChecker<'db> {
             .map(|candidate| {
                 let inst = canonical.extract_solution(&mut self.table, candidate.cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                let inst = evaluate_header_consts(self.db, inst);
                 super::env::PendingMethodCandidate {
                     inst,
                     method: candidate.cand.method,
@@ -5667,6 +5670,33 @@ where
     }
 
     value.fold_with(db, &mut SlotReifier { slot_bindings })
+}
+
+/// Evaluates the constants an implementation header keeps as unevaluated
+/// metadata, such as the `1` of `impl Width for W<String<1>>`. A method call is
+/// checked against its receiver's type, which names them evaluated.
+fn evaluate_header_consts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+) -> TraitInstId<'db> {
+    struct Evaluator;
+    impl<'db> TyFolder<'db> for Evaluator {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if ty.preserves_const_arg_metadata(db)
+                && let TyData::ConstTy(const_ty) = ty.data(db)
+                && let ConstTyData::UnEvaluated {
+                    ty: Some(expected), ..
+                } = const_ty.data(db)
+                && let Ok(evaluated) = ty.evaluate_const_ty(db, Some(*expected))
+                && let TyData::ConstTy(evaluated_const) = evaluated.data(db)
+                && let ConstTyData::Value(_) = evaluated_const.data(db)
+            {
+                return evaluated;
+            }
+            ty.super_fold_with(db, self)
+        }
+    }
+    inst.fold_with(db, &mut Evaluator)
 }
 
 fn body_diag_from_method_selection_err<'db>(

@@ -1,0 +1,1 @@
+A method call whose receiver gets its `String<N>` type from a string literal, such as `W { v: "a" }.width()` with implementations for `W<String<1>>` and `W<String<8>>`, no longer fails with an internal access-checking error.

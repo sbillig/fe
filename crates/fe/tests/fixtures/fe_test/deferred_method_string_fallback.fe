@@ -1,0 +1,44 @@
+// A method call that only a string literal's fallback type resolves: the
+// receiver's `String<N>` must match the implementation's header.
+struct W<T> {
+    v: T,
+}
+
+trait Width {
+    fn width(self) -> u256
+}
+
+impl Width for W<String<1>> {
+    fn width(self) -> u256 {
+        1
+    }
+}
+
+impl Width for W<String<8>> {
+    fn width(self) -> u256 {
+        8
+    }
+}
+
+fn short() -> u256 {
+    let x = "a"
+    W { v: x }.width()
+}
+
+fn long() -> u256 {
+    let x = "abcdefgh"
+    W { v: x }.width()
+}
+
+fn in_closure() -> u256 {
+    let x = "a"
+    let g = || W { v: x }.width()
+    g()
+}
+
+#[test]
+fn test_string_fallback_selects_the_method() {
+    assert(short() == 1)
+    assert(long() == 8)
+    assert(in_closure() == 1)
+}
