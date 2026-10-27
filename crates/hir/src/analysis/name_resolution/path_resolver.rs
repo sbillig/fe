@@ -1434,6 +1434,9 @@ fn resolve_segment<'db>(
                 && resolve_tail_as_value
                 && lowering_cx.const_bodies() == ConstBodyLowering::Eager
             {
+                // `<S as Tr>::Item::new`: a function is looked up on the type
+                // the projection names.
+                let ty = normalize_ty(db, ty, parent_scope, assumptions);
                 let receiver_ty = Canonicalized::new(db, ty);
                 match select_method_candidate(
                     db,

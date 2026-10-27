@@ -1,0 +1,51 @@
+// A qualified associated type as a value path's prefix names the type it
+// resolves to, as it does in a type position.
+struct S {}
+
+struct V {}
+
+impl V {
+    fn new() -> u8 {
+        5
+    }
+
+    fn get(self) -> u8 {
+        0
+    }
+}
+
+trait Tr0 {
+    type Item
+}
+
+impl Tr0 for S {
+    type Item = V
+}
+
+trait Tr<T> {
+    type Item
+}
+
+impl Tr<u8> for S {
+    type Item = V
+}
+
+fn called() -> u8 {
+    <S as Tr0>::Item::new()
+}
+
+fn generic_trait() -> u8 {
+    <S as Tr<u8>>::Item::new()
+}
+
+fn as_value() -> u8 {
+    let f = <S as Tr0>::Item::new
+    f()
+}
+
+#[test]
+fn test_qualified_assoc_type_value_paths() {
+    assert(called() == 5)
+    assert(generic_trait() == 5)
+    assert(as_value() == 5)
+}
