@@ -885,10 +885,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             {
                 self.lower_access(*inner)
             }
-            // A transport binding of an opaque shape is passed on as it is,
-            // moved: it is used at most once.
+            // A transport binding of an opaque or product shape is passed on
+            // as it is, moved: it is used at most once. A product parameter's
+            // binding holds the product its parts gather.
             Partial::Present(Expr::Path(_))
-                if matches!(shape, Shape::Opaque(_))
+                if matches!(shape, Shape::Opaque(_) | Shape::Tuple(_))
                     && let Some(binding) = self.typed_body.expr_binding(expr) =>
             {
                 let value = self.binding_locals[&binding];
