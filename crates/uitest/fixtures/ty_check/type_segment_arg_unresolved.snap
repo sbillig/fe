@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/type_segment_arg_unresolved.fe
+---
+error[2-0002]: `Missing` is not found
+   ┌─ type_segment_arg_unresolved.fe:16:7
+   │
+16 │     S<Missing>::mk()
+   │       ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ type_segment_arg_unresolved.fe:20:14
+   │
+20 │     S<(u256, Missing)>::mk()
+   │              ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ type_segment_arg_unresolved.fe:24:7
+   │
+24 │     S<Missing>::C
+   │       ^^^^^^^ `Missing` is not found

@@ -1,0 +1,25 @@
+struct S<T> {
+    x: u256,
+}
+
+impl<T> S<T> {
+    const C: u256 = 1
+
+    fn mk() -> u256 {
+        0
+    }
+}
+
+// The type a path's segment names reports the argument it can't resolve,
+// not a missing method or constant of an invalid type.
+fn method() -> u256 {
+    S<Missing>::mk()
+}
+
+fn nested() -> u256 {
+    S<(u256, Missing)>::mk()
+}
+
+fn constant() -> u256 {
+    S<Missing>::C
+}

@@ -53,7 +53,7 @@ use crate::analysis::{
             is_goal_satisfiable,
         },
         ty_def::{InvalidCause, Kind, ShapeMode, TyBase, TyData, TyId},
-        ty_error::emit_invalid_ty_error,
+        ty_error::{emit_invalid_ty_error, first_invalid_ty_cause, path_generic_args},
         ty_lower::{
             TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty_with_minter,
             lower_type_alias, lower_type_alias_deferred, lower_type_position_path,
@@ -303,6 +303,34 @@ impl<'db> PathResError<'db> {
                 } else {
                     fault
                 });
+            }
+            // `S<Missing>::mk`: the parent type is invalid because a path in
+            // its arguments names nothing, and that path is the error.
+            PathResErrorKind::NotFound {
+                parent: Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)),
+                ..
+            } if let Some(InvalidCause::PathResolutionFailed { path: missing }) =
+                first_invalid_ty_cause(db, ty)
+                && let Some(parent_path) = self.failed_at.parent(db)
+                && let Some(span) = path_generic_args(db, parent_path, path_span.clone())
+                    .find_map(|(arg, span)| {
+                        let GenericArg::Type(arg) = arg else {
+                            return None;
+                        };
+                        find_written_path(
+                            db,
+                            arg.ty.to_opt()?,
+                            TypePosition::GenericArg,
+                            Some(span.into_type_arg().ty()),
+                            &mut |written, _, span| (written == missing).then_some(span),
+                        )
+                    })
+                    .flatten() =>
+            {
+                PathResDiag::NotFound(
+                    span.segment(missing.segment_index(db)).ident().into(),
+                    missing.ident(db).to_opt()?,
+                )
             }
             PathResErrorKind::NotFound { parent, bucket } => {
                 if let Some(nr) = bucket.iter_ok().next() {
