@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId,
-        ItemKind, LitKind, ModeMarker, Partial,
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArg, GenericArgListId,
+        IdentId, ItemKind, LitKind, ModeMarker, Partial,
     },
     span::{
         DynLazySpan,
@@ -38,7 +38,7 @@ use crate::analysis::{
             BorrowKind, InvalidCause, Kind, ShapeCon, StringFallback, TyBase, TyData, TyFlags,
             TyId, TyVarSort,
         },
-        ty_error::emit_invalid_ty_error,
+        ty_error::{collect_ty_lower_errors, emit_invalid_ty_error},
         ty_lower::{CompleteSubst, collect_generic_params, lower_generic_arg_list},
         visitor::{TyVisitable, TyVisitor, collect_flags},
     },
@@ -645,14 +645,37 @@ impl<'db> Callable<'db> {
             Err(CallGenericArgUnifyError::InvalidArgument(error)) => {
                 // Invalid declarations are diagnosed once, at their default.
                 if error.diagnostic_owner.is_none() {
-                    let error_span = if error.from_default {
-                        span.into()
-                    } else {
-                        span.arg(error.index).into()
-                    };
-                    if let Some(diag) =
-                        emit_invalid_ty_error(tc.db, TyId::invalid(tc.db, error.cause), error_span)
-                    {
+                    // A written type reports its own errors where they are
+                    // written: an unresolved path has no other diagnostic.
+                    let written = match args.data(tc.db).get(error.index) {
+                        Some(GenericArg::Type(arg)) if !error.from_default => arg.ty.to_opt(),
+                        _ => None,
+                    }
+                    .map(|hir_ty| {
+                        collect_ty_lower_errors(
+                            tc.db,
+                            tc.env.scope(),
+                            hir_ty,
+                            span.clone().arg(error.index).into_type_arg().ty(),
+                            tc.env.assumptions(),
+                        )
+                    })
+                    .unwrap_or_default();
+                    if written.is_empty() {
+                        let error_span = if error.from_default {
+                            span.into()
+                        } else {
+                            span.arg(error.index).into()
+                        };
+                        if let Some(diag) = emit_invalid_ty_error(
+                            tc.db,
+                            TyId::invalid(tc.db, error.cause),
+                            error_span,
+                        ) {
+                            tc.push_diag(diag);
+                        }
+                    }
+                    for diag in written {
                         tc.push_diag(diag);
                     }
                 }

@@ -1,0 +1,17 @@
+struct S {}
+
+impl S {
+    fn take<T>() {}
+}
+
+fn take<T>() {}
+
+fn take_value<T>(_ x: T) {}
+
+pub fn unresolved() {
+    take<Missing>()
+    take<(u256, Missing)>()
+    take<[Missing; 2]>()
+    take_value<Missing>(1)
+    S::take<Missing>()
+}

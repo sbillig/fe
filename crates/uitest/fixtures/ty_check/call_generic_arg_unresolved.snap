@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/call_generic_arg_unresolved.fe
+---
+error[2-0002]: `Missing` is not found
+   ┌─ call_generic_arg_unresolved.fe:12:10
+   │
+12 │     take<Missing>()
+   │          ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ call_generic_arg_unresolved.fe:13:17
+   │
+13 │     take<(u256, Missing)>()
+   │                 ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ call_generic_arg_unresolved.fe:14:11
+   │
+14 │     take<[Missing; 2]>()
+   │           ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ call_generic_arg_unresolved.fe:15:16
+   │
+15 │     take_value<Missing>(1)
+   │                ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ call_generic_arg_unresolved.fe:16:13
+   │
+16 │     S::take<Missing>()
+   │             ^^^^^^^ `Missing` is not found
