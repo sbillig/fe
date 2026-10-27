@@ -1,0 +1,19 @@
+trait Has<T> {}
+
+struct X {}
+struct Y {}
+struct Z {}
+
+impl Has<[u8; true]> for X {}
+impl Has<[u8; 1 + true]> for Y {}
+impl Has<u8> for [u8; true] {}
+impl<T> Has<[T; true]> for Z {}
+
+// An associated const's value is reported once, with the impl's bodies.
+trait HasC {
+    const C: u256
+}
+
+impl HasC for X {
+    const C: u256 = true
+}

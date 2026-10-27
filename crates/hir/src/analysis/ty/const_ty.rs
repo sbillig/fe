@@ -1476,7 +1476,14 @@ pub(crate) fn const_body_failure<'db>(
         }) => Some((*expected, *given)),
         _ => None,
     }) {
-        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
+        // An implementation's associated const value is checked, and its
+        // mismatch reported, with the implementation's const bodies. A
+        // constant in the header's types is reported at its type.
+        if let Some(ItemKind::ImplTrait(impl_trait)) = body.scope().parent_item(db)
+            && impl_trait
+                .assoc_consts(db)
+                .any(|impl_const| impl_const.value_body(db) == Some(body))
+        {
             return ConstBodyFailure::Elsewhere;
         }
         return ConstBodyFailure::AtType(InvalidCause::ConstTyMismatch { expected, given });

@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/impl_header_array_length_type.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+  ┌─ impl_header_array_length_type.fe:7:10
+  │
+7 │ impl Has<[u8; true]> for X {}
+  │          ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+  ┌─ impl_header_array_length_type.fe:8:10
+  │
+8 │ impl Has<[u8; 1 + true]> for Y {}
+  │          ^^^^^^^^^^^^^^ expected `{integer}` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+  ┌─ impl_header_array_length_type.fe:9:18
+  │
+9 │ impl Has<u8> for [u8; true] {}
+  │                  ^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ impl_header_array_length_type.fe:10:13
+   │
+10 │ impl<T> Has<[T; true]> for Z {}
+   │             ^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ impl_header_array_length_type.fe:18:21
+   │
+18 │     const C: u256 = true
+   │                     ^^^^ expected `u256`, but `bool` is given
