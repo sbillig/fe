@@ -26,6 +26,10 @@ pub struct BorrowSummary<'db> {
     /// Scalar facts shared by all normal returns. The Result binder names this
     /// call's returned value; formal values name immutable argument SSA values.
     pub scalar_result: Option<Guard<'db>>,
+    /// Parameters whose scalar facts this body can read or export, so a caller
+    /// keeps the relations of the values it passes for them. `None` is every
+    /// parameter, for a summary not derived from the body.
+    pub observed_params: Option<BTreeSet<u32>>,
     pub mutable_inputs: Vec<InputPoststate<'db>>,
     /// A normal-return must range and its structural contents. The member
     /// binder, guarded coverage, and value share one source-witness namespace.
