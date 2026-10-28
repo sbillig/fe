@@ -27,7 +27,7 @@ use super::{
     handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::{RegionPath, aligned_index_pairs},
-    region::{ProviderRegionId, RegionRoot},
+    region::{ProviderRegionId, RegionRoot, SymbolicPlace},
     source::{InputSource, SourceExpr},
     value::{Guarded, IndexPayload},
 };
@@ -411,6 +411,27 @@ fn place_correspondence<'db>(
 }
 
 impl<'db> ClobberCondition<'db> {
+    /// A conditional endpoint keeps its prerequisite even when the other
+    /// endpoint is local and cannot appear in a caller-facing condition.
+    pub fn from_places(
+        target: &SymbolicPlace<'db>,
+        written: &SymbolicPlace<'db>,
+        extent: AccessExtent<'db>,
+    ) -> Option<Self> {
+        for place in [written, target] {
+            if let RegionRoot::External(source) = &place.root
+                && let Some(condition) = source.clobber_dependency()
+            {
+                return Some(condition.clone());
+            }
+        }
+        Some(Self::new(
+            SourceExpr::from_place(target)?,
+            SourceExpr::from_place(written)?,
+            extent,
+        ))
+    }
+
     pub fn new(
         mut target: SourceExpr<'db>,
         mut written: SourceExpr<'db>,
