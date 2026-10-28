@@ -1811,11 +1811,13 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         message: Option<hir::hir_def::StringId<'db>>,
     ) -> RTerminator<'db> {
-        let payload = if let Some(message) = message {
-            solidity_error_string_payload(message.data(self.db).as_bytes())
-        } else {
-            solidity_panic_payload(0x01)
+        // A failed assertion without a message panics with code 0x01.
+        let Some(message) = message else {
+            return RTerminator::Panic {
+                code: self.alloc_u256_const(bb, 0x01),
+            };
         };
+        let payload = solidity_error_string_payload(message.data(self.db).as_bytes());
         let payload_len = self.alloc_u256_const(bb, payload.len());
         let allocated_len = self.alloc_memory_int_const(bb, payload.len().next_multiple_of(32));
         let ptr = self.malloc_bytes(bb, allocated_len);
@@ -6424,13 +6426,6 @@ fn solidity_error_string_payload(bytes: &[u8]) -> Vec<u8> {
     push_abi_word_usize(&mut payload, bytes.len());
     payload.extend(bytes);
     payload.resize(4 + 64 + padded_len, 0);
-    payload
-}
-
-fn solidity_panic_payload(code: usize) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(36);
-    payload.extend([0x4e, 0x48, 0x7b, 0x71]);
-    push_abi_word_usize(&mut payload, code);
     payload
 }
 
