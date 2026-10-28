@@ -6,6 +6,12 @@ pub(crate) mod observability;
 pub use native_tests::{NativeTestEntry, NativeTestModule, emit_test_module_native};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::{
+    env, fs,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Instant,
+};
 
 use common::ingot::Ingot;
 use driver::DriverDataBase;
@@ -138,7 +144,22 @@ pub(crate) fn create_evm_isa() -> Evm {
 }
 
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
+    static NUMBER: AtomicUsize = AtomicUsize::new(0);
+    let number = NUMBER.fetch_add(1, Ordering::Relaxed);
+    if let Ok(directory) = env::var("FEVM_DIAGNOSTIC_IR") {
+        fs::write(
+            Path::new(&directory).join(format!("module-{number}.sir")),
+            ModuleWriter::new(module).dump_string(),
+        )
+        .unwrap();
+    }
+    eprintln!("FEVM_DIAGNOSTIC verify start {number}");
+    let started = Instant::now();
     let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Full));
+    eprintln!(
+        "FEVM_DIAGNOSTIC verify end {number}: {:?}",
+        started.elapsed()
+    );
     if report.has_errors() {
         return Err(LowerError::Internal(format_verification_report(
             module, &report,
@@ -820,12 +841,16 @@ pub fn emit_module_native_artifacts(
     opt_level: OptLevel,
     outputs: NativeOutputSelection,
 ) -> Result<NativeArtifacts, LowerError> {
+    eprintln!("FEVM_DIAGNOSTIC lowering start");
     let (module, main) = compile_executable_sonatina_native(db, top_mod)?;
+    eprintln!("FEVM_DIAGNOSTIC lowering end");
     let module = prepare_native_main(db, top_mod, module, main)?;
 
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
+    eprintln!("FEVM_DIAGNOSTIC optimize start");
     compile.optimize();
+    eprintln!("FEVM_DIAGNOSTIC optimize end");
     ensure_module_sonatina_ir_valid(compile.module())?;
     let ir = outputs
         .ir
