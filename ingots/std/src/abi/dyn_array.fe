@@ -173,7 +173,7 @@ impl<T> DynArray<T> {
                 size += value.payload_size()
             }
         }
-        let data = ptr::alloc_bytes(size.downcast_saturate())
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
             ptr::zero_bytes(data, size.downcast_unchecked())
             store_word(ptr: data, value: len as u256)
@@ -405,7 +405,7 @@ pub fn dyn_array_from<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
     where T: Encode<Sol> + AbiSize + Copy
 {
     let size = 32 + values.payload_size()
-    let data = ptr::alloc_bytes(size.downcast_saturate())
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
     unsafe {
         ptr::zero_bytes(data, size.downcast_unchecked())
         store_word(ptr: data, value: N as u256)
@@ -439,7 +439,7 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
         // The size is known up front, so each element is decoded once and
         // re-encoded in place.
         let size = 32 + count as u256 * head
-        let data = ptr::alloc_bytes(size.downcast_saturate())
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
         return unsafe {
             ptr::zero_bytes(data, size.downcast_unchecked())
             store_word(ptr: data, value: count as u256)
@@ -463,7 +463,7 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
         unsafe { *tails.ptr_at(i) = encoded }
     }
     // The heads, then the tails back to back in index order.
-    let data = ptr::alloc_bytes(size.downcast_saturate())
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
     unsafe { store_word(ptr: data, value: count as u256) }
     let root = ptr::offset_bytes(data, 32)
     var tail = count as u256 * 32

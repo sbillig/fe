@@ -1,7 +1,7 @@
 use super::intrinsic::size_of
 use super::marker::{Clearable, Copy}
 use super::mem::{drop, forget, needs_drop}
-use super::num::{from_be, to_be}
+use super::num::{from_be, to_be, word_to_usize}
 use super::option::Option
 use super::ops::{Drop, Eq, Index, Len}
 use super::result::Result
@@ -1147,6 +1147,17 @@ pub fn alloc<T>() -> *T {
 
 /// The largest allocation, as Solidity's.
 pub(ingot) const MAX_ALLOCATION: usize = 0xffffffffffffffff
+
+/// The `usize` length of an allocation sized as a word. A length the
+/// target's `usize` cannot hold exceeds `MAX_ALLOCATION`, so it reverts with
+/// `Panic(0x41)`, as `alloc_bytes` does.
+#[inline(always)]
+pub fn allocation_len(_ len: u256) -> usize {
+    if len > usize::max() as u256 {
+        panic_code(PANIC_OUT_OF_MEMORY)
+    }
+    word_to_usize(len)
+}
 
 /// Allocates `len` bytes, without initializing them. Reverts with
 /// `Panic(0x41)` above `2**64 - 1` bytes, like Solidity: an allocation is not

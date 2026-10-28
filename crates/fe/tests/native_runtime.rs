@@ -125,6 +125,37 @@ fn below_min_reverts() {
 }
 
 #[test]
+fn native_word_sized_allocations_beyond_usize_run_out_of_memory() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("oversized.fe");
+    fs::write(
+        &source,
+        r#"
+use core::abi::DynString
+
+// The string's 32-byte header and padded payload need more than 2**64 bytes.
+#[test(should_revert, panic = 0x41)]
+fn oversized_string() {
+    let _ = DynString::zeroed(usize::max())
+}
+"#,
+    )
+    .unwrap();
+    test_utils::skip_crash_reports();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn native_panics_report_on_stderr_after_flushing_stdout() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/panics.fe");

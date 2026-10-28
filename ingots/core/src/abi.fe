@@ -503,7 +503,7 @@ pub fn encode_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     where T: Encode<A> + AbiSize
 {
     let total = abi_payload_size(value)
-    let buffer = ptr::MemBuffer::alloc(total.downcast_saturate())
+    let buffer = ptr::MemBuffer::alloc(ptr::allocation_len(total))
     // The fresh buffer is zeroed, and only the encoding writes it.
     value.encode(unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) })
     buffer
@@ -514,7 +514,7 @@ pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     where T: Encode<A> + AbiSize
 {
     let total = abi_single_root_size(value)
-    let buffer = ptr::MemBuffer::alloc(total.downcast_saturate())
+    let buffer = ptr::MemBuffer::alloc(ptr::allocation_len(total))
     // The fresh buffer is zeroed, and only the encoding writes it.
     let out = unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) }
     encode_field<A, T>(value, out, head_pos: 0, tails: out.tail(abi_single_root_head_size<T>()))
@@ -947,7 +947,7 @@ impl DynString {
     /// Allocates a string of `len` zero bytes, to be filled through `payload_span`.
     pub fn zeroed(_ len: usize) -> Self {
         let size = 32 + round_up_words(len as u256)
-        let data = ptr::alloc_bytes(size.downcast_saturate())
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
             ptr::zero_bytes(data, word_to_usize(size))
             store_word(ptr: data, value: len as u256)
@@ -978,7 +978,7 @@ impl DynString {
     pub fn from_payload(source: ptr::MemSpan) -> Self {
         let len = source.len()
         let size = 32 + round_up_words(len as u256)
-        let data = ptr::alloc_bytes(size.downcast_saturate())
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
             ptr::zero_bytes(data, word_to_usize(size))
             store_word(ptr: data, value: len as u256)
@@ -1071,7 +1071,7 @@ impl Bytes {
     pub fn from_payload(source: ptr::MemSpan) -> Self {
         let len = source.len()
         let size = 32 + round_up_words(len as u256)
-        let data = ptr::alloc_bytes(size.downcast_saturate())
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
             ptr::zero_bytes(data, word_to_usize(size))
             store_word(ptr: data, value: len as u256)

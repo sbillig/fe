@@ -175,6 +175,27 @@ func inline(always) private %alloc_uninit__g03ed() -> @layout_0 {
         return v4;
 }
 
+func inline(always) private %allocation_len(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i1 = gt v0 -1.i256;
+        br v3 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 65.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        jump block4;
+
+    block4:
+        v10.i256 = call %word_to_usize v0;
+        return v10;
+}
+
 func private %cast(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -285,7 +306,7 @@ func inline(always) private %decode_runtime_args(v0.objref<@layout_3>) {
         return;
 }
 
-func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405(v0.i256) -> i256 {
+func private %downcast_saturate(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -325,7 +346,7 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405(v
         jump block11;
 
     block10:
-        v24.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v16;
+        v24.i256 = call %impl_trait_usize__from_word v16;
         jump block11;
 
     block11:
@@ -358,11 +379,11 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405(v
         jump block14;
 
     block18:
-        v39.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v39.i256 = call %impl_trait_usize__from_word v9;
         jump block20;
 
     block19:
-        v41.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
+        v41.i256 = call %impl_trait_usize__from_word v2;
         jump block20;
 
     block20:
@@ -370,7 +391,7 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405(v
         jump block17;
 
     block21:
-        v44.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v44.i256 = call %impl_trait_usize__from_word v9;
         jump block23;
 
     block22:
@@ -382,128 +403,11 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405(v
         jump block14;
 
     block24:
-        v50.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v50.i256 = call %impl_trait_usize__from_word v9;
         jump block26;
 
     block25:
-        v52.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
-        jump block26;
-
-    block26:
-        v53.i256 = phi (v50 block24) (v52 block25);
-        jump block23;
-
-    block27:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block28:
-        br 0.i1 block12 block13;
-}
-
-func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_7c4f(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %core__lib__num__impl_trait_u256_7874__to_word_48ef v0;
-        br 1.i1 block2 block3;
-
-    block2:
-        br 0.i1 block8 block6;
-
-    block3:
-        (v9.i256, v10.i1) = usubo 0.i256 1.i256;
-        br v10 block27 block28;
-
-    block4:
-        v15.i256 = phi (v25 block11) (v33 block14);
-        return v15;
-
-    block5:
-        jump block7;
-
-    block6:
-        jump block7;
-
-    block7:
-        v16.i256 = phi (0.i256 block5) (v2 block6);
-        v17.i1 = gt v16 -1.i256;
-        br v17 block9 block10;
-
-    block8:
-        v20.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v21.i1 = eq v20 0.i256;
-        v22.i1 = is_zero v21;
-        br v22 block5 block6;
-
-    block9:
-        jump block11;
-
-    block10:
-        v24.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_5325 v16;
-        jump block11;
-
-    block11:
-        v25.i256 = phi (-1.i256 block9) (v24 block10);
-        jump block4;
-
-    block12:
-        v28.i1 = slt v2 0.i256;
-        br v28 block15 block16;
-
-    block13:
-        v30.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v31.i1 = eq v30 0.i256;
-        v32.i1 = is_zero v31;
-        br v32 block21 block22;
-
-    block14:
-        v33.i256 = phi (v37 block17) (v48 block23);
-        jump block4;
-
-    block15:
-        jump block17;
-
-    block16:
-        v36.i1 = slt v9 v2;
-        br v36 block18 block19;
-
-    block17:
-        v37.i256 = phi (0.i256 block15) (v42 block20);
-        jump block14;
-
-    block18:
-        v39.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_5325 v9;
-        jump block20;
-
-    block19:
-        v41.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_5325 v2;
-        jump block20;
-
-    block20:
-        v42.i256 = phi (v39 block18) (v41 block19);
-        jump block17;
-
-    block21:
-        v44.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_5325 v9;
-        jump block23;
-
-    block22:
-        v47.i1 = slt v9 v2;
-        br v47 block24 block25;
-
-    block23:
-        v48.i256 = phi (v44 block21) (v53 block26);
-        jump block14;
-
-    block24:
-        v50.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_5325 v9;
-        jump block26;
-
-    block25:
-        v52.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_5325 v2;
+        v52.i256 = call %impl_trait_usize__from_word v2;
         jump block26;
 
     block26:
@@ -548,7 +452,7 @@ func private %downcast_unchecked(v0.i256) -> i256 {
 
     block1:
         v2.i256 = call %core__lib__num__impl_trait_u256_7874__to_word_e517 v0;
-        v3.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
+        v3.i256 = call %impl_trait_usize__from_word v2;
         return v3;
 }
 
@@ -567,7 +471,7 @@ func inline(always) private %encode_alloc(v0.i256) -> @layout_1 {
 
     block1:
         v2.i256 = call %abi_payload_size v0;
-        v3.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_7c4f v2;
+        v3.i256 = call %allocation_len v2;
         v4.@layout_1 = call %impl_MemBuffer__alloc v3;
         v5.i256 = call %impl_MemBuffer__ptr v4;
         v6.@layout_4 = call %from_raw_parts v5 v2;
@@ -627,7 +531,7 @@ func inline(always) private %encode_single_root_alloc(v0.i256) -> @layout_1 {
 
     block1:
         v2.i256 = call %abi_single_root_size v0;
-        v3.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_7c4f v2;
+        v3.i256 = call %allocation_len v2;
         v4.@layout_1 = call %impl_MemBuffer__alloc v3;
         v5.i256 = call %impl_MemBuffer__ptr v4;
         v6.@layout_4 = call %from_raw_parts v5 v2;
@@ -654,14 +558,6 @@ func inline(always) private %from_raw_parts(v0.i256, v1.i256) -> @layout_4 {
         return v8;
 }
 
-func private %core__lib__num__impl_trait_usize_95da__from_word_5325(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
 func private %impl_trait_u64__from_word(v0.i256) -> i64 {
     block0:
         jump block1;
@@ -671,7 +567,7 @@ func private %impl_trait_u64__from_word(v0.i256) -> i64 {
         return v2;
 }
 
-func private %core__lib__num__impl_trait_usize_95da__from_word_c59e(v0.i256) -> i256 {
+func private %impl_trait_usize__from_word(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -819,7 +715,7 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block7:
-        v13.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405 v6;
+        v13.i256 = call %downcast_saturate v6;
         v14.i256 = call %core__lib__ptr__alloc_bytes_8b3e v13;
         call %write_key v14 v1;
         v18.i256 = call %downcast_unchecked v4;
