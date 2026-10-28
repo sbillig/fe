@@ -148,6 +148,16 @@ pub(crate) fn create_evm_isa() -> Evm {
     ))
 }
 
+/// Verifies `module` only in builds with debug assertions: full verification
+/// takes about a fifth of a large native build.
+fn debug_ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
+    if cfg!(debug_assertions) {
+        ensure_module_sonatina_ir_valid(module)
+    } else {
+        Ok(())
+    }
+}
+
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
     let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Full));
     if report.has_errors() {
@@ -288,7 +298,7 @@ fn compile_runtime_objects_with_postopt_trace(
     LowerError,
 > {
     let mut compile = evm_compile(module, opt_level, emit_observability);
-    ensure_module_sonatina_ir_valid(compile.optimize())?;
+    debug_ensure_module_sonatina_ir_valid(compile.optimize())?;
     if emit_observability && let Some(owner) = postopt_trace_owner {
         stamp_postopt_instruction_provenance(owner, &mut compile);
     }
@@ -846,7 +856,7 @@ pub fn emit_module_native_artifacts(
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
     compile.optimize();
-    ensure_module_sonatina_ir_valid(compile.module())?;
+    debug_ensure_module_sonatina_ir_valid(compile.module())?;
     let ir = outputs
         .ir
         .then(|| ModuleWriter::new(compile.module()).dump_string());
@@ -1344,10 +1354,10 @@ pub fn emit_runtime_package_sonatina_ir_optimized(
 ) -> Result<String, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina IR")?;
     let module = compile_runtime_package_sonatina(db, package)?;
-    ensure_module_sonatina_ir_valid(&module)?;
+    debug_ensure_module_sonatina_ir_valid(&module)?;
     let mut compile = evm_compile(module, opt_level, false);
     let optimized = compile.optimize();
-    ensure_module_sonatina_ir_valid(optimized)?;
+    debug_ensure_module_sonatina_ir_valid(optimized)?;
     let mut writer = ModuleWriter::new(optimized);
     Ok(writer.dump_string())
 }
@@ -1611,7 +1621,7 @@ impl<'db> IsolatedObjectCompiler<'db, '_> {
             &isolated,
             &external_code,
         )?;
-        ensure_module_sonatina_ir_valid(&module)?;
+        debug_ensure_module_sonatina_ir_valid(&module)?;
         // Each isolated module has its own IDs. Keep pre/post-opt facts and
         // instruction provenance under a distinct owner for that exact module.
         let trace = match &self.trace_owner {
