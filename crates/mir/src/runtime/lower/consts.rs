@@ -1,3 +1,4 @@
+use cranelift_entity::EntityRef;
 use hir::analysis::ty::AddressSpace;
 use std::collections::HashSet;
 
@@ -14,8 +15,8 @@ use hir::analysis::{
 use crate::{
     db::MirDb,
     runtime::{
-        ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, RuntimeClass, ScalarClass,
-        ScalarRepr,
+        ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, RefKind, RuntimeCarrier,
+        RuntimeClass, ScalarClass, ScalarRepr,
     },
 };
 
@@ -51,32 +52,46 @@ pub(super) fn reified_const_ref_value_for_ty<'db>(
         .expect("runtime constant reification was validated before lowering")
 }
 
+/// The regions this body lowers to const handles: every referenced constant,
+/// and every constant value held by const reference. An aggregate value of
+/// the same constant reads its region instead of rebuilding every element.
 pub(super) fn collect_const_ref_regions<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     body: &RuntimeSemanticBody<'db>,
+    carriers: &[RuntimeCarrier<'db>],
 ) -> HashSet<ConstRegionId<'db>> {
     body.normalized
         .blocks
         .iter()
         .flat_map(|block| block.statements.iter())
         .filter_map(|stmt| {
-            let NStatementKind::Define { result, expr } = &stmt.kind else {
+            let NStatementKind::Define {
+                result,
+                expr: NExpr::Const(constant),
+            } = &stmt.kind
+            else {
                 return None;
             };
-            let NExpr::Const(SConst::Ref(cref)) = expr else {
-                return None;
+            let ty = body.normalized.value(*result)?.ty;
+            let value = match constant {
+                SConst::Ref(cref) => reified_const_ref_value_for_ty(db, body.owner(), *cref, ty),
+                SConst::Value(value)
+                    if matches!(
+                        carriers
+                            .get(body.value_local(*result)?.index())
+                            .and_then(RuntimeCarrier::value_class),
+                        Some(RuntimeClass::Ref {
+                            kind: RefKind::Const,
+                            ..
+                        })
+                    ) =>
+                {
+                    reify_runtime_const_for_ty(db, body.owner(), ty, value.value())?
+                }
+                _ => return None,
             };
-            aggregate_const_ref_region(
-                db,
-                env,
-                reified_const_ref_value_for_ty(
-                    db,
-                    body.owner(),
-                    *cref,
-                    body.normalized.value(*result)?.ty,
-                ),
-            )
+            aggregate_const_ref_region(db, env, value)
         })
         .collect()
 }

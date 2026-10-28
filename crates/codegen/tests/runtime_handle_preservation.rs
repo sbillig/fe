@@ -2460,6 +2460,30 @@ fn exercise() {
 }
 
 #[test]
+fn mutable_constant_aggregates_initialize_from_const_data() {
+    with_test_runtime_package!(
+        "mutable_constant_aggregates_initialize_from_const_data.fe",
+        r#"
+#[test]
+fn zeroed() {
+    var bytes: [u8; 64] = [0; 64]
+    bytes[1] = 7
+    assert(bytes[1] == 7 && bytes[2] == 0)
+}
+"#,
+        |db, package| {
+            let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
+                .expect("Sonatina IR");
+            let body = sonatina_function_body(&output, "zeroed");
+            assert!(
+                body.contains("obj.init.const") && !body.contains("insert_value"),
+                "a mutable binding should copy its constant initializer from const data:\n{body}"
+            );
+        }
+    );
+}
+
+#[test]
 fn capability_gated_provider_ref_conversion_preserves_transport_in_rmir() {
     with_runtime_package!(
         "capability_gated_provider_ref_conversion_preserves_transport_in_rmir.fe",

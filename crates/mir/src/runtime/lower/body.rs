@@ -685,7 +685,7 @@ impl<'db> RmirEmitter<'db> {
         } = inferred;
         let semantic_carriers = carriers.clone();
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
-        let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
+        let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body, &carriers);
         let terminated_blocks = vec![false; semantic_body.normalized.blocks.len()];
         let stmt_origins = vec![Vec::new(); semantic_body.normalized.blocks.len()];
         let terminator_origins = vec![SemOrigin::Synthetic; semantic_body.normalized.blocks.len()];

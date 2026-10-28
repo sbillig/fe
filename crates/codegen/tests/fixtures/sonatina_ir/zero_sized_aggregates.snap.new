@@ -1,0 +1,73 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 520
+expression: output
+input_file: crates/codegen/tests/fixtures/zero_sized_aggregates.fe
+---
+target = "evm-ethereum-osaka"
+
+type @layout_0 = {};
+type @layout_1 = {@layout_0, i256};
+
+global private const @layout_1 $const_region_0 = {{}, 1};
+global private const @layout_1 $const_region_1 = {{}, 7};
+global private const @layout_1 $const_region_2 = {{}, 5};
+
+func private %empty_field_assign() {
+    block0:
+        v0.objref<@layout_1> = obj.alloc @layout_1;
+        jump block1;
+
+    block1:
+        v2.constref<@layout_1> = const.ref $const_region_0;
+        v3.constref<@layout_1> = const.ref $const_region_0;
+        v4.objref<@layout_1> = obj.alloc @layout_1;
+        obj.init.const v4 v3;
+        v5.@layout_1 = obj.load v4;
+        obj.store v0 v5;
+        return;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        call %empty_field_assign;
+        evm_stop;
+}
+
+func private %struct_with_empty() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.constref<@layout_1> = const.ref $const_region_1;
+        v2.constref<@layout_1> = const.ref $const_region_1;
+        return 7.i256;
+}
+
+func private %tuple_only_empty() {
+    block0:
+        jump block1;
+
+    block1:
+        return;
+}
+
+func private %tuple_with_empty() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.constref<@layout_1> = const.ref $const_region_2;
+        v2.constref<@layout_1> = const.ref $const_region_2;
+        return 5.i256;
+}
+
+
+object @main {
+    section main {
+        entry %main_root;
+    }
+}

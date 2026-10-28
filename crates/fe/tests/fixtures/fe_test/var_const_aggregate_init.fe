@@ -1,0 +1,27 @@
+// Mutable bindings initialized from constant aggregates get their own copy of
+// the constant's data, fresh on every initialization.
+struct Pair {
+    xs: [u8; 4],
+    y: u256,
+}
+
+#[test]
+fn repeat_initializers_copy_fresh_each_iteration() {
+    var i: u256 = 0
+    while i < 3 {
+        var bytes: [u8; 4] = [1; 4]
+        assert!(bytes[0] == 1 && bytes[3] == 1)
+        bytes[0] = 9
+        assert!(bytes[0] == 9 && bytes[1] == 1)
+        i += 1
+    }
+}
+
+#[test]
+fn literal_initializers_leave_the_constant_intact() {
+    var p = Pair { xs: [1, 2, 3, 4], y: 5 }
+    p.xs[2] = 7
+    p.y = 6
+    let q = Pair { xs: [1, 2, 3, 4], y: 5 }
+    assert!(p.xs[2] == 7 && p.y == 6 && q.xs[2] == 3 && q.y == 5)
+}
