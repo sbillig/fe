@@ -2677,18 +2677,15 @@ impl<'db> Borrowck<'db> {
             effects: effect_args,
             origin: statement.origin,
         };
+        // Every output reads the same pre-call state. Share source resolutions
+        // across the result and poststates, until caller storage is updated.
+        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         let returned =
-            self.instantiate_value(state, &call.summary.result, &template, result, inputs)?;
+            self.instantiate_value(&mut instantiations, &call.summary.result, &template)?;
         let mut updates: Vec<(RegionSet<'db>, CapabilityValue<'db>)> = Vec::new();
         for (update, template) in call.summary.mutable_inputs.iter().zip(&call.updates) {
-            let value = self.instantiate_value(state, &update.value, template, result, inputs)?;
-            let target = self.instantiate_source(
-                state,
-                &update.destination,
-                result,
-                update.value.scope(),
-                inputs,
-            )?;
+            let value = self.instantiate_value(&mut instantiations, &update.value, template)?;
+            let target = instantiations.resolve(self, &update.destination, update.value.scope())?;
             // Different absent inputs all resolve to the same empty region,
             // but their contents need not have the same shape. They write no
             // caller storage, so they contribute no update to coalesce.
@@ -2706,28 +2703,22 @@ impl<'db> Borrowck<'db> {
         }
         let mut certified_ranges = Vec::new();
         for range in &call.summary.certified_ranges {
-            let Some(coverage) = self.instantiate_guard(&range.coverage, result, inputs)? else {
+            let Some(coverage) = instantiations.guard(self, &range.coverage)? else {
                 continue;
             };
-            let target =
-                self.instantiate_source(state, &range.destination, result, &range.scope, inputs)?;
+            let target = instantiations.resolve(self, &range.destination, &range.scope)?;
             let template = self
                 .inventory
                 .values
                 .empty(range.contents.shape(), &range.scope);
             let contents =
-                self.instantiate_value(state, &range.contents, &template, result, inputs)?;
+                self.instantiate_value(&mut instantiations, &range.contents, &template)?;
             certified_ranges.push((target.region, coverage, contents));
         }
         let mut scalar_updates = BTreeMap::new();
         for update in &call.summary.scalar_inputs {
-            let resolved = self.instantiate_source(
-                state,
-                &update.destination,
-                result,
-                &BinderScope::default(),
-                inputs,
-            )?;
+            let resolved =
+                instantiations.resolve(self, &update.destination, &BinderScope::default())?;
             let [clause] = resolved.region.clauses() else {
                 continue;
             };
@@ -2747,6 +2738,7 @@ impl<'db> Borrowck<'db> {
                 })
                 .or_insert(Some(update.value));
         }
+        drop(instantiations);
         let accesses = self.call_memory_accesses(state, result, inputs)?;
         let consumed = if call.summary.availability.unavailable.is_empty() {
             Vec::new()
@@ -2913,16 +2905,15 @@ impl<'db> Borrowck<'db> {
 
     fn instantiate_value(
         &mut self,
-        state: &BorrowState<'db>,
+        instantiations: &mut SourceInstantiations<'_, 'db>,
         value: &SourceValue<'db>,
         template: &CapabilityValue<'db>,
-        result: NValueId,
-        inputs: CallInputs<'_, 'db>,
     ) -> Result<CapabilityValue<'db>, SemanticDiagnostic<'db>> {
+        let result = instantiations.result;
+        let inputs = instantiations.inputs;
         let cache = self.inventory.values.guard_cache();
         let mut values = CapabilityValues::sharing(&self.inventory.values, ValueLimits::default());
         let sources = SourceValues::sharing(&values, ValueLimits::default());
-        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         let mut error = None;
         let instantiated =
             sources.map_payloads(value, &mut values, |semantics, path, entry, domain| {
