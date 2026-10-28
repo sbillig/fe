@@ -494,16 +494,7 @@ impl<'db> Borrowck<'db> {
                                 .with_boolean(choice.clone(), value)
                                 .expect("boolean alternative is feasible")
                         };
-                        let include_bounds =
-                            self.inventory
-                                .loops
-                                .for_value(&self.body, cond.value)
-                                .is_none()
-                                || (self.scalar.bounded_readers.contains(&cond.value)
-                                    && (!self.prefix_certificates.is_empty()
-                                        || self.calls.values().any(|call| {
-                                            !call.summary.certified_ranges.is_empty()
-                                        })));
+                        let include_bounds = self.scalar_bounds_enabled(cond.value);
                         let guard = guard.and(&self.condition_guard(
                             cond.value,
                             value,
@@ -665,7 +656,11 @@ impl<'db> Borrowck<'db> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("solve");
         self.prepare_calls()?;
-        (self.scalar.live, self.scalar.observed) = self.scalar_liveness();
+        (
+            self.scalar.live,
+            self.scalar.observed,
+            self.scalar.non_branch_params,
+        ) = self.scalar_liveness();
         if self
             .calls
             .values()

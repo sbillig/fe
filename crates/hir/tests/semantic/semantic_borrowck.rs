@@ -13701,6 +13701,200 @@ fn inspect() {
 }
 
 #[test]
+fn boolean_call_results_preserve_argument_conditions() {
+    for (first, second, valid) in [
+        ("flag", "!identity(flag)", true),
+        ("flag", "!forward(flag)", true),
+        ("flag", "!identity(!negate(flag))", true),
+        ("flag", "negate(flag)", true),
+        ("flag", "!choose(flag)", true),
+        ("flag && other", "!conjunction(flag, other)", true),
+        ("true", "never()", true),
+        ("flag", "identity(flag)", false),
+        ("flag", "!identity(other)", false),
+        ("flag", "always()", false),
+    ] {
+        let source = format!(
+            r#"
+use std::native::ByteBuffer
+fn identity(_ flag: bool) -> bool {{ flag }}
+fn forward(_ flag: bool) -> bool {{ identity(identity(flag)) }}
+fn negate(_ flag: bool) -> bool {{ !flag }}
+fn choose(_ flag: bool) -> bool {{ if flag {{ true }} else {{ false }} }}
+fn conjunction(_ flag: bool, _ other: bool) -> bool {{ flag && other }}
+fn never() -> bool {{ false }}
+fn always() -> bool {{ true }}
+fn caller(buffer: own ByteBuffer, flag: bool, other: bool) {{
+    if {first} {{ buffer.release() }}
+    if {second} {{ buffer.release() }}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert_eq!(diagnostics, "", "{source}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn boolean_call_results_correlate_private_moves() {
+    for (body, valid) in [
+        ("if !take_if(item, flag) { consume(*item) }", true),
+        ("if !forward(item, flag) { consume(*item) }", true),
+        (
+            "let kept = !take_if(item, flag)\nif kept { consume(*item) }",
+            true,
+        ),
+        ("if take_if(item, flag) { consume(*item) }", false),
+        ("let unused = take_if(item, flag)\nconsume(*item)", false),
+        (
+            r#"
+let other = core::ptr::alloc<Item>()
+*other = Item { n: 2 }
+if !take_if(item, flag) {
+    *flag = true
+    let unused = take_if(other, flag)
+    consume(*other)
+}
+"#,
+            false,
+        ),
+    ] {
+        let source = format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn take_if(_ item: *Item, _ flag: *bool) -> bool {{
+    if *flag {{
+        consume(*item)
+        true
+    }} else {{
+        false
+    }}
+}}
+fn forward(_ item: *Item, _ flag: *bool) -> bool {{ take_if(item, flag) }}
+fn caller(flag: *bool) {{
+    let item = core::ptr::alloc<Item>()
+    *item = Item {{ n: 1 }}
+    {body}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert_eq!(diagnostics, "", "{source}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn caller`"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn boolean_call_results_correlate_private_reinitialization() {
+    for (condition, valid) in [("initialized", true), ("!initialized", false)] {
+        let source = format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialize_if(_ item: *Item, _ flag: *bool) -> bool {{
+    if *flag {{
+        *item = Item {{ n: 1 }}
+        true
+    }} else {{
+        false
+    }}
+}}
+fn caller(flag: *bool) {{
+    let item = core::ptr::alloc<Item>()
+    *item = Item {{ n: 1 }}
+    consume(*item)
+    let initialized = initialize_if(item, flag)
+    if {condition} {{ consume(*item) }}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert_eq!(diagnostics, "", "{source}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn caller`"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn boolean_call_results_preserve_integer_predicates() {
+    for (predicate, complement) in [
+        ("index == 1", "index != 1"),
+        ("index < 4", "index >= 4"),
+        ("identity(index < 4)", "index >= 4"),
+    ] {
+        for (second, valid) in [("!predicate(index)", true), ("predicate(index)", false)] {
+            let source = format!(
+                r#"
+use std::native::ByteBuffer
+fn identity(_ flag: bool) -> bool {{ flag }}
+fn predicate(_ index: usize) -> bool {{ {predicate} }}
+fn complement(_ index: usize) -> bool {{ {complement} }}
+fn caller(buffer: own ByteBuffer, index: usize) {{
+    if predicate(index) {{ buffer.release() }}
+    if {second} {{ buffer.release() }}
+}}
+fn complementary(buffer: own ByteBuffer, index: usize) {{
+    if predicate(index) {{ buffer.release() }}
+    if complement(index) {{ buffer.release() }}
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            if valid {
+                assert_eq!(diagnostics, "", "{source}");
+            } else {
+                assert!(
+                    diagnostics.contains("move conflict in `fn caller`"),
+                    "{source}\n{diagnostics}"
+                );
+                assert!(
+                    !diagnostics.contains("move conflict in `fn complementary`"),
+                    "{source}\n{diagnostics}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn discarded_boolean_call_results_keep_argument_postconditions() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::native::ByteBuffer
+fn constrain(_ flag: bool) -> bool {
+    if !flag { assert!(false) }
+    false
+}
+fn caller(buffer: own ByteBuffer, flag: bool) {
+    let unused = constrain(flag)
+    buffer.release()
+    if !flag { buffer.release() }
+}
+"#,
+    );
+    assert_eq!(diagnostics, "");
+}
+
+#[test]
 fn discarded_scalar_call_results_keep_argument_postconditions() {
     let source = r#"
 fn constrain(_ index: usize) -> usize {
@@ -13814,6 +14008,42 @@ fn pick(_ offset: usize, _ index: usize, _ arr: [u64; 4]) -> u64 {
             "{observed:?}"
         );
     });
+}
+
+#[test]
+fn summaries_only_observe_scalar_branches_that_reach_postconditions() {
+    let source = r#"
+fn predicate(_ x: usize) -> bool { if x == 0 { true } else { false } }
+fn constant(_ x: usize) -> bool { if x == 0 { true } else { true } }
+fn constrain(_ x: usize) -> bool {
+    if x != 0 { assert!(false) }
+    true
+}
+fn write(_ x: usize, _ cells: mut [u64; 4]) -> bool {
+    if x == 0 { cells[0] = 1 }
+    false
+}
+"#;
+    for (name, unconditional, through_result) in [
+        ("predicate", false, true),
+        ("constant", false, false),
+        ("constrain", true, false),
+        ("write", true, false),
+    ] {
+        with_borrow_summary(source, name, |_db, summary| {
+            let observed = summary.observed_params.unwrap();
+            assert_eq!(
+                observed.unconditional.contains(&0),
+                unconditional,
+                "{name}: {observed:?}"
+            );
+            assert_eq!(
+                observed.through_result.contains(&0),
+                through_result,
+                "{name}: {observed:?}"
+            );
+        });
+    }
 }
 
 #[test]
