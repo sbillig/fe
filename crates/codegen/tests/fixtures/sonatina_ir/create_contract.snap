@@ -1387,7 +1387,7 @@ func inline(always) private %ptr__g03ed(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %ptr_offset(v0.i256, v1.i256) -> i256 {
+func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 

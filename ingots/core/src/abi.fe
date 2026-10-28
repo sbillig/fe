@@ -543,8 +543,10 @@ fn max_u256(a: u256, b: u256) -> u256 {
     }
 }
 
-// A frame offset lies within the frame's allocation, so it fits `usize`.
-fn ptr_offset(_ ptr: *u8, _ offset: u256) -> *u8 {
+/// `ptr` advanced by the word `offset`, which lies within `ptr`'s
+/// allocation and so fits `usize`.
+#[inline(always)]
+pub fn ptr_offset(_ ptr: *u8, _ offset: u256) -> *u8 {
     ptr::offset_bytes(ptr, word_to_usize(offset))
 }
 

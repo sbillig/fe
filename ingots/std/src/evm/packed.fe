@@ -43,7 +43,7 @@
 ///   values and Solidity's `bytes`).
 /// - No decoding counterpart: packed encoding is not self-describing,
 ///   and Solidity has none either.
-use core::abi::{Bytes, store_word}
+use core::abi::{Bytes, ptr_offset, store_word}
 use core::num::IntDowncast
 use core::ptr::{self, MemSpan}
 use core::result::Result
@@ -90,12 +90,6 @@ pub trait EncodePacked {
         ptr::copy(dest, source)
         source.len() as u256
     }
-}
-
-/// `offset` lies within the room a write was given, so it fits `usize`.
-#[inline(always)]
-fn ptr_offset(_ dest: *u8, _ offset: u256) -> *u8 {
-    ptr::offset_bytes(dest, offset.downcast_unchecked())
 }
 
 /// Reverts with `Panic(0x01)` when `width` bytes do not fit in `room`.

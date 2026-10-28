@@ -3688,7 +3688,7 @@ func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_daec(v0.objref<@lay
         return v4;
 }
 
-func private %ptr_offset(v0.i256, v1.i256) -> i256 {
+func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
