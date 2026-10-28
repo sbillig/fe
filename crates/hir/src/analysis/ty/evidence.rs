@@ -38,6 +38,118 @@ use crate::{
     hir_def::{Body, CallableDef, Func, ItemKind, scope_graph::ScopeId},
 };
 
+
+/// TEMPORARY: whether `$FE_EVIDENCE_LOG` is set.
+pub fn evlog_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FE_EVIDENCE_LOG").is_some())
+}
+
+/// TEMPORARY instrumentation: appends a line to `$FE_EVIDENCE_LOG`.
+pub fn evlog(line: impl FnOnce() -> String) {
+    if let Some(path) = std::env::var_os("FE_EVIDENCE_LOG") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let mut l = line().replace('\n', " ");
+            l.push('\n');
+            let _ = f.write_all(l.as_bytes());
+        }
+    }
+}
+
+/// TEMPORARY: why `prove` has no proof of `goal`.
+pub fn unproved_reason<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> String {
+    let flags = collect_flags(db, goal);
+    if flags.contains(TyFlags::HAS_INVALID) {
+        return "goal-invalid".into();
+    }
+    if flags.contains(TyFlags::HAS_VAR) {
+        return "goal-var".into();
+    }
+    let solve_cx = if is_closed_goal(db, goal) {
+        solve_cx.with_assumptions(PredicateListId::empty_list(db))
+    } else {
+        solve_cx
+    };
+    let resolved = match resolve_trait_impl_instance(db, solve_cx, goal) {
+        Selection::Unique(resolved) => resolved,
+        Selection::Ambiguous(_) => return "ambiguous".into(),
+        Selection::NotFound => return "notfound".into(),
+    };
+    let rflags = collect_flags(db, resolved);
+    if rflags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID) {
+        return format!("proof-var(origin={})", origin_tag(resolved.selected().origin(db)));
+    }
+    match resolved.selected().origin(db) {
+        ImplementorOrigin::Assumption => {
+            if answering_assumption(db, solve_cx, goal).is_none() {
+                "no-answering-assumption".into()
+            } else {
+                "assumption-but-none?".into()
+            }
+        }
+        ImplementorOrigin::Hir(_) => "cond-unproved".into(),
+        o => format!("other-none({})", origin_tag(o)),
+    }
+}
+
+pub fn owner_name<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> String {
+    match owner {
+        BodyOwner::Func(func, mode) => {
+            let name = func.name(db).to_opt().map_or("?".to_string(), |n| n.data(db).to_string());
+            let parent = match func.scope().parent_item(db) {
+                Some(ItemKind::ImplTrait(i)) => format!(
+                    "impl[{}]::",
+                    lower_impl_trait(db, i)
+                        .map_or("?".into(), |imp| imp.trait_inst(db).pretty_print(db, true)),
+                ),
+                Some(ItemKind::Trait(t)) => format!(
+                    "trait {}::",
+                    t.name(db).to_opt().map_or("?".into(), |n| n.data(db).to_string())
+                ),
+                Some(ItemKind::Impl(_)) => "impl::".into(),
+                _ => String::new(),
+            };
+            let ingot = func.top_mod(db).ingot(db).kind(db);
+            format!("{parent}{name}[{mode:?}]@{ingot:?}")
+        }
+        BodyOwner::AnonConstBody { .. } => "anon-const".into(),
+        BodyOwner::Const(_) => "const".into(),
+        BodyOwner::ContractInit { .. } => "contract-init".into(),
+        BodyOwner::ContractRecvArm { .. } => "recv-arm".into(),
+        BodyOwner::Closure { .. } => "closure".into(),
+    }
+}
+
+pub fn origin_tag(o: ImplementorOrigin<'_>) -> &'static str {
+    match o {
+        ImplementorOrigin::Hir(_) => "hir",
+        ImplementorOrigin::VirtualContract(_) => "contract",
+        ImplementorOrigin::Assumption => "assumption",
+        ImplementorOrigin::Callable => "callable",
+        ImplementorOrigin::Structural => "structural",
+    }
+}
+
+pub fn ev_kind<'db>(db: &'db dyn HirAnalysisDb, e: Option<EvidenceId<'db>>) -> &'static str {
+    match e {
+        None => "none",
+        Some(e) => match e.data(db) {
+            Evidence::Assumption(_) => "assumption",
+            Evidence::Impl { .. } if e.is_closed(db) => "impl-closed",
+            Evidence::Impl { .. } => "impl-open",
+        },
+    }
+}
+
+fn is_impl<'db>(db: &'db dyn HirAnalysisDb, e: Option<EvidenceId<'db>>) -> bool {
+    e.is_some_and(|e| matches!(e.data(db), Evidence::Impl { .. }))
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct EvidenceId<'db> {
@@ -320,7 +432,13 @@ pub(crate) fn declared_bound_evidence<'db>(
                     .iter()
                     .position(|&assumption| assumption == goal)
                 {
-                    Some(index) => Some(EvidenceId::new(db, Evidence::Assumption(index as u32))),
+                    Some(index) => {
+                        if evlog_enabled() {
+                        let alt = prove(db, solve_cx, goal);
+                        evlog(|| format!("E3 declared-shortcut alt={}{}", ev_kind(db, alt), if is_impl(db, alt) { format!(" goal={}", goal.pretty_print(db, true)) } else { String::new() }));
+                        }
+                        Some(EvidenceId::new(db, Evidence::Assumption(index as u32)))
+                    }
                     None => prove(db, solve_cx, goal),
                 }
             })
@@ -412,6 +530,7 @@ pub(crate) fn instantiated_selection<'db>(
             Some(ResolvedImplInstance::new(*selected, instantiated, goal()))
         }
         Some(Evidence::Assumption(_)) if is_closed_goal(db, inst) => {
+            evlog(|| format!("E2 sel-closed-assumption-arm goal={}", inst.pretty_print(db, true)));
             instantiated_selection(db, prove(db, solve_cx, inst), solve_cx, inst)
         }
         // As selection answers a goal by an assumption.
@@ -420,7 +539,10 @@ pub(crate) fn instantiated_selection<'db>(
             let assumption = ImplementorId::assumption(db, goal);
             Some(ResolvedImplInstance::new(assumption, assumption, goal))
         }
-        None => match resolve_trait_impl_instance(db, solve_cx, inst) {
+        None => match {
+            evlog(|| format!("E2 sel-fallback-none-arm goal={}", inst.pretty_print(db, true)));
+            resolve_trait_impl_instance(db, solve_cx, inst)
+        } {
             Selection::Unique(resolved) => Some(resolved),
             Selection::Ambiguous(_) | Selection::NotFound => None,
         },
@@ -533,6 +655,10 @@ fn basis_proofs<'db>(
                 return None;
             }
             if let Some(index) = basis.list(db).iter().position(|&pred| pred == goal) {
+                if evlog_enabled() {
+                let alt = prove(db, solve_cx, goal);
+                evlog(|| format!("E3 basis-shortcut alt={}{}", ev_kind(db, alt), if is_impl(db, alt) { format!(" goal={}", goal.pretty_print(db, true)) } else { String::new() }));
+                }
                 return Some(assumption(index));
             }
             prove(db, solve_cx, goal)?.rebase(db, to_basis())

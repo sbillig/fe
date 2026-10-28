@@ -4807,6 +4807,48 @@ impl<'db> TypedBody<'db> {
         Arc::make_mut(&mut self.tables)
     }
 
+    /// TEMPORARY: each call's goal, in table order.
+    pub(crate) fn call_goal_snapshot(&self) -> Vec<Option<TraitInstId<'db>>> {
+        let mut out: Vec<_> = self
+            .tables
+            .semantic_expr_lowering
+            .values()
+            .flatten()
+            .map(|lowering| match lowering {
+                SemanticExprLowering::Call { callable }
+                | SemanticExprLowering::CodeRegionIntrinsic { callable, .. }
+                | SemanticExprLowering::ConstIntrinsic { callable, .. } => callable.trait_inst(),
+            })
+            .collect();
+        for plan in self.tables.for_loop_plans.values().flatten() {
+            for call in &plan.calls {
+                out.push(call.callable.trait_inst());
+            }
+        }
+        out
+    }
+
+    /// TEMPORARY: each call's proof, in table order.
+    pub(crate) fn call_evidence_snapshot(&self) -> Vec<Option<EvidenceId<'db>>> {
+        let mut out: Vec<_> = self
+            .tables
+            .semantic_expr_lowering
+            .values()
+            .flatten()
+            .map(|lowering| match lowering {
+                SemanticExprLowering::Call { callable }
+                | SemanticExprLowering::CodeRegionIntrinsic { callable, .. }
+                | SemanticExprLowering::ConstIntrinsic { callable, .. } => callable.evidence(),
+            })
+            .collect();
+        for plan in self.tables.for_loop_plans.values().flatten() {
+            for call in &plan.calls {
+                out.push(call.callable.evidence());
+            }
+        }
+        out
+    }
+
     /// Replaces the assumptions the body's evidence names with `bound`'s
     /// proofs of them: an instance's own.
     pub(crate) fn bind_evidence(&mut self, db: &'db dyn HirAnalysisDb, bound: EvidenceList<'db>) {

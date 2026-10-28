@@ -1098,6 +1098,18 @@ fn semantic_callee_key_with_assumptions<'db>(
     // assumptions that body is checked under; an implementation's method
     // receives them from the selection's proofs of the implementation's
     // conditions and the call's proofs of the trait method's.
+    {
+        use crate::analysis::ty::evidence::{ev_kind, evlog};
+        if callable.bound_evidence().is_none()
+            && matches!(callable.evidence().map(|e| e.data(db)), Some(Evidence::Impl { .. }))
+            && body_func != nominal_func
+        {
+            evlog(|| format!("E4 method-impl-without-bound-evidence nominal={:?}", nominal_func.name(db).to_opt().map(|n| n.data(db).to_string())));
+        }
+        if callable.trait_inst().is_some() {
+            evlog(|| format!("E2 instance-call evidence={}", ev_kind(db, callable.evidence())));
+        }
+    }
     let subst = GenericSubst::for_owner(db, body_func.into(), subst_args);
     let evidence = match (callable.bound_evidence(), callable.evidence()) {
         (Some(bound), _) if body_func == nominal_func => bound,

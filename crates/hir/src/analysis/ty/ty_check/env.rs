@@ -1481,20 +1481,60 @@ impl<'db> TyCheckEnv<'db> {
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
+        let db = self.db;
+        let owner = self.owner;
+        let log_call = |callable: &super::Callable<'db>, site: &str| {
+            if let Some(inst) = callable.trait_inst() {
+                if callable.evidence().is_none() {
+                    crate::analysis::ty::evidence::evlog(|| {
+                        format!(
+                            "E1 {site} reason={} callee={:?} goal={} owner={:?}",
+                            crate::analysis::ty::evidence::unproved_reason(db, solve_cx, inst),
+                            callable.callable_def().name(db).map(|n| n.data(db).to_string()),
+                            inst.pretty_print(db, true),
+                            crate::analysis::ty::evidence::owner_name(db, owner),
+                        )
+                    });
+                } else {
+                    crate::analysis::ty::evidence::evlog(|| format!("E1 {site} proved={}", crate::analysis::ty::evidence::ev_kind(db, callable.evidence())));
+                }
+                // E3: impl-first although the goal is literally assumed.
+                if crate::analysis::ty::evidence::evlog_enabled() && matches!(callable.evidence().map(|e| e.data(db)), Some(crate::analysis::ty::evidence::Evidence::Impl { .. }))
+                    && solve_cx.assumptions().extend_all_bounds(db).list(db).contains(&inst)
+                {
+                    crate::analysis::ty::evidence::evlog(|| format!("E3 record-impl-first-though-assumed goal={} owner={}", inst.pretty_print(db, true), crate::analysis::ty::evidence::owner_name(db, owner)));
+                }
+            }
+        };
         for lowering in self.semantic_expr_lowering.values_mut().flatten() {
             let callable = lowering.callable_mut();
             callable.record_evidence(self.db, solve_cx);
             callable.record_bound_evidence(self.db, solve_cx);
+            log_call(callable, "call");
         }
         for plan in self.for_loop_plans.values_mut().flatten() {
             for call in &mut plan.calls {
                 call.callable.record_evidence(self.db, solve_cx);
                 call.callable.record_bound_evidence(self.db, solve_cx);
+                log_call(&call.callable, "forloop");
             }
         }
         for const_ref in self.const_refs.values_mut().flatten() {
             if let ConstRef::TraitConst { use_, evidence, .. } = const_ref {
                 *evidence = prove(self.db, use_.solve_cx(self.db), use_.inst());
+                let (use_, evidence) = (*use_, *evidence);
+                if evidence.is_none() {
+                    crate::analysis::ty::evidence::evlog(|| {
+                        format!(
+                            "E1 const reason={} goal={} owner={:?}",
+                            crate::analysis::ty::evidence::unproved_reason(db, use_.solve_cx(db), use_.inst()),
+                            use_.inst().pretty_print(db, true),
+                            crate::analysis::ty::evidence::owner_name(db, owner),
+                        )
+                    });
+                } else {
+                    crate::analysis::ty::evidence::evlog(|| format!("E1 const proved={}", crate::analysis::ty::evidence::ev_kind(db, evidence)));
+                }
             }
             const_ref.record_bound_evidence(self.db);
         }

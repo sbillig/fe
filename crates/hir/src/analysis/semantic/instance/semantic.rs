@@ -297,6 +297,68 @@ pub fn instantiated_typed_body<'db>(
         key.evidence(db),
         TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
     );
+    if crate::analysis::ty::evidence::evlog_enabled() {
+        use crate::analysis::ty::evidence::{Evidence, ev_kind, evlog};
+        let symbolic = !is_ground(collect_flags(db, key.subst(db).generic_args(db)));
+        let entries = key.evidence(db).entries(db);
+        if entries.is_empty() {
+            evlog(|| format!("E2 key evidence=empty symbolic={symbolic}"));
+        } else {
+            evlog(|| format!("E2 key evidence=nonempty symbolic={symbolic} n={}", entries.len()));
+            for entry in entries {
+                evlog(|| format!("E2 key-entry kind={}", ev_kind(db, *entry)));
+                if let Some(e) = entry
+                    && !e.is_closed(db)
+                {
+                    evlog(|| format!("E5 key-entry-has-assumption-leaf top={} symbolic={symbolic}", matches!(e.data(db), Evidence::Assumption(_))));
+                }
+            }
+        }
+        // Counterfactual: the instance with no caller-supplied proofs.
+        if !entries.is_empty() {
+            let without = instance_evidence(
+                db,
+                body.signature(),
+                EvidenceList::none(db),
+                TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
+            );
+            let mut with_body = body.clone();
+            with_body.bind_evidence(db, evidence);
+            let mut without_body = body.clone();
+            without_body.bind_evidence(db, without);
+            let goals = body.call_goal_snapshot();
+            for ((w, wo), goal) in with_body
+                .call_evidence_snapshot()
+                .iter()
+                .zip(without_body.call_evidence_snapshot().iter())
+                .zip(goals.iter())
+            {
+                let is_impl = |e: &Option<crate::analysis::ty::evidence::EvidenceId<'db>>| {
+                    e.is_some_and(|e| matches!(e.data(db), Evidence::Impl { .. }))
+                };
+                let tag = match (is_impl(w), is_impl(wo)) {
+                    (true, false) => "caller-evidence-makes-impl",
+                    (false, true) => "caller-evidence-makes-bound",
+                    _ if w != wo => "caller-evidence-same-kind-different-proof",
+                    _ => "caller-evidence-no-effect",
+                };
+                evlog(|| format!("E2cf {tag}{}", if tag == "caller-evidence-makes-impl" { format!(" owner={} goal={}", crate::analysis::ty::evidence::owner_name(db, key.owner(db)), goal.map_or("?".into(), |g| g.pretty_print(db, true))) } else { String::new() }));
+            }
+        }
+        let before = body.call_evidence_snapshot();
+        let mut after_body = body.clone();
+        after_body.bind_evidence(db, evidence);
+        let after = after_body.call_evidence_snapshot();
+        for (b, a) in before.iter().zip(after.iter()) {
+            if b != a {
+                evlog(|| format!("E2 bind-changed {}->{} symbolic={symbolic}", ev_kind(db, *b), ev_kind(db, *a)));
+            } else if let Some(e) = b
+                && matches!(e.data(db), Evidence::Assumption(_))
+            {
+                evlog(|| format!("E2 bind-unchanged-assumption symbolic={symbolic}"));
+            }
+        }
+    }
     body.bind_evidence(db, evidence);
     // A body's row provider parameters are the providers its call binds.
     let owner = match key.owner(db) {
