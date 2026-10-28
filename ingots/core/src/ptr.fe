@@ -448,6 +448,24 @@ impl<T> MemVec<T> {
         }
     }
 
+    /// Append `value` without checking the capacity, which must have room
+    /// for it, such as a stack that reserves its limit up front.
+    pub unsafe fn push_unchecked(mut self, _ value: own T) {
+        *elem(self.ptr, self.len) = value
+        self.len = self.len.wrapping_add(1)
+    }
+
+    /// The element at `index`, which the caller ensures is below `len()`.
+    pub unsafe fn get_unchecked(mut? self, _ index: usize) -> mut? T {
+        mut? *elem(self.ptr, index)
+    }
+
+    /// Replaces the element at `index`, which the caller ensures is below
+    /// `len()`, with `value`.
+    pub unsafe fn set_unchecked(mut self, _ index: usize, _ value: own T) {
+        *elem(self.ptr, index) = value
+    }
+
     /// As `push`, or `value` back when growing the allocation fails.
     pub fn try_push(mut self, _ value: own T) -> Result<T, ()> {
         if self.len == self.capacity && !self.try_grow(1) {
@@ -479,12 +497,23 @@ impl<T> MemVec<T> {
         if len > self.len {
             index_out_of_bounds()
         }
+        unsafe { self.truncate_unchecked(len) }
+    }
+
+    /// As `truncate`, without the check: the caller ensures `len` is at most
+    /// `len()`.
+    pub unsafe fn truncate_unchecked(mut self, _ len: usize) {
         let end = self.len
         // The elements past `len` leave the vector before they are destroyed.
-        unsafe {
-            self.len = len
-            drop_range(self.ptr, start: len, end)
-        }
+        self.len = len
+        drop_range(self.ptr, start: len, end)
+    }
+
+    /// Sets the length without initializing or destroying elements: the
+    /// caller ensures `len` is at most `capacity()` with the first `len`
+    /// elements initialized, and forgets any past it.
+    pub unsafe fn set_len(mut self, _ len: usize) {
+        self.len = len
     }
 
     /// Destroys every element, keeping the allocation.
@@ -760,6 +789,18 @@ impl MemSlice<u8> {
     /// as a big-endian integer. Reverts unless all of them lie in the span.
     pub fn read_be<T: IntWord>(self, _ offset: usize) -> T {
         from_be(unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) })
+    }
+
+    /// As `read_be`, without the bounds check: the caller ensures all
+    /// `size_of<T>()` bytes from `offset` on lie in the span.
+    pub unsafe fn read_be_unchecked<T: IntWord>(self, _ offset: usize) -> T {
+        from_be(*cast<u8, T>(offset_bytes(self.ptr, offset)))
+    }
+
+    /// As `write_be`, without the bounds check: the caller ensures all
+    /// `size_of<T>()` bytes from `offset` on lie in the span.
+    pub unsafe fn write_be_unchecked<T: IntWord>(mut self, offset: usize, value: T) {
+        *cast<u8, T>(offset_bytes(self.ptr, offset)) = to_be(value)
     }
 
     /// As `read_be`, reading the bytes little-endian.
