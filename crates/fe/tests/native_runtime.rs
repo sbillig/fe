@@ -1423,31 +1423,86 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_extern_declarations_cannot_claim_runtime_symbols() {
+fn native_extern_declarations_share_runtime_imports() {
     let temp = tempdir().unwrap();
-    for symbol in ["malloc", "free", "write", "__fe_revert"] {
-        let source = temp.path().join(format!("{symbol}.fe"));
+    let source = temp.path().join("shared.fe");
+    // The runtime's allocation, copy, release and panic report call the same
+    // C functions as these declarations.
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+extern {
+    fn malloc(_ size: usize) -> *u8
+    fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8
+    fn free(_ ptr: *u8)
+    fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize
+}
+pub fn main() -> i32 {
+    let text = unsafe { malloc(3) }
+    let copy = ptr::try_alloc_bytes(3).unwrap()
+    unsafe {
+        *text = 104
+        *ptr::offset_bytes(text, 1) = 105
+        *ptr::offset_bytes(text, 2) = 10
+        ptr::copy_raw(dest: copy, source: text, len: 3)
+        let _ = memmove(text, copy, 3)
+        let _ = write(2, copy, 3)
+        free(text)
+        ptr::dealloc(copy)
+    }
+    core::panic()
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("shared")).output().unwrap();
+        assert_eq!(
+            result.status.signal(),
+            Some(libc::SIGABRT),
+            "O{level}: {result:?}"
+        );
+        assert_eq!(result.stderr, b"hi\npanicked\n", "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_extern_declarations_must_match_runtime_imports() {
+    let temp = tempdir().unwrap();
+    for (name, declaration, call, error) in [
+        (
+            "write",
+            "fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize",
+            "write(2, core::ptr::alloc_bytes(1), 0)",
+            "native code calls the C library's `write`, so an `extern` declaration of it must be `fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize`",
+        ),
+        (
+            "__fe_revert",
+            "fn __fe_revert(_ data: *u8, _ len: usize)",
+            "__fe_revert(core::ptr::alloc_bytes(1), 0)",
+            "extern symbol `__fe_revert` is reserved: symbols starting with `__fe_` are the compiler's",
+        ),
+    ] {
+        let source = temp.path().join(format!("{name}.fe"));
         fs::write(
             &source,
             format!(
-                "extern {{\n    fn {symbol}(_ value: i64) -> i64\n}}\npub fn main() -> i32 {{\n    let _ = unsafe {{ {symbol}(1) }}\n    0\n}}\n"
+                "extern {{\n    {declaration}\n}}\npub fn main() -> i32 {{\n    let _ = unsafe {{ {call} }}\n    core::panic()\n}}\n"
             ),
         )
         .unwrap();
         let result = Command::new(env!("CARGO_BIN_EXE_fe"))
             .args(["build", "--backend", "native", "--out-dir"])
-            .arg(temp.path().join(format!("out-{symbol}")))
+            .arg(temp.path().join(format!("out-{name}")))
             .arg(&source)
             .output()
             .unwrap();
         let output = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success(), "{result:?}");
-        assert!(
-            output.contains(&format!(
-                "native extern symbol `{symbol}` is reserved for the native runtime"
-            )),
-            "{output}"
-        );
+        assert!(output.contains(error), "{output}");
     }
 }
 

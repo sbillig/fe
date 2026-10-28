@@ -45,7 +45,7 @@ use crate::{
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 #[test]
-fn native_extern_cannot_claim_the_memory_copy_symbol() {
+fn native_extern_must_match_the_memory_copy_import() {
     let mut db = DriverDataBase::default();
     db.compilation_settings()
         .set_target(&mut db)
@@ -74,7 +74,8 @@ pub fn main() -> i32 {
         .copied()
         .find(|function| function.linkage(&db) == RuntimeLinkage::External)
         .expect("reachable host import");
-    // Model a fixed host import claiming the symbol reserved by native copy lowering.
+    // Model a host import of `memmove` with another signature than the one
+    // native copies call.
     let isa = crate::sonatina::create_native_isa().unwrap();
     let mut lowerer = ModuleLowerer::new(
         &db,
@@ -85,13 +86,15 @@ pub fn main() -> i32 {
         NativePanics::Abort,
     )
     .unwrap();
+    lowerer.declare_functions().unwrap();
+    lowerer.lower_const_regions().unwrap();
     let error = lowerer
-        .declare_functions()
-        .expect_err("extern memmove must not collide with the memory-copy host symbol");
+        .lower_bodies()
+        .expect_err("a mismatched extern memmove must not share the copy import");
     assert!(
-        error
-            .to_string()
-            .contains("native extern symbol `memmove` is reserved for the native runtime"),
+        error.to_string().contains(
+            "native code calls the C library's `memmove`, so an `extern` declaration of it must be"
+        ),
         "unexpected error: {error}"
     );
 }

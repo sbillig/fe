@@ -18,7 +18,11 @@ use sonatina_ir::{
     module::FuncRef,
 };
 
-use super::{LoweringInstSet, ModuleLowerer};
+use super::{HostFunction, LowerError, LoweringInstSet, ModuleLowerer};
+
+/// The prefix of the symbols the compiler defines, which `extern` blocks
+/// cannot declare.
+pub(super) const COMPILER_SYMBOL_PREFIX: &str = "__fe_";
 
 /// How native code ends at a panic or a revert. The EVM ignores it, and only
 /// the `cranelift` feature compiles native code.
@@ -47,7 +51,9 @@ pub(super) enum NativePanic {
 }
 
 impl NativePanic {
-    fn symbol(self) -> &'static str {
+    pub(super) const ALL: [Self; 3] = [Self::Trap, Self::Revert, Self::Code];
+
+    pub(super) fn symbol(self) -> &'static str {
         match self {
             Self::Trap => "__fe_trap",
             Self::Revert => "__fe_revert",
@@ -100,7 +106,7 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
     }
 
     /// Defines the panic functions that the module's bodies call.
-    pub(super) fn define_native_panic_functions(&mut self) {
+    pub(super) fn define_native_panic_functions(&mut self) -> Result<(), LowerError> {
         // `__fe_panic_code` calls `__fe_revert`, so it is defined first.
         for panic in [NativePanic::Code, NativePanic::Trap, NativePanic::Revert] {
             let Some(func) = self.builder.lookup_func(panic.symbol()) else {
@@ -120,15 +126,16 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
                     self.define_panic_code(&mut fb, revert);
                 }
                 NativePanic::Trap => {
-                    let mut report = Report::new(&mut fb, self.inst_set);
+                    let mut report = Report::new(&mut fb, self)?;
                     report.text(b"panicked\n");
                     report.abort();
                 }
-                NativePanic::Revert => self.define_revert(&mut fb),
+                NativePanic::Revert => self.define_revert(&mut fb)?,
             }
             fb.seal_all();
             fb.finish();
         }
+        Ok(())
     }
 
     /// `__fe_panic_code(code)` passes `Panic(code)` data to `__fe_revert`.
@@ -154,11 +161,11 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
 
     /// `__fe_revert(data, len)` reports `Panic(uint256)` data by its code's
     /// reason, `Error(string)` data by its message, and other data in hex.
-    fn define_revert(&self, fb: &mut FunctionBuilder<InstInserter>) {
+    fn define_revert(&self, fb: &mut FunctionBuilder<InstInserter>) -> Result<(), LowerError> {
         let inst_set = self.inst_set;
         let [data, len] = [fb.func.arg_values[0], fb.func.arg_values[1]];
         let data = fb.insert_inst(PtrToInt::new(inst_set, data, Type::I64), Type::I64);
-        let mut report = Report::new(fb, inst_set);
+        let mut report = Report::new(fb, self)?;
         let [
             has_selector,
             panic_data,
@@ -275,6 +282,7 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
         report.hex(data, len);
         report.text(b"\n");
         report.abort();
+        Ok(())
     }
 }
 
@@ -291,27 +299,16 @@ struct Report<'a, I: 'static> {
 impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
     /// Flushes the C streams, so that the report follows the output before
     /// the panic, and allocates the text buffer.
-    fn new(fb: &'a mut FunctionBuilder<InstInserter>, inst_set: &'static I) -> Self {
+    fn new(
+        fb: &'a mut FunctionBuilder<InstInserter>,
+        module: &ModuleLowerer<'_, '_, I>,
+    ) -> Result<Self, LowerError> {
+        let inst_set = module.inst_set;
+        let fflush = module.host_function(HostFunction::Fflush)?;
+        let write = module.host_function(HostFunction::Write)?;
+        let abort = module.host_function(HostFunction::Abort)?;
+        // A null stream flushes them all.
         let pointer = fb.ptr_type(Type::I8);
-        let host = |fb: &mut FunctionBuilder<InstInserter>, signature| {
-            fb.module_builder
-                .declare_function(signature)
-                .expect("native runtime symbols are reserved")
-        };
-        let fflush = host(
-            fb,
-            Signature::new_single("fflush", Linkage::External, &[pointer], Type::I32),
-        );
-        let write = host(
-            fb,
-            Signature::new_single(
-                "write",
-                Linkage::External,
-                &[Type::I32, pointer, Type::I64],
-                Type::I64,
-            ),
-        );
-        let abort = host(fb, Signature::new_unit("abort", Linkage::External, &[]));
         let null = fb.make_imm_value(0i64);
         let null = fb.insert_inst(IntToPtr::new(inst_set, null, pointer), pointer);
         fb.insert_inst(Call::new(inst_set, fflush, smallvec![null]), Type::I32);
@@ -319,13 +316,13 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
         let buffer_ptr_ty = fb.ptr_type(buffer_ty);
         let buffer = fb.insert_inst(Alloca::new(inst_set, buffer_ty), buffer_ptr_ty);
         let buffer = fb.insert_inst(PtrToInt::new(inst_set, buffer, Type::I64), Type::I64);
-        Self {
+        Ok(Self {
             fb,
             inst_set,
             buffer,
             write,
             abort,
-        }
+        })
     }
 
     fn text(&mut self, text: &[u8]) {

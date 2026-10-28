@@ -5,8 +5,8 @@ mod native_panic;
 mod tests;
 
 use memory_reference::{MemoryReference, ReferentLayout};
-use native_panic::NativePanic;
 pub(super) use native_panic::NativePanics;
+use native_panic::{COMPILER_SYMBOL_PREFIX, NativePanic};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -82,19 +82,51 @@ use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
 // Sonatina's EVM calling convention can carry at most 16 arguments.
 const MAX_DIRECT_CALL_ARGS: usize = 16;
 
-// Host C functions that native core memory operations and panics call, and
-// the functions panics call. Fe items cannot claim these symbols.
-const HOST_SYMBOLS: &[&str] = &[
-    "memmove",
-    "malloc",
-    "free",
-    "fflush",
-    "write",
-    "abort",
-    "__fe_trap",
-    "__fe_revert",
-    "__fe_panic_code",
-];
+/// A C library function native code calls. A Fe `extern` declaration of the
+/// same symbol shares its import, so it must declare the same signature.
+#[derive(Clone, Copy)]
+enum HostFunction {
+    Malloc,
+    Free,
+    Memmove,
+    Write,
+    Fflush,
+    Abort,
+}
+
+impl HostFunction {
+    const ALL: [Self; 6] = [
+        Self::Malloc,
+        Self::Free,
+        Self::Memmove,
+        Self::Write,
+        Self::Fflush,
+        Self::Abort,
+    ];
+
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::Malloc => "malloc",
+            Self::Free => "free",
+            Self::Memmove => "memmove",
+            Self::Write => "write",
+            Self::Fflush => "fflush",
+            Self::Abort => "abort",
+        }
+    }
+
+    /// The Fe declaration whose import native code shares.
+    fn declaration(self) -> &'static str {
+        match self {
+            Self::Malloc => "fn malloc(_ size: usize) -> *u8",
+            Self::Free => "fn free(_ ptr: *u8)",
+            Self::Memmove => "fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8",
+            Self::Write => "fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize",
+            Self::Fflush => "fn fflush(_ stream: *u8) -> i32",
+            Self::Abort => "fn abort()",
+        }
+    }
+}
 
 // The native address of every zero-size allocation, which takes nothing from
 // the host. It is aligned for any value and lies in the unmapped first page,
@@ -248,7 +280,7 @@ where
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
-    lowerer.define_native_panic_functions();
+    lowerer.define_native_panic_functions()?;
     if declare_objects {
         lowerer.declare_objects()?;
     }
@@ -307,7 +339,15 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 db,
                 package,
                 fixed_symbol,
-                if native { HOST_SYMBOLS } else { &[] },
+                &if native {
+                    HostFunction::ALL
+                        .map(HostFunction::symbol)
+                        .into_iter()
+                        .chain(NativePanic::ALL.map(NativePanic::symbol))
+                        .collect()
+                } else {
+                    Vec::new()
+                },
             ),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
@@ -341,6 +381,33 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn is_native_target(&self) -> bool {
         is_native_architecture(self.builder.ctx.triple.architecture)
+    }
+
+    /// Declares the C library's `host`, sharing the import with a Fe `extern`
+    /// declaration of the same symbol. As in a Fe `extern`, a pointer is an
+    /// `*i8` and a `usize` or `isize` an address-wide integer.
+    fn host_function(&self, host: HostFunction) -> Result<FuncRef, LowerError> {
+        let pointer = self.builder.ptr_type(Type::I8);
+        let size = self.address_ty(AddressSpace::Memory);
+        let (args, ret) = match host {
+            HostFunction::Malloc => (vec![size], Some(pointer)),
+            HostFunction::Free => (vec![pointer], None),
+            HostFunction::Memmove => (vec![pointer, pointer, size], Some(pointer)),
+            HostFunction::Write => (vec![Type::I32, pointer, size], Some(size)),
+            HostFunction::Fflush => (vec![pointer], Some(Type::I32)),
+            HostFunction::Abort => (vec![], None),
+        };
+        let signature = match ret {
+            Some(ret) => Signature::new_single(host.symbol(), Linkage::External, &args, ret),
+            None => Signature::new_unit(host.symbol(), Linkage::External, &args),
+        };
+        self.builder.declare_function(signature).map_err(|_| {
+            LowerError::Unsupported(format!(
+                "native code calls the C library's `{}`, so an `extern` declaration of it must be `{}`",
+                host.symbol(),
+                host.declaration(),
+            ))
+        })
     }
 
     /// An address in `space`: the backend's pointer integer for memory, as
@@ -392,12 +459,11 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let instance = function.instance(self.db);
         let (mut args, ret) = self.signature_tys(instance)?;
         let symbol = self.function_symbol(instance);
-        if self.is_native_target()
-            && function.linkage(self.db) == RuntimeLinkage::External
-            && HOST_SYMBOLS.contains(&symbol.as_str())
+        if function.linkage(self.db) == RuntimeLinkage::External
+            && symbol.starts_with(COMPILER_SYMBOL_PREFIX)
         {
             return Err(LowerError::Unsupported(format!(
-                "native extern symbol `{symbol}` is reserved for the native runtime"
+                "extern symbol `{symbol}` is reserved: symbols starting with `{COMPILER_SYMBOL_PREFIX}` are the compiler's"
             )));
         }
         if function.linkage(self.db) == RuntimeLinkage::External
@@ -2095,16 +2161,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         Ok(Lowered::Value(value))
     }
 
-    fn host_function(&mut self, signature: Signature) -> Result<FuncRef, LowerError> {
-        let name = signature.name().to_string();
-        self.module
-            .builder
-            .declare_function(signature)
-            .map_err(|error| {
-                LowerError::Internal(format!("failed to declare native `{name}`: {error}"))
-            })
-    }
-
     fn allocate_bytes(&mut self, size: ValueId, pointee: Type) -> Result<ValueId, LowerError> {
         let ptr_ty = self.fb.ptr_type(pointee);
         Ok(if self.module.is_native_target() {
@@ -2144,14 +2200,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst_no_result(Br::new(inst_set, is_empty, done, allocate));
         self.fb.switch_to_block(allocate);
         let allocated = if fallible {
-            let malloc = self.host_function(Signature::new_single(
-                "malloc",
-                Linkage::External,
-                &[Type::I64],
-                pointer,
-            ))?;
-            // Callers bound the size to 64 bits.
-            let size = self.coerce_value_to_ty(size, Type::I64)?;
+            let malloc = self.module.host_function(HostFunction::Malloc)?;
+            // Callers bound the size to the address width.
+            let size =
+                self.coerce_value_to_ty(size, self.module.address_ty(AddressSpace::Memory))?;
             self.fb
                 .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer)
         } else {
@@ -2296,15 +2348,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         self.emit_empty_revert(invalid)?;
                     }
                     let pointer = self.fb.ptr_type(Type::I8);
-                    let memmove = self.host_function(Signature::new_single(
-                        "memmove",
-                        Linkage::External,
-                        &[pointer, pointer, Type::I64],
-                        pointer,
-                    ))?;
+                    let memmove = self.module.host_function(HostFunction::Memmove)?;
                     let dst = self.coerce_value_to_ty(dst, pointer)?;
                     let src = self.coerce_value_to_ty(src, pointer)?;
-                    let len = self.coerce_value_to_ty(len, Type::I64)?;
+                    let len =
+                        self.coerce_value_to_ty(len, self.module.address_ty(AddressSpace::Memory))?;
                     self.fb.insert_inst(
                         Call::new(self.module.inst_set(), memmove, smallvec![dst, src, len]),
                         pointer,
@@ -2680,12 +2728,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 // EVM memory is never reclaimed.
                 if self.module.is_native_target() {
                     let inst_set = self.module.inst_set();
-                    let pointer = self.fb.ptr_type(Type::I8);
-                    let free = self.host_function(Signature::new_unit(
-                        "free",
-                        Linkage::External,
-                        &[pointer],
-                    ))?;
+                    let free = self.module.host_function(HostFunction::Free)?;
                     let ptr = self.local_value(*ptr)?;
                     // A zero-size allocation took nothing from the host.
                     let address = self.coerce_value_to_ty(ptr, Type::I64)?;
@@ -2698,6 +2741,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     self.fb
                         .insert_inst_no_result(Br::new(inst_set, is_empty, done, release));
                     self.fb.switch_to_block(release);
+                    let pointer = self.fb.ptr_type(Type::I8);
                     let ptr = self.coerce_value_to_ty(ptr, pointer)?;
                     self.fb
                         .insert_inst_no_result(Call::new(inst_set, free, smallvec![ptr]));
