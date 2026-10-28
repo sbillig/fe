@@ -13,7 +13,7 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt},
         control_flow::{Br, BrTable, Call, Jump, Phi, Unreachable},
         data::{Alloca, Mload, Mstore},
-        logic::{And, Bswap},
+        logic::{And, Bswap, Or},
     },
     module::FuncRef,
 };
@@ -176,10 +176,11 @@ impl<I: LoweringInstSet + 'static> ModuleLowerer<'_, '_, I> {
         ] = [(); 6].map(|_| report.fb.append_block());
         let [error_message, other, empty, hex] = [(); 4].map(|_| report.fb.append_block());
 
-        let four = report.fb.make_imm_value(3i64);
+        // Data of four bytes or more starts with a selector.
+        let three = report.fb.make_imm_value(3i64);
         let long_enough = report
             .fb
-            .insert_inst(Gt::new(inst_set, len, four), Type::I1);
+            .insert_inst(Gt::new(inst_set, len, three), Type::I1);
         report.branch(long_enough, has_selector, other);
 
         report.fb.switch_to_block(has_selector);
@@ -355,11 +356,12 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
         );
     }
 
-    /// Writes the `len` bytes at `data` as lowercase hex digits.
+    /// Writes the `len` bytes at `data` as lowercase hex digits, a full text
+    /// buffer at a time.
     fn hex(&mut self, data: ValueId, len: ValueId) {
         let inst_set = self.inst_set;
         let entry = self.fb.current_block().expect("a report is in a block");
-        let [header, body, done] = [(); 3].map(|_| self.fb.append_block());
+        let [header, body, flush, latch, done] = [(); 5].map(|_| self.fb.append_block());
         let zero = self.fb.make_imm_value(0i64);
         self.fb.insert_inst_no_result(Jump::new(inst_set, header));
 
@@ -385,19 +387,47 @@ impl<'a, I: LoweringInstSet + 'static> Report<'a, I> {
         let low = self
             .fb
             .insert_inst(And::new(inst_set, byte, mask), Type::I8);
+        // The byte's two digits go at twice its place among the buffer's bytes.
+        let last_slot = self.fb.make_imm_value(TEXT_BUFFER_BYTES as i64 / 2 - 1);
+        let slot = self
+            .fb
+            .insert_inst(And::new(inst_set, index, last_slot), Type::I64);
+        let two = self.fb.make_imm_value(2i64);
+        let digits = self
+            .fb
+            .insert_inst(Mul::new(inst_set, slot, two), Type::I64);
+        let digits = self
+            .fb
+            .insert_inst(Add::new(inst_set, self.buffer, digits), Type::I64);
         for (position, nibble) in [high, low].into_iter().enumerate() {
             let digit = self.hex_digit(nibble);
-            let address = offset(self.fb, inst_set, self.buffer, position as i64);
+            let address = offset(self.fb, inst_set, digits, position as i64);
             self.fb
                 .insert_inst_no_result(Mstore::new(inst_set, address, digit, Type::I8));
         }
-        let two = self.fb.make_imm_value(2i64);
-        self.write(self.buffer, two);
         let one = self.fb.make_imm_value(1i64);
         let next = self
             .fb
             .insert_inst(Add::new(inst_set, index, one), Type::I64);
-        let latch = self.fb.current_block().expect("a report is in a block");
+        // Write the buffer once it is full or the data ends.
+        let full = self
+            .fb
+            .insert_inst(Eq::new(inst_set, slot, last_slot), Type::I1);
+        let ends = self.fb.insert_inst(Eq::new(inst_set, next, len), Type::I1);
+        let write = self.fb.insert_inst(Or::new(inst_set, full, ends), Type::I1);
+        self.branch(write, flush, latch);
+
+        self.fb.switch_to_block(flush);
+        let filled = self
+            .fb
+            .insert_inst(Add::new(inst_set, slot, one), Type::I64);
+        let filled = self
+            .fb
+            .insert_inst(Mul::new(inst_set, filled, two), Type::I64);
+        self.write(self.buffer, filled);
+        self.fb.insert_inst_no_result(Jump::new(inst_set, latch));
+
+        self.fb.switch_to_block(latch);
         self.fb.append_phi_arg(index, next, latch);
         self.fb.insert_inst_no_result(Jump::new(inst_set, header));
 

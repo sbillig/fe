@@ -76,6 +76,29 @@ fn native_usize_and_pointers_are_64_bits() {
 }
 
 #[test]
+fn native_reverts_report_their_data_in_hex() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/revert_hex.fe");
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        // The report writes 32 bytes of data at a time.
+        for len in [1, 32, 33, 65] {
+            let result = Command::new(out.join("revert_hex"))
+                .args(vec!["x"; len])
+                .output()
+                .unwrap();
+            let digits: String = (0..len).map(|byte| format!("{byte:02x}")).collect();
+            assert_eq!(
+                String::from_utf8_lossy(&result.stderr),
+                format!("panicked: reverted with 0x{digits}\n"),
+                "O{level}/{len}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_isize_abi_words_must_fit_64_bits() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("isize_words.fe");
