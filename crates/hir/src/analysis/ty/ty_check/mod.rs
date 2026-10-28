@@ -90,17 +90,11 @@ use super::{
         instantiated_selection,
     },
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
-<<<<<<< 2c6673819
-    trait_def::{TraitInstId, selected_assoc_const_body_template},
-    trait_resolution::{
-        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
-=======
     instantiate_trait_self,
-    trait_def::{TraitInstId, resolve_trait_method_instance},
+    trait_def::{TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
         WellFormedness, check_trait_inst_wf_without_self, check_ty_wf,
->>>>>>> f7b2a7b9a
         goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_def::{
@@ -122,13 +116,8 @@ use crate::analysis::ty::ty_def::{ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
     closure::{CallableShape, CallableValue},
     const_ty::{
-<<<<<<< 2c6673819
         CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext, const_body_assumptions,
-        invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
-=======
-        CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext,
         invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag, root_ctfe_error,
->>>>>>> f7b2a7b9a
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{

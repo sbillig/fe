@@ -13,12 +13,8 @@ use crate::analysis::semantic::{
     EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const,
     eval_body_owner_const_with_args, sem_const_ty,
 };
-<<<<<<< 2c6673819
-use crate::analysis::ty::corelib::resolve_lib_trait_path;
-use crate::analysis::ty::evidence::prove;
-=======
 use crate::analysis::ty::corelib::{concrete_usize, resolve_lib_trait_path};
->>>>>>> f7b2a7b9a
+use crate::analysis::ty::evidence::prove;
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::trait_def::{TraitInstId, assoc_const_body_template_for_trait_inst};
 use crate::analysis::ty::trait_resolution::TraitSolveCx;
