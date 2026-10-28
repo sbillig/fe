@@ -261,6 +261,10 @@ pub enum Command {
         /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
         standalone: bool,
+        /// Backend whose target to check for: integer widths and layouts
+        /// depend on it.
+        #[arg(long, value_enum, default_value = "sonatina")]
+        backend: BuildBackend,
         /// Compilation profile to use when resolving profile-aware config.
         #[arg(long, default_value = "dev", value_name = "PROFILE")]
         profile: String,
@@ -736,6 +740,7 @@ pub fn run(opts: &Options) {
             path,
             ingot,
             standalone,
+            backend,
             profile,
             dump_mir,
             report,
@@ -747,6 +752,7 @@ pub fn run(opts: &Options) {
                 path,
                 ingot.as_deref(),
                 *standalone,
+                backend.target(),
                 profile,
                 *dump_mir,
                 (*report).then_some(report_out),

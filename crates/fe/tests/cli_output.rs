@@ -170,6 +170,25 @@ fn test_cli_check_color_flag_controls_diagnostic_escape_codes() {
     }
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_check_uses_the_backend_target() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("widths.fe");
+    fs::write(
+        &source,
+        "pub fn main() -> i32 {\n    static_assert(core::size_of<*u8>() == 8)\n    0\n}\n",
+    )
+    .expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    let (output, exit_code) = run_fe_main(&["check", "--backend", "native", source]);
+    assert_eq!(exit_code, 0, "{output}");
+    // EVM pointers are words.
+    let (output, exit_code) = run_fe_main(&["check", source]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(output.contains("static assertion failed"), "{output}");
+}
+
 #[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
