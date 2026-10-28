@@ -104,3 +104,9 @@ revm-state = { opt-level = 3 }
 sonatina-ir = { opt-level = 3 }
 sonatina-codegen = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }
+
+[patch."https://github.com/fe-lang/sonatina"]
+sonatina-ir = { path = "/home/sean/code/sonatina-worktrees/state-driver-verifier/crates/ir" }
+sonatina-triple = { path = "/home/sean/code/sonatina-worktrees/state-driver-verifier/crates/triple" }
+sonatina-codegen = { path = "/home/sean/code/sonatina-worktrees/state-driver-verifier/crates/codegen" }
+sonatina-verifier = { path = "/home/sean/code/sonatina-worktrees/state-driver-verifier/crates/verifier" }
