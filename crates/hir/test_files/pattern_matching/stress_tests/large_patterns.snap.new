@@ -1,0 +1,49 @@
+---
+source: crates/hir/tests/frontend/pattern_matching.rs
+assertion_line: 148
+expression: diagnostic_output
+input_file: test_files/pattern_matching/stress_tests/large_patterns.fe
+---
+Stress test file large_patterns.fe has 7 diagnostic(s):
+
+error[8-0074]: integer literal out of range
+   ┌─ large_patterns.fe:61:145
+   │
+61 │         VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15 => 300
+   │                                                                                                                                                 ^^^ `300` is not representable in `u8`
+
+error[8-0074]: integer literal out of range
+   ┌─ large_patterns.fe:62:145
+   │
+62 │         VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17 | VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19 | VeryLargeEnum::Variant20 => 400
+   │                                                                                                                                                 ^^^ `400` is not representable in `u8`
+
+error[8-0074]: integer literal out of range
+    ┌─ large_patterns.fe:138:104
+    │
+138 │         (NestedA::DataA(NestedB::DataB(_)), ((VeryLargeEnum::Variant1, true), (0, NestedB::UnitB))) => 500
+    │                                                                                                        ^^^ `500` is not representable in `u8`
+
+error[8-0074]: integer literal out of range
+    ┌─ large_patterns.fe:139:114
+    │
+139 │         (NestedA::DataA(_), ((VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3, _), (_, NestedB::DataB(_)))) => 400
+    │                                                                                                                  ^^^ `400` is not representable in `u8`
+
+error[8-0074]: integer literal out of range
+    ┌─ large_patterns.fe:140:55
+    │
+140 │         (NestedA::UnitA, ((_, false), (x, _))) => x + 300
+    │                                                       ^^^ `300` is not representable in `u8`
+
+error[8-0074]: integer literal out of range
+    ┌─ large_patterns.fe:203:406
+    │
+203 │         (VeryLargeEnum::Variant1 | VeryLargeEnum::Variant2 | VeryLargeEnum::Variant3 | VeryLargeEnum::Variant4 | VeryLargeEnum::Variant5, VeryLargeEnum::Variant6 | VeryLargeEnum::Variant7 | VeryLargeEnum::Variant8 | VeryLargeEnum::Variant9 | VeryLargeEnum::Variant10, VeryLargeEnum::Variant11 | VeryLargeEnum::Variant12 | VeryLargeEnum::Variant13 | VeryLargeEnum::Variant14 | VeryLargeEnum::Variant15) => 500
+    │                                                                                                                                                                                                                                                                                                                                                                                                                      ^^^ `500` is not representable in `u8`
+
+error[8-0074]: integer literal out of range
+    ┌─ large_patterns.fe:205:145
+    │
+205 │         (VeryLargeEnum::Variant16 | VeryLargeEnum::Variant17, VeryLargeEnum::Variant18 | VeryLargeEnum::Variant19, VeryLargeEnum::Variant20) => 400
+    │                                                                                                                                                 ^^^ `400` is not representable in `u8`
