@@ -90,6 +90,21 @@ fn push_unchecked_fills_reserved_capacity() {
 }
 
 #[test]
+fn set_len_over_raw_writes() {
+    var v = MemVec<u256>::new()
+    v.push(1)
+    assert!(v.try_reserve(2))
+    unsafe {
+        *ptr::offset(v.ptr(), 1) = 2
+        *ptr::offset(v.ptr(), 2) = 3
+        v.set_len(3)
+    }
+    assert!(v.len() == 3 && v[1] == 2 && v[2] == 3)
+    unsafe { v.set_len(1) }
+    assert!(v.len() == 1 && v[0] == 1)
+}
+
+#[test]
 fn get_and_set_unchecked_within_len() {
     var v = MemVec<u256>::new()
     v.extend_from_slice(MemArray::from_fn(3, |i| i as u256 + 1).as_slice())

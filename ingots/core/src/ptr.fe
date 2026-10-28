@@ -513,6 +513,13 @@ impl<T> MemVec<T> {
         drop_range(self.ptr, start: len, end)
     }
 
+    /// Sets the length without initializing or destroying elements: the
+    /// caller ensures `len` is at most `capacity()` with the first `len`
+    /// elements initialized, and forgets any past it.
+    pub unsafe fn set_len(mut self, _ len: usize) {
+        self.len = len
+    }
+
     /// Destroys every element, keeping the allocation.
     pub fn clear(mut self) {
         self.truncate(0)
