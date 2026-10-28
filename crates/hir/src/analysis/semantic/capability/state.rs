@@ -2,6 +2,7 @@
 //!
 //! A carrier describes its referent region. Loading that region reads a separate
 //! structural value; updating it never changes the carrier or its loan identity.
+use rpds::RedBlackTreeMapSync;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,13 +72,52 @@ pub enum StateError<'db> {
 /// The keys and shapes are the immutable inventory shared by every block state.
 /// Keeping empty holders in the inventory makes all updates shape-checked and
 /// prevents a missing referent from being mistaken for capability-free storage.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq)]
 pub struct BorrowState<'db> {
     guard: Guard<'db>,
-    values: BTreeMap<NValueId, CapabilityValue<'db>>,
-    contents: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
+    values: RedBlackTreeMapSync<NValueId, CapabilityValue<'db>>,
+    contents: RedBlackTreeMapSync<RegionRoot<'db>, CapabilityValue<'db>>,
     certified_contents: Vec<CertifiedContents<'db>>,
     scalar_cells: BTreeMap<RegionRoot<'db>, Vec<Guarded<'db, Option<IndexExpr<'db>>>>>,
+}
+
+impl PartialEq for BorrowState<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.guard == other.guard
+            && same_entries(&self.values, &other.values)
+            && same_entries(&self.contents, &other.contents)
+            && self.certified_contents == other.certified_contents
+            && self.scalar_cells == other.scalar_cells
+    }
+}
+
+// Keep fixed-point comparisons linear when map roots differ. The maps are ordered,
+// so there is no need to look up each key again during equality checks.
+fn same_entries<K: Ord, V: PartialEq>(
+    left: &RedBlackTreeMapSync<K, V>,
+    right: &RedBlackTreeMapSync<K, V>,
+) -> bool {
+    left.ptr_eq(right) || left.size() == right.size() && left.iter().eq(right.iter())
+}
+
+// Inspect shared entries before mutation; mutable access to an unchanged entry
+// would copy its tree path and defeat sharing between statement snapshots.
+fn update_values<'db, K: Clone + Ord>(
+    map: &mut RedBlackTreeMapSync<K, CapabilityValue<'db>>,
+    mut update: impl FnMut(&K, &CapabilityValue<'db>) -> CapabilityValue<'db>,
+) -> bool {
+    let updates: Vec<_> = map
+        .iter()
+        .filter_map(|(key, old)| {
+            let new = update(key, old);
+            (new != *old).then(|| (key.clone(), new))
+        })
+        .collect();
+    let changed = !updates.is_empty();
+    for (key, value) in updates {
+        map.insert_mut(key, value);
+    }
+    changed
 }
 
 /// A verified must range over a typed family and its possible contents.
@@ -119,18 +159,14 @@ impl<'db> BorrowState<'db> {
         let scope = BinderScope::default();
         let mut state = Self {
             guard: Guard::always(&scope),
-            values: BTreeMap::new(),
-            contents: BTreeMap::new(),
+            values: RedBlackTreeMapSync::new_sync(),
+            contents: RedBlackTreeMapSync::new_sync(),
             certified_contents: Vec::new(),
             scalar_cells: BTreeMap::new(),
         };
         for (id, shape) in holders {
-            assert!(
-                state
-                    .values
-                    .insert(id, values.empty(shape, &scope))
-                    .is_none()
-            );
+            assert!(!state.values.contains_key(&id));
+            state.values.insert_mut(id, values.empty(shape, &scope));
         }
         for (root, value) in storage {
             assert!(
@@ -147,16 +183,17 @@ impl<'db> BorrowState<'db> {
             for index in root.indices() {
                 value.scope().validate(index).expect("free storage binder");
             }
-            assert!(state.contents.insert(root, value).is_none());
+            assert!(!state.contents.contains_key(&root));
+            state.contents.insert_mut(root, value);
         }
         state
     }
 
     pub fn extend_storage(&mut self, inventory: &Self) {
         for (root, initial) in &inventory.contents {
-            self.contents
-                .entry(root.clone())
-                .or_insert_with(|| initial.clone());
+            if !self.contents.contains_key(root) {
+                self.contents.insert_mut(root.clone(), initial.clone());
+            }
         }
     }
 
@@ -184,11 +221,14 @@ impl<'db> BorrowState<'db> {
                 let Some(born) = birth.selector(root, initial.scope()) else {
                     continue;
                 };
-                let old = self.contents.get_mut(root).expect("inventoried allocation");
+                let old = self.contents.get(root).expect("inventoried allocation");
                 let kept =
                     values.map_guards(old, |guard| guard.difference(&born.in_scope(guard.scope())));
                 let initial = values.with_guard(initial, &born);
-                *old = values.join(&kept, &initial);
+                let joined = values.join(&kept, &initial);
+                if joined != *old {
+                    self.contents.insert_mut(root.clone(), joined);
+                }
             }
         }
     }
@@ -225,9 +265,12 @@ impl<'db> BorrowState<'db> {
         let Some(guard) = self.guard.and(guard) else {
             return false;
         };
-        for value in self.values.values_mut().chain(self.contents.values_mut()) {
-            *value = values.with_guard(value, &guard.in_scope(value.scope()));
-        }
+        update_values(&mut self.values, |_, value| {
+            values.with_guard(value, &guard.in_scope(value.scope()))
+        });
+        update_values(&mut self.contents, |_, value| {
+            values.with_guard(value, &guard.in_scope(value.scope()))
+        });
         for alternatives in self.scalar_cells.values_mut() {
             *alternatives = alternatives
                 .iter()
@@ -446,17 +489,7 @@ impl<'db> BorrowState<'db> {
                 });
             }
         }
-        let holders = self
-            .values
-            .iter_mut()
-            .map(|(id, value)| (value, previous.and_then(|previous| previous.values.get(id))));
-        let storage = self.contents.iter_mut().map(|(root, value)| {
-            (
-                value,
-                previous.and_then(|previous| previous.contents.get(root)),
-            )
-        });
-        for (value, prior) in holders.chain(storage) {
+        let mut forget = |value: &CapabilityValue<'db>, prior: Option<&CapabilityValue<'db>>| {
             let prior_sources = prior.and_then(|prior| sources.get(prior));
             let mapped = values.map_payloads(value, &mut destination, |_, path, entry, domain| {
                 forgotten
@@ -514,8 +547,17 @@ impl<'db> BorrowState<'db> {
                     .into_iter()
                     .collect()
             });
-            *value = destination.widen(&mapped);
-        }
+            destination.widen(&mapped)
+        };
+        update_values(&mut self.values, |id, value| {
+            forget(value, previous.and_then(|previous| previous.values.get(id)))
+        });
+        update_values(&mut self.contents, |root, value| {
+            forget(
+                value,
+                previous.and_then(|previous| previous.contents.get(root)),
+            )
+        });
     }
 
     pub fn value(&self, id: NValueId) -> &CapabilityValue<'db> {
@@ -523,10 +565,12 @@ impl<'db> BorrowState<'db> {
     }
 
     pub fn set_value(&mut self, id: NValueId, value: CapabilityValue<'db>) {
-        let old = self.values.get_mut(&id).expect("inventoried SSA value");
+        let old = self.values.get(&id).expect("inventoried SSA value");
         assert_eq!(old.shape(), value.shape(), "SSA capability shape mismatch");
         assert_eq!(old.scope(), value.scope(), "SSA capability scope mismatch");
-        *old = value;
+        if *old != value {
+            self.values.insert_mut(id, value);
+        }
     }
 
     pub fn holders(&self) -> impl Iterator<Item = (NValueId, &CapabilityValue<'db>)> {
@@ -719,17 +763,13 @@ impl<'db> BorrowState<'db> {
         }
         changed |= scalar_cells != self.scalar_cells;
         self.scalar_cells = scalar_cells;
-        for (old, incoming) in self
-            .values
-            .values_mut()
-            .zip(other.values.values())
-            .chain(self.contents.values_mut().zip(other.contents.values()))
-        {
-            let joined = values.join(old, incoming);
-            let joined = values.widen(&joined);
-            changed |= joined != *old;
-            *old = joined;
-        }
+        let mut incoming = other.values.values().chain(other.contents.values());
+        let mut join = |old: &CapabilityValue<'db>| {
+            let joined = values.join(old, incoming.next().expect("matching inventories"));
+            values.widen(&joined)
+        };
+        changed |= update_values(&mut self.values, |_, old| join(old));
+        changed |= update_values(&mut self.contents, |_, old| join(old));
         changed
     }
 
@@ -853,6 +893,14 @@ impl<'db> BorrowState<'db> {
         Ok(())
     }
 
+    fn update_contents(&mut self, updates: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>) {
+        for (root, value) in updates {
+            if self.contents.get(&root) != Some(&value) {
+                self.contents.insert_mut(root, value);
+            }
+        }
+    }
+
     /// Byte writes may destroy every overlapping typed interpretation, including
     /// an exact cell when an intrinsic supplies no structural poststate.
     pub fn invalidate_memory(
@@ -886,7 +934,7 @@ impl<'db> BorrowState<'db> {
                 updates.insert(root.clone(), values.join(contents, &unknown));
             }
         }
-        self.contents.extend(updates);
+        self.update_contents(updates);
         self.invalidate_certified_contents(values.db, footprint);
         self.invalidate_scalar_memory(values.db, footprint);
         Ok(())
@@ -989,7 +1037,7 @@ impl<'db> BorrowState<'db> {
             }
         }
         let Some(overwrite) = overwrite else {
-            self.contents.extend(updates);
+            self.update_contents(updates);
             return Ok(());
         };
         let clauses = replacements
@@ -1115,7 +1163,7 @@ impl<'db> BorrowState<'db> {
                 }
             }
         }
-        self.contents.extend(updates);
+        self.update_contents(updates);
         for (region, _) in replacements {
             self.invalidate_certified_contents(values.db, AccessFootprint::typed(region));
             self.invalidate_scalar_memory(values.db, AccessFootprint::typed(region));

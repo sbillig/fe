@@ -1792,3 +1792,102 @@ fn arbitrary_memory_offsets_may_overlap_without_becoming_typed_identity() {
         assert!(leaf.payload.authority(&leaf.guard).is_empty());
     }
 }
+
+#[test]
+fn statement_snapshots_share_unchanged_entries_and_isolate_writes() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let first = handle(&mut values, shapes.handle, 0);
+    let second = handle(&mut values, shapes.handle, 1);
+    let holders: Vec<_> = (0..32).map(NValueId::from_u32).collect();
+    let roots: Vec<_> = (0..32).map(|index| root(&db, index)).collect();
+    let mut state = BorrowState::new(
+        &mut values,
+        holders.iter().map(|&id| (id, shapes.handle)),
+        roots.iter().map(|root| (root.clone(), first.clone())),
+    );
+    for &id in &holders {
+        state.set_value(id, first.clone());
+    }
+    let mut snapshots = vec![state.clone()];
+    for (&id, root) in holders.iter().zip(&roots) {
+        state.set_value(id, second.clone());
+        state
+            .write_region(overwrite, &mut values, &region(root.clone()), &second)
+            .unwrap();
+        snapshots.push(state.clone());
+    }
+    for (written, snapshot) in snapshots.iter().enumerate() {
+        for (index, (&id, root)) in holders.iter().zip(&roots).enumerate() {
+            let expected = if index < written { &second } else { &first };
+            assert_eq!(snapshot.value(id), expected);
+            assert_eq!(snapshot.contents.get(root), Some(expected));
+        }
+    }
+    // Count the actual map entries, not the already-shared capability payloads.
+    // Each key needs only its initial entry and its one changed entry, across
+    // every retained prefix and despite tree path copying/rebalancing.
+    let holder_entries: BTreeSet<_> = snapshots
+        .iter()
+        .flat_map(|state| {
+            state
+                .values
+                .values()
+                .map(|value| value as *const _ as usize)
+        })
+        .collect();
+    let storage_entries: BTreeSet<_> = snapshots
+        .iter()
+        .flat_map(|state| {
+            state
+                .contents
+                .values()
+                .map(|value| value as *const _ as usize)
+        })
+        .collect();
+    assert_eq!(holder_entries.len(), holders.len() * 2);
+    assert_eq!(storage_entries.len(), roots.len() * 2);
+}
+
+#[test]
+fn unchanged_state_operations_preserve_snapshot_maps() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let initial = handle(&mut values, shapes.handle, 0);
+    let holder = NValueId::from_u32(0);
+    let storage = root(&db, 0);
+    let mut state = BorrowState::new(
+        &mut values,
+        [(holder, shapes.handle)],
+        [(storage.clone(), initial.clone())],
+    );
+    state.set_value(holder, initial.clone());
+    let snapshot = state.clone();
+    state.set_value(holder, initial.clone());
+    state.extend_storage(&snapshot);
+    state
+        .write_region(overwrite, &mut values, &region(storage), &initial)
+        .unwrap();
+    assert!(state.constrain(&Guard::always(&BinderScope::default()), &mut values));
+    assert!(!state.join(&snapshot, &mut values));
+    state.forget_iteration(&mut values, Some(&snapshot), |_| false, |_| false);
+    assert_eq!(state, snapshot);
+    assert!(state.values.ptr_eq(&snapshot.values));
+    assert!(state.contents.ptr_eq(&snapshot.contents));
+
+    let guard = Guard::always(&BinderScope::default())
+        .with_equality(
+            IndexExpr::Runtime(NValueId::from_u32(1)),
+            IndexExpr::Const(0),
+        )
+        .unwrap();
+    assert!(state.constrain(&guard, &mut values));
+    assert_eq!(state.guard(), &guard);
+    assert_eq!(snapshot.guard(), &Guard::always(&BinderScope::default()));
+    assert_eq!(snapshot.value(holder), &initial);
+    assert_ne!(state, snapshot);
+}
