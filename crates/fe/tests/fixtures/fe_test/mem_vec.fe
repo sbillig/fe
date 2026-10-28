@@ -90,6 +90,20 @@ fn push_unchecked_fills_reserved_capacity() {
 }
 
 #[test]
+fn get_and_set_unchecked_within_len() {
+    var v = MemVec<u256>::new()
+    v.extend_from_slice(MemArray::from_fn(3, |i| i as u256 + 1).as_slice())
+    unsafe {
+        let first = v.get_unchecked(0)
+        v.set_unchecked(0, v.get_unchecked(2))
+        v.set_unchecked(2, first)
+    }
+    assert!(v[0] == 3 && v[1] == 2 && v[2] == 1 && v.len() == 3)
+    unsafe { v.truncate_unchecked(1) }
+    assert!(v.len() == 1 && v[0] == 3)
+}
+
+#[test]
 fn pop_truncate_and_access() {
     var v = MemVec<u256>::new()
     v.extend_from_slice(MemArray::from_fn(4, |i| i as u256 + 1).as_slice())

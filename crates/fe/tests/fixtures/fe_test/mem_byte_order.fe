@@ -32,6 +32,13 @@ fn reads_without_bounds_checks_within_the_span() {
 }
 
 #[test]
+fn writes_without_bounds_checks_within_the_span() {
+    var buffer = counting_bytes(40)
+    unsafe { buffer.span().write_be_unchecked(offset: 4, value: 0x0a0b0c0d as u32) }
+    assert!(buffer.read_be<u32>(4) == 0x0a0b0c0d && buffer[3] == 4 && buffer[8] == 9)
+}
+
+#[test]
 fn reads_signed_integers() {
     var buffer = MemBuffer::alloc(4)
     buffer[0] = 0xff
