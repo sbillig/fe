@@ -845,10 +845,17 @@ impl<'db> NormalizeCtxt<'db> {
                 dst: *dst,
                 expr: self.normalize_expr(origin, *dst, expr)?,
             }),
-            SStmtKind::Store { dst, src } => Ok(NSStmtKind::Store {
-                dst: self.normalize_place(dst)?,
-                src: self.normalize_operand(*src, origin),
-            }),
+            SStmtKind::Store { dst, src } => {
+                let place = self.normalize_place(dst)?;
+                let ty = self.locals[src.value.index()]
+                    .as_ref()
+                    .expect("normalized source")
+                    .ty;
+                Ok(NSStmtKind::Store {
+                    dst: self.dereference_place_to(place, ty),
+                    src: self.normalize_operand(*src, origin),
+                })
+            }
         }?;
         self.mark_stmt_root_demand(&stmt);
         Ok(stmt)
@@ -947,6 +954,7 @@ impl<'db> NormalizeCtxt<'db> {
             },
             SExpr::ReadPlace { place } => {
                 let place = self.normalize_place(place)?;
+                let place = self.dereference_place_to(place, dst_ty);
                 NExpr::ReadPlace {
                     mode: self.read_mode_for_place(origin, dst_ty, &place),
                     place,
@@ -955,6 +963,7 @@ impl<'db> NormalizeCtxt<'db> {
             SExpr::Field { base, field } => {
                 let place =
                     self.project_local_place(base.value, Projection::Field(field.0 as usize))?;
+                let place = self.dereference_place_to(place, dst_ty);
                 NExpr::ReadPlace {
                     mode: self.read_mode_for_place(origin, dst_ty, &place),
                     place,
@@ -965,6 +974,7 @@ impl<'db> NormalizeCtxt<'db> {
                     base.value,
                     Projection::Index(IndexSource::Dynamic(index.value)),
                 )?;
+                let place = self.dereference_place_to(place, dst_ty);
                 NExpr::ReadPlace {
                     mode: self.read_mode_for_place(origin, dst_ty, &place),
                     place,
@@ -974,11 +984,19 @@ impl<'db> NormalizeCtxt<'db> {
                 place,
                 kind,
                 provider,
-            } => NExpr::Borrow {
-                place: self.normalize_place(place)?,
-                kind: *kind,
-                provider: *provider,
-            },
+            } => {
+                let place = self.normalize_place(place)?;
+                let place = if let Some((_, target)) = dst_ty.as_borrow(self.db) {
+                    self.dereference_place_to(place, target)
+                } else {
+                    place
+                };
+                NExpr::Borrow {
+                    place,
+                    kind: *kind,
+                    provider: *provider,
+                }
+            }
             SExpr::GetEnumTag { value } => NExpr::GetEnumTag {
                 value: self.normalize_copy_operand(*value, origin),
             },
@@ -1060,6 +1078,7 @@ impl<'db> NormalizeCtxt<'db> {
         let Some(place) = self.local_read_place(operand.value, false)? else {
             return Ok(None);
         };
+        let place = self.dereference_place_to(place, ty);
         let mode = self.read_mode_for_place(origin, ty, &place);
         Ok(Some(NExpr::ReadPlace { place, mode }))
     }
@@ -1147,6 +1166,30 @@ impl<'db> NormalizeCtxt<'db> {
                 .path_relative_to_local_root(local, &NSProjectionPath::from_projection(projection)),
         );
         Ok(place)
+    }
+
+    /// Structural projections name a capability's slot. A payload operation
+    /// instead names its referent; preserve slot reads and replacements whose
+    /// type is the capability itself.
+    fn dereference_place_to(&self, mut place: NSPlace<'db>, target: TyId<'db>) -> NSPlace<'db> {
+        let ty = place
+            .root
+            .value_ty(&self.borrow_roots, |local| {
+                self.locals
+                    .get(local.index())?
+                    .as_ref()
+                    .map(NSLocal::layout_ty)
+            })
+            .and_then(|root_ty| place.path.projected_ty(self.db, root_ty));
+        if let Some(ty) = ty
+            && ty != target
+            && ty
+                .as_capability(self.db)
+                .is_some_and(|(_, inner)| inner == target)
+        {
+            place.path.push(Projection::Deref);
+        }
+        place
     }
 
     fn normalize_place(

@@ -16,7 +16,7 @@ use fe_hir::{
         },
         ty::{
             ProviderAddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, EffectPassMode, LocalBinding, check_func_body},
             ty_def::{BorrowKind, TyData},
         },
     },
@@ -46,6 +46,109 @@ fn assert_no_borrow_conflict(src: &str) {
     assert!(
         !diags.contains("internal borrow checking error"),
         "{diags:?}"
+    );
+}
+
+#[test]
+fn terminal_capability_accesses_select_the_referent() {
+    for (name, definition, expected_stores) in [
+        (
+            "field",
+            "fn access(holder: mut Wrap) { holder.value = 1 }",
+            1,
+        ),
+        (
+            "compound",
+            "fn access(holder: mut Wrap) { holder.value += 1 }",
+            0,
+        ),
+        (
+            "array",
+            "fn access(values: mut [Wrap; 2], index: usize) { values[index].value = 1 }",
+            1,
+        ),
+        (
+            "nested",
+            "fn access(outer: mut Outer) { outer.inner.value = 1 }",
+            1,
+        ),
+        (
+            "borrow",
+            "fn access(holder: mut Wrap) { let alias = mut holder.value\n alias = 1 }",
+            0,
+        ),
+        (
+            "replacement",
+            "fn access(values: mut [Wrap; 1], replacement: own Wrap) { values[0] = replacement }",
+            0,
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let source = format!(
+            "struct Wrap {{ value: mut u256 }}\nstruct Outer {{ inner: mut Wrap }}\n{definition}"
+        );
+        let file = db.new_stand_alone(format!("terminal_{name}.fe").into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        for func in top_mod.all_funcs(&db) {
+            let (diagnostics, _) = check_func_body(&db, *func).clone();
+            assert!(diagnostics.is_empty(), "{name}: {diagnostics:#?}");
+        }
+        let instance = func_instance(&db, top_mod, "access");
+        let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
+        verify_normalized_semantic_body(&db, instance, &normalized).expect("verified body");
+        let mut referent_stores = 0;
+        let mut loaded_handles = 0;
+        let mut referent_borrows = 0;
+        for statement in normalized.blocks.iter().flat_map(|block| &block.stmts) {
+            match &statement.kind {
+                NSStmtKind::Store { dst, .. } => {
+                    referent_stores +=
+                        usize::from(matches!(dst.path.iter().last(), Some(Projection::Deref)));
+                }
+                NSStmtKind::Assign {
+                    expr: NExpr::ReadPlace { place, .. },
+                    dst,
+                } => {
+                    loaded_handles += usize::from(
+                        normalized.locals[dst.index()].ty.as_borrow(&db).is_some()
+                            && matches!(
+                                normalized.locals[dst.index()].lowering,
+                                NormalizedBindingLowering::CarrierLocal { .. }
+                            )
+                            && !matches!(place.path.iter().last(), Some(Projection::Deref)),
+                    );
+                }
+                NSStmtKind::Assign {
+                    expr: NExpr::Borrow { place, .. },
+                    ..
+                } => {
+                    referent_borrows +=
+                        usize::from(matches!(place.path.iter().last(), Some(Projection::Deref)));
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(referent_stores, expected_stores, "{name}");
+        if name == "compound" {
+            assert_eq!(loaded_handles, 1);
+        }
+        if name == "borrow" {
+            assert_eq!(referent_borrows, 1);
+        }
+    }
+}
+
+#[test]
+fn terminal_capability_writes_preserve_borrow_conflicts() {
+    assert_mut_borrow_conflict(
+        r#"
+struct Wrap { value: mut u256 }
+fn bad(holder: mut Wrap) {
+    let alias = mut holder.value
+    holder.value = 2
+    alias = 3
+}
+"#,
     );
 }
 

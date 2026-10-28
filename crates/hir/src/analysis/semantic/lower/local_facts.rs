@@ -527,6 +527,17 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         place: SPlace<'db>,
     ) -> SemanticLocalRole<'db> {
         let fallback = self.fallback_local_role(dst_ty);
+        let base = &self.locals[place.local.index()];
+        if dst_ty.as_borrow(self.db).is_some()
+            && place
+                .path
+                .projected_ty(self.db, base.role.layout_ty(base.ty))
+                .is_some_and(|ty| ty.as_borrow(self.db).is_some())
+        {
+            // Loading a stored capability transports its handle. An implicit
+            // view of an ordinary field instead remains bound to that field.
+            return fallback;
+        }
         let base_role = self.locals[place.local.index()].role.clone();
         let base_value_ty = match &base_role {
             SemanticLocalRole::PlaceCarrier { value_ty, .. }

@@ -4326,3 +4326,38 @@ fn wide_function_arguments_at_all_optimization_levels() {
         assert_eq!(exit_code, 0, "wide calls failed at -O {level}:\n{output}");
     }
 }
+
+#[test]
+fn effect_provider_layout_at_all_optimization_levels() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/effect_provider_layout.fe");
+    for level in ["0", "2"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--jobs",
+            "1",
+            "--optimize",
+            level,
+            fixture.to_str().expect("fixture path utf8"),
+        ]);
+        assert_eq!(
+            exit_code, 0,
+            "provider layout failed at O{level}:\n{output}"
+        );
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_native_effect_provider_layout() {
+    let source = include_str!("fixtures/fe_test/effect_provider_layout.fe");
+    for level in ["0", "2"] {
+        assert_eq!(native_exit_code(source, level), Some(42), "O{level}");
+    }
+}

@@ -1,0 +1,28 @@
+struct Counter { value: i32 }
+struct Handle { value: mut i32 }
+
+fn increment() uses (counter: mut Counter) { counter.value += 1 }
+fn write_handle() uses (handle: mut Handle) { handle.value = 42 }
+
+fn direct_effect() -> bool {
+    let mut counter = Counter { value: 0 }
+    with (counter) { increment() }
+    counter.value == 1
+}
+
+fn capability_effect() -> bool {
+    let mut value: i32 = 0
+    let mut handle = Handle { value: mut value }
+    with (handle) { write_handle() }
+    value == 42
+}
+
+pub fn main() -> i32 {
+    if direct_effect() && capability_effect() { 42 } else { 1 }
+}
+
+#[test]
+fn test_direct_effect() { assert!(direct_effect()) }
+
+#[test]
+fn test_capability_effect() { assert!(capability_effect()) }

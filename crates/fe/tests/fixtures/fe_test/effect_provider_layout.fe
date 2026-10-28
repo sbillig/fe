@@ -1,0 +1,76 @@
+struct Handle { value: mut i32, calls: i32 }
+struct Holder { handle: Handle }
+
+fn increment() uses (handle: mut Handle) {
+    handle.value += 1
+    handle.calls += 1
+}
+
+fn forwarded() uses (handle: mut Handle) {
+    increment()
+    increment()
+}
+
+fn named() -> bool {
+    let mut value: i32 = 20
+    let mut handle = Handle { value: mut value, calls: 0 }
+    with (handle) { forwarded() }
+    handle.calls == 2 && value == 22
+}
+
+fn field() -> bool {
+    let mut value: i32 = 20
+    let mut holder = Holder { handle: Handle { value: mut value, calls: 0 } }
+    with (holder.handle) { forwarded() }
+    holder.handle.calls == 2 && value == 22
+}
+
+fn indexed() -> bool {
+    let mut first: i32 = 20
+    let mut second: i32 = 40
+    let mut handles = [Handle { value: mut first, calls: 0 }, Handle { value: mut second, calls: 0 }]
+    with (handles[1]) { forwarded() }
+    handles[0].calls == 0 && handles[1].calls == 2 && first == 20 && second == 42
+}
+
+fn direct() -> bool {
+    let mut value: i32 = 20
+    let mut handle = Handle { value: mut value, calls: 0 }
+    handle.value = 41
+    handle.value += 1
+    value == 42
+}
+
+fn reborrow() -> bool {
+    let mut value: i32 = 40
+    let mut handle = Handle { value: mut value, calls: 0 }
+    let alias = mut handle.value
+    alias += 2
+    value == 42
+}
+
+fn replacement() -> bool {
+    let mut first: i32 = 20
+    let mut second: i32 = 40
+    let mut holder = Holder { handle: Handle { value: mut first, calls: 0 } }
+    holder.handle = Handle { value: mut second, calls: 0 }
+    holder.handle.value += 2
+    first == 20 && second == 42
+}
+
+pub fn main() -> i32 {
+    if named() && field() && indexed() && direct() && reborrow() && replacement() { 42 } else { 1 }
+}
+
+#[test]
+fn test_named() { assert!(named()) }
+#[test]
+fn test_field() { assert!(field()) }
+#[test]
+fn test_indexed() { assert!(indexed()) }
+#[test]
+fn test_direct() { assert!(direct()) }
+#[test]
+fn test_reborrow() { assert!(reborrow()) }
+#[test]
+fn test_replacement() { assert!(replacement()) }

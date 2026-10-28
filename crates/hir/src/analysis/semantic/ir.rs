@@ -3,8 +3,11 @@ use salsa::Update;
 
 use crate::{
     analysis::{
+        HirAnalysisDb,
+        place::projectable_place_ty,
         semantic::instance::{SemanticInstance, SemanticInstanceKey},
         ty::{
+            adt_def::instantiate_adt_field_shape,
             provider::ProviderAddressSpace,
             ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
@@ -48,6 +51,42 @@ entity_impl!(SStmtId);
 
 pub type SValueId = SLocalId;
 pub type SemanticProjectionPath<'db> = ProjectionPath<TyId<'db>, VariantIndex, SLocalId>;
+
+impl<'db> SemanticProjectionPath<'db> {
+    /// The stored type at the end of a path, before any terminal capability access.
+    pub(crate) fn projected_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        root: TyId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.iter().try_fold(root, |ty, projection| {
+            if matches!(projection, Projection::Deref)
+                && let Some((_, inner)) = ty.as_capability(db)
+            {
+                return Some(inner);
+            }
+            let ty = projectable_place_ty(db, ty);
+            match projection {
+                Projection::Field(index) => ty.field_types(db).get(*index).copied(),
+                Projection::Index(_) if ty.is_array(db) => ty.generic_args(db).first().copied(),
+                Projection::Index(_) => None,
+                Projection::VariantField {
+                    enum_ty,
+                    variant,
+                    field_idx,
+                } => Some(instantiate_adt_field_shape(
+                    db,
+                    enum_ty.adt_def(db)?,
+                    variant.0 as usize,
+                    *field_idx,
+                    enum_ty.generic_args(db),
+                )),
+                Projection::Deref => ty.as_ptr(db),
+                Projection::Discriminant => Some(TyId::u8(db)),
+            }
+        })
+    }
+}
 
 unsafe impl<'db> Update for SemanticProjectionPath<'db> {
     unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {

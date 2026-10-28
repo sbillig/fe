@@ -58,15 +58,9 @@ impl<'db> NormalizedSemanticBody<'db> {
     /// query on normalized IR prevents layout and runtime lowering from
     /// independently reconstructing that type from provider metadata.
     pub fn place_root_ty(&self, root: &NSPlaceRoot) -> Option<TyId<'db>> {
-        match root {
-            NSPlaceRoot::CarrierDerefLocal(local) => self.local(*local).map(NSLocal::layout_ty),
-            NSPlaceRoot::Root(root) => match self.root(*root)? {
-                NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
-                    self.local(*local).map(NSLocal::layout_ty)
-                }
-                NBorrowRoot::Provider { value_ty, .. } => Some(*value_ty),
-            },
-        }
+        root.value_ty(&self.borrow_roots, |local| {
+            self.local(local).map(NSLocal::layout_ty)
+        })
     }
 }
 
@@ -230,6 +224,22 @@ pub enum NSPlaceRoot {
 }
 
 impl NSPlaceRoot {
+    pub(super) fn value_ty<'db>(
+        &self,
+        roots: &[NBorrowRoot<'db>],
+        local_ty: impl Fn(SLocalId) -> Option<TyId<'db>>,
+    ) -> Option<TyId<'db>> {
+        match self {
+            Self::CarrierDerefLocal(local) => local_ty(*local),
+            Self::Root(root) => match roots.get(root.index())? {
+                NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
+                    local_ty(*local)
+                }
+                NBorrowRoot::Provider { value_ty, .. } => Some(*value_ty),
+            },
+        }
+    }
+
     pub fn borrow_root(&self) -> Option<NBorrowRootId> {
         match self {
             Self::Root(root) => Some(*root),

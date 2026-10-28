@@ -653,13 +653,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     return self.lower_call_like_expr(expr, ty, Some(*dst), &[*src]);
                 }
                 let dst_place = self.lower_place(*dst);
+                let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
                 let lhs = if dst_place.path.is_empty() {
                     self.lower_expr_operand(*dst)
                 } else {
                     SOperand::expr(
                         self.emit_expr_with_origin(
                             SemOrigin::Expr(*dst),
-                            self.expr_ty(*dst),
+                            dst_ty,
                             SExpr::ReadPlace {
                                 place: dst_place.clone(),
                             },
@@ -668,7 +669,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     )
                 };
                 let rhs = self.lower_expr_operand(*src);
-                let dst_ty = self.projectable_place_ty(self.expr_ty(*dst));
                 let sum = self.emit_expr_with_origin(
                     origin,
                     dst_ty,
