@@ -22,8 +22,8 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             BlockedSemanticBody, SConst, SemConstScalar, SemConstValue, SemanticDiagnosticId,
-            SemanticInstance, SemanticNormalizationFailure, get_or_build_semantic_instance,
-            identity_semantic_instance_key,
+            SemanticInstance, SemanticNormalizationFailure, VariantIndex,
+            get_or_build_semantic_instance, identity_semantic_instance_key,
             normalized::{
                 NBlockId, NEffectArg, NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase,
                 NRootKind, NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
@@ -477,13 +477,12 @@ fn block_successors<'db>(
     }
 }
 
-/// The literal boolean value of an immutable SSA definition, chasing exact
-/// forwards. Loads remain unknown because roots may have changed.
-pub(crate) fn literal_bool_cond<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: &NormalizedBody<'db>,
+/// The expression defining an immutable SSA value, chasing exact forwards.
+/// Loads remain unknown because roots may have changed.
+fn literal_definition<'a, 'db>(
+    body: &'a NormalizedBody<'db>,
     mut value: NValueId,
-) -> Option<bool> {
+) -> Option<&'a NExpr<'db>> {
     for _ in 0..16 {
         let definition = body.value(value)?.definition;
         let crate::analysis::semantic::normalized::NValueDefinition::Statement { block, statement } =
@@ -498,17 +497,42 @@ pub(crate) fn literal_bool_cond<'db>(
         };
         match expr {
             NExpr::Forward { src } => value = src.value,
-            NExpr::Const(SConst::Value(value)) => {
-                return match value.value().value(db) {
-                    SemConstValue::Scalar {
-                        value: SemConstScalar::Bool(value),
-                        ..
-                    } => Some(*value),
-                    _ => None,
-                };
-            }
-            _ => return None,
+            expr => return Some(expr),
         }
     }
     None
+}
+
+/// The literal boolean value of an immutable SSA definition.
+pub(crate) fn literal_bool_cond<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedBody<'db>,
+    value: NValueId,
+) -> Option<bool> {
+    let NExpr::Const(SConst::Value(value)) = literal_definition(body, value)? else {
+        return None;
+    };
+    match value.value().value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(value),
+            ..
+        } => Some(*value),
+        _ => None,
+    }
+}
+
+/// The variant of an immutable SSA value constructed as an enum literal.
+pub(crate) fn literal_enum_variant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedBody<'db>,
+    value: NValueId,
+) -> Option<VariantIndex> {
+    match literal_definition(body, value)? {
+        NExpr::EnumMake { variant, .. } => Some(*variant),
+        NExpr::Const(SConst::Value(value)) => match value.value().value(db) {
+            SemConstValue::Enum { variant, .. } => Some(*variant),
+            _ => None,
+        },
+        _ => None,
+    }
 }

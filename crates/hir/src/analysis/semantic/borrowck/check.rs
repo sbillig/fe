@@ -2,14 +2,17 @@ use crate::analysis::semantic::diagnostics::{
     BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
     SemanticDiagnosticSpan, SemanticNormalizationFailure,
 };
-use std::fmt;
+use std::{
+    fmt,
+    hash::{DefaultHasher, Hash, Hasher},
+};
 
 use super::{
     callsite::solved_call_site_refinements,
     ir::{
         BorrowSummary, BorrowSummaryId, LocalBorrowCheck, PendingSemanticValidation,
         ProvisionalBorrowAnalysis, SemanticBorrowAnalysis, SemanticBorrowCheckResult,
-        SemanticBorrowSummaryResult,
+        SemanticBorrowSummaryResult, SeparationOrigin,
     },
     solver::{BorrowSummaryMode, Borrowck},
     summary::signature_summary,
@@ -45,6 +48,7 @@ fn semantic_borrow_analysis_query<'db>(
         Err(SemanticNormalizationFailure::Blocked(blocked)) => {
             return SemanticBorrowAnalysis {
                 summary: blocked_signature_borrow_summary_result(db, instance, blocked),
+                provenance: Vec::new(),
                 check: None,
             };
         }
@@ -54,13 +58,18 @@ fn semantic_borrow_analysis_query<'db>(
         ) => {
             return SemanticBorrowAnalysis {
                 summary: SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag)),
+                provenance: Vec::new(),
                 check: None,
             };
         }
     };
-    let summary = cached_borrow_summary_result(db, borrowck.borrow_summary());
+    let computation = borrowck.borrow_summary();
+    let provenance = computation
+        .as_ref()
+        .map_or_else(|_| Vec::new(), |computation| computation.provenance.clone());
     SemanticBorrowAnalysis {
-        summary,
+        summary: cached_borrow_summary_result(db, computation),
+        provenance,
         check: borrowck.is_solved().then(|| borrowck.local_check()),
     }
 }
@@ -152,6 +161,7 @@ fn cached_borrow_summary_result<'db>(
             summary,
             blocked: None,
             pending,
+            ..
         }) if !pending.callees.is_empty() => SemanticBorrowSummaryResult::Pending {
             validation: pending,
             summary: summary.map(|summary| BorrowSummaryId::new(db, summary)),
@@ -225,16 +235,16 @@ pub(super) struct BorrowSummaryVoucher<'db> {
     pub(super) summary: Option<BorrowSummary<'db>>,
     pub(super) blocked: Option<BlockedSemanticBody<'db>>,
     pub(super) pending: PendingSemanticValidation<'db>,
+    /// Origins of the summary's loan requirements, when a final solve has them.
+    pub(super) provenance: Vec<SeparationOrigin<'db>>,
 }
 
 pub(super) fn semantic_borrow_summary_voucher<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<BorrowSummaryVoucher<'db>, SemanticDiagnostic<'db>> {
-    summary_voucher(
-        db,
-        semantic_borrow_analysis_query(db, instance).summary.clone(),
-    )
+    let analysis = semantic_borrow_analysis_query(db, instance);
+    summary_voucher(db, analysis.summary.clone(), analysis.provenance.clone())
 }
 
 pub(super) fn provisional_borrow_summary_voucher<'db>(
@@ -246,23 +256,27 @@ pub(super) fn provisional_borrow_summary_voucher<'db>(
         provisional_borrow_analysis_query(db, instance)
             .summary
             .clone(),
+        Vec::new(),
     )
 }
 
 fn summary_voucher<'db>(
     db: &'db dyn HirAnalysisDb,
     result: SemanticBorrowSummaryResult<'db>,
+    provenance: Vec<SeparationOrigin<'db>>,
 ) -> Result<BorrowSummaryVoucher<'db>, SemanticDiagnostic<'db>> {
     match result {
         SemanticBorrowSummaryResult::Ok(summary) => Ok(BorrowSummaryVoucher {
             summary: summary.map(|summary| summary.items(db).clone()),
             blocked: None,
             pending: Default::default(),
+            provenance,
         }),
         SemanticBorrowSummaryResult::Blocked { body, summary } => Ok(BorrowSummaryVoucher {
             summary: summary.map(|summary| summary.items(db).clone()),
             blocked: Some(body),
             pending: Default::default(),
+            provenance,
         }),
         SemanticBorrowSummaryResult::Pending {
             validation,
@@ -271,6 +285,7 @@ fn summary_voucher<'db>(
             summary: summary.map(|summary| summary.items(db).clone()),
             blocked: None,
             pending: validation,
+            provenance,
         }),
         SemanticBorrowSummaryResult::Err(diag) => Err(diag.diag(db).clone()),
     }
@@ -517,6 +532,8 @@ pub(super) struct BorrowSummaryComputation<'db> {
     pub summary: Option<BorrowSummary<'db>>,
     pub blocked: Option<BlockedSemanticBody<'db>>,
     pub pending: PendingSemanticValidation<'db>,
+    /// Origins of the summary's loan requirements, in clause order.
+    pub provenance: Vec<SeparationOrigin<'db>>,
 }
 
 fn collect_pending_validation<'db>(
@@ -550,6 +567,105 @@ fn semantic_borrow_summary_cycle_recover<'db>(
     count: u32,
     instance: SemanticInstance<'db>,
 ) -> salsa::CycleRecoveryAction<SemanticBorrowSummaryResult<'db>> {
+    if let BodyOwner::Func(func) = instance.key(db).owner(db)
+        && func
+            .name(db)
+            .to_opt()
+            .is_some_and(|name| name.data(db) == "nested_depth")
+        && let SemanticBorrowSummaryResult::Ok(Some(id)) = value
+    {
+        let summary = id.items(db);
+        macro_rules! fields {
+            ($($field:ident),*) => { $(
+                let mut hash = DefaultHasher::new();
+                summary.$field.hash(&mut hash);
+                eprintln!("CYCLE_FIELD {count} {} {}", stringify!($field), hash.finish());
+            )* };
+        }
+        for (part, hash) in [
+            ("incoming", {
+                let mut h = DefaultHasher::new();
+                summary.availability.incoming.hash(&mut h);
+                h.finish()
+            }),
+            ("reinitialized", {
+                let mut h = DefaultHasher::new();
+                summary.availability.reinitialized.hash(&mut h);
+                h.finish()
+            }),
+            ("unavailable", {
+                let mut h = DefaultHasher::new();
+                summary.availability.unavailable.hash(&mut h);
+                h.finish()
+            }),
+        ] {
+            eprintln!("CYCLE_AVAIL {count} {part} {hash}");
+        }
+        if count == 1 || count == 2 {
+            let values = crate::analysis::semantic::capability::value::ValueInterner::<
+                crate::analysis::semantic::capability::source::SourceExpr,
+            >::new(
+                db,
+                crate::analysis::semantic::capability::value::ValueLimits::default(),
+            );
+            for (number, update) in summary.mutable_inputs.iter().enumerate() {
+                eprintln!(
+                    "CYCLE_UPDATE {count} {number} destination={:?}",
+                    update.destination
+                );
+                for leaf in values.leaves(
+                    &update.value,
+                    crate::analysis::semantic::capability::guard::ValueOccurrence::Summary,
+                ) {
+                    eprintln!(
+                        "CYCLE_UPDATE_LEAF {count} {number} path={:?} occurrences={:?} payload={:?}",
+                        leaf.path,
+                        leaf.guard.occurrences(),
+                        leaf.payload
+                    );
+                }
+            }
+        }
+        for (number, access) in summary.accesses.iter().enumerate() {
+            for (part, region) in [
+                ("region", &access.region),
+                ("authority", &access.authorizers),
+            ] {
+                let mut hash = DefaultHasher::new();
+                region.hash(&mut hash);
+                eprintln!(
+                    "CYCLE_ACCESS {count} {number} {:?} {:?} {part} {} clauses={}",
+                    access.kind,
+                    access.extent,
+                    hash.finish(),
+                    region.clauses().len()
+                );
+                if count == 1 || count == 2 {
+                    for clause in region.clauses() {
+                        eprintln!(
+                            "CYCLE_CLAUSE {count} {number} {part} occurrences={:?} payload={:?}",
+                            clause.guard.occurrences(),
+                            clause.payload
+                        );
+                    }
+                }
+            }
+        }
+        fields!(
+            may_return,
+            result,
+            scalar_result,
+            mutable_inputs,
+            certified_ranges,
+            scalar_inputs,
+            requirements,
+            accesses,
+            availability,
+            native_requirements,
+            loan_requirements,
+            separation_validity
+        );
+    }
     if count >= 16
         && !matches!(
             value,
@@ -583,6 +699,7 @@ fn semantic_borrow_analysis_cycle_initial<'db>(
 ) -> SemanticBorrowAnalysis<'db> {
     SemanticBorrowAnalysis {
         summary: semantic_borrow_summary_cycle_initial(db, instance),
+        provenance: Vec::new(),
         check: None,
     }
 }
@@ -599,6 +716,7 @@ fn semantic_borrow_analysis_cycle_recover<'db>(
         salsa::CycleRecoveryAction::Fallback(summary) => {
             salsa::CycleRecoveryAction::Fallback(SemanticBorrowAnalysis {
                 summary,
+                provenance: Vec::new(),
                 check: None,
             })
         }

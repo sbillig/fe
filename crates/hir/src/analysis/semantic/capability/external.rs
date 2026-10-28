@@ -29,6 +29,17 @@ use super::{
     value::{Guarded, IndexPayload},
 };
 
+/// What an alias comparison may treat as separation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AliasBasis {
+    /// Also the entry assumption that distinct certain sources are separate,
+    /// which call-boundary checks establish for the loans a body is given.
+    Assumed,
+    /// Only physical separation: address spaces, fresh objects against older
+    /// ones, and field, element and range separation within one object.
+    Physical,
+}
+
 /// Physical referent typing is independent of a capability's conversion views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReferentContract<'db> {
@@ -426,9 +437,13 @@ impl<'db> ClobberCondition<'db> {
         let (target_object, written_object) = (object(&target), object(&written));
         if written_object.source.in_raw_memory() && !target_object.source.in_raw_memory() {
             return Self {
-                target: target_object,
+                target,
+                extent: if extent == AccessExtent::Typed && written_object == written {
+                    AccessExtent::Typed
+                } else {
+                    AccessExtent::Unknown
+                },
                 written: written_object,
-                extent: AccessExtent::Unknown,
             };
         }
         Self {
@@ -939,6 +954,45 @@ impl<'db> ExternalSource<'db> {
         }
     }
 
+    /// How many nodes this source stores: itself, its dereference steps and
+    /// index arguments, and every Memory base and clobber dependency with their
+    /// projection steps and conversion views.
+    pub fn size(&self) -> usize {
+        let origin = match &self.origin {
+            ExternalOrigin::Input(input) => input.size(),
+            ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
+                handle.arguments.len()
+            }
+            ExternalOrigin::Unknown { arguments, .. } => arguments.len(),
+            ExternalOrigin::Memory { base, offset, .. } => {
+                base.size() + usize::from(*offset != MemoryOffset::Zero)
+            }
+            ExternalOrigin::Provider { .. }
+            | ExternalOrigin::Local(_)
+            | ExternalOrigin::OpaqueMemory => 0,
+        };
+        let clobber = self.clobber.as_ref().map_or(0, |clobber| {
+            clobber.target.size() + clobber.written.size() + clobber.extent.indices().count()
+        });
+        let dereferences = self
+            .dereferences
+            .iter()
+            .map(|path| 1 + path.as_slice().len())
+            .sum::<usize>();
+        1 + origin + clobber + dereferences
+    }
+
+    /// Whether any part of this route, including Memory bases and clobber
+    /// dependencies, names storage local to the analyzed body.
+    pub fn names_local_storage(&self) -> bool {
+        matches!(self.origin, ExternalOrigin::Local(_))
+            || matches!(&self.origin, ExternalOrigin::Memory { base, .. } if base.source.names_local_storage())
+            || self.clobber.as_ref().is_some_and(|clobber| {
+                clobber.target.source.names_local_storage()
+                    || clobber.written.source.names_local_storage()
+            })
+    }
+
     pub fn param(&self) -> Option<u32> {
         match &self.origin {
             ExternalOrigin::Input(input) => Some(input.param()),
@@ -1422,13 +1476,24 @@ impl<'db> ExternalSource<'db> {
         guard: Guard<'db>,
         allow_unknown: bool,
     ) -> Option<Guard<'db>> {
-        self.alias_guard_in(other, guard, allow_unknown, true)
+        self.alias_guard_in(other, guard, allow_unknown, true, AliasBasis::Assumed)
     }
 
     /// A raw byte span may cross from one cell into the next, so cells of one
     /// base are never separated by their elements.
     pub(super) fn byte_alias_guard(&self, other: &Self, guard: Guard<'db>) -> Option<Guard<'db>> {
-        self.alias_guard_in(other, guard, true, false)
+        self.alias_guard_in(other, guard, true, false, AliasBasis::Assumed)
+    }
+
+    /// Possible overlap without the entry assumption; `typed` compares typed
+    /// cells rather than byte spans.
+    pub(super) fn physical_alias_guard(
+        &self,
+        other: &Self,
+        guard: Guard<'db>,
+        typed: bool,
+    ) -> Option<Guard<'db>> {
+        self.alias_guard_in(other, guard, true, typed, AliasBasis::Physical)
     }
 
     fn alias_guard_in(
@@ -1437,6 +1502,7 @@ impl<'db> ExternalSource<'db> {
         guard: Guard<'db>,
         allow_unknown: bool,
         typed: bool,
+        basis: AliasBasis,
     ) -> Option<Guard<'db>> {
         let mut pairs = Vec::new();
         let exact = if !self.is_widened() && !other.is_widened() {
@@ -1468,7 +1534,7 @@ impl<'db> ExternalSource<'db> {
             // address, so bases are compared without cell separation.
             let possible = left
                 .source
-                .alias_guard_in(right, guard.clone(), true, false);
+                .alias_guard_in(right, guard.clone(), true, false, basis);
             // Where the bases are one object, the accessed typed cells of one
             // layout overlap only at an equal element, which `exact` states.
             match (
@@ -1482,7 +1548,7 @@ impl<'db> ExternalSource<'db> {
             && !other.reachable
             && let ExternalOrigin::Memory { base: right, .. } = &other.origin
         {
-            self.alias_guard_in(&right.source, guard, true, false)
+            self.alias_guard_in(&right.source, guard, true, false, basis)
         } else {
             // Distinct fresh allocations and incoming pointers cannot identify the
             // same object. Unknown manufactured addresses remain conservative.
@@ -1498,7 +1564,8 @@ impl<'db> ExternalSource<'db> {
                 && other.dereferences.is_empty())
                 || self.is_hashed_slot_beside_allocated_field(other)
                 || other.is_hashed_slot_beside_allocated_field(self);
-            (!disjoint && (self.uncertain() || other.uncertain()))
+            // Distinct certain sources are separate only by the entry assumption.
+            (!disjoint && (self.uncertain() || other.uncertain() || basis == AliasBasis::Physical))
                 .then_some(guard)
                 .filter(|_| self.contract.may_alias(other.contract))
         };

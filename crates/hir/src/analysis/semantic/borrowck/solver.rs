@@ -51,6 +51,7 @@ use crate::analysis::{
 use super::{
     access::ResolvedOperation,
     boundary::resolve_boundary_requirements,
+    events::ConflictAnalysis,
     inventory::Inventory,
     ir::{BoundaryRequirement, PendingSemanticValidation},
     loop_certificate::{FrontierCandidate, PrefixCertificate},
@@ -103,6 +104,8 @@ pub(super) struct Borrowck<'db> {
     pub operations: Vec<Vec<ResolvedOperation<'db>>>,
     pub boundary_requirements:
         Option<Result<Vec<BoundaryRequirement<'db>>, SemanticDiagnostic<'db>>>,
+    /// Published with the converged fixed point, like `boundary_requirements`.
+    pub(super) conflicts: Option<ConflictAnalysis<'db>>,
     pub blocked: Option<BlockedSemanticBody<'db>>,
     pub pending: PendingSemanticValidation<'db>,
     pub validation_dependencies: Vec<Vec<bool>>,
@@ -158,6 +161,7 @@ impl<'db> Borrowck<'db> {
             terminal: vec![None; body.blocks.len()],
             operations: vec![Vec::new(); body.blocks.len()],
             boundary_requirements: None,
+            conflicts: None,
             validation_dependencies: body
                 .blocks
                 .iter()
@@ -671,6 +675,7 @@ impl<'db> Borrowck<'db> {
             self.terminal.fill(None);
             self.operations.fill(Vec::new());
             self.boundary_requirements = None;
+            self.conflicts = None;
             let mut incoming = vec![None; self.body.blocks.len()];
             incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
             let mut certificate_application_failed = false;
@@ -851,6 +856,7 @@ impl<'db> Borrowck<'db> {
                     }
                 }
                 self.boundary_requirements = Some(boundary_requirements);
+                self.conflicts = Some(self.analyze_conflicts());
                 return Ok(());
             }
             self.prefix_certificates.clear();
