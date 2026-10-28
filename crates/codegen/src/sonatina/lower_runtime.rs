@@ -214,7 +214,7 @@ pub(super) fn compile_runtime_package_sonatina_with_external_code(
         package,
         None,
         NativePanics::Trap,
-    );
+    )?;
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.declare_external_code(external_code);
@@ -244,7 +244,7 @@ where
 {
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
     let mut lowerer =
-        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol, panics);
+        ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol, panics)?;
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
@@ -283,9 +283,20 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         package: &'a RuntimePackage<'db>,
         fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
         panics: NativePanics,
-    ) -> Self {
+    ) -> Result<Self, LowerError> {
+        // HIR and MIR lay memory out with the compilation target's `usize`,
+        // so the backend's addresses must be as wide.
+        let target = db.compilation_settings().target(db);
+        let address_bits = usize::from(int_bits(builder.ctx.type_layout.pointer_repl()));
+        if address_bits != target.usize_bits() {
+            return Err(LowerError::Unsupported(format!(
+                "the {target:?} compilation target has {}-bit addresses, but the {:?} backend has {address_bits}-bit addresses",
+                target.usize_bits(),
+                builder.ctx.triple.architecture,
+            )));
+        }
         let native = is_native_architecture(builder.ctx.triple.architecture);
-        Self {
+        Ok(Self {
             db,
             builder,
             inst_set,
@@ -307,7 +318,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             external_code: FxHashMap::default(),
             const_bytes: FxHashMap::default(),
             panics,
-        }
+        })
     }
 
     fn finish(self) -> (Module, FxHashMap<RuntimeInstance<'db>, FuncRef>) {
@@ -332,11 +343,12 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         is_native_architecture(self.builder.ctx.triple.architecture)
     }
 
-    /// An address in `space`: a `usize` for memory, whose width is the
-    /// compilation target's, and a word for the EVM's word-addressed spaces.
+    /// An address in `space`: the backend's pointer integer for memory, as
+    /// wide as the compilation target's `usize`, and a word for the EVM's
+    /// word-addressed spaces.
     fn address_ty(&self, space: AddressSpace) -> Type {
         if space == AddressSpace::Memory {
-            int_ty(self.db.compilation_settings().target(self.db).usize_bits() as u16)
+            self.builder.ctx.type_layout.pointer_repl()
         } else {
             Type::I256
         }
@@ -4893,7 +4905,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             | RuntimeClass::Ref {
                 kind: RefKind::Native,
                 ..
-            } => self.load_word(addr, space),
+            } => {
+                if self.module.is_native_target() && space == AddressSpace::Memory {
+                    let ty = self.native_memory_ty(class)?;
+                    return Ok(self
+                        .fb
+                        .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+                }
+                self.load_word(addr, space)
+            }
             RuntimeClass::AggregateValue { .. } => unreachable!(),
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
@@ -5123,7 +5143,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
         if self.module.is_native_target() && matches!(space, AddressSpace::Memory) {
-            let ty = scalar_ty(scalar);
+            let ty = self.native_memory_ty(&RuntimeClass::Scalar(scalar.clone()))?;
             return Ok(self
                 .fb
                 .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
@@ -5155,7 +5175,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let value = match class {
             RuntimeClass::Scalar(scalar) => {
                 let ty = if native_memory {
-                    scalar_ty(scalar)
+                    self.native_memory_ty(class)?
                 } else {
                     scalar_word_ty(scalar)
                 };
@@ -5193,62 +5213,36 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ..
                     },
                 ..
-            } => self.coerce_value_to_ty(src, Type::I256),
-            RuntimeClass::RawAddr { .. }
+            }
+            | RuntimeClass::RawAddr { .. }
             | RuntimeClass::Ref {
                 kind: RefKind::Native,
                 ..
-            } => self.coerce_value_to_ty(src, Type::I256),
+            } => {
+                let ty = if native_memory {
+                    self.native_memory_ty(class)?
+                } else {
+                    Type::I256
+                };
+                self.coerce_value_to_ty(src, ty)
+            }
             RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => Err(
                 LowerError::Unsupported("aggregate/handle ptr stores require CopyInto".to_string()),
             ),
         }?;
         match space {
             AddressSpace::Memory => match class {
-                RuntimeClass::Scalar(_) if native_memory => {
-                    self.fb.insert_inst_no_result(Mstore::new(
-                        self.module.inst_set(),
-                        addr,
-                        value,
-                        self.fb.type_of(value),
-                    ));
-                }
-                RuntimeClass::Scalar(scalar) if scalar_raw_memory_size_bytes(scalar) < 32 => {
+                RuntimeClass::Scalar(scalar)
+                    if !native_memory && scalar_raw_memory_size_bytes(scalar) < 32 =>
+                {
                     self.store_memory_scalar_bytes(addr, scalar, value)?
                 }
-                RuntimeClass::Scalar(_)
-                | RuntimeClass::RawAddr { .. }
-                | RuntimeClass::Ref {
-                    kind: RefKind::Native,
-                    ..
-                } => {
-                    self.fb.insert_inst_no_result(Mstore::new(
-                        self.module.inst_set(),
-                        addr,
-                        value,
-                        Type::I256,
-                    ));
-                }
-                RuntimeClass::Ref {
-                    kind:
-                        RefKind::Provider {
-                            space:
-                                AddressSpace::Storage
-                                | AddressSpace::Transient
-                                | AddressSpace::Calldata
-                                | AddressSpace::Code,
-                            ..
-                        },
-                    ..
-                } => {
-                    self.fb.insert_inst_no_result(Mstore::new(
-                        self.module.inst_set(),
-                        addr,
-                        value,
-                        Type::I256,
-                    ));
-                }
-                RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => unreachable!(),
+                _ => self.fb.insert_inst_no_result(Mstore::new(
+                    self.module.inst_set(),
+                    addr,
+                    value,
+                    self.fb.type_of(value),
+                )),
             },
             AddressSpace::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
                 self.module.required_inst::<EvmSstore>()?,
@@ -5272,6 +5266,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
         }
         Ok(())
+    }
+
+    /// The type a native memory access of `class` moves: the value's own
+    /// type, which must take as many bytes as the class's MIR layout.
+    fn native_memory_ty(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError> {
+        let ty = match class {
+            RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
+            _ => self.module.ty_for_class(class)?,
+        };
+        let layout_size = RuntimeMemoryLayout::raw(self.module.db).class_size(class)?;
+        let size =
+            self.fb.module_builder.ctx.size_of(ty).map_err(|err| {
+                LowerError::Internal(format!("`{ty:?}` has no native size: {err:?}"))
+            })?;
+        if size as u64 != layout_size {
+            return Err(LowerError::Internal(format!(
+                "a native memory access of `{class:?}` moves {size} bytes, but its layout has {layout_size}"
+            )));
+        }
+        Ok(ty)
     }
 
     fn store_memory_scalar_bytes(
