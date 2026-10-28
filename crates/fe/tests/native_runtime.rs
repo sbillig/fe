@@ -76,6 +76,55 @@ fn native_usize_and_pointers_are_64_bits() {
 }
 
 #[test]
+fn native_isize_abi_words_must_fit_64_bits() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("isize_words.fe");
+    fs::write(
+        &source,
+        r#"
+use core::abi::{Decode, store_word}
+use core::ptr::{self, MemSpan}
+use std::abi::Sol
+
+fn decode(_ word: u256) -> isize {
+    let data = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: data, value: word) }
+    Decode<Sol>::decode_from(unsafe { MemSpan::from_raw_parts(ptr: data, len: 32) }, 0)
+}
+
+#[test]
+fn extremes_decode() {
+    assert!(decode(0x7fffffffffffffff) == isize::max())
+    assert!(decode(0xffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000) == isize::min())
+}
+
+#[test(should_revert)]
+fn above_max_reverts() {
+    let _ = decode(0x8000000000000000)
+}
+
+#[test(should_revert)]
+fn below_min_reverts() {
+    let _ = decode(0xffffffffffffffffffffffffffffffffffffffffffffffff7fffffffffffffff)
+}
+"#,
+    )
+    .unwrap();
+    test_utils::skip_crash_reports();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("3 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn native_panics_report_on_stderr_after_flushing_stdout() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/panics.fe");

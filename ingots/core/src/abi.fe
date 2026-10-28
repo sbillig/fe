@@ -2390,13 +2390,24 @@ impl<A: Abi> Encode<A> for usize {
 
 impl<A: Abi> Decode<A> for isize {
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
-        d.read_word(input).downcast_unchecked()
+        decode_isize_word<A>(d.read_word(input))
     }
 
     #[inline(always)]
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-        input.word_at(pos).downcast_unchecked()
+        decode_isize_word<A>(input.word_at(pos))
     }
+}
+
+/// A word that is not the sign extension of a target `isize` does not
+/// decode.
+#[inline(always)]
+fn decode_isize_word<A: Abi>(_ word: u256) -> isize {
+    let signed: i256 = word.downcast_unchecked()
+    if let Option::Some(value) = signed.downcast() {
+        return value
+    }
+    A::decode_error()
 }
 
 impl<A: Abi> Encode<A> for isize {
