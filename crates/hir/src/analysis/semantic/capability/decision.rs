@@ -465,7 +465,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         let mut hasher = FxHasher::default();
         node.hash(&mut hasher);
         let hash = hasher.finish();
-        let mut position = self.positions.get(&hash).copied().unwrap_or(NONE);
+        let head = self.positions.entry(hash).or_insert(NONE);
+        let mut position = *head;
         while position != NONE {
             if self.nodes[position as usize] == node {
                 return position as usize;
@@ -473,9 +474,9 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
             position = self.next[position as usize];
         }
         let id = self.nodes.len();
-        // The chain link is whichever node held this hash before.
-        self.next
-            .push(self.positions.insert(hash, child(id)).unwrap_or(NONE));
+        // Reuse the bucket lookup and link to its previous head.
+        self.next.push(*head);
+        *head = child(id);
         self.nodes.push(node);
         id
     }
