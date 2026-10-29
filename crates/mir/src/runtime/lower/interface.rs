@@ -3,8 +3,10 @@ use hir::analysis::{
     semantic::{SemanticBody, SemanticInstance, same_owner_effect_binding},
     ty::ty_check::{BodyOwner, LocalBinding},
 };
+use hir::hir_def::FuncParamMode;
 
 use crate::{
+    RuntimeInstanceKey,
     db::MirDb,
     runtime::{RuntimeBoundarySpec, RuntimeParamPlan},
 };
@@ -48,6 +50,25 @@ pub(crate) fn runtime_param_locals<'db>(
     entries
         .iter()
         .map(|entry| runtime_visible_binding_local(body, entry.binding))
+        .collect()
+}
+
+/// Whether each runtime parameter of `key` is an access of its caller's
+/// place: a view or `mut` parameter, an access part of a product, or an
+/// effect. Fe's access rules make such a place exclusive to the call or
+/// unwritten during it.
+pub fn runtime_param_accesses<'db>(db: &'db dyn MirDb, key: RuntimeInstanceKey<'db>) -> Vec<bool> {
+    let Some(semantic) = key.semantic(db) else {
+        return Vec::new();
+    };
+    runtime_visible_binding_plans(db, semantic)
+        .iter()
+        .map(|entry| match entry.binding {
+            LocalBinding::Param { mode, .. } => mode != FuncParamMode::Own,
+            LocalBinding::ParamPart { access, .. } => access.is_some(),
+            LocalBinding::EffectParam { .. } => true,
+            LocalBinding::Local { .. } => false,
+        })
         .collect()
 }
 

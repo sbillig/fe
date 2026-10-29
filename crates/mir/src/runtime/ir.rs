@@ -451,7 +451,11 @@ pub enum ScalarRepr {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ScalarRole<'db> {
     Plain,
-    EnumTag { enum_layout: LayoutId<'db> },
+    EnumTag {
+        enum_layout: LayoutId<'db>,
+    },
+    /// A memory address, which native targets hold as a pointer.
+    Pointer,
 }
 
 #[salsa::interned]

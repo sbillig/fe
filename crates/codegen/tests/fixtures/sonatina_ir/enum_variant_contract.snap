@@ -19,7 +19,7 @@ func private %abi_encode_u256(v0.i256) {
 
     block1:
         v3.@layout_0 = call %alloc 32.i256;
-        v4.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_6ab2 v3;
+        v4.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_1f42 v3;
         call %store_word v4 v0;
         jump block3;
 
@@ -96,7 +96,7 @@ func private %calldataload(v0.i256) -> i256 {
         return v2;
 }
 
-func private %capacity(v0.objref<@layout_0>) -> i256 {
+func private %capacity(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -122,7 +122,7 @@ func private %cast__g5f1e(v0.i256) -> i256 {
         return v0;
 }
 
-func private %codecopy(v0.objref<@layout_0>, v1.i256, v2.i256, v3.i256) {
+func private %codecopy(noalias v0.objref<@layout_0>, v1.i256, v2.i256, v3.i256) {
     block0:
         jump block1;
 
@@ -228,7 +228,7 @@ func private %init() {
         jump block4;
 }
 
-func private %len__g79ff(v0.objref<@layout_1>) -> i256 {
+func private %len__g79ff(noalias v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -238,7 +238,7 @@ func private %len__g79ff(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %impl_MemBuffer__len(v0.objref<@layout_0>) -> i256 {
+func private %impl_MemBuffer__len(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -266,7 +266,7 @@ func private %manual_contract_runtime_root_EnumContract() {
         evm_stop;
 }
 
-func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -> i256 {
+func private %prepare_copy_destination(noalias v0.objref<@layout_0>, v1.i256, v2.i256) -> i256 {
     block0:
         jump block1;
 
@@ -292,7 +292,7 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         br v15 block10 block11;
 
     block6:
-        v23.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0b32 v0;
+        v23.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b060 v0;
         v24.i256 = call %impl_MemBuffer__len v0;
         v25.i256 = add v23 v24;
         v27.i256 = call %impl_MemBuffer__len v0;
@@ -303,7 +303,7 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         jump block8;
 
     block8:
-        v34.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0b32 v0;
+        v34.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b060 v0;
         v36.i256 = call %downcast_unchecked v1;
         v37.i256 = add v34 v36;
         return v37;
@@ -328,17 +328,7 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         jump block8;
 }
 
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_0b32(v0.objref<@layout_0>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_6ab2(v0.@layout_0) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_1f42(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
@@ -347,7 +337,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_6ab2(v0.@layout_0) -> i25
         return v3;
 }
 
-func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b060(noalias v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -357,7 +347,17 @@ func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %return_data(v0.objref<@layout_1>) {
+func private %ptr__g79ff(noalias v0.objref<@layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+
+func private %return_data(noalias v0.objref<@layout_1>) {
     block0:
         jump block1;
 
@@ -473,7 +473,7 @@ func private %runtime() {
         jump block22;
 }
 
-func private %set_len(v0.objref<@layout_0>, v1.i256) {
+func private %set_len(noalias v0.objref<@layout_0>, v1.i256) {
     block0:
         jump block1;
 

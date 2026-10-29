@@ -435,7 +435,7 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
     let repr = match ty.base_ty(db).data(db) {
         TyData::TyBase(TyBase::Prim(prim)) => match prim {
             PrimTy::Bool => ScalarRepr::Bool,
-            PrimTy::Ptr(space) => return Some(address_int_class(db, *space)),
+            PrimTy::Ptr(space) => return Some(pointer_class(db, *space)),
             PrimTy::String => ScalarRepr::FixedBytes {
                 // Fixed strings have at most 31 payload bytes, but casts and
                 // `to_word` operate on the full EVM word.
@@ -492,6 +492,20 @@ pub(crate) fn memory_int_const(db: &dyn MirDb, value: u64) -> ConstScalar {
             .into_iter()
             .skip_while(|byte| *byte == 0)
             .collect(),
+    }
+}
+
+/// The scalar a pointer into `space` is: its address integer, which for
+/// memory is a pointer.
+pub(crate) fn pointer_class<'db>(db: &dyn MirDb, space: AddressSpace) -> ScalarClass<'db> {
+    let class = address_int_class(db, space);
+    if space == AddressSpace::Memory {
+        ScalarClass {
+            role: ScalarRole::Pointer,
+            ..class
+        }
+    } else {
+        class
     }
 }
 
@@ -709,7 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn pointers_are_address_words() {
+    fn pointers_are_address_scalars() {
         let db = DriverDataBase::default();
         let assumptions = PredicateListId::new(&db, Vec::new());
         let env = RuntimeTypeEnv::new(None, assumptions);
@@ -718,20 +732,29 @@ mod tests {
         let word_ptr_ptr_ty = TyId::ptr_to(&db, word_ptr_ty);
         let slot_ty = TyId::ptr_in(&db, AddressSpace::Storage, TyId::u256(&db));
 
-        for ty in [word_ptr_ty, word_ptr_ptr_ty, slot_ty] {
+        // A memory pointer is a pointer, and a storage pointer its slot.
+        let pointer = RuntimeClass::Scalar(pointer_class(&db, AddressSpace::Memory));
+        for (ty, class) in [
+            (word_ptr_ty, &pointer),
+            (word_ptr_ptr_ty, &pointer),
+            (slot_ty, &word),
+        ] {
             assert_eq!(
-                top_level_class_for_ty_in_env(&db, env, ty, AddressSpace::Memory),
-                Some(word.clone())
+                top_level_class_for_ty_in_env(&db, env, ty, AddressSpace::Memory).as_ref(),
+                Some(class)
             );
         }
-        let memory = RuntimeClass::raw_addr(&db, AddressSpace::Memory, word.clone());
         assert_eq!(
             deref_transport_class_in_env(&db, env, word_ptr_ty),
-            Some(memory.clone())
+            Some(RuntimeClass::raw_addr(
+                &db,
+                AddressSpace::Memory,
+                word.clone()
+            ))
         );
         assert_eq!(
             deref_transport_class_in_env(&db, env, word_ptr_ptr_ty),
-            Some(memory)
+            Some(RuntimeClass::raw_addr(&db, AddressSpace::Memory, pointer))
         );
         assert_eq!(
             deref_transport_class_in_env(&db, env, slot_ty),
@@ -872,14 +895,15 @@ fn shapes(_ a: *A, _ b: *B, _ odd: *Odd) {}
     }
 
     #[test]
-    fn recursive_pointer_fields_are_words() {
+    fn recursive_pointer_fields_are_pointers() {
         with_source(|db, top_mod| {
             let (ptr_ty, env) = param(db, top_mod, "first", 0);
             let node = deref_transport_class_in_env(db, env, ptr_ty)
                 .and_then(|transport| transport.deref_target(db))
                 .expect("pointer parameter");
             let word = stored_class_for_ty_in_env(db, env, TyId::u256(db));
-            assert_eq!(struct_fields(db, &node), vec![word.clone(), word]);
+            let pointer = RuntimeClass::Scalar(pointer_class(db, AddressSpace::Memory));
+            assert_eq!(struct_fields(db, &node), vec![word, pointer]);
         });
     }
 

@@ -20,7 +20,7 @@ use mir::{
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-use mir::{RuntimeLinkage, build_native_executable_package};
+use mir::{RuntimeLinkage, ScalarClass, ScalarRole, build_native_executable_package};
 #[cfg(all(
     feature = "cranelift",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -169,6 +169,11 @@ pub fn main() -> i32 {
     let RuntimeClass::Scalar(address_scalar) = address.clone() else {
         panic!("a `usize` is a scalar: {address:?}");
     };
+    // Only a memory pointer converts to a raw memory address.
+    let pointer = RuntimeClass::Scalar(ScalarClass {
+        role: ScalarRole::Pointer,
+        ..address_scalar.clone()
+    });
     let raw = RuntimeClass::RawAddr {
         space: AddressSpace::Memory,
         pointee: None,
@@ -177,7 +182,7 @@ pub fn main() -> i32 {
     let origin = body.terminator_origins[0];
     // A raw address in a stack slot, stored and loaded back.
     body.locals = [
-        (address.clone(), false),
+        (pointer, false),
         (raw.clone(), true),
         (raw, false),
         (address, false),
@@ -252,8 +257,8 @@ pub fn main() -> i32 {
         .split("func ")
         .find(|function| function.contains("%address("))
         .expect("lowered address helper");
-    // The slot, its store and its load all take 64 bits.
-    assert!(function.contains("alloca i64"), "{function}");
+    // The slot, its store and its load all take a 64-bit pointer.
+    assert!(function.contains("alloca *i8"), "{function}");
     assert!(!function.contains("i256"), "{function}");
 }
 

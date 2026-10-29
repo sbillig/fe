@@ -18,9 +18,7 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use super::{
-    CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet, scalar_ty,
-};
+use super::{CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet};
 
 // The descriptor's layout also records the referent's address space. Provider
 // kinds may be erased when a reference is stored inside an ordinary typed slot.
@@ -81,7 +79,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             ObjMaterializeStack::new(self.module.inst_set(), descriptor),
             ptr_ty,
         );
-        self.coerce_value_to_ty(descriptor, Type::I256)
+        self.coerce_value_to_ty(descriptor, self.module.address_ty(AddressSpace::Memory))
     }
 
     pub(super) fn load_memory_reference(
@@ -171,7 +169,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         let ty = match class {
-            RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
+            RuntimeClass::Scalar(scalar) => self.module.scalar_repr_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
         let packed = match class {
@@ -273,7 +271,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         value: ValueId,
     ) -> Result<(), LowerError> {
         let ty = match class {
-            RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
+            RuntimeClass::Scalar(scalar) => self.module.scalar_repr_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
         let value = self.coerce_value_to_ty(value, ty)?;

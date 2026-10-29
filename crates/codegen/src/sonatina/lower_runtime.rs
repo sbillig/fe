@@ -19,7 +19,7 @@ use driver::DriverDataBase;
 use hir::{
     analysis::{
         semantic::FieldIndex,
-        ty::{AddressSpace, ty_check::BodyOwner, ty_def::TyId},
+        ty::{AddressSpace, ty_check::BodyOwner},
     },
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
@@ -31,7 +31,7 @@ use mir::{
     ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
     RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
     RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr,
-    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place, runtime_param_accesses,
     scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -50,7 +50,7 @@ use sonatina_ir::{
         data::{
             Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, MemAllocDynamic,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, MemAllocDynamic,
             Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjLoad, ObjMaterializeStack, ObjProj,
             ObjStore, SymAddr, SymSize, SymbolRef,
         },
@@ -190,6 +190,7 @@ define_lowering_inst_set!(
     EnumTag,
     EnumWriteVariant,
     ExtractValue,
+    Gep,
     InsertValue,
     Memzero,
     Mload,
@@ -388,7 +389,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     /// `*i8` and a `usize` or `isize` an address-wide integer.
     fn host_function(&self, host: HostFunction) -> Result<FuncRef, LowerError> {
         let pointer = self.builder.ptr_type(Type::I8);
-        let size = self.address_ty(AddressSpace::Memory);
+        let size = self.address_int_ty(AddressSpace::Memory);
         let (args, ret) = match host {
             HostFunction::Malloc => (vec![size], Some(pointer)),
             HostFunction::Free => (vec![pointer], None),
@@ -410,10 +411,20 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         })
     }
 
-    /// An address in `space`: the backend's pointer integer for memory, as
-    /// wide as the compilation target's `usize`, and a word for the EVM's
-    /// word-addressed spaces.
+    /// An address in `space`: a byte pointer for native memory, and otherwise
+    /// its integer.
     fn address_ty(&self, space: AddressSpace) -> Type {
+        if space == AddressSpace::Memory && self.is_native_target() {
+            self.builder.ptr_type(Type::I8)
+        } else {
+            self.address_int_ty(space)
+        }
+    }
+
+    /// An address in `space` as an integer: the backend's pointer integer for
+    /// memory, as wide as the compilation target's `usize`, and a word for the
+    /// EVM's word-addressed spaces.
+    fn address_int_ty(&self, space: AddressSpace) -> Type {
         if space == AddressSpace::Memory {
             self.builder.ctx.type_layout.pointer_repl()
         } else {
@@ -833,47 +844,22 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         name
     }
 
-    /// The parameter and return types of `instance`. Pointers are address
-    /// words; host calls instead pass a declared pointer as a machine pointer,
-    /// without the native i256 indirect-value ABI.
+    /// The parameter and return types of `instance`.
     fn signature_tys(
         &mut self,
         instance: RuntimeInstance<'db>,
     ) -> Result<(Vec<Type>, Option<Type>), LowerError> {
         let signature = instance.interface_signature(self.db);
-        let host = if self.is_native_target() && instance.is_external_declaration(self.db) {
-            instance
-                .key(self.db)
-                .semantic(self.db)
-                .and_then(|semantic| match semantic.key(self.db).owner(self.db) {
-                    BodyOwner::Func(func, _) => Some(func),
-                    _ => None,
-                })
-        } else {
-            None
-        };
-        let db = self.db;
-        let declared_pointer = |ty: Option<TyId<'db>>| {
-            ty.is_some_and(|ty| matches!(ty.as_ptr(db), Some((_, AddressSpace::Memory))))
-        };
-        let mut params = Vec::with_capacity(signature.params.len());
-        for (idx, param) in signature.params.iter().enumerate() {
-            let declared = host
-                .and_then(|func| func.arg_ty(db, idx))
-                .map(|ty| ty.instantiate_identity());
-            params.push(if declared_pointer(declared) {
-                self.builder.ptr_type(Type::I8)
-            } else {
-                self.ty_for_class(&param.class)?
-            });
-        }
-        let ret = match &signature.ret {
-            Some(_) if declared_pointer(host.map(|func| func.return_ty(db))) => {
-                Some(self.builder.ptr_type(Type::I8))
-            }
-            Some(class) => Some(self.ty_for_class(class)?),
-            None => None,
-        };
+        let params = signature
+            .params
+            .iter()
+            .map(|param| self.ty_for_class(&param.class))
+            .collect::<Result<_, _>>()?;
+        let ret = signature
+            .ret
+            .as_ref()
+            .map(|class| self.ty_for_class(class))
+            .transpose()?;
         Ok((params, ret))
     }
 
@@ -907,8 +893,17 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     fn scalar_ty(&mut self, scalar: &ScalarClass<'db>) -> Result<Type, LowerError> {
         Ok(match scalar.role {
             mir::ScalarRole::EnumTag { enum_layout } => self.enum_tag_ty(enum_layout)?,
-            _ => scalar_ty(scalar),
+            _ => self.scalar_repr_ty(scalar),
         })
+    }
+
+    /// The type of `scalar`'s representation, which for an enum tag is its
+    /// integer. A memory address is a pointer on native targets.
+    fn scalar_repr_ty(&self, scalar: &ScalarClass<'db>) -> Type {
+        match scalar.role {
+            mir::ScalarRole::Pointer => self.address_ty(AddressSpace::Memory),
+            _ => scalar_ty(scalar),
+        }
     }
 
     fn enum_tag_ty(&mut self, enum_layout: LayoutId<'db>) -> Result<Type, LowerError> {
@@ -949,7 +944,8 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     "const scalar `{scalar:?}` does not fit runtime class `{class:?}`"
                 )));
             }
-            let ty = self.scalar_ty(class)?;
+            // A pointer constant is its address integer.
+            let ty = scalar_ty(class);
             return Ok(match scalar {
                 ConstScalar::Bool(value) => Immediate::from(*value),
                 ConstScalar::Int { signed, words, .. } => {
@@ -1584,6 +1580,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
         }
 
+        // A view, `mut` or effect parameter's object belongs to this call
+        // alone, or nothing writes it during the call.
+        if !self.module.argument_packs.contains_key(&self.body.owner) {
+            let accesses = runtime_param_accesses(self.module.db, self.body.key);
+            for (idx, access) in accesses.into_iter().enumerate() {
+                if access
+                    && let Some(&arg) = self.fb.func.arg_values.get(idx)
+                    && self.fb.type_of(arg).is_obj_ref(&self.fb.module_builder.ctx)
+                {
+                    self.fb.func.set_noalias_arg(arg);
+                }
+            }
+        }
+
         let params = self.body.signature.params.clone();
         for (idx, param) in params.iter().enumerate() {
             let local = param.local;
@@ -1850,7 +1860,22 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     .value_class(*value)
                     .is_some_and(RuntimeClass::is_signed_scalar);
                 let value = self.local_value(*value)?;
-                self.cast_scalar_with_signedness(value, scalar_ty(to), signed)?
+                let ty = self.module.scalar_repr_ty(to);
+                let ctx = &self.fb.module_builder.ctx;
+                let address = self.module.address_int_ty(AddressSpace::Memory);
+                // A pointer converts to and from an integer through its address.
+                match (self.fb.type_of(value).is_pointer(ctx), ty.is_pointer(ctx)) {
+                    (false, false) => self.cast_scalar_with_signedness(value, ty, signed)?,
+                    (true, false) => {
+                        let address = self.coerce_value_to_ty(value, address)?;
+                        self.cast_scalar(address, ty)?
+                    }
+                    (false, true) => {
+                        let address = self.cast_scalar_with_signedness(value, address, signed)?;
+                        self.coerce_value_to_ty(address, ty)?
+                    }
+                    (true, true) => self.coerce_value_to_ty(value, ty)?,
+                }
             }
             RExpr::ConstRef { region, .. } => {
                 let gv = self.module.lower_const_region(*region)?;
@@ -2203,7 +2228,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             let malloc = self.module.host_function(HostFunction::Malloc)?;
             // Callers bound the size to the address width.
             let size =
-                self.coerce_value_to_ty(size, self.module.address_ty(AddressSpace::Memory))?;
+                self.coerce_value_to_ty(size, self.module.address_int_ty(AddressSpace::Memory))?;
             self.fb
                 .insert_inst(Call::new(inst_set, malloc, smallvec![size]), pointer)
         } else {
@@ -2339,6 +2364,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     // Reject a byte range that wraps the address space.
                     let max = self.fb.make_imm_value(u64::MAX);
                     for address in [dst, src] {
+                        let address = self.coerce_value_to_ty(address, Type::I64)?;
                         let available = self
                             .fb
                             .insert_inst(Sub::new(self.module.inst_set(), max, address), Type::I64);
@@ -2351,8 +2377,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     let memmove = self.module.host_function(HostFunction::Memmove)?;
                     let dst = self.coerce_value_to_ty(dst, pointer)?;
                     let src = self.coerce_value_to_ty(src, pointer)?;
-                    let len =
-                        self.coerce_value_to_ty(len, self.module.address_ty(AddressSpace::Memory))?;
+                    let len = self.coerce_value_to_ty(
+                        len,
+                        self.module.address_int_ty(AddressSpace::Memory),
+                    )?;
                     self.fb.insert_inst(
                         Call::new(self.module.inst_set(), memmove, smallvec![dst, src, len]),
                         pointer,
@@ -2734,13 +2762,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
-                let address = self.module.address_ty(AddressSpace::Memory);
                 let ptr = self.local_value(*ptr)?;
-                let ptr = self.coerce_value_to_ty(ptr, address)?;
                 let offset = self.local_value(*offset)?;
-                let offset = self.cast_scalar(offset, address)?;
-                self.fb
-                    .insert_inst(Add::new(self.module.inst_set(), ptr, offset), address)
+                self.offset_address(ptr, offset)?
             }
             RuntimeBuiltin::Call {
                 gas,
@@ -3689,7 +3713,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let address = self.module.address_ty(space);
+                    let address = self.module.address_int_ty(space);
                     let idx = self.checked_index_value(&base_class, index)?;
                     let idx = self.cast_scalar(idx, address)?;
                     let scale = self.ptr_index_stride_for_space(&base_class, space)?;
@@ -3702,11 +3726,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         self.fb
                             .insert_inst(Mul::new(self.module.inst_set(), idx, scale), address)
                     };
-                    let addr = self.coerce_value_to_ty(addr, address)?;
+                    let addr = self.coerce_value_to_ty(addr, self.module.address_ty(space))?;
                     PlaceTerminal::Ptr {
-                        addr: self
-                            .fb
-                            .insert_inst(Add::new(self.module.inst_set(), addr, scaled), address),
+                        addr: self.offset_address(addr, scaled)?,
                         space,
                         class: class.clone(),
                         lane: None,
@@ -5384,7 +5406,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     /// type, which must take as many bytes as the class's MIR layout.
     fn native_memory_ty(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError> {
         let ty = match class {
-            RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
+            RuntimeClass::Scalar(scalar) => self.module.scalar_repr_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
         let layout_size = RuntimeMemoryLayout::raw(self.module.db).class_size(class)?;
@@ -6202,8 +6224,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         operand: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         let ty = self.module.ty_for_class(operand)?;
-        let lhs = self.cast_scalar(lhs, ty)?;
-        let rhs = self.cast_scalar(rhs, ty)?;
+        let (lhs, rhs) = if ty.is_pointer(&self.fb.module_builder.ctx) {
+            // Pointers compare as their addresses.
+            let address = self.module.address_int_ty(AddressSpace::Memory);
+            (
+                self.coerce_value_to_ty(lhs, address)?,
+                self.coerce_value_to_ty(rhs, address)?,
+            )
+        } else {
+            (self.cast_scalar(lhs, ty)?, self.cast_scalar(rhs, ty)?)
+        };
         let signed = operand.is_signed_scalar();
         Ok(match op {
             CompBinOp::Eq => self
@@ -6560,18 +6590,37 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         if units == 0 {
             return Ok(base);
         }
-        // An address keeps its integer type: a memory address is a `usize`,
-        // a storage slot a word. A typed pointer steps as a memory address.
+        let ty = self.fb.type_of(base);
+        let offset_ty = if ty.is_integral() {
+            ty
+        } else {
+            self.module.address_int_ty(AddressSpace::Memory)
+        };
+        let offset = self
+            .fb
+            .make_imm_value(Immediate::from_i256(I256::from(units), offset_ty));
+        self.offset_address(base, offset)
+    }
+
+    /// Steps `base` by `offset` bytes, or words in a word-addressed space. An
+    /// integer address keeps its type: an EVM memory address is a `usize` and
+    /// a storage slot a word. A pointer steps as a memory address, with `gep`
+    /// where that is a pointer.
+    fn offset_address(&mut self, base: ValueId, offset: ValueId) -> Result<ValueId, LowerError> {
         let ty = Some(self.fb.type_of(base))
             .filter(|ty| ty.is_integral())
             .unwrap_or_else(|| self.module.address_ty(AddressSpace::Memory));
         let base = self.coerce_value_to_ty(base, ty)?;
-        let offset = self
-            .fb
-            .make_imm_value(Immediate::from_i256(I256::from(units), ty));
-        Ok(self
-            .fb
-            .insert_inst(Add::new(self.module.inst_set(), base, offset), ty))
+        let is = self.module.inst_set();
+        Ok(if ty.is_integral() {
+            let offset = self.cast_scalar(offset, ty)?;
+            self.fb.insert_inst(Add::new(is, base, offset), ty)
+        } else {
+            let offset =
+                self.cast_scalar(offset, self.module.address_int_ty(AddressSpace::Memory))?;
+            self.fb
+                .insert_inst(Gep::new(is, smallvec![base, offset]), ty)
+        })
     }
 
     fn offset_ptr_array_elem_address(
