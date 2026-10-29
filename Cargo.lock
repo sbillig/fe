@@ -1449,7 +1449,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
@@ -1457,7 +1457,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "cranelift-srcgen",
 ]
@@ -1465,7 +1465,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "cranelift-entity 0.135.2",
  "wasmtime-internal-core 48.0.2",
@@ -1474,7 +1474,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bitset"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "wasmtime-internal-core 48.0.2",
 ]
@@ -1491,7 +1491,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -1517,7 +1517,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -1528,12 +1528,12 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 
 [[package]]
 name = "cranelift-control"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "arbitrary",
 ]
@@ -1541,7 +1541,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "cranelift-bitset 0.135.2",
  "wasmtime-internal-core 48.0.2",
@@ -1560,7 +1560,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.1",
@@ -1572,12 +1572,12 @@ dependencies = [
 [[package]]
 name = "cranelift-isle"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 
 [[package]]
 name = "cranelift-module"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -1587,7 +1587,7 @@ dependencies = [
 [[package]]
 name = "cranelift-native"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -1597,7 +1597,7 @@ dependencies = [
 [[package]]
 name = "cranelift-object"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "anyhow",
  "cranelift-codegen",
@@ -1612,7 +1612,7 @@ dependencies = [
 [[package]]
 name = "cranelift-srcgen"
 version = "0.135.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 
 [[package]]
 name = "crc"
@@ -1947,11 +1947,6 @@ name = "dot2"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "855423f2158bcc73798b3b9a666ec4204597a72370dc91dbdb8e7f9519de8cc3"
-
-[[package]]
-name = "dot2"
-version = "1.0.0"
-source = "git+https://github.com/sanpii/dot2.rs.git#5c4ffa7182d3e6c14b91b94bb9efaad1e218022b"
 
 [[package]]
 name = "dunce"
@@ -2314,6 +2309,7 @@ dependencies = [
  "smallvec 1.15.1",
  "smallvec 2.0.0-alpha.12",
  "sonatina-codegen",
+ "sonatina-cranelift",
  "sonatina-ir",
  "sonatina-triple",
  "sonatina-verifier",
@@ -2420,7 +2416,7 @@ dependencies = [
  "cranelift-entity 0.136.1",
  "derive_more 1.0.0",
  "dir-test",
- "dot2 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dot2",
  "either",
  "ena",
  "fe-common",
@@ -6794,16 +6790,11 @@ dependencies = [
 
 [[package]]
 name = "sonatina-codegen"
-version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=716267b3046de32a62338eba72447c394c6de588#716267b3046de32a62338eba72447c394c6de588"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
 dependencies = [
  "bit-set",
- "cranelift-codegen",
  "cranelift-entity 0.136.1",
- "cranelift-frontend",
- "cranelift-module",
- "cranelift-native",
- "cranelift-object",
  "dashmap",
  "indexmap 2.14.2",
  "rpds",
@@ -6818,16 +6809,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "sonatina-cranelift"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-entity 0.136.1",
+ "cranelift-frontend",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "rustc-hash 2.1.1",
+ "sonatina-codegen",
+ "sonatina-ir",
+ "sonatina-triple",
+ "sonatina-verifier",
+]
+
+[[package]]
 name = "sonatina-ir"
-version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=716267b3046de32a62338eba72447c394c6de588#716267b3046de32a62338eba72447c394c6de588"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
 dependencies = [
  "bit-set",
  "bitflags 2.11.0",
  "cranelift-entity 0.136.1",
  "crossbeam-utils",
  "dashmap",
- "dot2 1.0.0 (git+https://github.com/sanpii/dot2.rs.git)",
+ "dot2",
  "dyn-clone",
  "indexmap 2.14.2",
  "parking_lot",
@@ -6844,8 +6853,8 @@ dependencies = [
 
 [[package]]
 name = "sonatina-macros"
-version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=716267b3046de32a62338eba72447c394c6de588#716267b3046de32a62338eba72447c394c6de588"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6854,8 +6863,8 @@ dependencies = [
 
 [[package]]
 name = "sonatina-parser"
-version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=716267b3046de32a62338eba72447c394c6de588#716267b3046de32a62338eba72447c394c6de588"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
 dependencies = [
  "annotate-snippets",
  "bimap",
@@ -6875,8 +6884,8 @@ dependencies = [
 
 [[package]]
 name = "sonatina-sp1"
-version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=716267b3046de32a62338eba72447c394c6de588#716267b3046de32a62338eba72447c394c6de588"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
 dependencies = [
  "object",
  "tempfile",
@@ -6885,16 +6894,16 @@ dependencies = [
 
 [[package]]
 name = "sonatina-triple"
-version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=716267b3046de32a62338eba72447c394c6de588#716267b3046de32a62338eba72447c394c6de588"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "sonatina-verifier"
-version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=716267b3046de32a62338eba72447c394c6de588#716267b3046de32a62338eba72447c394c6de588"
+version = "0.1.0"
+source = "git+https://github.com/fe-lang/sonatina?rev=92df01a623ec87927452d884131d93589a711c3d#92df01a623ec87927452d884131d93589a711c3d"
 dependencies = [
  "cranelift-entity 0.136.1",
  "rpds",
@@ -7986,7 +7995,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-core"
 version = "48.0.2"
-source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
+source = "git+https://github.com/fe-lang/wasmtime?rev=94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1#94b3dcc3cc823e12a51513c06918ee0dcd3b2aa1"
 dependencies = [
  "hashbrown 0.17.1",
  "libm",
