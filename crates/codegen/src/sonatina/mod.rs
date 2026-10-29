@@ -22,7 +22,7 @@ use mir::{RuntimeSectionName, build_native_executable_package, native_executable
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
-use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
+use sonatina_codegen::Compile;
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
     machinst::vcode::{SectionCodeUnitId, VCodeInst},
@@ -32,6 +32,8 @@ use sonatina_codegen::{
         UnmappedReasonCoverage,
     },
 };
+#[cfg(feature = "cranelift")]
+use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_ir::{
     BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
@@ -265,7 +267,7 @@ fn format_object_compile_errors(errors: &[sonatina_codegen::object::ObjectCompil
 }
 
 #[cfg(feature = "cranelift")]
-fn format_cranelift_errors(errors: &[sonatina_codegen::isa::cranelift::CraneliftError]) -> String {
+fn format_cranelift_errors(errors: &[sonatina_cranelift::CraneliftError]) -> String {
     errors
         .iter()
         .map(ToString::to_string)

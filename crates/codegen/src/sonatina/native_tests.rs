@@ -1,7 +1,8 @@
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use mir::{build_native_test_runtime_package, format_runtime_package};
-use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
+use sonatina_codegen::Compile;
+use sonatina_cranelift::CraneliftObjectBackend;
 use sonatina_ir::{Linkage, ir_writer::ModuleWriter};
 
 use super::{

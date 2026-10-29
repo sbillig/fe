@@ -4,8 +4,8 @@ version = "26.5.0"
 edition.workspace = true
 
 [features]
-cranelift = ["sonatina-codegen/cranelift"]
-sp1 = ["cranelift", "sonatina-codegen/sp1"]
+cranelift = ["dep:sonatina-cranelift"]
+sp1 = ["cranelift", "sonatina-cranelift/sp1"]
 
 [dependencies]
 driver = { path = "../driver", package = "fe-driver" }
@@ -22,6 +22,7 @@ rustc-hash.workspace = true
 sonatina-ir.workspace = true
 sonatina-triple.workspace = true
 sonatina-codegen.workspace = true
+sonatina-cranelift = { workspace = true, optional = true }
 sonatina-verifier.workspace = true
 smallvec.workspace = true
 smallvec1.workspace = true
