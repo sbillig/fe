@@ -1961,9 +1961,33 @@ pub fn emit_ingot_sonatina_bytecode(
     opt_level: OptLevel,
     contract: Option<&str>,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_ingot_sonatina_bytecode_with_options(db, ingot, opt_level, contract, false)
+}
+
+pub fn emit_ingot_sonatina_bytecode_with_observability(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_ingot_sonatina_bytecode_with_options(db, ingot, opt_level, contract, true)
+}
+
+fn emit_ingot_sonatina_bytecode_with_options(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+    emit_observability: bool,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
     let mut outputs = BTreeMap::new();
     for package in select_ingot_runtime_packages(db, ingot, contract)? {
-        for (name, bytecode) in emit_runtime_package_sonatina_bytecode(db, &package, opt_level)? {
+        for (name, bytecode) in emit_runtime_package_sonatina_bytecode_with_options(
+            db,
+            &package,
+            opt_level,
+            emit_observability,
+        )? {
             if outputs.insert(name.clone(), bytecode).is_some() {
                 return Err(LowerError::Internal(format!(
                     "duplicate root object `{name}` across ingot modules"

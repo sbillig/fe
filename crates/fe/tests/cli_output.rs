@@ -639,6 +639,81 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
     assert_eq!(function["outputs"][0]["type"], "uint256");
 }
 
+#[test]
+fn test_cli_build_emit_sizes_accounts_for_every_code_byte() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let build = |name: &str, emit: &str| {
+        let out_dir = temp.path().join(name);
+        let out_dir_str = out_dir.to_string_lossy().to_string();
+        let (output, exit_code) = run_fe_main(&[
+            "build",
+            "--emit",
+            emit,
+            "--out-dir",
+            out_dir_str.as_str(),
+            fixture_path_str,
+        ]);
+        assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+        (out_dir, output)
+    };
+    let (sized, output) = build("sized", "runtime-bytecode,sizes");
+    let (plain, _) = build("plain", "runtime-bytecode");
+
+    let runtime = fs::read_to_string(sized.join("Foo.runtime.bin")).expect("read runtime");
+    assert_eq!(
+        runtime,
+        fs::read_to_string(plain.join("Foo.runtime.bin")).expect("read runtime"),
+        "emitting sizes changed the runtime bytecode"
+    );
+    assert!(
+        !sized.join("Foo.bin").exists(),
+        "unexpected deploy artifact"
+    );
+    assert!(
+        output.contains("Foo.sizes.txt"),
+        "unexpected output:\n{output}"
+    );
+
+    // Each section header gives the section's bytes and code bytes; the
+    // function lines below it add up to the code bytes.
+    let report = fs::read_to_string(sized.join("Foo.sizes.txt")).expect("read sizes");
+    let mut sections: Vec<(&str, usize, usize, usize)> = Vec::new();
+    let mut functions = Vec::new();
+    for line in report.lines() {
+        if let Some((section, rest)) = line.split_once(": ") {
+            let numbers: Vec<usize> = rest
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|word| !word.is_empty())
+                .map(|word| word.parse().expect("byte count"))
+                .collect();
+            sections.push((section, numbers[0], numbers[1], 0));
+        } else {
+            let (bytes, name) = line.trim_start().split_once(' ').expect("function line");
+            sections.last_mut().expect("section header").3 +=
+                bytes.parse::<usize>().expect("function bytes");
+            functions.push(name);
+        }
+    }
+    let names: Vec<_> = sections.iter().map(|section| section.0).collect();
+    assert_eq!(
+        names,
+        ["runtime", "creation"],
+        "unexpected report:\n{report}"
+    );
+    assert_eq!(sections[0].1, runtime.trim().len() / 2, "report:\n{report}");
+    for (section, _, code, function_bytes) in &sections {
+        assert_eq!(code, function_bytes, "{section} code bytes:\n{report}");
+    }
+    assert!(
+        functions.contains(&"contract_runtime_root_Foo"),
+        "missing runtime root:\n{report}"
+    );
+}
+
 #[cfg(all(
     feature = "cranelift",
     any(

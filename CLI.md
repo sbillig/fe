@@ -251,6 +251,7 @@ For each built contract, `fe build` writes (depending on `--emit`):
 - `<out>/<contract>.runtime.bin` (runtime bytecode, hex + trailing newline)
 - `<out>/<contract>.abi.json` (Solidity-compatible ABI; only when `--emit abi`)
 - `<out>/<contract>.metadata.json` (Solidity-standard contract metadata for verifiers like Sourcify; only when `--emit metadata`)
+- `<out>/<contract>.sizes.txt` (code bytes of each function in the runtime and init sections, largest first; only when `--emit sizes`)
 
 For the Sonatina backend, `.bin` is the **init section** bytes and `.runtime.bin` is the **runtime section** bytes.
 

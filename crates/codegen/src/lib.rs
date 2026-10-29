@@ -12,9 +12,10 @@ pub use debug::{
 };
 pub use sonatina::{
     LowerError, SonatinaContractBytecode, SonatinaTestOptions, compile_runtime_package_sonatina,
-    emit_ingot_sonatina_bytecode, emit_ingot_sonatina_ir, emit_ingot_sonatina_ir_optimized,
-    emit_module_sonatina_bytecode, emit_module_sonatina_bytecode_with_observability,
-    emit_module_sonatina_ir, emit_module_sonatina_ir_optimized, emit_runtime_package_sonatina_ir,
+    emit_ingot_sonatina_bytecode, emit_ingot_sonatina_bytecode_with_observability,
+    emit_ingot_sonatina_ir, emit_ingot_sonatina_ir_optimized, emit_module_sonatina_bytecode,
+    emit_module_sonatina_bytecode_with_observability, emit_module_sonatina_ir,
+    emit_module_sonatina_ir_optimized, emit_runtime_package_sonatina_ir,
     emit_runtime_package_sonatina_ir_optimized, emit_test_ingot_sonatina,
     emit_test_module_sonatina, validate_module_sonatina_ir,
 };
