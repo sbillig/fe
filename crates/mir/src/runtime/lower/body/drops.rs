@@ -7,6 +7,7 @@
 //! only it consults.
 use std::mem;
 
+use common::compilation::Target;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
@@ -32,7 +33,7 @@ use rustc_hash::FxHashMap;
 use super::RmirEmitter;
 use crate::{
     db::MirDb,
-    instance::{RuntimeInstance, RuntimeTarget, runtime::runtime_instance_lowered_body},
+    instance::{RuntimeInstance, runtime::runtime_instance_lowered_body},
     runtime::{
         ConstScalar, RBlock, RBlockId, RExpr, RLocalId, RStmt, RTerminator, RuntimeBody,
         RuntimeCarrier, RuntimeClass, RuntimeLocalRoot, ScalarClass, ScalarRepr, ScalarRole,
@@ -513,7 +514,7 @@ impl<'db> RmirEmitter<'db> {
     }
 
     pub(super) fn needs_drop(&self, ty: TyId<'db>) -> bool {
-        runtime_needs_drop(self.db, ty, self.target())
+        runtime_needs_drop(self.db, ty)
     }
 }
 
@@ -573,30 +574,22 @@ fn project_class<'db>(
         })
 }
 
-fn runtime_needs_drop_cycle_initial<'db>(
-    _: &'db dyn MirDb,
-    _: salsa::Id,
-    _: TyId<'db>,
-    _: RuntimeTarget,
-) -> bool {
+fn runtime_needs_drop_cycle_initial<'db>(_: &'db dyn MirDb, _: salsa::Id, _: TyId<'db>) -> bool {
     false
 }
 
-/// Whether destroying a value of `ty` does anything on `target`. Natively,
+/// Whether destroying a value of `ty` does anything on the compilation
+/// target. Natively,
 /// every value with drop glue is destroyed. On EVM, a part is destroyed when
 /// its `drop` has an effect there. As for effects, recursion adds nothing: a
 /// type that holds itself, such as a list of boxed nodes, needs destroying
 /// only if something it holds does.
 #[salsa::tracked(returns(copy), cycle_initial = runtime_needs_drop_cycle_initial)]
-pub(crate) fn runtime_needs_drop<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    target: RuntimeTarget,
-) -> bool {
+pub(crate) fn runtime_needs_drop<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
     if !ty_has_drop_glue(db, ty) {
         return false;
     }
-    if target == RuntimeTarget::Native {
+    if db.compilation_settings().target(db) == Target::Native {
         return true;
     }
     if let Some(adt) = ty.adt_def(db)
@@ -616,14 +609,11 @@ pub(crate) fn runtime_needs_drop<'db>(
             return true;
         };
         let semantic = SemanticInstance::new(db, key);
-        return runtime_instance_has_effect(
-            db,
-            runtime_instance_for_semantic(db, semantic, target),
-        );
+        return runtime_instance_has_effect(db, runtime_instance_for_semantic(db, semantic));
     }
     drop_glue_components(db, ty)
         .into_iter()
-        .any(|component| runtime_needs_drop(db, component, target))
+        .any(|component| runtime_needs_drop(db, component))
 }
 
 /// The components a value of a type without a `Drop` implementation

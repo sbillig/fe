@@ -241,6 +241,9 @@ pub fn build(
     db.compilation_settings()
         .set_profile(&mut db)
         .to(profile.into());
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(backend.target());
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {

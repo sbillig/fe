@@ -38,14 +38,14 @@ pub fn bytes_from_word(_ w: u256) -> Bytes {
 pub fn bytes_from_words<const N: usize>(_ words: [u256; N]) -> Bytes {
     let len: u256 = (N as u256) * 32
     let size: u256 = 32 + len
-    let data = ptr::alloc_bytes(size)
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
     unsafe { store_word(ptr: data, value: len) }
     var i: usize = 0
     while i < N {
-        unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i]) }
+        unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + i * 32), value: words[i]) }
         i += 1
     }
-    unsafe { Bytes::from_abi_tail(data: data, len: len as usize, size: size) }
+    unsafe { Bytes::from_abi_tail(data: data, len: len.downcast_unchecked(), size: size) }
 }
 
 /// Allocate a `Bytes` of byte length `LEN` from `N` u256 words.
@@ -67,12 +67,12 @@ pub fn bytes_from_words_prefix<const LEN: usize, const N: usize>(_ words: [u256;
     let payload_words: usize = (LEN + 31) / 32
     let payload: u256 = (payload_words as u256) * 32
     let size: u256 = 32 + payload
-    let data = ptr::alloc_bytes(size)
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
     unsafe { store_word(ptr: data, value: len) }
     var i: usize = 0
     while i < payload_words {
-        unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i]) }
+        unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + i * 32), value: words[i]) }
         i += 1
     }
-    unsafe { Bytes::from_abi_tail(data: data, len: len as usize, size: size) }
+    unsafe { Bytes::from_abi_tail(data: data, len: len.downcast_unchecked(), size: size) }
 }

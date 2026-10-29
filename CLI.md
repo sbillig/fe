@@ -365,7 +365,7 @@ Type-checks and analyzes Fe code (no bytecode output).
 ### Synopsis
 
 ```
-fe check [--standalone] [--dump-mir] [--report [--report-out <out>] [--report-failed-only]] [path]
+fe check [--standalone] [--backend <backend>] [--dump-mir] [--report [--report-out <out>] [--report-failed-only]] [path]
 ```
 
 If `path` is omitted, it defaults to `.`.
@@ -409,6 +409,11 @@ one's grant nothing. Only use counts: an untrusted dependency's safe functions n
 ingot's code that reaches an `unsafe` block or `unsafe fn` body of an untrusted dependency. A call
 reaches what it runs: the functions it calls, the `StateIndex::locate` of a collection it indexes,
 and the bodies of a contract it creates.
+
+### Backend
+
+`--backend` selects the target to check for, as for `fe build` (default `sonatina`, the EVM).
+Integer widths, `size_of` and layouts depend on it: `usize` is 64 bits with `--backend native`.
 
 ### Optional outputs
 

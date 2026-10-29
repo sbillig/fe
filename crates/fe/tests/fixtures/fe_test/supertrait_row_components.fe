@@ -15,7 +15,7 @@ fn count() -> u256 uses (counts: Counts) {
 }
 
 fn value(_ i: u256) -> u256 uses (counts: Counts) {
-    counts.values[i as usize]
+    counts.values[i.downcast_unchecked()]
 }
 
 /// The values in use, reached through the `Counts` effect.

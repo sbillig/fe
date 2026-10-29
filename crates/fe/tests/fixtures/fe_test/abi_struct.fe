@@ -336,11 +336,11 @@ fn canonical_dyn_array_of_zero_size_elements_is_constant_time() {
     let count: u256 = 1 << 200
     let data = MemBuffer::alloc(32)
     unsafe { store_word(ptr: data.ptr(), value: count) }
-    let units = unsafe { canonical_dyn_array(DynArray<()>::from_abi_tail(data: data.ptr(), len: count as usize, size: 32)) }
-    assert(units.len() == count as usize)
+    let units = unsafe { canonical_dyn_array(DynArray<()>::from_abi_tail(data: data.ptr(), len: count.downcast_unchecked(), size: 32)) }
+    assert(units.len() == count.downcast_unchecked())
     assert(units.encoded_size() == 32)
-    let empties = unsafe { canonical_dyn_array(DynArray<Empty>::from_abi_tail(data: data.ptr(), len: count as usize, size: 32)) }
-    assert(empties.len() == count as usize)
+    let empties = unsafe { canonical_dyn_array(DynArray<Empty>::from_abi_tail(data: data.ptr(), len: count.downcast_unchecked(), size: 32)) }
+    assert(empties.len() == count.downcast_unchecked())
     assert(empties.encoded_size() == 32)
 }
 

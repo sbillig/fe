@@ -3,10 +3,11 @@
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 
-use common::InputDb;
+use common::{InputDb, compilation::Target};
 use driver::DriverDataBase;
 use fe_codegen::{NativeOutputSelection, NativeTarget, OptLevel, emit_module_native_artifacts};
 use mir::{build_native_executable_package, runtime::format_runtime_package};
+use salsa::Setter;
 use url::Url;
 
 fn with_top_mod_for_source<T>(
@@ -15,6 +16,9 @@ fn with_top_mod_for_source<T>(
     f: impl for<'db> FnOnce(&'db DriverDataBase, hir::hir_def::TopLevelMod<'db>) -> T,
 ) -> T {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
     let url = Url::parse(&format!("file:///{name}")).expect("test URL should parse");
     let file = db.workspace().touch(&mut db, url, Some(source.to_string()));
     let top_mod = db.top_mod(file);
@@ -70,7 +74,13 @@ fn native_entry_symbol_is_reserved_when_reachable_helpers_are_named_main() {
         3,
         "associated, trait, and module helpers should have qualified symbols:\n{ir}"
     );
-    assert_eq!(ir.matches(" = call %").count(), 3, "missing calls:\n{ir}");
+    assert_eq!(
+        ir.lines()
+            .filter(|line| line.contains(" = call %") && line.contains("__main"))
+            .count(),
+        3,
+        "missing calls:\n{ir}"
+    );
 }
 
 #[test]
@@ -274,9 +284,10 @@ fn native_argv_entry_has_a_host_pointer_bridge() {
         )
         .unwrap();
         assert!(ir.contains("func public %main("), "{ir}");
+        // The host vector is a `**u8` as Fe lays it out, so it passes as is.
         assert!(ir.contains("**i8"), "{ir}");
         assert!(ir.contains("ptr_to_int"), "{ir}");
-        assert!(ir.contains("zext"), "{ir}");
+        assert!(!ir.contains("mem.alloc_dynamic"), "{ir}");
     }
 }
 

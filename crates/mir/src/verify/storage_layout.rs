@@ -455,7 +455,7 @@ pub contract Other {
         mutate(&mut spec);
         let synthetic = RuntimeSyntheticInstance::new(db, spec.clone());
         let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Synthetic(synthetic), vec![]);
-        let instance = get_or_build_runtime_instance(db, key, crate::RuntimeTarget::Evm);
+        let instance = get_or_build_runtime_instance(db, key);
         let function = RuntimeFunction::new(
             db,
             instance,

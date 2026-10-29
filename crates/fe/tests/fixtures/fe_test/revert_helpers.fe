@@ -112,17 +112,17 @@ pub contract Forwarder uses (call: mut Call) {
 /// A zeroed scratch area of `len` bytes plus a word of slack for unaligned
 /// stores near the end.
 fn scratch(_ len: u256) -> *u8 {
-    let buf = ptr::alloc_bytes(len + 32)
-    unsafe { ptr::zero_bytes(buf, len + 32) }
+    let buf = ptr::alloc_bytes((len + 32).downcast_saturate())
+    unsafe { ptr::zero_bytes(buf, (len + 32).downcast_unchecked()) }
     buf
 }
 
 fn put(_ buf: *u8, _ at: u256, _ value: u256) {
-    unsafe { store_word(ptr: ptr::offset_bytes(buf, at), value) }
+    unsafe { store_word(ptr: ptr::offset_bytes(buf, at.downcast_unchecked()), value) }
 }
 
 fn span(_ buf: *u8, _ len: u256) -> ref ptr::MemSpan {
-    unsafe { ptr::MemSpan::from_raw_parts(ptr: buf, len: len as usize) }
+    unsafe { ptr::MemSpan::from_raw_parts(ptr: buf, len: len.downcast_unchecked()) }
 }
 
 /// `Error(string)` revert data with explicit offset, length and total size;

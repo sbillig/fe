@@ -108,7 +108,7 @@ contract C {
 fn needs_drop_skips_destruction_that_does_nothing_on_evm() {
     let ir = |token_drop: &str, many_drop: bool| {
         let many_drop = if many_drop {
-            "impl<T> Drop for Many<T> { fn drop(own self) { if needs_drop<T>() { for i in 0..self.len { unsafe { core::mem::drop(*core::ptr::offset(self.ptr, i as u256)) } } } } }"
+            "impl<T> Drop for Many<T> { fn drop(own self) { if needs_drop<T>() { for i in 0..self.len { unsafe { core::mem::drop(*core::ptr::offset(self.ptr, i)) } } } } }"
         } else {
             ""
         };

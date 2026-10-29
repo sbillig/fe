@@ -10,12 +10,14 @@ struct Tree {
     children: MemVec<Tree>,
 }
 
-// On EVM, freeing does nothing, and holding itself adds no effect, so
-// destroying these owners of plain values compiles away.
+// Natively, destroying these owners of plain values frees their memory. On
+// EVM, freeing does nothing, and holding itself adds no effect, so their
+// destruction compiles away.
 #[test]
-fn plain_recursive_types_need_no_drop_on_evm() {
-    assert(!core::mem::needs_drop<Node>())
-    assert(!core::mem::needs_drop<Tree>())
+fn plain_recursive_types_need_drop_only_natively() {
+    let native = core::size_of<usize>() == 8
+    assert(core::mem::needs_drop<Node>() == native)
+    assert(core::mem::needs_drop<Tree>() == native)
 }
 
 #[test]

@@ -6,7 +6,7 @@ extern {
 }
 
 fn put(_ c: i32) {
-    let _ = putchar(c)
+    let _ = unsafe { putchar(c) }
 }
 
 // Prints its tag when destroyed.

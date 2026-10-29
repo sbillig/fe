@@ -27,11 +27,11 @@ use super::storage_map::StorageKey
 pub fn mapping_slot<K: StorageKey>(_ root: u256, _ key: K) -> u256 {
     // Reserve the entire preimage before encoding: key encoders may allocate.
     let key_len = K::encoded_len(key)
-    let scratch = ptr::alloc_bytes(key_len + 32)
+    let scratch = ptr::alloc_bytes((key_len + 32).downcast_saturate())
     unsafe {
         K::write_key(ptr: scratch, key)
-        mstore(addr: ptr::offset_bytes(scratch, key_len), value: root)
-        keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: (key_len + 32) as usize))
+        mstore(addr: ptr::offset_bytes(scratch, key_len.downcast_unchecked()), value: root)
+        keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: (key_len + 32).downcast_unchecked()))
     }
 }
 

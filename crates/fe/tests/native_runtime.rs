@@ -25,6 +25,8 @@ use num_bigint::BigUint;
 use tempfile::tempdir;
 
 fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
+    // Several tests run built programs that trap.
+    test_utils::skip_crash_reports();
     let result = Command::new(env!("CARGO_BIN_EXE_fe"))
         .args([
             "build",
@@ -48,6 +50,248 @@ fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
         String::from_utf8_lossy(&result.stderr)
     );
     result
+}
+
+#[test]
+fn native_usize_and_pointers_are_64_bits() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/word_widths.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("word_widths");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        let overflow = Command::new(&executable).arg("x").output().unwrap();
+        assert_eq!(
+            overflow.status.signal(),
+            Some(libc::SIGABRT),
+            "O{level}: {overflow:?}"
+        );
+        assert_eq!(
+            overflow.stderr, b"panicked: arithmetic overflow\n",
+            "O{level}: {overflow:?}"
+        );
+    }
+}
+
+#[test]
+fn native_reverts_report_their_data_in_hex() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/revert_hex.fe");
+    for level in ["0", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        // The report writes 32 bytes of data at a time.
+        for len in [1, 32, 33, 65] {
+            let result = Command::new(out.join("revert_hex"))
+                .args(vec!["x"; len])
+                .output()
+                .unwrap();
+            let digits: String = (0..len).map(|byte| format!("{byte:02x}")).collect();
+            assert_eq!(
+                String::from_utf8_lossy(&result.stderr),
+                format!("panicked: reverted with 0x{digits}\n"),
+                "O{level}/{len}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_isize_abi_words_must_fit_64_bits() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("isize_words.fe");
+    fs::write(
+        &source,
+        r#"
+use core::abi::{Decode, store_word}
+use core::ptr::{self, MemSpan}
+use std::abi::Sol
+
+fn decode(_ word: u256) -> isize {
+    let data = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: data, value: word) }
+    Decode<Sol>::decode_from(unsafe { MemSpan::from_raw_parts(ptr: data, len: 32) }, 0)
+}
+
+#[test]
+fn extremes_decode() {
+    assert!(decode(0x7fffffffffffffff) == isize::max())
+    assert!(decode(0xffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000) == isize::min())
+}
+
+#[test(should_revert)]
+fn above_max_reverts() {
+    let _ = decode(0x8000000000000000)
+}
+
+#[test(should_revert)]
+fn below_min_reverts() {
+    let _ = decode(0xffffffffffffffffffffffffffffffffffffffffffffffff7fffffffffffffff)
+}
+"#,
+    )
+    .unwrap();
+    test_utils::skip_crash_reports();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("3 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn native_word_sized_allocations_beyond_usize_run_out_of_memory() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("oversized.fe");
+    fs::write(
+        &source,
+        r#"
+use core::abi::DynString
+
+// The string's 32-byte header and padded payload need more than 2**64 bytes.
+#[test(should_revert, panic = 0x41)]
+fn oversized_string() {
+    let _ = DynString::zeroed(usize::max())
+}
+"#,
+    )
+    .unwrap();
+    test_utils::skip_crash_reports();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "O{level}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn native_panics_report_on_stderr_after_flushing_stdout() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/panics.fe");
+    let reports = [
+        "panicked\n",
+        "panicked: index out of bounds\n",
+        "panicked: arithmetic overflow\n",
+        "panicked: custom message\n",
+        "panicked: reverted with 0x4e487b710000000000000000000000000000000000000000000000000000000000000077\n",
+        "panicked: division by zero\n",
+        "panicked: reverted without data\n",
+    ];
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("panics");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        for (kind, report) in reports.iter().enumerate() {
+            // Piped stdout is fully buffered; the panic flushes it.
+            let result = Command::new(&executable)
+                .args(vec!["x"; kind + 1])
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.signal(),
+                Some(libc::SIGABRT),
+                "O{level}/{kind}: {result:?}"
+            );
+            assert_eq!(result.stdout, b"A\n", "O{level}/{kind}: {result:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&result.stderr),
+                *report,
+                "O{level}/{kind}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_tests_check_expected_reverts() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("reverts.fe");
+    fs::write(
+        &source,
+        r#"
+fn bump(_ x: u8) -> u8 {
+    x + 1
+}
+
+#[test(should_revert, panic = 0x11)]
+fn panic_code_matches() {
+    let _ = bump(255)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn panic_code_differs() {
+    let _ = bump(255)
+}
+
+#[test(should_revert, selector = 0x08c379a0)]
+fn selector_matches() {
+    assert!(false, "boom")
+}
+
+#[test(should_revert)]
+fn any_revert() {
+    core::panic_code(0x01)
+}
+
+#[test(should_revert)]
+fn trap_is_not_a_revert() {
+    core::panic()
+}
+
+#[test(should_revert)]
+fn no_revert() {}
+
+#[test]
+fn unexpected_revert() {
+    let _ = bump(255)
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&source)
+            .output()
+            .unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert!(!result.status.success(), "O{level}: {output}");
+        for passing in ["panic_code_matches", "selector_matches", "any_revert"] {
+            assert!(
+                output.contains(&format!("] {passing}\n")),
+                "O{level}: {output}"
+            );
+            assert!(
+                !output.contains(&format!("    {passing}\n")),
+                "O{level}: {output}"
+            );
+        }
+        for failure in [
+            "Expected revert data 0x4e487b710000000000000000000000000000000000000000000000000000000000000032, but got: 0x4e487b710000000000000000000000000000000000000000000000000000000000000011",
+            "Expected test to revert, but it failed with: native test failed (signal: 6 (SIGABRT)",
+            "Expected test to revert, but it succeeded",
+            "Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000011",
+            "test result: FAILED. 3 passed; 4 failed",
+        ] {
+            assert!(output.contains(failure), "O{level}: {output}");
+        }
+    }
 }
 
 #[test]
@@ -563,23 +807,17 @@ fn noisy() {
 fn native_runner_rejects_evm_attributes_and_trace_options() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("unsupported.fe");
-    for attribute in ["should_revert", "balance = 10"] {
-        fs::write(
-            &source,
-            format!("#[test({attribute})]\nfn evm_test() {{}}\n"),
-        )
+    fs::write(&source, "#[test(balance = 10)]\nfn evm_test() {}\n").unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args(["test", "--backend", "native"])
+        .arg(&source)
+        .output()
         .unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
-            .args(["test", "--backend", "native"])
-            .arg(&source)
-            .output()
-            .unwrap();
-        assert!(!result.status.success());
-        assert!(
-            String::from_utf8_lossy(&result.stdout).contains("cannot use EVM"),
-            "{result:?}"
-        );
-    }
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stdout).contains("cannot use the EVM `balance` attribute"),
+        "{result:?}"
+    );
     for option in ["--trace-evm", "--show-logs", "--call-trace"] {
         let result = Command::new(env!("CARGO_BIN_EXE_fe"))
             .args(["test", "--backend", "native", option])
@@ -1215,7 +1453,7 @@ struct Exits {
 }
 impl Drop for Exits {
     fn drop(own self) {
-        exit(self.code)
+        unsafe { exit(self.code) }
     }
 }
 #[inline(never)]
@@ -1239,31 +1477,86 @@ pub fn main() -> i32 {
 }
 
 #[test]
-fn native_extern_declarations_cannot_claim_host_allocator_symbols() {
+fn native_extern_declarations_share_runtime_imports() {
     let temp = tempdir().unwrap();
-    for symbol in ["malloc", "free"] {
-        let source = temp.path().join(format!("{symbol}.fe"));
+    let source = temp.path().join("shared.fe");
+    // The runtime's allocation, copy, release and panic report call the same
+    // C functions as these declarations.
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+extern {
+    fn malloc(_ size: usize) -> *u8
+    fn memmove(_ dest: *u8, _ src: *u8, _ len: usize) -> *u8
+    fn free(_ ptr: *u8)
+    fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize
+}
+pub fn main() -> i32 {
+    let text = unsafe { malloc(3) }
+    let copy = ptr::try_alloc_bytes(3).unwrap()
+    unsafe {
+        *text = 104
+        *ptr::offset_bytes(text, 1) = 105
+        *ptr::offset_bytes(text, 2) = 10
+        ptr::copy_raw(dest: copy, source: text, len: 3)
+        let _ = memmove(text, copy, 3)
+        let _ = write(2, copy, 3)
+        free(text)
+        ptr::dealloc(copy)
+    }
+    core::panic()
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("shared")).output().unwrap();
+        assert_eq!(
+            result.status.signal(),
+            Some(libc::SIGABRT),
+            "O{level}: {result:?}"
+        );
+        assert_eq!(result.stderr, b"hi\npanicked\n", "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_extern_declarations_must_match_runtime_imports() {
+    let temp = tempdir().unwrap();
+    for (name, declaration, call, error) in [
+        (
+            "write",
+            "fn write(_ fd: i64, _ buf: *u8, _ len: usize) -> isize",
+            "write(2, core::ptr::alloc_bytes(1), 0)",
+            "native code calls the C library's `write`, so an `extern` declaration of it must be `fn write(_ fd: i32, _ buf: *u8, _ len: usize) -> isize`",
+        ),
+        (
+            "__fe_revert",
+            "fn __fe_revert(_ data: *u8, _ len: usize)",
+            "__fe_revert(core::ptr::alloc_bytes(1), 0)",
+            "extern symbol `__fe_revert` is reserved: symbols starting with `__fe_` are the compiler's",
+        ),
+    ] {
+        let source = temp.path().join(format!("{name}.fe"));
         fs::write(
             &source,
             format!(
-                "extern {{\n    fn {symbol}(_ value: i64) -> i64\n}}\npub fn main() -> i32 {{\n    let _ = {symbol}(1)\n    0\n}}\n"
+                "extern {{\n    {declaration}\n}}\npub fn main() -> i32 {{\n    let _ = unsafe {{ {call} }}\n    core::panic()\n}}\n"
             ),
         )
         .unwrap();
         let result = Command::new(env!("CARGO_BIN_EXE_fe"))
             .args(["build", "--backend", "native", "--out-dir"])
-            .arg(temp.path().join(format!("out-{symbol}")))
+            .arg(temp.path().join(format!("out-{name}")))
             .arg(&source)
             .output()
             .unwrap();
         let output = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success(), "{result:?}");
-        assert!(
-            output.contains(&format!(
-                "native extern symbol `{symbol}` is reserved for core memory operations"
-            )),
-            "{output}"
-        );
+        assert!(output.contains(error), "{output}");
     }
 }
 
@@ -1274,23 +1567,8 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
     for (name, operation, success) in [
         (
             "empty",
-            "let invalid = ptr::offset(data, 1 << 128)\nptr::copy_raw(dest: invalid, source: invalid, len: 0)",
+            "let invalid = ptr::offset(data, 1 << 62)\nptr::copy_raw(dest: invalid, source: invalid, len: 0)",
             true,
-        ),
-        (
-            "wide_length",
-            "ptr::copy_raw(dest: data, source: data, len: (1 << 64) + 1)",
-            false,
-        ),
-        (
-            "wide_destination",
-            "ptr::copy_raw(dest: ptr::offset(data, 1 << 64), source: data, len: 1)",
-            false,
-        ),
-        (
-            "wide_source",
-            "ptr::copy_raw(dest: data, source: ptr::offset(data, 1 << 64), len: 1)",
-            false,
         ),
         (
             "wrapping_range",
@@ -1309,10 +1587,15 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
                 "{name}/O{level}: {result:?}"
             );
             if !success {
-                // Unreachable traps are SIGILL/SIGTRAP on the supported hosts;
-                // an invalid libc access would instead be SIGSEGV/SIGBUS.
-                assert!(
-                    matches!(result.status.signal(), Some(4 | 5)),
+                // The range check reverts before the copy; an invalid libc
+                // access would instead be SIGSEGV/SIGBUS.
+                assert_eq!(
+                    result.status.signal(),
+                    Some(libc::SIGABRT),
+                    "{name}/O{level}: {result:?}"
+                );
+                assert_eq!(
+                    result.stderr, b"panicked: reverted without data\n",
                     "{name}/O{level}: {result:?}"
                 );
             }
@@ -1431,7 +1714,7 @@ pub fn main() -> i32 {
             core::assert(buffer[i] == (i + 1).downcast_truncate())
         }
         let capacity = buffer.capacity()
-        core::assert(!buffer.try_resize(0x10000000000000000))
+        core::assert(!buffer.try_resize(usize::max()))
         core::assert(buffer.len() == 3000 && buffer.capacity() == capacity)
         core::assert(buffer[32] == 33)
         core::assert(buffer.try_resize(8))
@@ -1873,7 +2156,7 @@ fn same_name() { core::assert(shared_answer() == 42) }
 #[test]
 fn keep_alpha() {
     core::assert(shared_answer() == 42)
-    core::assert(abs(-42) == 42)
+    core::assert(unsafe { abs(-42) } == 42)
 }
 "#,
     )
@@ -1890,7 +2173,7 @@ fn same_name() { core::assert(shared_answer() == 0) }
 #[test]
 fn keep_beta() {
     core::assert(shared_answer() == 42)
-    core::assert(abs(-7) == 7)
+    core::assert(unsafe { abs(-7) } == 7)
 }
 "#,
     )

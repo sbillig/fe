@@ -1374,7 +1374,7 @@ struct Storage<T> {
     value: T,
 }
 
-fn make<T>() -> Storage<T> { todo() }
+fn make<T>() -> Storage<T> { unsafe { todo() } }
 fn take(x: ref Storage<u8>) {}
 fn needs<T>() uses (store: Storage<T>) {}
 
@@ -1427,7 +1427,7 @@ struct Storage<T> {
     value: T,
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(_: ref u8) {}
 fn needs<T>(_: T) uses (store: Storage<T>) {}
 
@@ -1479,7 +1479,7 @@ struct Bad {}
 
 impl Cap<Storage<u8>> for Good {}
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(_: ref u8) {}
 fn needs<T>(_: T) uses (cap: Cap<Storage<T>>) {}
 
@@ -1532,7 +1532,7 @@ impl Logger for Good {
     fn log(self) {}
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(x: ref Bad) {}
 fn needs() uses (logger: Logger) {}
 
@@ -1584,7 +1584,7 @@ impl Logger for Good {
     fn log(self) {}
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(x: ref Bad) {}
 fn needs() uses (logger: Logger) {}
 
@@ -1640,7 +1640,7 @@ impl Logger for AlsoGood {
     fn log(self) {}
 }
 
-fn make<T>() -> T { todo() }
+fn make<T>() -> T { unsafe { todo() } }
 fn take(x: ref Bad) {}
 fn needs() uses (logger: Logger) {}
 
@@ -2187,7 +2187,7 @@ struct Storage<T> {
     value: T,
 }
 
-fn make<T>() -> Storage<T> { todo() }
+fn make<T>() -> Storage<T> { unsafe { todo() } }
 fn needs() uses (store: Storage<u8>) {}
 
 fn caller() {

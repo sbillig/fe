@@ -18,6 +18,7 @@ use crate::{
     runtime::{
         Layout, RExpr, RLocalId, RefKind, RefView, RuntimeBody, RuntimeBuiltin, RuntimeClass,
         RuntimeProgramView, ScalarClass, ScalarRepr, ScalarRole,
+        lower::type_info::address_int_class,
         place::{
             enum_extract_class, enum_tag_class, enum_tag_class_from_value, project_place,
             resolve_runtime_place_address_class, runtime_value_class, scalar_class_from_const,
@@ -52,7 +53,7 @@ pub fn expr_result_class<'db>(
             _ => Some(RuntimeClass::Scalar(scalar_class_from_const(value))),
         },
         RExpr::Placeholder { class } => Some(class.clone()),
-        RExpr::Builtin(builtin) => builtin_result_class(program, body, builtin)?,
+        RExpr::Builtin(builtin) => builtin_result_class(db, program, body, builtin)?,
         RExpr::Unary { value, .. } => {
             if !matches!(
                 (runtime_value_class(body, *value)?, &dst_class),
@@ -200,17 +201,11 @@ pub fn expr_result_class<'db>(
             }
         }
         RExpr::WordToRawAddr { value, space } => {
-            let RuntimeClass::Scalar(ScalarClass {
-                repr:
-                    ScalarRepr::Int {
-                        bits: 256,
-                        signed: false,
-                    },
-                role: ScalarRole::Plain,
-            }) = runtime_value_class(body, *value)?
-            else {
+            if runtime_value_class(body, *value)?
+                != &RuntimeClass::Scalar(address_int_class(db, *space))
+            {
                 return Err(VerifyError::InvalidExprClass(dst));
-            };
+            }
             match &dst_class {
                 Some(RuntimeClass::RawAddr {
                     space: actual_space,
@@ -359,22 +354,23 @@ pub fn expr_result_class<'db>(
 }
 
 fn builtin_result_class<'db>(
+    db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     builtin: &RuntimeBuiltin<'db>,
 ) -> Result<Option<RuntimeClass<'db>>, VerifyError<'db>> {
     match builtin {
         RuntimeBuiltin::Mload { addr } => {
-            verify_address_operand(body, *addr, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *addr, AddressSpace::Memory)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Mstore { addr, value } => {
-            verify_address_operand(body, *addr, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *addr, AddressSpace::Memory)?;
             verify_word_value(body, *value)?;
             Ok(None)
         }
         RuntimeBuiltin::Mstore8 { addr, value } => {
-            verify_address_operand(body, *addr, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *addr, AddressSpace::Memory)?;
             let RuntimeClass::Scalar(ScalarClass {
                 repr:
                     ScalarRepr::Int {
@@ -389,18 +385,18 @@ fn builtin_result_class<'db>(
             Ok(None)
         }
         RuntimeBuiltin::Mcopy { dst, src, len } => {
-            verify_address_operand(body, *dst, AddressSpace::Memory)?;
-            verify_address_operand(body, *src, AddressSpace::Memory)?;
-            verify_word_value(body, *len)?;
+            verify_address_operand(db, body, *dst, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *src, AddressSpace::Memory)?;
+            verify_memory_int(db, body, *len)?;
             Ok(None)
         }
         RuntimeBuiltin::ZeroMem { dst, len } => {
-            verify_address_operand(body, *dst, AddressSpace::Memory)?;
-            verify_word_value(body, *len)?;
+            verify_address_operand(db, body, *dst, AddressSpace::Memory)?;
+            verify_memory_int(db, body, *len)?;
             Ok(None)
         }
         RuntimeBuiltin::StoreConstBytes { dst, .. } => {
-            verify_address_operand(body, *dst, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *dst, AddressSpace::Memory)?;
             Ok(None)
         }
         RuntimeBuiltin::Msize
@@ -435,11 +431,11 @@ fn builtin_result_class<'db>(
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Sload { slot } => {
-            verify_address_operand(body, *slot, AddressSpace::Storage)?;
+            verify_address_operand(db, body, *slot, AddressSpace::Storage)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Sstore { slot, value } => {
-            verify_address_operand(body, *slot, AddressSpace::Storage)?;
+            verify_address_operand(db, body, *slot, AddressSpace::Storage)?;
             verify_word_value(body, *value)?;
             Ok(None)
         }
@@ -450,7 +446,7 @@ fn builtin_result_class<'db>(
         RuntimeBuiltin::ReturnDataCopy { dst, offset, len }
         | RuntimeBuiltin::CallDataCopy { dst, offset, len }
         | RuntimeBuiltin::CodeCopy { dst, offset, len } => {
-            verify_address_operand(body, *dst, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *dst, AddressSpace::Memory)?;
             verify_word_value(body, *offset)?;
             verify_word_value(body, *len)?;
             Ok(None)
@@ -462,13 +458,13 @@ fn builtin_result_class<'db>(
             len,
         } => {
             verify_word_value(body, *addr)?;
-            verify_address_operand(body, *dst, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *dst, AddressSpace::Memory)?;
             verify_word_value(body, *offset)?;
             verify_word_value(body, *len)?;
             Ok(None)
         }
         RuntimeBuiltin::Keccak256 { offset, len } => {
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
@@ -535,17 +531,23 @@ fn builtin_result_class<'db>(
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Malloc { size } | RuntimeBuiltin::TryMalloc { size } => {
-            verify_word_value(body, *size)?;
-            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+            verify_memory_int(db, body, *size)?;
+            Ok(Some(RuntimeClass::Scalar(address_int_class(
+                db,
+                AddressSpace::Memory,
+            ))))
         }
         RuntimeBuiltin::Free { ptr } => {
-            verify_address_operand(body, *ptr, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *ptr, AddressSpace::Memory)?;
             Ok(None)
         }
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
-            verify_word_value(body, *ptr)?;
-            verify_word_value(body, *offset)?;
-            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+            verify_memory_int(db, body, *ptr)?;
+            verify_memory_int(db, body, *offset)?;
+            Ok(Some(RuntimeClass::Scalar(address_int_class(
+                db,
+                AddressSpace::Memory,
+            ))))
         }
         RuntimeBuiltin::Call {
             gas,
@@ -559,9 +561,9 @@ fn builtin_result_class<'db>(
             verify_word_value(body, *gas)?;
             verify_word_value(body, *addr)?;
             verify_word_value(body, *value)?;
-            verify_address_operand(body, *args_offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *args_offset, AddressSpace::Memory)?;
             verify_word_value(body, *args_len)?;
-            verify_address_operand(body, *ret_offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *ret_offset, AddressSpace::Memory)?;
             verify_word_value(body, *ret_len)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
@@ -583,15 +585,15 @@ fn builtin_result_class<'db>(
         } => {
             verify_word_value(body, *gas)?;
             verify_word_value(body, *addr)?;
-            verify_address_operand(body, *args_offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *args_offset, AddressSpace::Memory)?;
             verify_word_value(body, *args_len)?;
-            verify_address_operand(body, *ret_offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *ret_offset, AddressSpace::Memory)?;
             verify_word_value(body, *ret_len)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Create { value, offset, len } => {
             verify_word_value(body, *value)?;
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
@@ -602,13 +604,13 @@ fn builtin_result_class<'db>(
             salt,
         } => {
             verify_word_value(body, *value)?;
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             verify_word_value(body, *salt)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Log0 { offset, len } => {
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             Ok(None)
         }
@@ -617,7 +619,7 @@ fn builtin_result_class<'db>(
             len,
             topic0,
         } => {
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             verify_word_value(body, *topic0)?;
             Ok(None)
@@ -628,7 +630,7 @@ fn builtin_result_class<'db>(
             topic0,
             topic1,
         } => {
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             verify_word_value(body, *topic0)?;
             verify_word_value(body, *topic1)?;
@@ -641,7 +643,7 @@ fn builtin_result_class<'db>(
             topic1,
             topic2,
         } => {
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             verify_word_value(body, *topic0)?;
             verify_word_value(body, *topic1)?;
@@ -656,7 +658,7 @@ fn builtin_result_class<'db>(
             topic2,
             topic3,
         } => {
-            verify_address_operand(body, *offset, AddressSpace::Memory)?;
+            verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
             verify_word_value(body, *len)?;
             verify_word_value(body, *topic0)?;
             verify_word_value(body, *topic1)?;
@@ -704,6 +706,7 @@ pub(crate) fn verify_word_value<'db>(
 }
 
 pub(crate) fn verify_address_operand<'db>(
+    db: &'db dyn MirDb,
     body: &RuntimeBody<'db>,
     value: crate::runtime::RValueId,
     space: AddressSpace,
@@ -713,14 +716,23 @@ pub(crate) fn verify_address_operand<'db>(
             space: actual_space,
             ..
         } if *actual_space == space => Ok(()),
-        RuntimeClass::Scalar(ScalarClass {
-            repr:
-                ScalarRepr::Int {
-                    bits: 256,
-                    signed: false,
-                },
-            ..
-        }) => Ok(()),
+        RuntimeClass::Scalar(scalar) if scalar.repr == address_int_class(db, space).repr => Ok(()),
+        _ => Err(VerifyError::InvalidExprClass(value)),
+    }
+}
+
+/// A memory address, size or offset as an integer: a `usize`.
+pub(crate) fn verify_memory_int<'db>(
+    db: &'db dyn MirDb,
+    body: &RuntimeBody<'db>,
+    value: crate::runtime::RValueId,
+) -> Result<(), VerifyError<'db>> {
+    match runtime_value_class(body, value)? {
+        RuntimeClass::Scalar(scalar)
+            if scalar.repr == address_int_class(db, AddressSpace::Memory).repr =>
+        {
+            Ok(())
+        }
         _ => Err(VerifyError::InvalidExprClass(value)),
     }
 }

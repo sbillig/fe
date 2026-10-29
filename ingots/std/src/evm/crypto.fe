@@ -17,7 +17,7 @@ use super::effects::Address
 use super::ops
 
 fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
-    ptr::offset_bytes(base, bytes)
+    ptr::offset_bytes(base, bytes.downcast_unchecked())
 }
 
 pub const ECRECOVER_ADDRESS: u256 = 0x01
@@ -92,7 +92,7 @@ fn staticcall_memory(
     }
 
     let returned = ops::returndatasize()
-    unsafe { out.set_len(if returned < ret_len as u256 { returned as usize } else { ret_len }) }
+    unsafe { out.set_len(if returned < ret_len as u256 { returned.downcast_unchecked() } else { ret_len }) }
     Result::Ok(out)
 }
 

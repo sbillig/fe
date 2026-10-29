@@ -26,6 +26,7 @@ use camino::Utf8PathBuf;
 use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
+use common::compilation::Target;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
@@ -92,6 +93,17 @@ impl BuildBackend {
             Self::Native => "native",
             #[cfg(feature = "sp1")]
             Self::Sp1 => "sp1",
+        }
+    }
+
+    /// The machine this backend compiles for. SP1 guests are native code.
+    pub fn target(self) -> Target {
+        match self {
+            Self::Sonatina => Target::Evm,
+            #[cfg(feature = "cranelift")]
+            Self::Native => Target::Native,
+            #[cfg(feature = "sp1")]
+            Self::Sp1 => Target::Native,
         }
     }
 
@@ -249,6 +261,10 @@ pub enum Command {
         /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
         standalone: bool,
+        /// Backend whose target to check for: integer widths and layouts
+        /// depend on it.
+        #[arg(long, value_enum, default_value = "sonatina")]
+        backend: BuildBackend,
         /// Compilation profile to use when resolving profile-aware config.
         #[arg(long, default_value = "dev", value_name = "PROFILE")]
         profile: String,
@@ -724,6 +740,7 @@ pub fn run(opts: &Options) {
             path,
             ingot,
             standalone,
+            backend,
             profile,
             dump_mir,
             report,
@@ -735,6 +752,7 @@ pub fn run(opts: &Options) {
                 path,
                 ingot.as_deref(),
                 *standalone,
+                backend.target(),
                 profile,
                 *dump_mir,
                 (*report).then_some(report_out),

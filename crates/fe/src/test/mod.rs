@@ -1494,6 +1494,9 @@ fn prepare_suite_job(
         db.compilation_settings()
             .set_profile(&mut db)
             .to(shared.profile.clone().into());
+        db.compilation_settings()
+            .set_target(&mut db)
+            .to(shared.backend.target());
         db
     });
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
@@ -2973,32 +2976,7 @@ fn execute_test(
         ),
         // Expected revert: execution reverted — check revert data against expectation
         (Err(contract_harness::HarnessError::Revert(data)), Some(expected)) => {
-            let mismatch = match expected {
-                ExpectedRevert::Any => None,
-                ExpectedRevert::Selector(sel) => {
-                    if data.0.len() >= 4 && data.0[..4] == sel[..] {
-                        None
-                    } else {
-                        Some(format!(
-                            "Expected revert with selector 0x{}, but got revert data: {}",
-                            hex::encode(sel),
-                            data,
-                        ))
-                    }
-                }
-                ExpectedRevert::PanicCode(expected_bytes) => {
-                    if data.0 == *expected_bytes {
-                        None
-                    } else {
-                        Some(format!(
-                            "Expected revert data 0x{}, but got: {}",
-                            hex::encode(expected_bytes),
-                            data,
-                        ))
-                    }
-                }
-            };
-            match mismatch {
+            match revert_mismatch(expected, &data.0) {
                 None => (
                     TestResult {
                         name: name.to_string(),
@@ -3032,6 +3010,28 @@ fn execute_test(
             Vec::new(),
             trace,
         ),
+    }
+}
+
+/// How revert `data` differs from what a `should_revert` test expects, if it
+/// does.
+fn revert_mismatch(expected: &ExpectedRevert, data: &[u8]) -> Option<String> {
+    match expected {
+        ExpectedRevert::Any => None,
+        ExpectedRevert::Selector(selector) => (data.get(..4) != Some(&selector[..])).then(|| {
+            format!(
+                "Expected revert with selector 0x{}, but got revert data: 0x{}",
+                hex::encode(selector),
+                hex::encode(data),
+            )
+        }),
+        ExpectedRevert::PanicCode(expected) => (data != &expected[..]).then(|| {
+            format!(
+                "Expected revert data 0x{}, but got: 0x{}",
+                hex::encode(expected),
+                hex::encode(data),
+            )
+        }),
     }
 }
 

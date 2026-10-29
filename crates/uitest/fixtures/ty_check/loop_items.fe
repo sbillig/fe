@@ -23,7 +23,7 @@ fn view_base(_ xs: [u256; 2]) {
 // S-70. Rejected: `mut` on the owned index beside the item.
 fn mut_extra(_ xs: mut [u256; 2]) {
     for (mut i, x) in xs.enumerate() {
-        i += x as usize
+        i += x.downcast_unchecked()
     }
 }
 

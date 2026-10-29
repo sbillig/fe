@@ -5,7 +5,7 @@ use crate::{
     db::MirDb,
     runtime::{
         LayoutId, PlaceRoot, RBlockId, RExpr, RLocalId, RStmt, RefKind, RefView, RuntimeClass,
-        RuntimePlace, ScalarClass, ScalarRepr, ScalarRole,
+        RuntimePlace, ScalarClass, ScalarRepr, ScalarRole, lower::type_info::address_int_class,
     },
 };
 
@@ -545,14 +545,8 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 steps.push(RuntimeConversionStep::ProviderRefToRaw { class: target });
                 Ok(())
             }
-            (RuntimeClass::RawAddr { .. }, RuntimeClass::Scalar(scalar))
-                if matches!(
-                    scalar.repr,
-                    ScalarRepr::Int {
-                        bits: 256,
-                        signed: false
-                    }
-                ) =>
+            (RuntimeClass::RawAddr { space, .. }, RuntimeClass::Scalar(scalar))
+                if scalar.repr == address_int_class(self.db, *space).repr =>
             {
                 steps.push(RuntimeConversionStep::RawAddrToWord {
                     class: target.clone(),
@@ -561,7 +555,7 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 Ok(())
             }
             (RuntimeClass::Scalar(scalar), RuntimeClass::RawAddr { space, .. })
-                if is_plain_word_scalar(scalar) =>
+                if *scalar == address_int_class(self.db, *space) =>
             {
                 steps.push(RuntimeConversionStep::WordToRawAddr {
                     class: target.clone(),

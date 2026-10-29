@@ -57,7 +57,7 @@ fn rejects_wrapping_offset() {
     var buffer = MemBuffer::with_capacity(32)
     buffer
         .write_word(
-            offset: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+            offset: usize::max(),
             value: 1,
         )
 }

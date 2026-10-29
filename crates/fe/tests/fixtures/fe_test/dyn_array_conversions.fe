@@ -2,7 +2,7 @@
 /// canonical decoding and allocation bounds.
 use std::abi::{DynArray, FixedBytes, Uint24, Int24}
 use core::abi::store_word
-use core::ptr::{self, MemArray, MemBuffer, MemVec}
+use core::ptr::{self, MemArray, MemVec}
 
 #[test]
 fn test_empty_roundtrip() {
@@ -64,11 +64,12 @@ fn test_fixed_bytes_elements() {
 }
 
 fn dirty_bool() -> DynArray<bool> {
-    let data = MemBuffer::alloc(64)
-    unsafe { store_word(ptr: data.ptr(), value: 1) }
+    // The array never frees its tail, so the tail is not an owner.
+    let data = ptr::alloc_bytes(64)
+    unsafe { store_word(ptr: data, value: 1) }
     // The array shape is valid, but 2 is not a canonical ABI bool.
-    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 2) }
-    unsafe { DynArray::from_abi_tail(data: data.ptr(), len: 1, size: 64) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data, 32), value: 2) }
+    unsafe { DynArray::from_abi_tail(data, len: 1, size: 64) }
 }
 
 #[test(should_revert)]
@@ -108,14 +109,12 @@ fn test_empty_get_panics() {
 
 #[test(should_revert, panic = 0x11)]
 fn test_allocation_size_overflow_panics() {
-    let one: usize = 1
     // Multiplying the element count by 32 must fail before allocation.
-    let _values = MemVec<u256>::with_capacity(one << 251)
+    let _values = MemVec<u256>::with_capacity(usize::max() >> 4)
 }
 
 #[test(should_revert, panic = 0x32)]
 fn test_huge_index_panics_before_offset_calculation() {
     let values = DynArray::from_slice(MemArray<u256>::new_zeroed(1).as_slice())
-    let one: usize = 1
-    let _ = values.get(one << 251)
+    let _ = values.get(usize::max() >> 4)
 }

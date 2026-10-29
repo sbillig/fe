@@ -24,11 +24,11 @@ pub contract Arr {
 
     recv ArrMsg {
         GetAt { values, index } -> u256 {
-            values.get(index as usize)
+            values.get(index.downcast_unchecked())
         }
 
         AddrAt { addrs, index } -> u256 {
-            addrs.get(index as usize).word()
+            addrs.get(index.downcast_unchecked()).word()
         }
 
         AddrLen { addrs } -> u256 {
@@ -87,7 +87,7 @@ fn test_get_on_empty_panics() {
 #[test(should_revert, panic = 0x32)]
 fn test_get_large_index_panics_before_offset_arithmetic() {
     let values = make_arr(a: 1, b: 2, c: 3)
-    let _ = values.get(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+    let _ = values.get(usize::max())
 }
 
 #[test(should_revert, panic = 0x11)]
@@ -97,7 +97,7 @@ fn test_array_constructor_rejects_overflowing_element_frame() {
     // a DynArray that can bypass get's validated-frame invariant.
     let len: u256 = 1 << 251
     unsafe { store_word(ptr: data, value: len) }
-    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len: len as usize, size: 32) }
+    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len: len.downcast_unchecked(), size: 32) }
     let _ = values.get(0)
 }
 
@@ -107,7 +107,7 @@ fn test_array_constructor_rejects_overflowing_length_header() {
     // The element bytes fit, but adding the array's length word overflows.
     let len: u256 = (1 << 251) - 1
     unsafe { store_word(ptr: data, value: len) }
-    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len: len as usize, size: 32) }
+    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len: len.downcast_unchecked(), size: 32) }
     let _ = values.get(0)
 }
 

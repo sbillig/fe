@@ -88,7 +88,7 @@ pub fn process_proof<P: ProofNodes>(proof: P, leaf: u256) -> u256 {
     var node = leaf
     var i: u256 = 0
     while i < len {
-        unsafe { node = sorted_into(scratch, node, ops::mload(ptr::offset_bytes(base, i * 32))) }
+        unsafe { node = sorted_into(scratch, node, ops::mload(ptr::offset_bytes(base, (i * 32).downcast_unchecked()))) }
         i += 1
     }
     node
@@ -125,7 +125,7 @@ pub fn process_indexed_proof<P: ProofNodes>(proof: P, leaf: u256, index: u256) -
     var node = leaf
     var i: u256 = 0
     while i < len {
-        let sibling = unsafe { ops::mload(ptr::offset_bytes(base, i * 32)) }
+        let sibling = unsafe { ops::mload(ptr::offset_bytes(base, (i * 32).downcast_unchecked())) }
         if (index >> i) & 1 == 1 {
             unsafe {
                 ops::mstore(addr: scratch, value: sibling)

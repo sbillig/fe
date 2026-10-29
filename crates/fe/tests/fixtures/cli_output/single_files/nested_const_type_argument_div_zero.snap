@@ -9,7 +9,7 @@ errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/nest
 error[3-0025]: division by zero in const context
   ┌─ nested_const_type_argument_div_zero.fe:2:26
   │
-2 │     core::size_of<[u8; { 1 / 0 }]>()
+2 │     core::size_of<[u8; { 1 / 0 }]>() as u256
   │                          ^^^^^ cannot divide by zero
 
 

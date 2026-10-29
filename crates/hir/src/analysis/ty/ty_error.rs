@@ -999,6 +999,18 @@ pub(crate) fn diag_from_invalid_cause<'db>(
             TyLowerDiag::ConstEvalNegativeExponent(expr.span(body).into()).into()
         }
 
+        InvalidCause::IntLiteralOutOfRange {
+            body,
+            expr,
+            literal,
+            ty,
+        } => TyLowerDiag::IntLiteralOutOfRange {
+            span: expr.span(body).into(),
+            literal,
+            ty,
+        }
+        .into(),
+
         InvalidCause::ConstEvalStepLimitExceeded { body, expr } => {
             TyLowerDiag::ConstEvalStepLimitExceeded(expr.span(body).into()).into()
         }

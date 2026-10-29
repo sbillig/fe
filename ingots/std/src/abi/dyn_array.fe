@@ -67,7 +67,8 @@ impl<T> DynArray<T> {
 
     /// Construct an array handle over a complete ABI tail.
     ///
-    /// `data` must point to `size` valid bytes. Static-element arrays are
+    /// `data` must point to `size` valid bytes in an allocation that outlives
+    /// the array, which never frees it. Static-element arrays are
     /// validated exactly; callers constructing dynamic-element arrays must
     /// ensure their nested tails are valid and end at `size`.
     pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self
@@ -99,7 +100,7 @@ impl<T> DynArray<T> {
     }
 
     pub fn encoded_span(self) -> ref MemSpan {
-        unsafe { MemSpan::from_raw_parts(ptr: self.data, len: self.size as usize) }
+        unsafe { MemSpan::from_raw_parts(ptr: self.data, len: self.size.downcast_unchecked()) }
     }
 
     /// The element at `index`. Reverts with Solidity `Panic(0x32)` if
@@ -146,8 +147,8 @@ impl<T> DynArray<T> {
         // own, the head bounds each of the decoder's reads by constants.
         let head = unsafe {
             MemSpan::from_raw_parts(
-                ptr: ptr::offset_bytes(self.data, head_pos),
-                len: abi_field_head_size<T>() as usize,
+                ptr: ptr::offset_bytes(self.data, head_pos.downcast_unchecked()),
+                len: abi_field_head_size<T>().downcast_unchecked(),
             )
         }
         T::decode_from(head, 0)
@@ -172,9 +173,9 @@ impl<T> DynArray<T> {
                 size += value.payload_size()
             }
         }
-        let data = ptr::alloc_bytes(size)
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
-            ptr::zero_bytes(data, size)
+            ptr::zero_bytes(data, size.downcast_unchecked())
             store_word(ptr: data, value: len as u256)
         }
         // The zeroed payload after the length word, which only this encoding
@@ -238,7 +239,7 @@ fn decode_payload_at<A: Abi, T, I>(_ input: I, _ pos: u256, _ input_len: u256) -
     // The payload ends within the input, and the copy is its checked tail.
     unsafe {
         let (data, size) = copy_payload<A, I>(input, pos, actual_size: payload_end - pos, input_len, padded: T::IS_DYNAMIC)
-        DynArray::from_validated_abi_tail(data, len: elem_count as usize, size)
+        DynArray::from_validated_abi_tail(data, len: elem_count.downcast_unchecked(), size)
     }
 }
 
@@ -404,9 +405,9 @@ pub fn dyn_array_from<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
     where T: Encode<Sol> + AbiSize + Copy
 {
     let size = 32 + values.payload_size()
-    let data = ptr::alloc_bytes(size)
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
     unsafe {
-        ptr::zero_bytes(data, size)
+        ptr::zero_bytes(data, size.downcast_unchecked())
         store_word(ptr: data, value: N as u256)
         // The zeroed payload after the length word, which only this
         // encoding writes.
@@ -438,13 +439,13 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
         // The size is known up front, so each element is decoded once and
         // re-encoded in place.
         let size = 32 + count as u256 * head
-        let data = ptr::alloc_bytes(size)
+        let data = ptr::alloc_bytes(ptr::allocation_len(size))
         return unsafe {
-            ptr::zero_bytes(data, size)
+            ptr::zero_bytes(data, size.downcast_unchecked())
             store_word(ptr: data, value: count as u256)
             for i in 0..count {
                 // The element's zeroed head, which only this encoding writes.
-                values.get(i).encode(AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32 + i as u256 * head), len: head))
+                values.get(i).encode(AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, (32 + i as u256 * head).downcast_unchecked()), len: head))
             }
             DynArray::from_abi_tail(data, len: count, size)
         }
@@ -462,14 +463,14 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
         unsafe { *tails.ptr_at(i) = encoded }
     }
     // The heads, then the tails back to back in index order.
-    let data = ptr::alloc_bytes(size)
+    let data = ptr::alloc_bytes(ptr::allocation_len(size))
     unsafe { store_word(ptr: data, value: count as u256) }
     let root = ptr::offset_bytes(data, 32)
     var tail = count as u256 * 32
     for (i, ref part) in tails.enumerate() {
         unsafe {
-            store_word(ptr: ptr::offset_bytes(root, i as u256 * 32), value: tail)
-            ptr::copy(ptr::offset_bytes(root, tail), part.span())
+            store_word(ptr: ptr::offset_bytes(root, i * 32), value: tail)
+            ptr::copy(ptr::offset_bytes(root, tail.downcast_unchecked()), part.span())
         }
         tail += part.len() as u256
     }
