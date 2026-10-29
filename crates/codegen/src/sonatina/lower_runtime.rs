@@ -2515,37 +2515,19 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
-                if self.module.is_native_target() {
-                    self.lower_modular_arithmetic(lhs, rhs, modulus, false)
-                } else {
-                    self.fb.insert_inst(
-                        EvmAddMod::new(
-                            self.module.required_inst::<EvmAddMod>()?,
-                            lhs,
-                            rhs,
-                            modulus,
-                        ),
-                        Type::I256,
-                    )
-                }
+                self.fb.insert_inst(
+                    EvmAddMod::new(self.module.required_inst::<EvmAddMod>()?, lhs, rhs, modulus),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::MulMod { lhs, rhs, modulus } => {
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
-                if self.module.is_native_target() {
-                    self.lower_modular_arithmetic(lhs, rhs, modulus, true)
-                } else {
-                    self.fb.insert_inst(
-                        EvmMulMod::new(
-                            self.module.required_inst::<EvmMulMod>()?,
-                            lhs,
-                            rhs,
-                            modulus,
-                        ),
-                        Type::I256,
-                    )
-                }
+                self.fb.insert_inst(
+                    EvmMulMod::new(self.module.required_inst::<EvmMulMod>()?, lhs, rhs, modulus),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::LeadingZeros { value } => {
                 let value = self.local_value(*value)?;
@@ -2560,8 +2542,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::SwapBytes { value } => {
                 let value = self.local_value(*value)?;
+                let ty = self.fb.type_of(value);
                 self.fb
-                    .insert_inst(Bswap::new(self.module.inst_set(), value), Type::I256)
+                    .insert_inst(Bswap::new(self.module.inst_set(), value), ty)
             }
             RuntimeBuiltin::BlackBox { value } => {
                 let value = self.local_value(*value)?;
@@ -4581,6 +4564,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     }
                 }
             }
+            RuntimeClass::AggregateValue { .. } if self.memory_matches_value(memory, class)? => {
+                let ty = self.module.ty_for_class(class)?;
+                self.fb
+                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
+                Ok(())
+            }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.module.db) {
                 Layout::Struct(data) => {
                     // Packed fields of one word are combined and stored once.
@@ -4965,6 +4954,79 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
     }
 
+    /// Whether `class` has the same bytes in `memory` as a Sonatina value of
+    /// its type, so it moves between them in one load or store. Raw memory
+    /// packs fields without alignment, which matches only where no field is
+    /// padded; enums and handles keep encodings of their own.
+    fn memory_matches_value(
+        &mut self,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+    ) -> Result<bool, LowerError> {
+        if !self.module.is_native_target() {
+            return Ok(false);
+        }
+        let raw = match memory {
+            ReferentLayout::Object => None,
+            ReferentLayout::Raw(AddressSpace::Memory) => {
+                Some(RuntimeMemoryLayout::raw(self.module.db))
+            }
+            ReferentLayout::Raw(_) => return Ok(false),
+        };
+        let ty = self.module.ty_for_class(class)?;
+        let size = self.fb.module_builder.ctx.size_of(ty).ok();
+        let offset = |lowerer: &Self, idx: usize| {
+            lowerer
+                .fb
+                .module_builder
+                .ctx
+                .aggregate_elem_offset(ty, idx)
+                .map(|(offset, _)| offset as u64)
+        };
+        let layout = match class {
+            RuntimeClass::Scalar(scalar) => {
+                return Ok(
+                    raw.is_none() || size == Some(scalar_raw_memory_size_bytes(scalar) as usize)
+                );
+            }
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => return Ok(raw.is_none()),
+            RuntimeClass::AggregateValue { layout } => *layout,
+        };
+        let fields = match layout.data(self.module.db) {
+            Layout::Enum(_) => return Ok(false),
+            Layout::Struct(data) => {
+                let mut offsets = Vec::with_capacity(data.fields.len());
+                for (idx, field) in data.fields.iter().enumerate() {
+                    if !self.memory_matches_value(memory, field)? {
+                        return Ok(false);
+                    }
+                    if let Some(raw) = raw {
+                        offsets.push((raw.struct_field_offset(&data, idx)?, idx));
+                    }
+                }
+                offsets
+            }
+            Layout::Array(data) => {
+                if !self.memory_matches_value(memory, &data.elem)? {
+                    return Ok(false);
+                }
+                match raw {
+                    Some(raw) if data.len > 1 => vec![(raw.array_element_offset(&data, 1)?, 1)],
+                    _ => Vec::new(),
+                }
+            }
+        };
+        Ok(match raw {
+            None => true,
+            Some(raw) => {
+                size == Some(raw.layout_size(layout)? as usize)
+                    && fields
+                        .into_iter()
+                        .all(|(raw_offset, idx)| offset(self, idx) == Some(raw_offset))
+            }
+        })
+    }
+
     fn load_aggregate_from_ptr(
         &mut self,
         addr: ValueId,
@@ -4972,6 +5034,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
         let class = RuntimeClass::AggregateValue { layout };
+        if self.memory_matches_value(memory, &class)? {
+            let ty = self.module.ty_for_layout(layout)?;
+            return Ok(self
+                .fb
+                .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+        }
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
@@ -5976,38 +6044,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    /// Modular addition of reduced operands without losing the carry bit.
-    fn add_reduced(&mut self, lhs: ValueId, rhs: ValueId, modulus: ValueId) -> ValueId {
-        let inst_set = self.module.inst_set();
-        let gap = self
-            .fb
-            .insert_inst(Sub::new(inst_set, modulus, rhs), Type::I256);
-        let below = self.fb.insert_inst(Lt::new(inst_set, lhs, gap), Type::I1);
-        let add = self.fb.append_block();
-        let subtract = self.fb.append_block();
-        let done = self.fb.append_block();
-        self.fb
-            .insert_inst_no_result(Br::new(inst_set, below, add, subtract));
-        self.fb.switch_to_block(add);
-        let sum = self
-            .fb
-            .insert_inst(Add::new(inst_set, lhs, rhs), Type::I256);
-        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-        self.fb.switch_to_block(subtract);
-        let difference = self
-            .fb
-            .insert_inst(Sub::new(inst_set, lhs, gap), Type::I256);
-        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-        self.fb.switch_to_block(done);
-        self.fb.insert_inst(
-            Phi::new(inst_set, smallvec![(sum, add), (difference, subtract)]),
-            Type::I256,
-        )
-    }
-
-    /// Full-width mathematical sum/product modulo m, including m == 0 -> 0.
-    /// Reducing operands first and keeping the accumulator below m preserves
-    /// the high product bits without requiring a target-specific 512-bit type.
     /// Branch-free binary search for the most significant set bit, for targets
     /// without a count-leading-zeros instruction. Returns 256 for zero.
     fn lower_leading_zeros(&mut self, value: ValueId) -> ValueId {
@@ -6047,117 +6083,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst(Zext::new(inst_set, is_zero, Type::I256), Type::I256);
         self.fb
             .insert_inst(Add::new(inst_set, zeros, extra), Type::I256)
-    }
-
-    fn lower_modular_arithmetic(
-        &mut self,
-        lhs: ValueId,
-        rhs: ValueId,
-        modulus: ValueId,
-        multiply: bool,
-    ) -> ValueId {
-        let inst_set = self.module.inst_set();
-        let entry = self
-            .fb
-            .current_block()
-            .expect("modular arithmetic requires a block");
-        let reduce = self.fb.append_block();
-        let done = self.fb.append_block();
-        let zero = self.fb.make_imm_value(I256::zero());
-        let is_zero = self
-            .fb
-            .insert_inst(IsZero::new(inst_set, modulus), Type::I1);
-        self.fb
-            .insert_inst_no_result(Br::new(inst_set, is_zero, done, reduce));
-        self.fb.switch_to_block(reduce);
-        let lhs = self
-            .fb
-            .insert_inst(Umod::new(inst_set, lhs, modulus), Type::I256);
-        let rhs = self
-            .fb
-            .insert_inst(Umod::new(inst_set, rhs, modulus), Type::I256);
-        let result = if multiply {
-            let one = self.fb.make_imm_value(I256::one());
-            let header = self.fb.append_block();
-            let test_bit = self.fb.append_block();
-            let add = self.fb.append_block();
-            let advance = self.fb.append_block();
-            let double = self.fb.append_block();
-            let exit = self.fb.append_block();
-            self.fb.insert_inst_no_result(Jump::new(inst_set, header));
-            self.fb.switch_to_block(header);
-            let result = self
-                .fb
-                .insert_inst(Phi::new(inst_set, smallvec![(zero, reduce)]), Type::I256);
-            let factor = self
-                .fb
-                .insert_inst(Phi::new(inst_set, smallvec![(lhs, reduce)]), Type::I256);
-            let remaining = self
-                .fb
-                .insert_inst(Phi::new(inst_set, smallvec![(rhs, reduce)]), Type::I256);
-            let finished = self
-                .fb
-                .insert_inst(IsZero::new(inst_set, remaining), Type::I1);
-            self.fb
-                .insert_inst_no_result(Br::new(inst_set, finished, exit, test_bit));
-            self.fb.switch_to_block(test_bit);
-            let bit = self
-                .fb
-                .insert_inst(And::new(inst_set, remaining, one), Type::I256);
-            let even = self.fb.insert_inst(IsZero::new(inst_set, bit), Type::I1);
-            self.fb
-                .insert_inst_no_result(Br::new(inst_set, even, advance, add));
-            self.fb.switch_to_block(add);
-            let sum = self.add_reduced(result, factor, modulus);
-            let add_exit = self
-                .fb
-                .current_block()
-                .expect("modular sum requires a block");
-            self.fb.insert_inst_no_result(Jump::new(inst_set, advance));
-            self.fb.switch_to_block(advance);
-            let next_result = self.fb.insert_inst(
-                Phi::new(inst_set, smallvec![(result, test_bit), (sum, add_exit)]),
-                Type::I256,
-            );
-            let next_remaining = self
-                .fb
-                .insert_inst(Shr::new(inst_set, one, remaining), Type::I256);
-            let finished = self
-                .fb
-                .insert_inst(IsZero::new(inst_set, next_remaining), Type::I1);
-            self.fb
-                .insert_inst_no_result(Br::new(inst_set, finished, exit, double));
-            self.fb.switch_to_block(double);
-            let next_factor = self.add_reduced(factor, factor, modulus);
-            let back = self
-                .fb
-                .current_block()
-                .expect("modular doubling requires a block");
-            self.fb.append_phi_arg(result, next_result, back);
-            self.fb.append_phi_arg(factor, next_factor, back);
-            self.fb.append_phi_arg(remaining, next_remaining, back);
-            self.fb.insert_inst_no_result(Jump::new(inst_set, header));
-            self.fb.switch_to_block(exit);
-            self.fb.insert_inst(
-                Phi::new(
-                    inst_set,
-                    smallvec![(result, header), (next_result, advance)],
-                ),
-                Type::I256,
-            )
-        } else {
-            self.add_reduced(lhs, rhs, modulus)
-        };
-        let exit = self
-            .fb
-            .current_block()
-            .expect("modular arithmetic requires a block");
-        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-        self.fb.switch_to_block(done);
-        self.fb.insert_inst(
-            Phi::new(inst_set, smallvec![(zero, entry), (result, exit)]),
-            Type::I256,
-        )
     }
 
     fn lower_pow(

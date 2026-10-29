@@ -1354,7 +1354,7 @@ pub enum RuntimeBuiltin<'db> {
     LeadingZeros {
         value: RValueId,
     },
-    /// Reverses the bytes of a word.
+    /// Reverses the bytes of an integer.
     SwapBytes {
         value: RValueId,
     },

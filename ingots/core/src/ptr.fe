@@ -1,9 +1,9 @@
 use super::intrinsic::size_of
 use super::marker::{Clearable, Copy}
 use super::mem::{drop, forget, needs_drop}
-use super::num::{from_be, to_be, word_to_usize}
+use super::num::{IntWord, from_be, from_le, to_be, to_le, word_to_usize}
 use super::option::Option
-use super::ops::{Drop, Eq, Index, Len}
+use super::ops::{Drop, Eq, Index, Len, WrappingAdd, WrappingMul, WrappingSub}
 use super::result::Result
 use super::panic_code
 use super::panics::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY}
@@ -383,9 +383,15 @@ impl<T> MemVec<T> {
     /// Ensure that `additional` more elements fit without growing.
     pub fn reserve(mut self, _ additional: usize) {
         let needed = self.len + additional
-        if needed <= self.capacity {
-            return
+        if needed > self.capacity {
+            self.grow(needed)
         }
+    }
+
+    /// Grows the allocation to hold `needed` elements. Out of line, so that
+    /// `reserve`'s check stays small where it is inlined.
+    #[inline(never)]
+    fn grow(mut self, needed: usize) {
         var capacity = if self.capacity == 0 { 4 } else { self.capacity }
         while capacity < needed {
             capacity *= 2
@@ -397,9 +403,13 @@ impl<T> MemVec<T> {
     /// As `reserve`, but `false`, leaving the vector as it was, when the
     /// allocation fails or would exceed `MAX_ALLOCATION` bytes.
     pub fn try_reserve(mut self, _ additional: usize) -> bool {
-        if additional <= self.capacity - self.len {
-            return true
-        }
+        // `len` never exceeds `capacity`.
+        additional <= self.capacity.wrapping_sub(self.len) || self.try_grow(additional)
+    }
+
+    /// As `grow`, for `try_reserve`.
+    #[inline(never)]
+    fn try_grow(mut self, _ additional: usize) -> bool {
         let size = size_of<T>()
         let max = if size == 0 { MAX_ALLOCATION } else { MAX_ALLOCATION / size }
         if additional > max - self.len {
@@ -431,24 +441,45 @@ impl<T> MemVec<T> {
 
     /// Append `value`, growing the allocation when it is full.
     pub fn push(mut self, _ value: own T) {
-        self.reserve(1)
-        // `reserve` made room for element `len`, which the write initializes.
+        if self.len == self.capacity {
+            self.grow(needed: self.len + 1)
+        }
+        // There is room for element `len`, which the write initializes. It
+        // lies within the allocation, so `len + 1` cannot overflow.
         unsafe {
             *elem(self.ptr, self.len) = value
-            self.len += 1
+            self.len = self.len.wrapping_add(1)
         }
+    }
+
+    /// Append `value` without checking the capacity, which must have room
+    /// for it, such as a stack that reserves its limit up front.
+    pub unsafe fn push_unchecked(mut self, _ value: own T) {
+        *elem(self.ptr, self.len) = value
+        self.len = self.len.wrapping_add(1)
+    }
+
+    /// The element at `index`, which the caller ensures is below `len()`.
+    pub unsafe fn get_unchecked(mut? self, _ index: usize) -> mut? T {
+        mut? *elem(self.ptr, index)
+    }
+
+    /// Replaces the element at `index`, which the caller ensures is below
+    /// `len()`, with `value`.
+    pub unsafe fn set_unchecked(mut self, _ index: usize, _ value: own T) {
+        *elem(self.ptr, index) = value
     }
 
     /// As `push`, or `value` back when growing the allocation fails.
     pub fn try_push(mut self, _ value: own T) -> Result<T, ()> {
-        if !self.try_reserve(1) {
+        if self.len == self.capacity && !self.try_grow(1) {
             return Result::Err(value)
         }
-        // `try_reserve` made room for element `len`, which the write
-        // initializes.
+        // There is room for element `len`, which the write initializes. It
+        // lies within the allocation, so `len + 1` cannot overflow.
         unsafe {
             *elem(self.ptr, self.len) = value
-            self.len += 1
+            self.len = self.len.wrapping_add(1)
         }
         Result::Ok(())
     }
@@ -470,12 +501,23 @@ impl<T> MemVec<T> {
         if len > self.len {
             index_out_of_bounds()
         }
+        unsafe { self.truncate_unchecked(len) }
+    }
+
+    /// As `truncate`, without the check: the caller ensures `len` is at most
+    /// `len()`.
+    pub unsafe fn truncate_unchecked(mut self, _ len: usize) {
         let end = self.len
         // The elements past `len` leave the vector before they are destroyed.
-        unsafe {
-            self.len = len
-            drop_range(self.ptr, start: len, end)
-        }
+        self.len = len
+        drop_range(self.ptr, start: len, end)
+    }
+
+    /// Sets the length without initializing or destroying elements: the
+    /// caller ensures `len` is at most `capacity()` with the first `len`
+    /// elements initialized, and forgets any past it.
+    pub unsafe fn set_len(mut self, _ len: usize) {
+        self.len = len
     }
 
     /// Destroys every element, keeping the allocation.
@@ -747,20 +789,54 @@ impl MemSlice<u8> {
         }
     }
 
-    /// The 32 bytes from `offset` on, which need not be word-aligned, as a
-    /// big-endian word. Reverts unless all 32 lie in the span.
+    /// The `size_of<T>()` bytes from `offset` on, which need not be aligned,
+    /// as a big-endian integer. Reverts unless all of them lie in the span.
+    pub fn read_be<T: IntWord>(self, _ offset: usize) -> T {
+        from_be(unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) })
+    }
+
+    /// As `read_be`, without the bounds check: the caller ensures all
+    /// `size_of<T>()` bytes from `offset` on lie in the span.
+    pub unsafe fn read_be_unchecked<T: IntWord>(self, _ offset: usize) -> T {
+        from_be(*cast<u8, T>(offset_bytes(self.ptr, offset)))
+    }
+
+    /// As `write_be`, without the bounds check: the caller ensures all
+    /// `size_of<T>()` bytes from `offset` on lie in the span.
+    pub unsafe fn write_be_unchecked<T: IntWord>(mut self, offset: usize, value: T) {
+        *cast<u8, T>(offset_bytes(self.ptr, offset)) = to_be(value)
+    }
+
+    /// As `read_be`, reading the bytes little-endian.
+    pub fn read_le<T: IntWord>(self, _ offset: usize) -> T {
+        from_le(unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) })
+    }
+
+    /// Writes `value` big-endian over the `size_of<T>()` bytes from `offset`
+    /// on, which need not be aligned. Reverts unless all of them lie in the
+    /// span.
+    pub fn write_be<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) = to_be(value) }
+    }
+
+    /// As `write_be`, writing `value` little-endian.
+    pub fn write_le<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.value_ptr<T>(offset)) = to_le(value) }
+    }
+
+    /// The 32 bytes from `offset` on as a big-endian word; see `read_be`.
     pub fn read_word(self, _ offset: usize) -> u256 {
-        from_be(unsafe { *cast<u8, u256>(self.word_ptr(offset)) })
+        self.read_be<u256>(offset)
     }
 
-    /// Writes `value` big-endian over the 32 bytes from `offset` on, which
-    /// need not be word-aligned. Reverts unless all 32 lie in the span.
+    /// Writes `value` big-endian over the 32 bytes from `offset` on; see
+    /// `write_be`.
     pub fn write_word(mut self, offset: usize, value: u256) {
-        unsafe { *cast<u8, u256>(self.word_ptr(offset)) = to_be(value) }
+        self.write_be<u256>(offset, value)
     }
 
-    fn word_ptr(self, _ offset: usize) -> *u8 {
-        if offset > self.len || 32 > self.len - offset {
+    fn value_ptr<T>(self, _ offset: usize) -> *u8 {
+        if offset > self.len || size_of<T>() > self.len - offset {
             index_out_of_bounds()
         }
         offset_bytes(self.ptr, offset)
@@ -856,8 +932,19 @@ impl MemBuffer {
         self.span().slice(offset, len)
     }
 
-    /// The 32 bytes from `offset` on, which need not be word-aligned, as a
-    /// big-endian word. Reverts unless all 32 lie in the logical extent.
+    /// The `size_of<T>()` bytes from `offset` on, which need not be aligned,
+    /// as a big-endian integer. Reverts unless all of them lie in the
+    /// logical extent.
+    pub fn read_be<T: IntWord>(self, _ offset: usize) -> T {
+        self.span().read_be<T>(offset)
+    }
+
+    /// As `read_be`, reading the bytes little-endian.
+    pub fn read_le<T: IntWord>(self, _ offset: usize) -> T {
+        self.span().read_le<T>(offset)
+    }
+
+    /// The 32 bytes from `offset` on as a big-endian word; see `read_be`.
     pub fn read_word(self, _ offset: usize) -> u256 {
         self.span().read_word(offset)
     }
@@ -978,32 +1065,46 @@ impl MemBuffer {
         }
     }
 
-    /// Write a full word at a byte offset, which need not be word-aligned.
+    /// Write `value` big-endian at a byte offset, which need not be aligned.
     ///
-    /// The complete 32-byte word must fit within this buffer's capacity.
-    /// Extends the logical extent to include the word and zeroes any gap
-    /// between the previous extent and the write. Existing bytes outside
-    /// the word are preserved. The allocation never grows.
+    /// All `size_of<T>()` bytes must fit within this buffer's capacity.
+    /// Extends the logical extent to include them and zeroes any gap between
+    /// the previous extent and the write. Existing bytes outside the write
+    /// are preserved. The allocation never grows.
+    #[inline(always)]
+    pub fn write_be<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.extend_over<T>(offset)) = to_be(value) }
+    }
+
+    /// As `write_be`, writing `value` little-endian.
+    #[inline(always)]
+    pub fn write_le<T: IntWord>(mut self, offset: usize, value: T) {
+        unsafe { *cast<u8, T>(self.extend_over<T>(offset)) = to_le(value) }
+    }
+
+    /// Write a full word big-endian at a byte offset; see `write_be`.
+    #[inline(always)]
+    pub fn write_word(mut self, offset: usize, value: u256) {
+        self.write_be<u256>(offset, value)
+    }
+
+    /// The `size_of<T>()` bytes at `offset`, which must fit within the
+    /// capacity, after zeroing any gap before them and extending the logical
+    /// extent over them. The caller writes every one of them.
     #[inline(always)]
     #[arithmetic(unchecked)]
-    pub fn write_word(mut self, offset: usize, value: u256) {
-        if offset > self.capacity || 32 > self.capacity - offset {
+    unsafe fn extend_over<T>(mut self, _ offset: usize) -> *u8 {
+        let size = size_of<T>()
+        if offset > self.capacity || size > self.capacity - offset {
             index_out_of_bounds()
         }
-        unsafe {
-            if offset > self.len {
-                zero_bytes(
-                    ptr: offset_bytes(self.ptr, self.len),
-                    len: (offset - self.len),
-                )
-            }
-            *cast<u8, u256>(offset_bytes(self.ptr, offset)) = to_be(value)
+        if offset > self.len {
+            zero_bytes(ptr: offset_bytes(self.ptr, self.len), len: (offset - self.len))
         }
-        let end = offset + 32
-        if end > self.len {
-            // The word and any gap initialized every byte up to the new extent.
-            unsafe { self.len = end }
+        if offset + size > self.len {
+            self.len = offset + size
         }
+        offset_bytes(self.ptr, offset)
     }
 
     /// Set the logical extent after initializing the added bytes.
@@ -1286,9 +1387,11 @@ fn mem_vec_elem<T>(_ vec: MemVec<T>, _ index: usize) -> *T {
     elem(vec.ptr, index)
 }
 
+/// Element `index` of an allocation, which every caller keeps `index` in, so
+/// the product of its offset cannot overflow.
 #[inline(always)]
 fn elem<T>(_ ptr: *T, _ index: usize) -> *T {
-    offset(ptr, index)
+    offset_bytes(ptr, index.wrapping_mul(size_of<T>()))
 }
 
 impl<T> Index<usize> for MemArray<T> {

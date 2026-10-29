@@ -3370,12 +3370,18 @@ impl<'db> RmirEmitter<'db> {
         {
             return Some(self.alloc_runtime_temp(TyId::unit(self.db), RuntimeCarrier::Erased));
         }
-        // EVM memory is big-endian, so there a word is its own big-endian
-        // representation.
-        if matches!(
+        // EVM memory is big-endian and native memory little-endian, so there
+        // an integer is its own representation in that byte order.
+        let big_endian = matches!(
             kind,
             RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian
-        ) && self.target() == Target::Evm
+        );
+        if (big_endian
+            || matches!(
+                kind,
+                RuntimeBuiltinFuncKind::ToLittleEndian | RuntimeBuiltinFuncKind::FromLittleEndian
+            ))
+            && big_endian == (self.target() == Target::Evm)
             && let [value] = args.as_slice()
         {
             let class = self.value_class(*value)?.clone();
@@ -4049,11 +4055,18 @@ impl<'db> RmirEmitter<'db> {
                     Some(word.clone()),
                 )
             }
-            RuntimeBuiltinFuncKind::ToBigEndian | RuntimeBuiltinFuncKind::FromBigEndian => {
+            RuntimeBuiltinFuncKind::ToBigEndian
+            | RuntimeBuiltinFuncKind::FromBigEndian
+            | RuntimeBuiltinFuncKind::ToLittleEndian
+            | RuntimeBuiltinFuncKind::FromLittleEndian
+            | RuntimeBuiltinFuncKind::SwapBytes => {
                 let [value] = args else { return None };
+                let class @ RuntimeClass::Scalar(_) = self.value_class(*value)? else {
+                    return None;
+                };
                 builtin(
                     crate::runtime::RuntimeBuiltin::SwapBytes { value: *value },
-                    Some(word.clone()),
+                    Some(class.clone()),
                 )
             }
             RuntimeBuiltinFuncKind::BlackBox => {

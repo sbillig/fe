@@ -80,6 +80,45 @@ fn push_grows_and_keeps_elements() {
 }
 
 #[test]
+fn push_unchecked_fills_reserved_capacity() {
+    var v = MemVec<u256>::with_capacity(4)
+    for i in 0..4 {
+        unsafe { v.push_unchecked(i as u256 + 1) }
+    }
+    assert!(v.len() == 4 && v.capacity() == 4)
+    assert!(v[0] == 1 && v[3] == 4)
+}
+
+#[test]
+fn set_len_over_raw_writes() {
+    var v = MemVec<u256>::new()
+    v.push(1)
+    assert!(v.try_reserve(2))
+    unsafe {
+        *ptr::offset(v.ptr(), 1) = 2
+        *ptr::offset(v.ptr(), 2) = 3
+        v.set_len(3)
+    }
+    assert!(v.len() == 3 && v[1] == 2 && v[2] == 3)
+    unsafe { v.set_len(1) }
+    assert!(v.len() == 1 && v[0] == 1)
+}
+
+#[test]
+fn get_and_set_unchecked_within_len() {
+    var v = MemVec<u256>::new()
+    v.extend_from_slice(MemArray::from_fn(3, |i| i as u256 + 1).as_slice())
+    unsafe {
+        let first = v.get_unchecked(0)
+        v.set_unchecked(0, v.get_unchecked(2))
+        v.set_unchecked(2, first)
+    }
+    assert!(v[0] == 3 && v[1] == 2 && v[2] == 1 && v.len() == 3)
+    unsafe { v.truncate_unchecked(1) }
+    assert!(v.len() == 1 && v[0] == 3)
+}
+
+#[test]
 fn pop_truncate_and_access() {
     var v = MemVec<u256>::new()
     v.extend_from_slice(MemArray::from_fn(4, |i| i as u256 + 1).as_slice())

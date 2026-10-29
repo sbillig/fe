@@ -263,8 +263,9 @@ func inline(always) private %elem(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.i256 = call %offset v0 v1;
-        return v4;
+        v4.i256 = call %wrapping_mul v1 32.i256;
+        v6.i256 = add v0 v4;
+        return v6;
 }
 
 func inline(always) private %has(v0.@layout_0, v1.i256) -> i1 {
@@ -693,6 +694,15 @@ func private %wrapping_add(v0.i256, v1.i256) -> i256 {
 
     block1:
         v4.i256 = add v0 v1;
+        return v4;
+}
+
+func private %wrapping_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = mul v0 v1;
         return v4;
 }
 
