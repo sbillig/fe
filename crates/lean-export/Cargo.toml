@@ -12,3 +12,4 @@ doctest = false
 [dependencies]
 cranelift-entity.workspace = true
 hir.workspace = true
+rustc-hash.workspace = true

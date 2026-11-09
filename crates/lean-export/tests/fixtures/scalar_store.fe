@@ -1,0 +1,26 @@
+use std::abi::sol
+
+msg FeScalarStoreMsg {
+    #[selector = sol("get()")]
+    Get -> u256,
+    #[selector = sol("set(uint256)")]
+    Set { value: u256 },
+}
+
+pub contract FeScalarStore {
+    mut stored: u256
+
+    init(initial: u256) uses (mut stored) {
+        stored = initial
+    }
+
+    recv FeScalarStoreMsg {
+        Get -> u256 uses (stored) {
+            stored
+        }
+
+        Set { value } uses (mut stored) {
+            stored = value
+        }
+    }
+}

@@ -2676,6 +2676,7 @@ version = "26.5.0"
 dependencies = [
  "cranelift-entity 0.136.1",
  "fe-hir",
+ "rustc-hash 2.1.1",
 ]
 
 [[package]]
