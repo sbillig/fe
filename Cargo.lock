@@ -2671,6 +2671,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe-lean-export"
+version = "26.5.0"
+dependencies = [
+ "cranelift-entity 0.136.1",
+ "fe-hir",
+]
+
+[[package]]
 name = "fe-mir"
 version = "26.5.0"
 dependencies = [
