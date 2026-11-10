@@ -195,10 +195,26 @@ impl Lane {
 struct Effect<'db> {
     provider: u32,
     ty: TyId<'db>,
-    /// Whether it lies in contract state, where the argument is its place,
-    /// and not in a local, where the argument is its value.
+    /// Whether it lies in contract state unless a caller says otherwise.
     state: bool,
     mutable: bool,
+}
+
+/// How a body receives what its access parameters and its effects reach: by
+/// parameter, and by provider. One function is exported once for each way.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+struct Carriers {
+    params: Vec<Option<Carrier>>,
+    effects: Vec<(u32, Carrier)>,
+}
+
+impl From<Vec<Option<Carrier>>> for Carriers {
+    fn from(params: Vec<Option<Carrier>>) -> Self {
+        Self {
+            params,
+            effects: Vec::new(),
+        }
+    }
 }
 
 /// Where a call leaves the value its callee returns for a `mut` argument it
@@ -281,7 +297,8 @@ fn export<'db>(
         defs: String::new(),
     };
     for (name, owner) in entries {
-        let (body, _) = module.body(&name, identity_semantic_instance_key(db, owner), &[])?;
+        let key = identity_semantic_instance_key(db, owner);
+        let (body, _) = module.body(&name, key, &Carriers::default())?;
         module.define(&name, &body);
     }
     if with_entries {
@@ -304,7 +321,7 @@ struct Module<'db> {
     root: SemanticInstance<'db>,
     /// The Lean name of each exported function or constant instance, for
     /// each way it receives its access parameters.
-    names: FxHashMap<(SemanticInstanceKey<'db>, Vec<Option<Carrier>>), String>,
+    names: FxHashMap<(SemanticInstanceKey<'db>, Carriers), String>,
     taken: FxHashSet<String>,
     /// The exported functions that never return.
     nevers: FxHashSet<String>,
@@ -332,7 +349,7 @@ impl<'db> Module<'db> {
         &mut self,
         name: &str,
         key: SemanticInstanceKey<'db>,
-        carriers: &[Option<Carrier>],
+        carriers: &Carriers,
     ) -> Result<(String, bool), Unsupported> {
         let normalized = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
@@ -457,7 +474,7 @@ impl<'db> Module<'db> {
                         &[host, abi, info.args_ty],
                     )
                     .map_err(generated)?;
-                    let decode = self.instance(key, vec![Some(Carrier::Erased)])?;
+                    let decode = self.instance(key, vec![Some(Carrier::Erased)].into())?;
                     writeln!(lines, "  let message ← {decode}").unwrap();
                     let fields = self.fields(info.args_ty)?;
                     let bindings = arm.arg_bindings(db);
@@ -488,7 +505,8 @@ impl<'db> Module<'db> {
                             &[abi, ret_ty],
                         )
                         .map_err(generated)?;
-                        let return_value = self.instance(key, vec![Some(Carrier::Erased), None])?;
+                        let carriers = vec![Some(Carrier::Erased), None];
+                        let return_value = self.instance(key, carriers.into())?;
                         writeln!(lines, "  let result ← {name}{args}").unwrap();
                         writeln!(lines, "  {return_value} result").unwrap();
                     }
@@ -579,11 +597,11 @@ impl<'db> Module<'db> {
                 "decode_payload",
                 &[decoder_ty, span_ty],
             )?;
-            let decoder_new = self.instance(decoder_new, Vec::new())?;
+            let decoder_new = self.instance(decoder_new, Carriers::default())?;
             // The input is a view: the value itself if a span is a snapshot.
             let input = (!ty_is_snapshot(db, scope, span_ty, PredicateListId::empty_list(db)))
                 .then_some(Carrier::Value);
-            let decode = self.instance(decode, vec![Some(Carrier::Value), input])?;
+            let decode = self.instance(decode, vec![Some(Carrier::Value), input].into())?;
             let span = self.value_ty(span_ty)?;
             lines.push_str("  let size := UInt256.ofNat args.size\n");
             lines.push_str("  let tail ← alloc size\n  mstoreBytes tail args\n");
@@ -636,7 +654,7 @@ impl<'db> Module<'db> {
     fn instance(
         &mut self,
         key: SemanticInstanceKey<'db>,
-        carriers: Vec<Option<Carrier>>,
+        carriers: Carriers,
     ) -> Result<String, Unsupported> {
         if let Some(name) = self.names.get(&(key, carriers.clone())) {
             return Ok(name.clone());
@@ -734,8 +752,8 @@ impl<'db> Module<'db> {
                         provider: binding.provider_idx,
                         ty: root.ty,
                         state: matches!(
-                            binding.semantics.address_space,
-                            Some(AddressSpace::Storage | AddressSpace::Transient)
+                            root.address_space,
+                            AddressSpace::Storage | AddressSpace::Transient
                         ),
                         mutable: binding.is_mut,
                     })
@@ -1516,7 +1534,7 @@ struct BodyExporter<'a, 'db> {
     module: &'a mut Module<'db>,
     body: &'a NormalizedBody<'db>,
     /// How the body receives each access parameter, by parameter.
-    carriers: &'a [Option<Carrier>],
+    carriers: &'a Carriers,
     /// The slots of locals and of parameters, each a mutable Lean variable.
     slots: Vec<NRootId>,
     /// The `mut` access parameters received as values, which the body
@@ -1587,7 +1605,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 owner,
                 BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. }
             );
-            let carrier = match self.carriers.get(param as usize).copied().flatten() {
+            let carrier = match self.carriers.params.get(param as usize).copied().flatten() {
                 None if entry && self.is_access(value.ty) => Some(Carrier::Value),
                 carrier => carrier,
             };
@@ -1628,8 +1646,14 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         params.sort_by_key(|(param, ..)| *param);
         self.binders = params.into_iter().map(|(_, name, ty)| (name, ty)).collect();
-        for effect in self.module.effect_params(self.body.owner.key(db)) {
+        for mut effect in self.module.effect_params(self.body.owner.key(db)) {
             let name = format!("e{}", effect.provider);
+            let given = self
+                .carriers
+                .effects
+                .iter()
+                .find(|(provider, _)| *provider == effect.provider);
+            effect.state = given.map_or(effect.state, |(_, carrier)| *carrier == Carrier::Place);
             if effect.state {
                 self.binders.push((name, "Place".to_string()));
             } else {
@@ -2234,7 +2258,10 @@ impl<'db> BodyExporter<'_, 'db> {
                         let db = self.module.db;
                         let saved = self.module.clone();
                         Some(
-                            match self.module.instance(constant.instance(db), Vec::new()) {
+                            match self
+                                .module
+                                .instance(constant.instance(db), Carriers::default())
+                            {
                                 Ok(constant) => format!("let {name} ← {constant}"),
                                 // A constant whose definition has no model is
                                 // the value the compiler computes for it.
@@ -2558,7 +2585,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 vec![ty],
             )
             .map_err(|error| Unsupported(format!("drop: generated call: {error:?}")))?;
-            let drop = self.module.instance(key, vec![None])?;
+            let drop = self.module.instance(key, vec![None].into())?;
             lines.push(format!("let _ ← {drop} {value}"));
             return Ok(());
         }
@@ -2603,6 +2630,7 @@ impl<'db> BodyExporter<'_, 'db> {
             return Ok(format!("let {name} := {cast}"));
         }
         let mut carriers = Vec::new();
+        let mut effects = Vec::new();
         let mut lean_args = String::new();
         let mut outs = Vec::new();
         for arg in args {
@@ -2643,28 +2671,33 @@ impl<'db> BodyExporter<'_, 'db> {
                     }
                 }
                 NEffectArgValue::Value(operand) => {
-                    if effect.state || effect.mutable {
-                        return Err(Unsupported("effect argument that is a value".to_string()));
+                    if effect.mutable {
+                        return Err(Unsupported(
+                            "`mut` effect argument that is a value".to_string(),
+                        ));
                     }
                     write!(lean_args, " {}", self.operand(operand)?).unwrap();
+                    effects.push((effect.provider, Carrier::Value));
                     continue;
                 }
             };
+            // The callee takes the effect as the caller has it: a place in
+            // contract state, or a value.
             match target {
-                Target::Place(lean, lane)
-                    if effect.state && !lane.is_some_and(|lane| lane.partial) =>
-                {
-                    write!(lean_args, " {lean}").unwrap()
+                Target::Place(lean, lane) if !lane.is_some_and(|lane| lane.partial) => {
+                    write!(lean_args, " {lean}").unwrap();
+                    effects.push((effect.provider, Carrier::Place));
                 }
-                Target::Value(target) if !effect.state => {
+                Target::Value(target) => {
                     write!(lean_args, " {}", self.read(&target)?).unwrap();
+                    effects.push((effect.provider, Carrier::Value));
                     if effect.mutable {
                         outs.push(Out::Value(target));
                     }
                 }
                 // A packed lane is passed as the value it holds, and a `mut`
                 // effect writes back the value it leaves.
-                Target::Place(lean, Some(lane)) if !effect.state && lane.partial => {
+                Target::Place(lean, Some(lane)) => {
                     let NEffectArgValue::Place(place) = &arg.arg else {
                         return Err(Unsupported("lane behind an access".to_string()));
                     };
@@ -2672,13 +2705,18 @@ impl<'db> BodyExporter<'_, 'db> {
                     let load = self.module.load(place.ty, &lean, Some(lane))?;
                     self.located.push(format!("let {held} ← {load}"));
                     write!(lean_args, " {held}").unwrap();
+                    effects.push((effect.provider, Carrier::Value));
                     if effect.mutable {
                         outs.push(Out::Lane(place.ty, lean, lane));
                     }
                 }
-                _ => return Err(Unsupported("effect argument in another space".to_string())),
+                _ => return Err(Unsupported("effect argument in memory".to_string())),
             }
         }
+        let carriers = Carriers {
+            params: carriers,
+            effects,
+        };
         let callee = self.module.instance(callee, carriers)?;
         if self.module.nevers.contains(&callee) {
             return Ok(format!("let {name} ← {callee}{lean_args}\nnever"));
@@ -3006,7 +3044,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     owner,
                     BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. }
                 );
-                let carrier = self.carriers.get(param as usize).copied().flatten();
+                let carrier = self.carriers.params.get(param as usize).copied().flatten();
                 carrier
                     .or(entry.then_some(Carrier::Value))
                     .ok_or_else(|| Unsupported("access parameter without a carrier".to_string()))
@@ -3470,7 +3508,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 });
             }
         }
-        let locate = self.module.instance(entry.callee, carriers)?;
+        let locate = self.module.instance(entry.callee, carriers.into())?;
         let location = format!("l{}", self.entries);
         self.entries += 1;
         self.located.push(format!(
