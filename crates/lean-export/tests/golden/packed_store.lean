@@ -1159,5 +1159,5 @@ def runtime : FeM Empty := do
       recv0_arm3_entry
     else if selector = UInt256.ofNat 0xf26feec9 then
       recv0_arm2_entry
-    else 
+    else
       revertEmpty

@@ -37,7 +37,7 @@ fn scalar_store() {
 
 #[test]
 fn erc20() {
-    check("erc20");
+    check_with("erc20", export_contract_with_runtime);
 }
 
 #[test]

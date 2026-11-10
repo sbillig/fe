@@ -323,15 +323,16 @@ impl<'db> Module<'db> {
             }
         }
         cases.sort_unstable();
-        let mut dispatch = String::new();
-        for (selector, name) in cases {
-            write!(
-                dispatch,
-                "if selector = UInt256.ofNat {selector:#010x} then\n      {name}_entry\n    else "
-            )
-            .unwrap();
-        }
-        let last = if dispatch.is_empty() {
+        let tests: Vec<_> = cases
+            .iter()
+            .map(|(selector, name)| {
+                format!(
+                    "if selector = UInt256.ofNat {selector:#010x} then\n      {name}_entry\n    else"
+                )
+            })
+            .collect();
+        let dispatch = tests.join(" ");
+        let last = if tests.is_empty() {
             default.clone()
         } else {
             format!("\n      {default}")
@@ -423,13 +424,25 @@ impl<'db> Module<'db> {
         Ok(name)
     }
 
-    /// The Lean name of `definition`, a layout definition named `name`.
-    fn layout(&mut self, name: String, definition: impl FnOnce(&str) -> String) -> String {
-        if !self.layouts.iter().any(|(known, _)| *known == name) {
+    /// The Lean name of `definition`, a type or layout definition named
+    /// `name`, or `name` with a number if a different definition has it.
+    fn layout(&mut self, name: String, definition: impl Fn(&str) -> String) -> String {
+        for n in 0.. {
+            let name = match n {
+                0 => name.clone(),
+                n => format!("{name}_{n}"),
+            };
             let definition = definition(&name);
-            self.layouts.push((name.clone(), definition));
+            match self.layouts.iter().find(|(known, _)| *known == name) {
+                Some((_, known)) if *known == definition => return name,
+                Some(_) => {}
+                None => {
+                    self.layouts.push((name.clone(), definition));
+                    return name;
+                }
+            }
         }
-        name
+        unreachable!()
     }
 
     /// The Lean projections and the type of each field of struct or tuple
@@ -1602,8 +1615,66 @@ fn field_path(path: &NDataPath) -> Result<Vec<usize>, Unsupported> {
 /// `name` as a Lean identifier, quoted if Lean reserves it.
 fn lean_name(name: &str) -> String {
     const RESERVED: &[&str] = &[
-        "at", "by", "do", "else", "end", "from", "fun", "have", "if", "in", "let", "match", "open",
-        "show", "then", "this", "where", "with",
+        "abbrev",
+        "at",
+        "axiom",
+        "break",
+        "by",
+        "calc",
+        "catch",
+        "class",
+        "continue",
+        "def",
+        "deriving",
+        "do",
+        "else",
+        "end",
+        "example",
+        "exists",
+        "export",
+        "extends",
+        "finally",
+        "for",
+        "forall",
+        "from",
+        "fun",
+        "have",
+        "if",
+        "import",
+        "in",
+        "inductive",
+        "instance",
+        "let",
+        "local",
+        "macro",
+        "match",
+        "mut",
+        "namespace",
+        "nomatch",
+        "notation",
+        "opaque",
+        "open",
+        "partial",
+        "private",
+        "protected",
+        "return",
+        "section",
+        "show",
+        "structure",
+        "suffices",
+        "syntax",
+        "then",
+        "theorem",
+        "this",
+        "to",
+        "try",
+        "universe",
+        "unless",
+        "unsafe",
+        "using",
+        "variable",
+        "where",
+        "with",
     ];
     if RESERVED.contains(&name) {
         format!("«{name}»")
