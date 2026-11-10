@@ -29,8 +29,9 @@ use hir::{
             adt_def::{AdtField, AdtRef, instantiate_adt_field_shape},
             corelib::{
                 NumericExternIntrinsic, RuntimeBuiltinFuncKind, SaturatingArithmetic,
-                core_numeric_const_intrinsic, lib_func_matches, resolve_core_trait,
-                resolve_lib_func_path, resolve_lib_type_path, runtime_builtin_func_kind,
+                contract_metadata_kind, core_numeric_const_intrinsic, lib_func_matches,
+                resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
+                runtime_builtin_func_kind,
             },
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
             normalize::normalize_ty,
@@ -48,6 +49,7 @@ use hir::{
     },
     semantic::{ProviderSource, storage_field_placements, storage_lane_bytes, storage_slot_span},
 };
+use num_bigint::BigUint;
 use num_traits::Signed;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -78,9 +80,14 @@ const PRELUDE: &[&str] = &[
     "codecopy",
     "codesize",
     "coinbase",
+    "create2",
     "decide",
     "default",
+    "delegatecall",
+    "extcodecopy",
+    "extcodehash",
     "extcodesize",
+    "gas",
     "gaslimit",
     "gasprice",
     "init_entry",
@@ -100,6 +107,8 @@ const PRELUDE: &[&str] = &[
     "pure",
     "readPaddedWord",
     "returnData",
+    "returndatacopy",
+    "returndatasize",
     "revertData",
     "revertEmpty",
     "runtime",
@@ -107,6 +116,7 @@ const PRELUDE: &[&str] = &[
     "selfbalance",
     "sload",
     "sstore",
+    "staticcall",
     "stopCall",
     "store",
     "timestamp",
@@ -674,6 +684,11 @@ impl<'db> Module<'db> {
                 if func.is_extern(db) {
                     return Err(Unsupported(format!("extern function `{name}`")));
                 }
+                // The compiler implements these for each contract from where
+                // its init code lies in the artifact.
+                if contract_metadata_kind(db, func.trait_method_def(db).unwrap_or(func)).is_some() {
+                    return Err(Unsupported(format!("`{name}` of a contract's init code")));
+                }
                 match mode {
                     Some(mode) => format!("{name}_{mode:?}").to_lowercase(),
                     None => name.to_string(),
@@ -936,6 +951,15 @@ impl<'db> Module<'db> {
                 value: SemConstScalar::Bool(value),
                 ..
             } => Ok(value.to_string()),
+            SemConstValue::Scalar {
+                ty,
+                value: SemConstScalar::Bytes(bytes),
+            } if ty.is_string(db) && bytes.len() <= 32 => {
+                let word = bytes
+                    .iter()
+                    .fold(BigUint::ZERO, |word, byte| word * 256u32 + *byte);
+                Ok(format!("(UInt256.ofNat {word})"))
+            }
             SemConstValue::Tuple { ty, elems: fields }
             | SemConstValue::Struct { ty, fields }
             | SemConstValue::Array { ty, elems: fields } => {
@@ -962,6 +986,10 @@ impl<'db> Module<'db> {
 
     /// The width of `ty`, and whether it is signed, if it is an integer type.
     fn int_bits(&self, ty: TyId<'db>) -> Option<(usize, bool)> {
+        // A fixed string is a word: its bytes as a big-endian number.
+        if ty.is_string(self.db) {
+            return Some((256, false));
+        }
         let prim = ty.as_prim(self.db)?;
         let target = self.db.compilation_settings().target(self.db);
         Some((prim_int_bits(prim, target)?, prim.is_signed_int()))
@@ -1746,6 +1774,14 @@ impl<'db> BodyExporter<'_, 'db> {
             self.helds.push((*result, place.clone(), mutable));
         }
         self.result_ty = self.returned_ty()?;
+        // A function that returns a value and whose body returns none has
+        // no body of its own: the compiler supplies its result.
+        if let BodyOwner::Func(func, _) = owner
+            && self.result_ty == "Unit"
+            && func.return_ty(db) != TyId::unit(db)
+        {
+            return Err(Unsupported("body the compiler supplies".to_string()));
+        }
         let never = self.result_ty == "Empty";
         let mut returned = Vec::new();
         for out in self.outs.clone() {
@@ -2827,6 +2863,19 @@ impl<'db> BodyExporter<'_, 'db> {
             Kind::CodeSize => "codesize",
             Kind::ExtCodeSize => "extcodesize",
             Kind::Keccak256 => "keccak256",
+            // External calls, and the gas a model does not have: what the
+            // prelude's feed supplies.
+            Kind::Gas => "gas",
+            Kind::Call => "Fe.EVM.call",
+            Kind::StaticCall => "staticcall",
+            Kind::StaticCallPrecompile => "staticcallPrecompile",
+            Kind::DelegateCall => "delegatecall",
+            Kind::Create => "Fe.EVM.create",
+            Kind::Create2 => "create2",
+            Kind::ReturnDataSize => "returndatasize",
+            Kind::ReturnDataCopy => "returndatacopy",
+            Kind::ExtCodeHash => "extcodehash",
+            Kind::ExtCodeCopy => "extcodecopy",
             Kind::Address => "selfAddress",
             Kind::Caller => "caller",
             Kind::CallValue => "callvalue",

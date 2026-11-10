@@ -2677,6 +2677,7 @@ dependencies = [
  "cranelift-entity 0.136.1",
  "fe-common",
  "fe-hir",
+ "num-bigint",
  "num-traits",
  "rustc-hash 2.1.1",
 ]

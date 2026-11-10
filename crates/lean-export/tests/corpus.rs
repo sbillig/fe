@@ -19,13 +19,19 @@ use hir::{
 
 /// Exports every contract of the colon-separated files in
 /// `LEAN_EXPORT_CORPUS`. Writes each export to
-/// `LEAN_EXPORT_CORPUS_OUT/<file>_<n>.lean`, wrapped in a namespace so that it
+/// `LEAN_EXPORT_CORPUS_OUT/<file>_<n>.lean`, importing the modules
+/// `LEAN_EXPORT_CORPUS_IMPORTS` names and wrapped in a namespace so that it
 /// elaborates on its own, and prints the construct each other contract
 /// stopped at as `BLOCK <ids>\t<reason>`.
 #[test]
 #[ignore = "reads its input from the environment"]
 fn export_corpus() {
     let out = env::var("LEAN_EXPORT_CORPUS_OUT").unwrap();
+    let imports: String = env::var("LEAN_EXPORT_CORPUS_IMPORTS")
+        .unwrap()
+        .split_whitespace()
+        .map(|module| format!("import {module}\n"))
+        .collect();
     let mut blockers = BTreeMap::<String, Vec<String>>::new();
     let (mut exported, mut skipped, mut total) = (0, Vec::new(), 0);
     let files = env::var("LEAN_EXPORT_CORPUS").unwrap();
@@ -61,7 +67,7 @@ fn export_corpus() {
                 Ok(lean) => {
                     exported += 1;
                     let text = format!(
-                        "import Fe.EVM.Storage\nopen Ethereum Ethereum.EVM Fe Fe.EVM\n\
+                        "{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n\
                          namespace Corpus.{id}\nsection\n\
                          set_option linter.unusedVariables false\n\n{lean}\nend\nend Corpus.{id}\n"
                     );
