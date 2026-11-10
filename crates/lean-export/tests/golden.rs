@@ -109,3 +109,8 @@ fn state() {
 fn entries() {
     check("entries");
 }
+
+#[test]
+fn wide() {
+    check_with("wide", export_contract_with_entries);
+}

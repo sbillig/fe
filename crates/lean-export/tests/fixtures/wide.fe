@@ -1,0 +1,25 @@
+use std::abi::sol
+
+msg WideMsg {
+    #[selector = sol("sum(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)")]
+    Sum {
+        a: u256,
+        b: u256,
+        c: u256,
+        d: u256,
+        e: u256,
+        f: u256,
+        g: u256,
+        h: u256,
+        i: u256,
+        j: u256,
+    } -> u256,
+}
+
+pub contract Wide {
+    recv WideMsg {
+        Sum { a, b, c, d, e, f, g, h, i, j } -> u256 {
+            a + b + c + d + e + f + g + h + i + j
+        }
+    }
+}

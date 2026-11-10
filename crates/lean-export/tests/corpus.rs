@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, env, fs, panic};
 
 use cranelift_entity::EntityRef;
-use fe_lean_export::export_contract_with_entries;
+use fe_lean_export::{Unsupported, export_contract_with_entries};
 use hir::{
     analysis::{
         semantic::{
@@ -32,20 +32,28 @@ fn export_corpus() {
     for path in files.split(':') {
         let source = fs::read_to_string(path).unwrap();
         let name = path.rsplit('/').next().unwrap().trim_end_matches(".fe");
-        // A file with diagnostics is skipped.
-        let results = panic::catch_unwind(|| {
+        // A file with diagnostics is skipped. A panic of the exporter is
+        // reported as what stopped the contract.
+        let analyzed = panic::catch_unwind(|| {
             let mut db = HirAnalysisTestDb::default();
             let file = db.new_stand_alone("corpus.fe".into(), &source);
             let (top_mod, _) = db.top_mod(file);
             db.assert_no_diags(top_mod);
-            let contracts = top_mod.all_contracts(&db);
-            let export = |contract: &_| export_contract_with_entries(&db, *contract);
-            contracts.iter().map(export).collect::<Vec<_>>()
+            (db, file)
         });
-        let Ok(results) = results else {
+        let Ok((db, file)) = analyzed else {
             skipped.push(name);
             continue;
         };
+        let (top_mod, _) = db.top_mod(file);
+        let db = &db;
+        let export = |contract: &_| {
+            panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                export_contract_with_entries(db, *contract)
+            }))
+            .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())))
+        };
+        let results: Vec<_> = top_mod.all_contracts(db).iter().map(export).collect();
         for (index, result) in results.into_iter().enumerate() {
             total += 1;
             let id = format!("{name}_{index}");
