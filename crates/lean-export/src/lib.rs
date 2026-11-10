@@ -17,18 +17,22 @@ use hir::{
             NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement,
             NStatementKind, NSuccessor, NTerminatorKind, NValueDefinition, NValueId,
             NormalizedBody, Overflow, SConst, SemConstScalar, SemConstValue, SemanticInstance,
-            SemanticInstanceKey, UnaryOp, drop_elaboration, identity_semantic_instance_key,
-            normalize_semantic_body,
+            SemanticInstanceKey, UnaryOp, drop_elaboration, generated_callee_key,
+            identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
             AddressSpace,
             adt_def::AdtRef,
-            ty_check::BodyOwner,
+            corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
+            registered_root_providers,
+            trait_def::TraitInstId,
+            trait_resolution::PredicateListId,
+            ty_check::{BodyOwner, EffectParamSite, LocalBinding},
             ty_def::{CapabilityKind, TyId, prim_int_bits},
             ty_is_snapshot,
         },
     },
-    hir_def::{Contract, FieldParent, ItemKind, expr::CompBinOp},
+    hir_def::{Contract, FieldParent, IdentId, ItemKind, PatId, expr::CompBinOp},
     semantic::{ProviderSource, storage_field_placements},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -70,6 +74,25 @@ pub fn export_contract<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Result<String, Unsupported> {
+    export(db, contract, false)
+}
+
+/// As [`export_contract`], followed by the runtime entry: one definition per
+/// arm that decodes its arguments, runs it and returns its result, and
+/// `runtime`, which dispatches on the selector. They call std's decoder and
+/// encoder as exported.
+pub fn export_contract_with_runtime<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Result<String, Unsupported> {
+    export(db, contract, true)
+}
+
+fn export<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    runtime: bool,
+) -> Result<String, Unsupported> {
     let mut entries = vec![("init".to_string(), BodyOwner::ContractInit { contract })];
     for (recv_idx, recv) in contract.recv_views(db).enumerate() {
         entries.extend(recv.arms(db).enumerate().map(|(arm_idx, _)| {
@@ -86,7 +109,11 @@ pub fn export_contract<'db>(
     let mut module = Module {
         db,
         names: FxHashMap::default(),
-        taken: entries.iter().map(|(name, _)| name.clone()).collect(),
+        taken: entries
+            .iter()
+            .flat_map(|(name, _)| [name.clone(), format!("{name}_entry")])
+            .chain(["runtime".to_string()])
+            .collect(),
         nevers: FxHashSet::default(),
         open: Vec::new(),
         layouts: Vec::new(),
@@ -96,6 +123,9 @@ pub fn export_contract<'db>(
     for (name, owner) in entries {
         let (body, _) = module.body(&name, identity_semantic_instance_key(db, owner), &[])?;
         writeln!(module.defs, "def {name}{body}").unwrap();
+    }
+    if runtime {
+        module.runtime(contract)?;
     }
     let layouts: String = module
         .layouts
@@ -149,6 +179,169 @@ impl<'db> Module<'db> {
         }
         .export()
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))
+    }
+
+    /// The patterns that bind the arguments of recv arm `owner`, in the order
+    /// the arm takes them; none for any other body.
+    fn arg_pats(&self, owner: BodyOwner<'db>) -> Vec<PatId> {
+        let BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        } = owner
+        else {
+            return Vec::new();
+        };
+        let arm = contract
+            .recv(self.db, recv_idx)
+            .and_then(|recv| recv.arm(self.db, arm_idx));
+        arm.map_or(Vec::new(), |arm| {
+            let bindings = arm.arg_bindings(self.db);
+            bindings.iter().map(|binding| binding.pat).collect()
+        })
+    }
+
+    /// Appends the runtime entry: what the compiler synthesizes around the
+    /// arms. An arm's entry rejects call value unless the arm is payable,
+    /// decodes the message with `core::contracts::decode_runtime_args`, runs
+    /// the arm on the fields it binds, and returns through the host's
+    /// `return_value`, or with no data. `runtime` reverts on calldata shorter
+    /// than a selector or with an unknown one, unless there is a fallback.
+    fn runtime(&mut self, contract: Contract<'db>) -> Result<(), Unsupported> {
+        let db = self.db;
+        let scope = contract.scope();
+        let missing = |what: &str| Unsupported(format!("runtime: missing `{what}`"));
+        let abi = resolve_lib_type_path(db, scope, "std::abi::Sol")
+            .ok_or_else(|| missing("std::abi::Sol"))?;
+        let decode = resolve_lib_func_path(db, scope, "core::contracts::decode_runtime_args")
+            .ok_or_else(|| missing("core::contracts::decode_runtime_args"))?;
+        let host_trait = resolve_core_trait(db, scope, &["contracts", "ContractHost"])
+            .ok_or_else(|| missing("core::contracts::ContractHost"))?;
+        let generated = |error| Unsupported(format!("runtime: generated call: {error:?}"));
+        let mut cases = Vec::new();
+        let mut default = "revertEmpty".to_string();
+        for (recv_idx, recv) in contract.recv_views(db).enumerate() {
+            for (arm_idx, arm) in recv.arms(db).enumerate() {
+                let name = format!("recv{recv_idx}_arm{arm_idx}");
+                let owner = BodyOwner::ContractRecvArm {
+                    contract,
+                    recv_idx: recv_idx as u32,
+                    arm_idx: arm_idx as u32,
+                };
+                let site = EffectParamSite::ContractRecvArm {
+                    contract,
+                    recv_idx: recv_idx as u32,
+                    arm_idx: arm_idx as u32,
+                };
+                let host = registered_root_providers(db, site)
+                    .first()
+                    .ok_or_else(|| missing("root provider"))?
+                    .provider_ty;
+                let info = arm.abi_info(db, abi);
+                let mut lines = String::new();
+                if !arm.arm(db).is_some_and(|arm| arm.is_payable(db)) {
+                    lines.push_str("  nonPayable\n");
+                }
+                // The arguments the arm's body takes, by their place among
+                // the arm's bindings.
+                let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
+                let normalized = normalize_semantic_body(db, instance)
+                    .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
+                let pats = self.arg_pats(owner);
+                let values = normalized.body.values.iter().filter_map(|value| {
+                    matches!(value.definition, NValueDefinition::EntryParam { .. })
+                        .then(|| arg_position(value.source, &pats))
+                });
+                let slots = normalized
+                    .body
+                    .roots
+                    .iter()
+                    .filter_map(|root| match root.kind {
+                        NRootKind::LocalSlot { binding } => arg_position(binding, &pats).map(Some),
+                        _ => None,
+                    });
+                let mut positions = values
+                    .chain(slots)
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| Unsupported(format!("{name}: argument bound by no field")))?;
+                positions.sort_unstable();
+                let mut args = String::new();
+                if info.args_ty != TyId::unit(db) {
+                    let key = generated_callee_key(
+                        db,
+                        scope,
+                        PredicateListId::empty_list(db),
+                        decode,
+                        None,
+                        &[host, abi, info.args_ty],
+                    )
+                    .map_err(generated)?;
+                    let decode = self.instance(key, vec![Some(Carrier::Erased)])?;
+                    writeln!(lines, "  let message ← {decode}").unwrap();
+                    let fields = self.fields(info.args_ty)?;
+                    let bindings = arm.arg_bindings(db);
+                    for position in positions {
+                        let (steps, _) = &fields[bindings[position].tuple_index as usize];
+                        write!(args, " message.{}", steps.join(".")).unwrap();
+                    }
+                }
+                match info.ret_ty {
+                    None => {
+                        writeln!(lines, "  let _ ← {name}{args}").unwrap();
+                        lines.push_str("  returnData (UInt256.ofNat 0) (UInt256.ofNat 0)\n");
+                    }
+                    Some(ret_ty) => {
+                        let inst = TraitInstId::new_simple(db, host_trait, vec![host]);
+                        let method = IdentId::new(db, "return_value".to_string());
+                        let func = host_trait
+                            .method_defs(db)
+                            .get(&method)
+                            .copied()
+                            .ok_or_else(|| missing("ContractHost::return_value"))?;
+                        let key = generated_callee_key(
+                            db,
+                            scope,
+                            PredicateListId::empty_list(db),
+                            func,
+                            Some(inst),
+                            &[abi, ret_ty],
+                        )
+                        .map_err(generated)?;
+                        let return_value = self.instance(key, vec![Some(Carrier::Erased), None])?;
+                        writeln!(lines, "  let result ← {name}{args}").unwrap();
+                        writeln!(lines, "  {return_value} result").unwrap();
+                    }
+                }
+                writeln!(self.defs, "def {name}_entry : FeM Empty := do\n{lines}").unwrap();
+                match info.selector_value {
+                    _ if info.is_fallback => default = format!("{name}_entry"),
+                    Some(selector) => cases.push((selector, name)),
+                    None => return Err(Unsupported(format!("{name}: no selector"))),
+                }
+            }
+        }
+        cases.sort_unstable();
+        let mut dispatch = String::new();
+        for (selector, name) in cases {
+            write!(
+                dispatch,
+                "if selector = UInt256.ofNat {selector:#010x} then\n      {name}_entry\n    else "
+            )
+            .unwrap();
+        }
+        let last = if dispatch.is_empty() {
+            default.clone()
+        } else {
+            format!("\n      {default}")
+        };
+        writeln!(
+            self.defs,
+            "def runtime : FeM Empty := do\n  let size ← calldatasize\n  \
+             if size.toNat < 4 then\n    {default}\n  else\n    \
+             let selector ← calldataSelector\n    {dispatch}{last}"
+        )
+        .unwrap();
+        Ok(())
     }
 
     /// The Lean name of the function or constant instance `key` that
@@ -243,6 +436,10 @@ impl<'db> Module<'db> {
     fn fields(&self, ty: TyId<'db>) -> Result<Vec<(Vec<String>, TyId<'db>)>, Unsupported> {
         let db = self.db;
         let tys = ty.field_types(db);
+        // An address is its word, so its one field is the address itself.
+        if ty.pretty_print(db) == "Address" {
+            return Ok(tys.into_iter().map(|ty| (Vec::new(), ty)).collect());
+        }
         if ty.is_tuple(db) {
             let last = tys.len().saturating_sub(1);
             let steps = |index: usize| {
@@ -284,6 +481,9 @@ impl<'db> Module<'db> {
     /// The Lean term for `value` of integer type `from` cast to `to`: the
     /// word, cut to the width of a narrower unsigned type.
     fn cast(&self, value: &str, from: TyId<'db>, to: TyId<'db>) -> Result<String, Unsupported> {
+        if from.is_bool(self.db) && self.uint_bits(to).is_some() {
+            return Ok(format!("Bool.toUInt256 {value}"));
+        }
         match (self.int_bits(from), self.int_bits(to)) {
             // A word reinterpreted at its own width.
             (Some((256, _)), Some((256, _))) => Ok(value.to_string()),
@@ -388,11 +588,22 @@ impl<'db> BodyExporter<'_, 'db> {
     fn export(mut self) -> Result<(String, bool), Unsupported> {
         let db = self.module.db;
         // A parameter is an entry value, or a slot if the body needs its
-        // address: the slot starts out holding the argument.
+        // address: the slot starts out holding the argument. A recv arm's
+        // are in the order of the fields its pattern binds.
+        let owner = self.body.owner.key(db).owner(db);
+        let arm = matches!(owner, BodyOwner::ContractRecvArm { .. });
+        let pats = self.module.arg_pats(owner);
         let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
             let NValueDefinition::EntryParam { param } = value.definition else {
                 continue;
+            };
+            let param = if arm {
+                arg_position(value.source, &pats)
+                    .ok_or_else(|| Unsupported("argument bound by no field".to_string()))?
+                    as u32
+            } else {
+                param
             };
             let carrier = self.carriers.get(param as usize).copied().flatten();
             let ty = match (value.ty.as_capability(db), carrier) {
@@ -416,7 +627,14 @@ impl<'db> BodyExporter<'_, 'db> {
                 _ => continue,
             };
             self.slots.push(NRootId::new(index));
-            if let NRootKind::ParamPlace { param } = root.kind {
+            let param = match root.kind {
+                NRootKind::ParamPlace { param } => Some(param),
+                NRootKind::LocalSlot { binding } => {
+                    arg_position(binding, &pats).map(|position| position as u32)
+                }
+                _ => None,
+            };
+            if let Some(param) = param {
                 params.push((param, format!(" (r{index} : {ty})")));
                 writeln!(state, "  let mut r{index} := r{index}").unwrap();
             } else {
@@ -463,6 +681,21 @@ impl<'db> BodyExporter<'_, 'db> {
                 NTerminatorKind::Return(operand) => Some(operand),
                 _ => None,
             });
+        // A projection gives what it yields: the value its access reaches.
+        let yielded = self
+            .body
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.kind {
+                NTerminatorKind::Yield { value, .. } => Some(self.ty(value.value)),
+                _ => None,
+            });
+        if let Some(yielded) = yielded {
+            let inner = yielded
+                .as_capability(self.module.db)
+                .map_or(yielded, |(_, ty)| ty);
+            return self.module.value_ty(inner);
+        }
         match returned {
             Some(Some(operand)) => self.lean_ty(self.ty(operand.value)),
             Some(None) => Ok("Unit".to_string()),
@@ -611,6 +844,25 @@ impl<'db> BodyExporter<'_, 'db> {
             NTerminatorKind::Fail(FailReason::Assert { message: None }) => {
                 writeln!(out, "{pad}M.panic 0x01").unwrap()
             }
+            // A projection that grants read access to a value and then only
+            // ends its own sessions returns the value.
+            NTerminatorKind::Yield { value, resume } => {
+                let db = self.module.db;
+                let ty = self.ty(value.value);
+                let read_only = !matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)));
+                if !read_only || !self.outs.is_empty() || !self.slide_is_empty(resume.block) {
+                    return Err(Unsupported(
+                        "projection that grants `mut` access or has a slide".to_string(),
+                    ));
+                }
+                let granted = if self.is_access(ty) {
+                    let target = self.carrier_value(value.value)?;
+                    self.read(&target)?
+                } else {
+                    self.operand(value)?
+                };
+                writeln!(out, "{pad}return {granted}").unwrap();
+            }
             // Control stops at a call that never returns, whose result has
             // no values.
             NTerminatorKind::Unreachable => {
@@ -633,6 +885,31 @@ impl<'db> BodyExporter<'_, 'db> {
             other => return Err(Unsupported(format!("terminator {other:?}"))),
         }
         Ok(())
+    }
+
+    /// Whether the slide from `block` does nothing: it ends sessions,
+    /// destroys nothing and returns.
+    fn slide_is_empty(&self, block: NBlockId) -> bool {
+        let data = &self.body.blocks[block.index()];
+        let drops = drop_elaboration(self.module.db, self.body.owner);
+        let inert = data
+            .statements
+            .iter()
+            .all(|statement| match statement.kind {
+                NStatementKind::End { .. } => true,
+                NStatementKind::Drop { .. } => {
+                    drops.is_some_and(|drops| drops.parts(statement.id).is_empty())
+                }
+                _ => false,
+            });
+        inert
+            && match &data.terminator.kind {
+                NTerminatorKind::Return(None) => true,
+                NTerminatorKind::Goto(next) => {
+                    next.args.is_empty() && self.slide_is_empty(next.block)
+                }
+                _ => false,
+            }
     }
 
     /// Prints the step to `target`: a call of its local function if it is a
@@ -877,6 +1154,10 @@ impl<'db> BodyExporter<'_, 'db> {
                 let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
                 return Ok(format!("let {name} ← revertData {ptr} {len}\nnever"));
             }
+            (true, Some("return_data"), [ptr, len]) if func.is_extern(db) => {
+                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
+                return Ok(format!("let {name} ← returnData {ptr} {len}\nnever"));
+            }
             (true, Some("panic_code"), [code]) if func.is_extern(db) => {
                 return Ok(format!(
                     "let {name} ← panicCode {}\nnever",
@@ -963,14 +1244,17 @@ impl<'db> BodyExporter<'_, 'db> {
             return Ok(value_name(operand.value));
         };
         let fields: Vec<_> = fields.iter().copied().map(value_name).collect();
+        // A type that is its one field, a tuple of one or an address.
+        if let [(steps, _)] = self.module.fields(ty)?.as_slice()
+            && steps.is_empty()
+        {
+            return Ok(fields[0].clone());
+        }
         if ty.is_tuple(self.module.db) {
             return Ok(format!("({})", fields.join(", ")));
         }
-        Ok(format!(
-            "({}.mk {})",
-            self.module.value_ty(ty)?,
-            fields.join(" ")
-        ))
+        let fields: String = fields.iter().map(|field| format!(" {field}")).collect();
+        Ok(format!("({}.mk{fields})", self.module.value_ty(ty)?))
     }
 
     /// Whether a value of `ty` is an access to a place. A view of a snapshot
@@ -1012,6 +1296,15 @@ impl<'db> BodyExporter<'_, 'db> {
                 .copied()
                 .flatten()
                 .ok_or_else(|| Unsupported("access parameter of an entry".to_string())),
+            // A read-only grant is the value the projection returned.
+            CarrierBase::Grant { session, .. }
+                if !matches!(
+                    self.ty(session).as_capability(self.module.db),
+                    Some((CapabilityKind::Mut, _))
+                ) =>
+            {
+                Ok(Carrier::Value)
+            }
             base => Err(Unsupported(format!("access to {base:?}"))),
         }
     }
@@ -1038,6 +1331,16 @@ impl<'db> BodyExporter<'_, 'db> {
                     .ok_or_else(|| Unsupported("access to an unknown parameter".to_string()))?;
                 let (_, inner) = value.ty.as_capability(db).unwrap();
                 (format!("v{index}"), inner)
+            }
+            CarrierBase::Grant { session, component } => {
+                let (_, inner) = self.ty(session).as_capability(db).unwrap();
+                let mut path = field_path(&component)?;
+                path.extend(field_path(&target.path)?);
+                return Ok(ValueTarget {
+                    var: value_name(session),
+                    ty: inner,
+                    path,
+                });
             }
             base => return Err(Unsupported(format!("access to {base:?}"))),
         };
@@ -1274,6 +1577,14 @@ fn lean_ident(text: impl AsRef<str>) -> String {
 
 fn value_name(value: NValueId) -> String {
     format!("v{}", value.index())
+}
+
+/// The place of `binding` among the patterns `pats`, if it is one of them.
+fn arg_position(binding: Option<LocalBinding<'_>>, pats: &[PatId]) -> Option<usize> {
+    let Some(LocalBinding::Local { pat, .. }) = binding else {
+        return None;
+    };
+    pats.iter().position(|bound| *bound == pat)
 }
 
 /// The struct fields `path` steps through.

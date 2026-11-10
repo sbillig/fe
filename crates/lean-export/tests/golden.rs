@@ -1,11 +1,14 @@
 use std::{env, fs, path::PathBuf};
 
-use fe_lean_export::export_contract;
-use hir::test_db::HirAnalysisTestDb;
+use fe_lean_export::{Unsupported, export_contract, export_contract_with_runtime};
+use hir::{analysis::HirAnalysisDb, hir_def::Contract, test_db::HirAnalysisTestDb};
 
-/// Exports the one contract of `tests/fixtures/<name>.fe` and compares it with
-/// `tests/golden/<name>.lean`. `LEAN_EXPORT_BLESS=1` rewrites the golden file.
-fn check(name: &str) {
+type Export = for<'db> fn(&'db dyn HirAnalysisDb, Contract<'db>) -> Result<String, Unsupported>;
+
+/// Exports the one contract of `tests/fixtures/<name>.fe` with `export` and
+/// compares it with `tests/golden/<name>.lean`. `LEAN_EXPORT_BLESS=1`
+/// rewrites the golden file.
+fn check_with(name: &str, export: Export) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
     let source = fs::read_to_string(dir.join(format!("fixtures/{name}.fe"))).unwrap();
     let mut db = HirAnalysisTestDb::default();
@@ -15,12 +18,16 @@ fn check(name: &str) {
     let [contract] = top_mod.all_contracts(&db).as_slice() else {
         panic!("expected one contract");
     };
-    let lean = export_contract(&db, *contract).expect("exported");
+    let lean = export(&db, *contract).expect("exported");
     let golden = dir.join(format!("golden/{name}.lean"));
     if env::var_os("LEAN_EXPORT_BLESS").is_some() {
         fs::write(&golden, &lean).unwrap();
     }
     assert_eq!(lean, fs::read_to_string(&golden).unwrap());
+}
+
+fn check(name: &str) {
+    check_with(name, export_contract);
 }
 
 #[test]
@@ -35,7 +42,7 @@ fn erc20() {
 
 #[test]
 fn packed_store() {
-    check("packed_store");
+    check_with("packed_store", export_contract_with_runtime);
 }
 
 #[test]
