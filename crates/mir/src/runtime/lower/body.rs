@@ -4967,16 +4967,11 @@ impl<'db> RmirEmitter<'db> {
                 }
                 NDataProjection::Entry(key) => {
                     runtime_place.path = std::mem::take(&mut projected).into_boxed_slice();
-                    let normalized = &self.semantic_body.normalized;
-                    let collection_ty = normalized.place_prefix_ty(self.db, place, idx)?;
-                    let element_ty = normalized.place_prefix_ty(self.db, place, idx + 1)?;
-                    runtime_place = match self.lower_entry(
-                        bb,
-                        runtime_place,
-                        collection_ty,
-                        element_ty,
-                        *key,
-                    ) {
+                    let collection_ty = self
+                        .semantic_body
+                        .normalized
+                        .place_prefix_ty(self.db, place, idx)?;
+                    runtime_place = match self.lower_entry(bb, runtime_place, collection_ty, *key) {
                         EntryPlace::Place(place) => place,
                         EntryPlace::Lane(lane) => RuntimePlace {
                             root: PlaceRoot::Slot(self.hold_lane(bb, LaneSite::Entry(lane))),
@@ -5059,14 +5054,18 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         collection: RuntimePlace<'db>,
         collection_ty: TyId<'db>,
-        element_ty: TyId<'db>,
         key: NValueId,
     ) -> EntryPlace<'db> {
-        let owner = self.semantic_body.owner();
-        let space = owner
-            .pinned_space(self.db, collection_ty)
+        let entry = self
+            .semantic_body
+            .owner()
+            .entry_locate(self.db, collection_ty)
+            .unwrap_or_else(|error| {
+                panic!("failed to finalize generated call to `locate`: {error:?}")
+            });
+        let space = entry
+            .space
             .expect("a collection whose elements are places is pinned to their space");
-        let lanes = owner.state_index_lanes(self.db, collection_ty);
         let word_ty = TyId::u256(self.db);
         let word = word_class();
         let receiver_class = self.place_addr_class(&collection);
@@ -5082,12 +5081,7 @@ impl<'db> RmirEmitter<'db> {
             self.lower_place_addr_of_for_class(collection_ty, bb, collection, receiver_class);
         let base = self.coerce_value(bb, receiver, &word);
         let key = self.read_normalized_value(bb, key);
-        let locate = self.resolve_core_method(
-            &["ops", "StateIndex"],
-            "locate",
-            vec![collection_ty],
-            collection_ty,
-        );
+        let locate = SemanticInstance::new(self.db, entry.callee);
         let location = self.call_generated(bb, locate, &[receiver, base, key]);
         let mut coordinate = |index| {
             let value = self.alloc_runtime_temp(word_ty, RuntimeCarrier::Value(word.clone()));
@@ -5104,17 +5098,17 @@ impl<'db> RmirEmitter<'db> {
             value
         };
         let slot = coordinate(0);
-        if let Some(lanes) = lanes {
+        if let Some(lanes) = entry.lanes {
             return EntryPlace::Lane(Lane {
                 slot,
                 offset: coordinate(1),
                 space,
                 codec: lanes.codec,
-                ty: element_ty,
+                ty: entry.entry_ty,
             });
         }
         let element_class =
-            provider_class_for_target_in_env(self.db, self.env, Some(element_ty), space);
+            provider_class_for_target_in_env(self.db, self.env, Some(entry.entry_ty), space);
         let element = self.coerce_value(bb, slot, &element_class);
         EntryPlace::Place(RuntimePlace {
             root: PlaceRoot::Ref(element),
@@ -5143,7 +5137,7 @@ impl<'db> RmirEmitter<'db> {
                 ..place.clone()
             },
         )?;
-        match self.lower_entry(bb, collection, collection_ty, place.ty, *key) {
+        match self.lower_entry(bb, collection, collection_ty, *key) {
             EntryPlace::Lane(lane) => Some(lane),
             EntryPlace::Place(_) => unreachable!("the collection packs its elements"),
         }

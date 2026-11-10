@@ -38,7 +38,7 @@ use crate::{
             },
             provider::{
                 AddressSpace, ProviderKind, ProviderTransport, RootProviderRegistration,
-                RootProviderScope, provider_semantics_for_specialized_call,
+                RootProviderScope, StateIndexLanes, provider_semantics_for_specialized_call,
                 registered_root_providers,
             },
             shape::Shape,
@@ -73,7 +73,7 @@ use thin_vec::ThinVec;
 
 use super::{
     EffectProviderSubst, GenericSubst, ImplEnv,
-    const_ref::{is_ground, root_impl_env},
+    const_ref::{core_method_callee_key, is_ground, root_impl_env},
     instantiate_typed_body, provisional_semantic_callee_key,
     semantic_callee_key_with_effect_providers, typed_body_template,
 };
@@ -201,6 +201,28 @@ impl<'db> ForLoopCallSites<'db> {
     pub fn site(&self, step: ForLoopStep) -> &CallSiteLowering<'db> {
         &self.sites[step as usize]
     }
+}
+
+/// How an instance reaches an entry `c[k]` of a collection whose elements are
+/// places (`core::ops::StateIndex`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EntryLocate<'db> {
+    /// The collection's `StateIndex::locate`. The compiler calls it once per
+    /// entry step with the collection, the collection's own slot (`root`)
+    /// and the key, and the entry lies at the `Location` it returns.
+    pub callee: SemanticInstanceKey<'db>,
+    /// `StateIndex::Key`: the type of the step's key.
+    pub key_ty: TyId<'db>,
+    /// `StateIndex::Entry`: the type of the entry.
+    pub entry_ty: TyId<'db>,
+    /// The state space the collection is pinned to, in which its entries
+    /// lie. `None` in a body generic over the pin's space.
+    pub space: Option<AddressSpace>,
+    /// The codec of an entry the collection packs into a lane: the entry is
+    /// `bits` bits of the word at the location's `slot`, `offset` bits above
+    /// its low end. `None` for an entry that keeps its type's storage layout
+    /// from `slot` on, whose `offset` is unused.
+    pub lanes: Option<StateIndexLanes<'db>>,
 }
 
 /// The address space of the place a call supplies to one of its callee's
@@ -1462,7 +1484,7 @@ impl<'db> SemanticInstance<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
-    ) -> Option<crate::analysis::ty::provider::StateIndexLanes<'db>> {
+    ) -> Option<StateIndexLanes<'db>> {
         crate::analysis::ty::provider::state_index_lanes(
             db,
             self.normalization_scope(db),
@@ -1485,6 +1507,35 @@ impl<'db> SemanticInstance<'db> {
             ty,
             self.assumptions(db),
         )
+    }
+
+    /// How this instance reaches an entry `c[k]` of a collection of type
+    /// `ty`. An error when `ty`'s `StateIndex::locate` has no body here, as
+    /// for a collection that is a type parameter.
+    pub fn entry_locate(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+    ) -> Result<EntryLocate<'db>, MethodArgMapError<'db>> {
+        let ty = self.normalized_ty(db, ty);
+        let (key_ty, entry_ty) = self
+            .state_index_tys(db, ty)
+            .ok_or(MethodArgMapError::MissingBody)?;
+        let callee = core_method_callee_key(
+            db,
+            self.normalization_scope(db),
+            self.assumptions(db),
+            &["ops", "StateIndex"],
+            "locate",
+            vec![ty],
+        )?;
+        Ok(EntryLocate {
+            callee,
+            key_ty,
+            entry_ty,
+            space: self.pinned_space(db, ty),
+            lanes: self.state_index_lanes(db, ty),
+        })
     }
 
     #[salsa::tracked]

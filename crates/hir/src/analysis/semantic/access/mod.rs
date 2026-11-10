@@ -592,15 +592,9 @@ fn generated_callees<'db>(
                 let Some(collection) = body.place_prefix_ty(db, place, idx) else {
                     continue;
                 };
-                let collection = instance.normalized_ty(db, collection);
-                let locate = core_method_callee_key(
-                    db,
-                    scope,
-                    assumptions,
-                    &["ops", "StateIndex"],
-                    "locate",
-                    vec![collection],
-                );
+                let locate = instance
+                    .entry_locate(db, collection)
+                    .map(|entry| entry.callee);
                 let codec_args = instance
                     .state_index_lanes(db, collection)
                     .zip(body.place_prefix_ty(db, place, idx + 1))
