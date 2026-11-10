@@ -114,3 +114,8 @@ fn entries() {
 fn wide() {
     check_with("wide", export_contract_with_entries);
 }
+
+#[test]
+fn projections() {
+    check("projections");
+}

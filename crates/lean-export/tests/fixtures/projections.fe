@@ -1,0 +1,63 @@
+use std::abi::sol
+
+struct Cell {
+    v: u256,
+}
+
+impl Cell {
+    fn get(self) -> u256 {
+        self.v
+    }
+
+    fn set(mut self, _ v: u256) {
+        self.v = v
+    }
+
+    // A grant of a place in contract state: writes reach it at once.
+    fn slot(mut self) -> mut u256 {
+        mut self.v
+    }
+
+    // A grant of a local with a slide that stores what the caller left.
+    fn cached(mut self) -> mut u256 {
+        var tmp = self.get()
+        yield mut tmp
+        self.set(tmp)
+    }
+}
+
+// A grant into the caller's own local: the value comes back when it ends.
+fn first(pair: mut (u256, u256)) -> mut u256 {
+    mut pair.0
+}
+
+msg ProjectionsMsg {
+    #[selector = sol("direct(uint256)")]
+    Direct { by: u256 } -> u256,
+    #[selector = sol("slide(uint256)")]
+    Slide { by: u256 } -> u256,
+    #[selector = sol("local(uint256,uint256)")]
+    Local { a: u256, b: u256 } -> u256,
+}
+
+pub contract Projections {
+    mut cell: Cell,
+
+    recv ProjectionsMsg {
+        Direct { by } -> u256 uses (mut cell) {
+            cell.slot() += by
+            cell.v
+        }
+
+        Slide { by } -> u256 uses (mut cell) {
+            cell.cached() += by
+            cell.v
+        }
+
+        Local { a, b } -> u256 {
+            var pair = (a, b)
+            first(mut pair) += b
+            pair.0
+        }
+    }
+}

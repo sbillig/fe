@@ -117,6 +117,13 @@ const PRELUDE: &[&str] = &[
     "zeroMem",
 ];
 
+/// The types exported code names from Lean and the prelude, which no exported
+/// type takes.
+const TYPES: &[&str] = &[
+    "Bool", "Empty", "FeM", "IntTy", "Lane", "Layout", "Nat", "Place", "Space", "UInt256", "Unit",
+    "Vector",
+];
+
 /// The longest run of statements a definition starts with before it is cut
 /// into pieces, and the statements of each piece. Lean compiles a `do` block
 /// in time that grows with the fourth power of its binds, and elaborates it
@@ -158,6 +165,7 @@ enum Step {
 
 /// The value an access or place of a local reaches: a path below a Lean
 /// variable.
+#[derive(Clone)]
 struct ValueTarget<'db> {
     var: String,
     ty: TyId<'db>,
@@ -195,6 +203,7 @@ struct Effect<'db> {
 
 /// Where a call leaves the value its callee returns for a `mut` argument it
 /// took by value.
+#[derive(Clone)]
 enum Out<'db> {
     /// Below a local's variable.
     Value(ValueTarget<'db>),
@@ -264,6 +273,8 @@ fn export<'db>(
             .chain(PRELUDE.iter().map(|name| name.to_string()))
             .collect(),
         nevers: FxHashSet::default(),
+        lenses: FxHashSet::default(),
+        lens: false,
         open: Vec::new(),
         layouts: Vec::new(),
         bodies: FxHashMap::default(),
@@ -297,6 +308,12 @@ struct Module<'db> {
     taken: FxHashSet<String>,
     /// The exported functions that never return.
     nevers: FxHashSet<String>,
+    /// The exported projections that return the value they grant with their
+    /// slide: a function from the value the caller leaves there to the
+    /// values the projection's `mut` parameters end with.
+    lenses: FxHashSet<String>,
+    /// Whether the body exported last is such a projection.
+    lens: bool,
     /// The instances whose export is under way.
     open: Vec<SemanticInstanceKey<'db>>,
     /// The layout definitions the bodies name, by Lean name.
@@ -332,6 +349,10 @@ impl<'db> Module<'db> {
             joined: FxHashSet::default(),
             loops: FxHashSet::default(),
             helds: Vec::new(),
+            slide: FxHashSet::default(),
+            slide_ty: None,
+            sessions: Vec::new(),
+            slides: FxHashMap::default(),
             located: Vec::new(),
             entries: 0,
         }
@@ -661,6 +682,7 @@ impl<'db> Module<'db> {
         });
         self.open.push(key);
         let (body, never) = self.body(&base, key, &carriers)?;
+        let lens = std::mem::take(&mut self.lens);
         self.open.pop();
         // Instances with one definition share it.
         let name = match self.bodies.get(&(base.clone(), body.clone())) {
@@ -682,6 +704,9 @@ impl<'db> Module<'db> {
         };
         if never {
             self.nevers.insert(name.clone());
+        }
+        if lens {
+            self.lenses.insert(name.clone());
         }
         self.names.insert((key, carriers), name.clone());
         Ok(name)
@@ -747,6 +772,9 @@ impl<'db> Module<'db> {
             match self.layouts.iter().find(|(known, _)| *known == name) {
                 Some((_, known)) if *known == definition => return name,
                 Some(_) => {}
+                // A type the exported text names from Lean or the prelude
+                // keeps its name.
+                None if TYPES.contains(&name.as_str()) => {}
                 None => {
                     self.layouts.push((name.clone(), definition));
                     return name;
@@ -1512,6 +1540,17 @@ struct BodyExporter<'a, 'db> {
     /// it is `mut`. A lane has no address, so the borrow holds its value in a
     /// mutable variable, which a `mut` borrow writes back where it ends.
     helds: Vec<(NValueId, NPlace<'db>, bool)>,
+    /// The blocks of a projection's slides: those a yield resumes into.
+    slide: FxHashSet<NBlockId>,
+    /// The Lean type of what a slide returns, if the body is a projection
+    /// that returns its slide.
+    slide_ty: Option<String>,
+    /// The calls of projections that grant `mut` access to a local: the
+    /// session is a mutable variable holding the granted value.
+    sessions: Vec<NValueId>,
+    /// Where the slide of each open session of a projection that returns its
+    /// slide leaves the values it returns.
+    slides: FxHashMap<NValueId, Vec<Out<'db>>>,
     /// The lines that locate the entries the statement being printed names,
     /// which go before it.
     located: Vec<String>,
@@ -1603,6 +1642,22 @@ impl<'db> BodyExporter<'_, 'db> {
         for out in &self.outs {
             writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
         }
+        // A call of a projection that grants `mut` access to a local holds
+        // the granted value in a mutable variable.
+        for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
+            if let NStatementKind::Define {
+                result,
+                expr: NExpr::Call { callee, .. },
+            } = &statement.kind
+                && SemanticInstance::new(db, callee.key).is_projection(db)
+                && let Some((CapabilityKind::Mut, inner)) = self.ty(*result).as_capability(db)
+                && !self.granted_in_state(*result)
+            {
+                let ty = self.module.value_ty(inner)?;
+                writeln!(state, "  let mut {} : {ty} := default", value_name(*result)).unwrap();
+                self.sessions.push(*result);
+            }
+        }
         for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
             let NStatementKind::Define { result, expr } = &statement.kind else {
                 continue;
@@ -1635,23 +1690,58 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         self.result_ty = self.returned_ty()?;
         let never = self.result_ty == "Empty";
+        let mut returned = Vec::new();
         for out in self.outs.clone() {
             let (_, inner) = self.ty(out).as_capability(db).unwrap();
-            let ty = self.module.value_ty(inner)?;
-            self.result_ty = format!("{} × {ty}", self.result_ty);
+            returned.push(self.module.value_ty(inner)?);
         }
         for effect in self.effects.clone() {
             if effect.mutable {
-                let ty = self.module.value_ty(effect.ty)?;
-                self.result_ty = format!("{} × {ty}", self.result_ty);
+                returned.push(self.module.value_ty(effect.ty)?);
             }
         }
-        if !self.returned().is_empty() {
-            self.result_ty = format!("({})", self.result_ty);
+        // A projection returns what it grants. If the caller's writes must
+        // come back, or its slide does anything, it returns the slide too: a
+        // function from the value the caller leaves to the values the
+        // projection's `mut` parameters end with.
+        let yields: Vec<_> = self
+            .body
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator.kind {
+                NTerminatorKind::Yield { value, resume } => Some((value.value, resume.block)),
+                _ => None,
+            })
+            .collect();
+        let mut direct = returned.is_empty();
+        for (value, resume) in &yields {
+            let ty = self.ty(*value);
+            let place = self.is_access(ty) && self.carrier(*value)? == Carrier::Place;
+            let read_only = !matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)));
+            direct &= (read_only || place) && self.slide_is_empty(*resume);
+        }
+        if !yields.is_empty() && !direct {
+            let mut pending: Vec<_> = yields.iter().map(|(_, resume)| *resume).collect();
+            while let Some(block) = pending.pop() {
+                if self.slide.insert(block) {
+                    let successors = self.body.blocks[block.index()].terminator.kind.successors();
+                    pending.extend(successors.iter().map(|successor| successor.block));
+                }
+            }
+            let outs = match returned.as_slice() {
+                [] => "Unit".to_string(),
+                [ty] => ty.clone(),
+                tys => format!("({})", tys.join(" × ")),
+            };
+            self.result_ty = format!("({0} × ({0} → FeM {outs}))", self.result_ty);
+            self.slide_ty = Some(outs);
+        } else if !returned.is_empty() {
+            self.result_ty = format!("({} × {})", self.result_ty, returned.join(" × "));
         }
         self.find_joins();
         let mut out = format!("{params} : FeM {} := do\n{state}", self.result_ty);
         self.block(self.body.entry, 1, &mut out)?;
+        self.module.lens = self.slide_ty.is_some();
         Ok((out, never))
     }
 
@@ -1670,6 +1760,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     .iter()
                     .map(|effect| format!("e{}", effect.provider)),
             )
+            .chain(self.sessions.iter().copied().map(value_name))
             .chain(helds)
             .collect()
     }
@@ -1861,6 +1952,10 @@ impl<'db> BodyExporter<'_, 'db> {
         for effect in self.effects.clone() {
             tys.push(self.module.value_ty(effect.ty)?);
         }
+        for session in self.sessions.clone() {
+            let (_, inner) = self.ty(session).as_capability(self.module.db).unwrap();
+            tys.push(self.module.value_ty(inner)?);
+        }
         for (held, place, _) in self.helds.clone() {
             if self.held(held).is_some_and(|(var, _)| var == held) {
                 tys.push(self.module.value_ty(place.ty)?);
@@ -1887,7 +1982,11 @@ impl<'db> BodyExporter<'_, 'db> {
                 .iter()
                 .cloned()
                 .chain(params.iter().copied().map(value_name));
-            let (index, result) = (join.index(), &self.result_ty);
+            let index = join.index();
+            let result = match &self.slide_ty {
+                Some(outs) if self.slide.contains(&join) => outs.clone(),
+                _ => self.result_ty.clone(),
+            };
             // The head of a loop calls itself: the least fixed point, which
             // diverges where the loop does.
             if self.loops.contains(&join) {
@@ -1915,6 +2014,16 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         match &data.terminator.kind {
+            // A slide returns the values the projection's `mut` parameters
+            // end with.
+            NTerminatorKind::Return(_) if self.slide.contains(&block) => {
+                let outs = match self.returned().as_slice() {
+                    [] => "()".to_string(),
+                    [out] => out.clone(),
+                    outs => format!("({})", outs.join(", ")),
+                };
+                writeln!(out, "{pad}return {outs}").unwrap();
+            }
             NTerminatorKind::Return(returned) => {
                 let result = match returned {
                     Some(returned) => self.operand(returned)?,
@@ -1993,24 +2102,35 @@ impl<'db> BodyExporter<'_, 'db> {
                 let db = self.module.db;
                 let ty = self.ty(value.value);
                 let place = self.is_access(ty) && self.carrier(value.value)? == Carrier::Place;
-                // Writes through a place it grants reach contract state at
-                // once; a value it grants is only read.
-                let read_only = !matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)));
-                if !(read_only || place)
-                    || !self.returned().is_empty()
-                    || !self.slide_is_empty(resume.block)
-                {
-                    return Err(Unsupported(
-                        "projection that grants `mut` access to a local or has a slide".to_string(),
-                    ));
-                }
-                let granted = if self.is_access(ty) && !place {
-                    let target = self.carrier_value(value.value)?;
-                    self.read(&target)?
-                } else {
-                    self.operand(value)?
+                let target = (self.is_access(ty) && !place)
+                    .then(|| self.carrier_value(value.value))
+                    .transpose()?;
+                let granted = match &target {
+                    Some(target) => self.read(target)?,
+                    None => self.operand(value)?,
                 };
-                writeln!(out, "{pad}return {granted}").unwrap();
+                let Some(outs) = self.slide_ty.clone() else {
+                    writeln!(out, "{pad}return {granted}").unwrap();
+                    return Ok(());
+                };
+                // The slide takes the value the caller leaves: a write
+                // through a `mut` grant of a local comes back with it.
+                let granted_ty = self.returned_ty()?;
+                writeln!(
+                    out,
+                    "{pad}let slide : {granted_ty} → FeM {outs} := fun g => do"
+                )
+                .unwrap();
+                for var in self.state() {
+                    writeln!(out, "{pad}  let mut {var} := {var}").unwrap();
+                }
+                if let Some(target) = &target
+                    && matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)))
+                {
+                    writeln!(out, "{pad}  {}", self.write(target, "g")?).unwrap();
+                }
+                self.jump(resume, depth + 1, out)?;
+                writeln!(out, "{pad}return ({granted}, slide)").unwrap();
             }
             // Control stops at a call that never returns, whose result has
             // no values.
@@ -2293,6 +2413,29 @@ impl<'db> BodyExporter<'_, 'db> {
                     }
                 })
             }
+            // The end of a session runs the projection's slide on the value
+            // the session leaves.
+            NStatementKind::End { access } if self.slides.contains_key(access) => {
+                let outs = self.slides[access].clone();
+                let name = value_name(*access);
+                let names: Vec<_> = (0..outs.len()).map(|n| format!("{name}_{n}")).collect();
+                let binder = match names.as_slice() {
+                    [] => "_".to_string(),
+                    [one] => one.clone(),
+                    names => format!("({})", names.join(", ")),
+                };
+                let mut lines = format!("let {binder} ← {name}_k {name}");
+                for (out, value) in outs.iter().zip(&names) {
+                    let line = match out {
+                        Out::Value(target) => self.write(target, value)?,
+                        Out::Lane(ty, place, lane) => {
+                            self.module.store(*ty, place, Some(*lane), value)?
+                        }
+                    };
+                    write!(lines, "\n{line}").unwrap();
+                }
+                Some(lines)
+            }
             // A `mut` borrow of a lane writes the value it held back.
             NStatementKind::End { access } => {
                 let held = self
@@ -2539,6 +2682,16 @@ impl<'db> BodyExporter<'_, 'db> {
         let callee = self.module.instance(callee, carriers)?;
         if self.module.nevers.contains(&callee) {
             return Ok(format!("let {name} ← {callee}{lean_args}\nnever"));
+        }
+        // A projection that returns its slide: the slide runs where the
+        // session ends, and the values it returns are written back there.
+        if self.module.lenses.contains(&callee) {
+            self.slides.insert(result, outs);
+            return Ok(if self.sessions.contains(&result) {
+                format!("let ({name}_g, {name}_k) ← {callee}{lean_args}\n{name} := {name}_g")
+            } else {
+                format!("let ({name}, {name}_k) ← {callee}{lean_args}")
+            });
         }
         if outs.is_empty() {
             return Ok(format!("let {name} ← {callee}{lean_args}"));
@@ -2864,6 +3017,12 @@ impl<'db> BodyExporter<'_, 'db> {
                 if component.is_empty() && self.granted_in_state(session) =>
             {
                 Ok(Carrier::Place)
+            }
+            // A `mut` grant of a local is the value the session holds.
+            CarrierBase::Grant { session, component }
+                if component.is_empty() && self.sessions.contains(&session) =>
+            {
+                Ok(Carrier::Value)
             }
             // A read-only grant is the value the projection returned.
             CarrierBase::Grant { session, .. }
