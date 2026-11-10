@@ -1,0 +1,58 @@
+use std::abi::sol
+
+msg CursorMsg {
+    #[selector = sol("sum(uint256)")]
+    Sum { step: u256 } -> u256,
+    #[selector = sol("bump(uint256)")]
+    Bump { step: u256 } -> u256,
+}
+
+struct Cursor {
+    pos: u256,
+    base: u256,
+}
+
+struct Span {
+    start: Cursor,
+    len: u256,
+}
+
+impl Cursor {
+    fn advance(mut self, by: u256) -> u256 {
+        let at = self.pos
+        self.pos = at + by
+        at
+    }
+
+    fn skip(mut self, by: u256) {
+        if by > 32 {
+            self.advance(by: 32)
+        } else {
+            self.advance(by)
+        }
+        self.base = self.pos
+    }
+
+    fn end(self) -> u256 {
+        self.pos + self.base
+    }
+}
+
+pub contract Walker {
+    mut saved: Cursor,
+
+    recv CursorMsg {
+        Sum { step } -> u256 {
+            var c = Cursor { pos: 0, base: 4 }
+            let a = c.advance(by: step)
+            c.skip(by: step)
+            var s = Span { start: c, len: step }
+            let b = s.start.advance(by: s.len)
+            a + b + s.start.end()
+        }
+
+        Bump { step } -> u256 uses (mut saved) {
+            saved.advance(by: step)
+        }
+    }
+}

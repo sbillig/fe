@@ -47,3 +47,8 @@ fn helper_call() {
 fn join() {
     check("join");
 }
+
+#[test]
+fn local_struct() {
+    check("local_struct");
+}

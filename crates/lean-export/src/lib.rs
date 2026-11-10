@@ -13,20 +13,21 @@ use hir::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BinaryOp, FailReason, NBlockId, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
-            NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
-            NSuccessor, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow,
-            SConst, SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey,
-            identity_semantic_instance_key, normalize_semantic_body,
+            BinaryOp, CarrierBase, FailReason, NBlockId, NDataPath, NDataProjection, NEffectArg,
+            NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement,
+            NStatementKind, NSuccessor, NTerminatorKind, NValueDefinition, NValueId,
+            NormalizedBody, Overflow, SConst, SemConstScalar, SemConstValue, SemanticInstance,
+            SemanticInstanceKey, identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
             AddressSpace,
+            adt_def::AdtRef,
             ty_check::BodyOwner,
             ty_def::{CapabilityKind, TyId},
             ty_is_snapshot,
         },
     },
-    hir_def::{Contract, ItemKind, expr::CompBinOp},
+    hir_def::{Contract, FieldParent, ItemKind, expr::CompBinOp},
     semantic::{ProviderSource, storage_field_placements},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -34,6 +35,29 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// A construct the exporter has no model for.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
+
+/// How a body receives what an access parameter reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Carrier {
+    /// As a `Place`, which the body reads and writes.
+    Place,
+    /// As the value there. The body returns the value a `mut` access leaves.
+    Value,
+}
+
+/// The value an access or place of a local reaches: a field path below a
+/// Lean variable.
+struct ValueTarget<'db> {
+    var: String,
+    ty: TyId<'db>,
+    path: Vec<usize>,
+}
+
+/// What a place is in the model.
+enum Target<'db> {
+    Place(String),
+    Value(ValueTarget<'db>),
+}
 
 /// The Lean definitions of `contract`: its storage layout, the functions
 /// and constants its entries reach, then its `init` and `recv` arms.
@@ -64,7 +88,7 @@ pub fn export_contract<'db>(
         defs: String::new(),
     };
     for (name, owner) in entries {
-        let body = module.body(&name, identity_semantic_instance_key(db, owner))?;
+        let body = module.body(&name, identity_semantic_instance_key(db, owner), &[])?;
         writeln!(module.defs, "def {name}{body}").unwrap();
     }
     let layouts: String = module
@@ -78,8 +102,9 @@ pub fn export_contract<'db>(
 /// The definitions exported so far.
 struct Module<'db> {
     db: &'db dyn HirAnalysisDb,
-    /// The Lean name of each exported function or constant instance.
-    names: FxHashMap<SemanticInstanceKey<'db>, String>,
+    /// The Lean name of each exported function or constant instance, for
+    /// each way it receives its access parameters.
+    names: FxHashMap<(SemanticInstanceKey<'db>, Vec<Option<Carrier>>), String>,
     taken: FxHashSet<String>,
     /// The instances whose export is under way.
     open: Vec<SemanticInstanceKey<'db>>,
@@ -94,13 +119,21 @@ struct Module<'db> {
 impl<'db> Module<'db> {
     /// The definition of `key`'s body after its name, which `name` is in
     /// reports. The definitions it uses are exported first.
-    fn body(&mut self, name: &str, key: SemanticInstanceKey<'db>) -> Result<String, Unsupported> {
+    fn body(
+        &mut self,
+        name: &str,
+        key: SemanticInstanceKey<'db>,
+        carriers: &[Option<Carrier>],
+    ) -> Result<String, Unsupported> {
         let normalized = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
         BodyExporter {
             module: self,
             body: &normalized.body,
+            carriers,
             aggregates: FxHashMap::default(),
+            slots: Vec::new(),
+            outs: Vec::new(),
             result_ty: String::new(),
             joins: FxHashMap::default(),
             joined: FxHashSet::default(),
@@ -109,10 +142,14 @@ impl<'db> Module<'db> {
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))
     }
 
-    /// The Lean name of the function or constant instance `key`, exported
-    /// on first use.
-    fn instance(&mut self, key: SemanticInstanceKey<'db>) -> Result<String, Unsupported> {
-        if let Some(name) = self.names.get(&key) {
+    /// The Lean name of the function or constant instance `key` that
+    /// receives its access parameters as `carriers`, exported on first use.
+    fn instance(
+        &mut self,
+        key: SemanticInstanceKey<'db>,
+        carriers: Vec<Option<Carrier>>,
+    ) -> Result<String, Unsupported> {
+        if let Some(name) = self.names.get(&(key, carriers.clone())) {
             return Ok(name.clone());
         }
         let db = self.db;
@@ -155,7 +192,7 @@ impl<'db> Module<'db> {
             format!("{name}_{}", lean_ident(arg.pretty_print(db)))
         });
         self.open.push(key);
-        let body = self.body(&base, key)?;
+        let body = self.body(&base, key, &carriers)?;
         self.open.pop();
         // Instances with one definition share it.
         let name = match self.bodies.get(&(base.clone(), body.clone())) {
@@ -168,13 +205,14 @@ impl<'db> Module<'db> {
                     })
                     .find(|name| !self.taken.contains(name))
                     .unwrap();
-                writeln!(self.defs, "def {name}{body}").unwrap();
                 self.taken.insert(name.clone());
+                let name = lean_name(&name);
+                writeln!(self.defs, "def {name}{body}").unwrap();
                 self.bodies.insert((base, body), name.clone());
                 name
             }
         };
-        self.names.insert(key, name.clone());
+        self.names.insert((key, carriers), name.clone());
         Ok(name)
     }
 
@@ -185,6 +223,39 @@ impl<'db> Module<'db> {
             self.layouts.push((name.clone(), definition));
         }
         name
+    }
+
+    /// The names and types of the fields of struct `ty`.
+    fn struct_fields(&self, ty: TyId<'db>) -> Result<Vec<(String, TyId<'db>)>, Unsupported> {
+        let db = self.db;
+        let Some(AdtRef::Struct(item)) = ty.adt_def(db).map(|adt| adt.adt_ref(db)) else {
+            return Err(Unsupported(format!("type {}", ty.pretty_print(db))));
+        };
+        let names = FieldParent::Struct(item).fields(db).map(|field| {
+            let name = field.name(db).map(|name| name.data(db).as_str());
+            lean_name(name.unwrap_or("field"))
+        });
+        Ok(names.zip(ty.field_types(db)).collect())
+    }
+
+    /// The Lean type of a value of `ty`: a word, or the structure a struct
+    /// is defined as.
+    fn value_ty(&mut self, ty: TyId<'db>) -> Result<String, Unsupported> {
+        let pretty = ty.pretty_print(self.db);
+        match pretty.as_str() {
+            // An address is its word.
+            "u256" | "Address" => return Ok("UInt256".to_string()),
+            "bool" => return Ok("Bool".to_string()),
+            "()" => return Ok("Unit".to_string()),
+            _ => {}
+        }
+        let mut fields = String::new();
+        for (name, field) in self.struct_fields(ty)? {
+            writeln!(fields, "  {name} : {}", self.value_ty(field)?).unwrap();
+        }
+        Ok(self.layout(lean_ident(pretty), |name| {
+            format!("structure {name} where\n{fields}deriving Inhabited")
+        }))
     }
 
     /// The layout of struct or tuple `ty`: the slot of each field below a
@@ -217,9 +288,16 @@ impl<'db> Module<'db> {
 struct BodyExporter<'a, 'db> {
     module: &'a mut Module<'db>,
     body: &'a NormalizedBody<'db>,
-    /// The type name and fields of each aggregate a body builds, which only
-    /// a std call consumes.
-    aggregates: FxHashMap<NValueId, (String, Vec<NValueId>)>,
+    /// How the body receives each access parameter, by parameter.
+    carriers: &'a [Option<Carrier>],
+    /// The type and fields of each aggregate the body builds, printed where
+    /// it is used.
+    aggregates: FxHashMap<NValueId, (TyId<'db>, Vec<NValueId>)>,
+    /// The local slots, each a mutable Lean variable.
+    slots: Vec<NRootId>,
+    /// The `mut` access parameters received as values, which the body
+    /// returns after its result.
+    outs: Vec<NValueId>,
     /// The Lean type of the value the body returns.
     result_ty: String,
     /// The blocks printed as local functions, under the block that
@@ -231,21 +309,61 @@ struct BodyExporter<'a, 'db> {
 impl<'db> BodyExporter<'_, 'db> {
     /// The body's definition after its name: parameters, type and value.
     fn export(mut self) -> Result<String, Unsupported> {
+        let db = self.module.db;
         let mut params = String::new();
         for (index, value) in self.body.values.iter().enumerate() {
-            if matches!(value.definition, NValueDefinition::EntryParam { .. }) {
-                write!(params, " (v{index} : {})", self.lean_ty(value.ty)?).unwrap();
+            let NValueDefinition::EntryParam { param } = value.definition else {
+                continue;
+            };
+            let carrier = self.carriers.get(param as usize).copied().flatten();
+            let ty = match (value.ty.as_capability(db), carrier) {
+                (Some((kind, inner)), Some(Carrier::Value)) => {
+                    if kind == CapabilityKind::Mut {
+                        self.outs.push(NValueId::new(index));
+                    }
+                    self.module.value_ty(inner)?
+                }
+                _ => self.lean_ty(value.ty)?,
+            };
+            write!(params, " (v{index} : {ty})").unwrap();
+        }
+        let mut state = String::new();
+        for (index, root) in self.body.roots.iter().enumerate() {
+            if matches!(root.kind, NRootKind::LocalSlot { .. }) {
+                self.slots.push(NRootId::new(index));
+                let ty = self.module.value_ty(root.ty)?;
+                writeln!(state, "  let mut r{index} : {ty} := default").unwrap();
             }
         }
+        for out in &self.outs {
+            writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
+        }
         self.result_ty = self.returned_ty()?;
+        for out in self.outs.clone() {
+            let (_, inner) = self.ty(out).as_capability(db).unwrap();
+            let ty = self.module.value_ty(inner)?;
+            self.result_ty = format!("{} × {ty}", self.result_ty);
+        }
+        if !self.outs.is_empty() {
+            self.result_ty = format!("({})", self.result_ty);
+        }
         self.find_joins()?;
-        let mut out = format!("{params} : FeM {} := do\n", self.result_ty);
+        let mut out = format!("{params} : FeM {} := do\n{state}", self.result_ty);
         self.block(self.body.entry, 1, &mut out)?;
         Ok(out)
     }
 
+    /// The mutable variables of the body: its local slots, then the values
+    /// it returns for its `mut` access parameters.
+    fn state(&self) -> Vec<String> {
+        let slots = self.slots.iter().map(|root| format!("r{}", root.index()));
+        slots
+            .chain(self.outs.iter().copied().map(value_name))
+            .collect()
+    }
+
     /// The type every `Return` of the body gives.
-    fn returned_ty(&self) -> Result<String, Unsupported> {
+    fn returned_ty(&mut self) -> Result<String, Unsupported> {
         let returned = self
             .body
             .blocks
@@ -314,22 +432,40 @@ impl<'db> BodyExporter<'_, 'db> {
         let data = &self.body.blocks[block.index()];
         let pad = "  ".repeat(depth);
         for statement in &data.statements {
-            if let Some(line) = self.statement(statement)? {
+            for line in self
+                .statement(statement)?
+                .iter()
+                .flat_map(|text| text.lines())
+            {
                 writeln!(out, "{pad}{line}").unwrap();
             }
         }
+        // A join takes the body's mutable variables before its parameters,
+        // since a local function cannot assign its definer's.
+        let state = self.state();
         for join in self.joins.get(&block).cloned().unwrap_or_default() {
             let params = &self.body.blocks[join.index()].params;
             let mut ty = String::new();
+            for root in self.slots.clone() {
+                let slot = self.body.roots[root.index()].ty;
+                write!(ty, "{} → ", self.module.value_ty(slot)?).unwrap();
+            }
+            for out in self.outs.clone() {
+                let (_, inner) = self.ty(out).as_capability(self.module.db).unwrap();
+                write!(ty, "{} → ", self.module.value_ty(inner)?).unwrap();
+            }
             for param in params {
                 write!(ty, "{} → ", self.lean_ty(self.ty(*param))?).unwrap();
             }
-            let binder = match &params[..] {
-                [] => String::new(),
-                params => {
-                    let names: Vec<_> = params.iter().copied().map(value_name).collect();
-                    format!("fun {} => ", names.join(" "))
-                }
+            let names: Vec<_> = state
+                .iter()
+                .cloned()
+                .chain(params.iter().copied().map(value_name))
+                .collect();
+            let binder = if names.is_empty() {
+                String::new()
+            } else {
+                format!("fun {} => ", names.join(" "))
             };
             writeln!(
                 out,
@@ -338,12 +474,27 @@ impl<'db> BodyExporter<'_, 'db> {
                 self.result_ty
             )
             .unwrap();
+            for var in &state {
+                writeln!(out, "{pad}  let mut {var} := {var}").unwrap();
+            }
             self.block(join, depth + 1, out)?;
         }
         match &data.terminator.kind {
-            NTerminatorKind::Return(None) => writeln!(out, "{pad}return ()").unwrap(),
-            NTerminatorKind::Return(Some(operand)) => {
-                writeln!(out, "{pad}return {}", value_name(operand.value)).unwrap()
+            NTerminatorKind::Return(returned) => {
+                let result = match returned {
+                    Some(returned) => self.operand(returned)?,
+                    None => "()".to_string(),
+                };
+                let outs: String = self
+                    .outs
+                    .iter()
+                    .map(|out| format!(", {}", value_name(*out)))
+                    .collect();
+                if outs.is_empty() {
+                    writeln!(out, "{pad}return {result}").unwrap();
+                } else {
+                    writeln!(out, "{pad}return ({result}{outs})").unwrap();
+                }
             }
             NTerminatorKind::Goto(target) => self.jump(target, depth, out)?,
             NTerminatorKind::Branch {
@@ -383,30 +534,57 @@ impl<'db> BodyExporter<'_, 'db> {
         if !self.joined.contains(&target.block) {
             return self.block(target.block, depth, out);
         }
-        let args: String = target
-            .args
-            .iter()
-            .map(|arg| format!(" {}", operand(arg)))
-            .collect();
+        let mut args: String = self.state().iter().map(|var| format!(" {var}")).collect();
+        for arg in &target.args {
+            write!(args, " {}", self.operand(arg)?).unwrap();
+        }
         writeln!(out, "{}b{}{args}", "  ".repeat(depth), target.block.index()).unwrap();
         Ok(())
     }
 
+    /// The lines of `statement`, if it prints any.
     fn statement(&mut self, statement: &NStatement<'db>) -> Result<Option<String>, Unsupported> {
         Ok(match &statement.kind {
             NStatementKind::Define { result, expr } => {
                 let name = value_name(*result);
                 match expr {
-                    NExpr::Forward { src } => Some(format!("let {name} := {}", operand(src))),
+                    // A view or borrow of the `Evm` root carries no data.
+                    NExpr::MakeView { place, .. } | NExpr::Borrow { place, .. }
+                        if self.is_root_object(place) =>
+                    {
+                        None
+                    }
+                    // An access to a local is read and written through the
+                    // local's variable, where it is used.
+                    NExpr::Forward { .. } | NExpr::MakeView { .. } | NExpr::Borrow { .. }
+                        if self.is_access(self.ty(*result))
+                            && self.carrier(*result)? == Carrier::Value =>
+                    {
+                        None
+                    }
+                    NExpr::Forward { src } => Some(format!("let {name} := {}", self.operand(src)?)),
                     NExpr::Const(SConst::Ref(constant)) => Some(format!(
                         "let {name} ← {}",
-                        self.module.instance(constant.instance(self.module.db))?
+                        self.module
+                            .instance(constant.instance(self.module.db), Vec::new())?
                     )),
                     NExpr::Const(constant) => {
                         Some(format!("let {name} := {}", self.lean_const(constant)?))
                     }
-                    NExpr::Load { place, .. } => {
-                        Some(format!("let {name} ← load {}", self.word_place(place)?))
+                    NExpr::Load { place, .. } => Some(match self.target(place)? {
+                        Target::Place(lean) => {
+                            self.word(place)?;
+                            format!("let {name} ← load {lean}")
+                        }
+                        Target::Value(target) => format!("let {name} := {}", self.read(&target)?),
+                    }),
+                    NExpr::ProjectValue { value, path } => {
+                        let target = ValueTarget {
+                            var: self.operand(value)?,
+                            ty: self.ty(value.value),
+                            path: field_path(&path.0)?,
+                        };
+                        Some(format!("let {name} := {}", self.read(&target)?))
                     }
                     NExpr::Binary { op, lhs, rhs } => {
                         if self.ty(lhs.value).pretty_print(self.module.db) != "u256" {
@@ -414,25 +592,28 @@ impl<'db> BodyExporter<'_, 'db> {
                         }
                         Some(format!(
                             "let {name} {}",
-                            binary(*op, operand(lhs), operand(rhs))?
+                            binary(*op, self.operand(lhs)?, self.operand(rhs)?)?
                         ))
                     }
-                    // A view or borrow of the `Evm` root carries no data.
-                    NExpr::MakeView { place, .. } | NExpr::Borrow { place, .. }
-                        if self.is_root_object(place) =>
-                    {
-                        None
-                    }
                     NExpr::MakeView { place, .. } | NExpr::Borrow { place, .. } => {
-                        if self.lean_ty(self.ty(*result))? != "Place" {
-                            return Err(Unsupported("view of a one-word place".to_string()));
-                        }
-                        Some(format!("let {name} := {}", self.place(place)?))
+                        Some(
+                            match (self.target(place)?, self.is_access(self.ty(*result))) {
+                                (Target::Place(lean), true) => format!("let {name} := {lean}"),
+                                // A view of a snapshot type is the value now there.
+                                (Target::Value(target), false) => {
+                                    format!("let {name} := {}", self.read(&target)?)
+                                }
+                                _ => {
+                                    return Err(Unsupported(
+                                        "view of a one-word place".to_string(),
+                                    ));
+                                }
+                            },
+                        )
                     }
                     NExpr::AggregateMake { ty, fields } => {
                         let fields = fields.iter().map(|field| field.value).collect();
-                        let ty = ty.pretty_print(self.module.db).to_string();
-                        self.aggregates.insert(*result, (ty, fields));
+                        self.aggregates.insert(*result, (*ty, fields));
                         None
                     }
                     NExpr::Call {
@@ -463,18 +644,24 @@ impl<'db> BodyExporter<'_, 'db> {
                     other => return Err(Unsupported(format!("expression {other:?}"))),
                 }
             }
-            NStatementKind::Store { destination, value } => Some(format!(
-                "store {} {}",
-                self.word_place(destination)?,
-                operand(value)
-            )),
+            NStatementKind::Store { destination, value } => {
+                let value = self.operand(value)?;
+                Some(match self.target(destination)? {
+                    Target::Place(lean) => {
+                        self.word(destination)?;
+                        format!("store {lean} {value}")
+                    }
+                    Target::Value(target) => self.write(&target, &value)?,
+                })
+            }
             NStatementKind::End { .. } => None,
             other => return Err(Unsupported(format!("statement {other:?}"))),
         })
     }
 
     /// A call: to a std function the prelude models, by name, or to an
-    /// exported function.
+    /// exported function. An access to a local passes the value there, and
+    /// a `mut` one stores the value the callee returns for it.
     fn call(
         &mut self,
         name: &str,
@@ -491,8 +678,8 @@ impl<'db> BodyExporter<'_, 'db> {
         );
         let callee_name = func.name(db).to_opt().map(|name| name.data(db).as_str());
         match (in_std, callee_name, args) {
-            (true, Some("caller"), [_evm]) => Ok(format!("let {name} ← caller")),
-            (true, Some("zero"), []) => Ok(format!("let {name} := UInt256.ofNat 0")),
+            (true, Some("caller"), [_evm]) => return Ok(format!("let {name} ← caller")),
+            (true, Some("zero"), []) => return Ok(format!("let {name} := UInt256.ofNat 0")),
             (true, Some("emit"), [_evm, event]) => {
                 let (ty, fields) = self
                     .aggregates
@@ -501,20 +688,184 @@ impl<'db> BodyExporter<'_, 'db> {
                 let fields = fields
                     .iter()
                     .map(|field| format!(" {}", value_name(*field)));
-                Ok(format!(
-                    "let {name} ← emit{ty}{}",
+                return Ok(format!(
+                    "let {name} ← emit{}{}",
+                    ty.pretty_print(db),
                     fields.collect::<String>()
-                ))
+                ));
             }
-            _ => {
-                let callee = self.module.instance(callee)?;
-                let args: String = args
-                    .iter()
-                    .map(|arg| format!(" {}", operand(arg)))
-                    .collect();
-                Ok(format!("let {name} ← {callee}{args}"))
+            _ => {}
+        }
+        let mut carriers = Vec::new();
+        let mut lean_args = String::new();
+        let mut outs = Vec::new();
+        for arg in args {
+            let ty = self.ty(arg.value);
+            let carrier = if self.is_access(ty) {
+                Some(self.carrier(arg.value)?)
+            } else {
+                None
+            };
+            carriers.push(carrier);
+            if carrier != Some(Carrier::Value) {
+                write!(lean_args, " {}", self.operand(arg)?).unwrap();
+                continue;
+            }
+            let target = self.carrier_value(arg.value)?;
+            write!(lean_args, " {}", self.read(&target)?).unwrap();
+            if matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _))) {
+                outs.push(target);
             }
         }
+        let callee = self.module.instance(callee, carriers)?;
+        if outs.is_empty() {
+            return Ok(format!("let {name} ← {callee}{lean_args}"));
+        }
+        let returned: String = (0..outs.len()).map(|n| format!(", {name}_{n}")).collect();
+        let mut lines = format!("let ({name}{returned}) ← {callee}{lean_args}");
+        for (n, out) in outs.iter().enumerate() {
+            write!(lines, "\n{}", self.write(out, &format!("{name}_{n}"))?).unwrap();
+        }
+        Ok(lines)
+    }
+
+    /// `operand` as a Lean term: its variable, or the structure an aggregate
+    /// builds.
+    fn operand(&mut self, operand: &NOperand) -> Result<String, Unsupported> {
+        let Some((ty, fields)) = self.aggregates.get(&operand.value).cloned() else {
+            return Ok(value_name(operand.value));
+        };
+        let fields: String = fields
+            .iter()
+            .map(|field| format!(" {}", value_name(*field)))
+            .collect();
+        Ok(format!("({}.mk{fields})", self.module.value_ty(ty)?))
+    }
+
+    /// Whether a value of `ty` is an access to a place. A view of a snapshot
+    /// type is the value.
+    fn is_access(&self, ty: TyId<'db>) -> bool {
+        let db = self.module.db;
+        let owner = self.body.owner;
+        let scope = owner.key(db).owner(db).scope();
+        match ty.as_capability(db) {
+            Some((CapabilityKind::View, inner)) => {
+                !ty_is_snapshot(db, scope, inner, owner.assumptions(db))
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// How the model holds the access `value`: as a `Place` if it reaches
+    /// contract state, and by the value there if it reaches a local.
+    fn carrier(&self, value: NValueId) -> Result<Carrier, Unsupported> {
+        let target = self
+            .body
+            .carrier_target(self.module.db, value)
+            .ok_or_else(|| Unsupported("access without one target".to_string()))?;
+        match target.base {
+            CarrierBase::Root(root) => match self.body.roots[root.index()].kind {
+                NRootKind::Provider { .. } => Ok(Carrier::Place),
+                NRootKind::LocalSlot { .. } => Ok(Carrier::Value),
+                ref kind => Err(Unsupported(format!("access to root {kind:?}"))),
+            },
+            CarrierBase::Param { param } => self
+                .carriers
+                .get(param as usize)
+                .copied()
+                .flatten()
+                .ok_or_else(|| Unsupported("access parameter of an entry".to_string())),
+            base => Err(Unsupported(format!("access to {base:?}"))),
+        }
+    }
+
+    /// The local value the access `value` reaches.
+    fn carrier_value(&self, value: NValueId) -> Result<ValueTarget<'db>, Unsupported> {
+        let db = self.module.db;
+        let target = self
+            .body
+            .carrier_target(db, value)
+            .ok_or_else(|| Unsupported("access without one target".to_string()))?;
+        let (var, ty) = match target.base {
+            CarrierBase::Root(root) => (
+                format!("r{}", root.index()),
+                self.body.roots[root.index()].ty,
+            ),
+            CarrierBase::Param { param } => {
+                let (index, value) = self
+                    .body
+                    .values
+                    .iter()
+                    .enumerate()
+                    .find(|(_, value)| value.definition == NValueDefinition::EntryParam { param })
+                    .ok_or_else(|| Unsupported("access to an unknown parameter".to_string()))?;
+                let (_, inner) = value.ty.as_capability(db).unwrap();
+                (format!("v{index}"), inner)
+            }
+            base => return Err(Unsupported(format!("access to {base:?}"))),
+        };
+        Ok(ValueTarget {
+            var,
+            ty,
+            path: field_path(&target.path)?,
+        })
+    }
+
+    /// What `place` is in the model: a `Place` in contract state, or a
+    /// value below a local's variable.
+    fn target(&mut self, place: &NPlace<'db>) -> Result<Target<'db>, Unsupported> {
+        let local = match place.base {
+            NPlaceBase::Root(root) => {
+                let data = &self.body.roots[root.index()];
+                matches!(data.kind, NRootKind::LocalSlot { .. }).then(|| ValueTarget {
+                    var: format!("r{}", root.index()),
+                    ty: data.ty,
+                    path: Vec::new(),
+                })
+            }
+            NPlaceBase::CapabilityTarget { carrier }
+                if self.carrier(carrier)? == Carrier::Value =>
+            {
+                Some(self.carrier_value(carrier)?)
+            }
+            _ => None,
+        };
+        let Some(mut local) = local else {
+            return Ok(Target::Place(self.place(place)?));
+        };
+        local.path.extend(field_path(&place.path)?);
+        Ok(Target::Value(local))
+    }
+
+    /// The Lean term for the value at `target`.
+    fn read(&self, target: &ValueTarget<'db>) -> Result<String, Unsupported> {
+        let mut lean = target.var.clone();
+        let mut ty = target.ty;
+        for &index in &target.path {
+            let (name, field) = self.module.struct_fields(ty)?.swap_remove(index);
+            write!(lean, ".{name}").unwrap();
+            ty = field;
+        }
+        Ok(lean)
+    }
+
+    /// The assignment that leaves `value` at `target`.
+    fn write(&self, target: &ValueTarget<'db>, value: &str) -> Result<String, Unsupported> {
+        let mut prefix = target.var.clone();
+        let mut ty = target.ty;
+        let mut open = String::new();
+        for &index in &target.path {
+            let (name, field) = self.module.struct_fields(ty)?.swap_remove(index);
+            write!(open, "{{ {prefix} with {name} := ").unwrap();
+            write!(prefix, ".{name}").unwrap();
+            ty = field;
+        }
+        Ok(format!(
+            "{} := {open}{value}{}",
+            target.var,
+            " }".repeat(target.path.len())
+        ))
     }
 
     fn ty(&self, value: NValueId) -> TyId<'db> {
@@ -532,27 +883,13 @@ impl<'db> BodyExporter<'_, 'db> {
         )
     }
 
-    /// The Lean type of a value of `ty`: a word, or the place an access
-    /// reaches. A view of a snapshot type carries the value.
-    fn lean_ty(&self, ty: TyId<'db>) -> Result<String, Unsupported> {
-        let db = self.module.db;
-        let word = |ty: TyId<'db>| match ty.pretty_print(db).as_str() {
-            // An address is its word.
-            "u256" | "Address" => Ok("UInt256".to_string()),
-            "bool" => Ok("Bool".to_string()),
-            "()" => Ok("Unit".to_string()),
-            other => Err(Unsupported(format!("type {other}"))),
-        };
-        let owner = self.body.owner;
-        let scope = owner.key(db).owner(db).scope();
-        match ty.as_capability(db) {
-            Some((CapabilityKind::View, inner))
-                if ty_is_snapshot(db, scope, inner, owner.assumptions(db)) =>
-            {
-                word(inner)
-            }
-            Some(_) => Ok("Place".to_string()),
-            None => word(ty),
+    /// The Lean type of a value of `ty`: a `Place` for an access, and the
+    /// type of the value otherwise.
+    fn lean_ty(&mut self, ty: TyId<'db>) -> Result<String, Unsupported> {
+        match (self.is_access(ty), ty.as_capability(self.module.db)) {
+            (true, _) => Ok("Place".to_string()),
+            (false, Some((_, inner))) => self.module.value_ty(inner),
+            (false, None) => self.module.value_ty(ty),
         }
     }
 
@@ -574,12 +911,12 @@ impl<'db> BodyExporter<'_, 'db> {
         }
     }
 
-    /// `place`, which holds one word.
-    fn word_place(&mut self, place: &NPlace<'db>) -> Result<String, Unsupported> {
-        if self.lean_ty(place.ty)? != "UInt256" {
-            return Err(Unsupported("place that is not one word".to_string()));
+    /// Checks that `place` holds one word, as `load` and `store` take.
+    fn word(&mut self, place: &NPlace<'db>) -> Result<(), Unsupported> {
+        match self.lean_ty(place.ty)?.as_str() {
+            "UInt256" => Ok(()),
+            _ => Err(Unsupported("place that is not one word".to_string())),
         }
-        self.place(place)
     }
 
     /// The Lean place `place` names: its base, then a layout step for each
@@ -588,11 +925,7 @@ impl<'db> BodyExporter<'_, 'db> {
         let db = self.module.db;
         let mut lean = match place.base {
             NPlaceBase::Root(root) => self.root(root)?,
-            NPlaceBase::CapabilityTarget { carrier }
-                if self.lean_ty(self.ty(carrier))? == "Place" =>
-            {
-                value_name(carrier)
-            }
+            NPlaceBase::CapabilityTarget { carrier } => value_name(carrier),
             base => return Err(Unsupported(format!("place base {base:?}"))),
         };
         for (len, projection) in place.path.iter().enumerate() {
@@ -670,8 +1003,27 @@ fn value_name(value: NValueId) -> String {
     format!("v{}", value.index())
 }
 
-fn operand(operand: &NOperand) -> String {
-    value_name(operand.value)
+/// The struct fields `path` steps through.
+fn field_path(path: &NDataPath) -> Result<Vec<usize>, Unsupported> {
+    path.iter()
+        .map(|projection| match projection {
+            NDataProjection::Field(index) => Ok(usize::from(index.0)),
+            other => Err(Unsupported(format!("step {other:?} in a local"))),
+        })
+        .collect()
+}
+
+/// `name` as a Lean identifier, quoted if Lean reserves it.
+fn lean_name(name: &str) -> String {
+    const RESERVED: &[&str] = &[
+        "at", "by", "do", "else", "end", "from", "fun", "have", "if", "in", "let", "match", "open",
+        "show", "then", "this", "where", "with",
+    ];
+    if RESERVED.contains(&name) {
+        format!("«{name}»")
+    } else {
+        name.to_string()
+    }
 }
 
 /// The right-hand side of `let v` for a built-in operation on `u256`.
