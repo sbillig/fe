@@ -257,6 +257,7 @@ impl<'db> Module<'db> {
             result_ty: String::new(),
             joins: FxHashMap::default(),
             joined: FxHashSet::default(),
+            loops: FxHashSet::default(),
         }
         .export()
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))
@@ -876,6 +877,9 @@ struct BodyExporter<'a, 'db> {
     /// immediately dominates each, in the order they are defined.
     joins: FxHashMap<NBlockId, Vec<NBlockId>>,
     joined: FxHashSet<NBlockId>,
+    /// The joins an edge from a later block enters: the heads of loops,
+    /// printed as recursive local functions.
+    loops: FxHashSet<NBlockId>,
 }
 
 impl<'db> BodyExporter<'_, 'db> {
@@ -952,7 +956,7 @@ impl<'db> BodyExporter<'_, 'db> {
         if !self.outs.is_empty() {
             self.result_ty = format!("({})", self.result_ty);
         }
-        self.find_joins()?;
+        self.find_joins();
         let mut out = format!("{params} : FeM {} := do\n{state}", self.result_ty);
         self.block(self.body.entry, 1, &mut out)?;
         Ok((out, never))
@@ -1002,18 +1006,21 @@ impl<'db> BodyExporter<'_, 'db> {
 
     /// Finds the join blocks: those more than one edge enters, and those
     /// that take parameters. Each is printed once, as a local function of
-    /// the block that immediately dominates it. An edge to an earlier block
-    /// is a loop.
-    fn find_joins(&mut self) -> Result<(), Unsupported> {
+    /// the block that immediately dominates it. An edge from a later block
+    /// closes a loop: its target is the loop's head, a recursive join, and
+    /// the edge is no part of what dominates a block.
+    fn find_joins(&mut self) {
         let order = self.body.reverse_postorder();
         let position: FxHashMap<_, _> = order.iter().enumerate().map(|(i, b)| (*b, i)).collect();
         let mut preds: FxHashMap<NBlockId, Vec<NBlockId>> = FxHashMap::default();
         for &block in &order {
             for successor in self.body.blocks[block.index()].terminator.kind.successors() {
                 if position[&successor.block] <= position[&block] {
-                    return Err(Unsupported("loop".to_string()));
+                    self.loops.insert(successor.block);
+                    self.joined.insert(successor.block);
+                } else {
+                    preds.entry(successor.block).or_default().push(block);
                 }
-                preds.entry(successor.block).or_default().push(block);
             }
         }
         let mut idom: FxHashMap<NBlockId, NBlockId> = FxHashMap::default();
@@ -1033,14 +1040,16 @@ impl<'db> BodyExporter<'_, 'db> {
                 })
                 .unwrap();
             idom.insert(block, dominator);
-            if preds[&block].len() > 1 || !self.body.blocks[block.index()].params.is_empty() {
+            if preds[&block].len() > 1
+                || !self.body.blocks[block.index()].params.is_empty()
+                || self.loops.contains(&block)
+            {
                 self.joined.insert(block);
                 // A later join can be the target of an earlier one, so it is
                 // defined first.
                 self.joins.entry(dominator).or_default().insert(0, block);
             }
         }
-        Ok(())
     }
 
     /// Prints `block`: its statements, the joins it dominates, and where it
@@ -1067,39 +1076,48 @@ impl<'db> BodyExporter<'_, 'db> {
         let state = self.state();
         for join in self.joins.get(&block).cloned().unwrap_or_default() {
             let params = &self.body.blocks[join.index()].params;
-            let mut ty = String::new();
+            let mut tys = Vec::new();
             for root in self.slots.clone() {
                 let slot = self.body.roots[root.index()].ty;
-                write!(ty, "{} → ", self.module.value_ty(slot)?).unwrap();
+                tys.push(self.module.value_ty(slot)?);
             }
             for out in self.outs.clone() {
                 let (_, inner) = self.ty(out).as_capability(self.module.db).unwrap();
-                write!(ty, "{} → ", self.module.value_ty(inner)?).unwrap();
+                tys.push(self.module.value_ty(inner)?);
             }
             for param in params {
-                write!(ty, "{} → ", self.lean_ty(self.ty(*param))?).unwrap();
+                tys.push(self.lean_ty(self.ty(*param))?);
             }
-            let names: Vec<_> = state
+            let names = state
                 .iter()
                 .cloned()
-                .chain(params.iter().copied().map(value_name))
-                .collect();
-            let binder = if names.is_empty() {
-                String::new()
+                .chain(params.iter().copied().map(value_name));
+            let (index, result) = (join.index(), &self.result_ty);
+            // The head of a loop calls itself: the least fixed point, which
+            // diverges where the loop does.
+            if self.loops.contains(&join) {
+                let binders: String = names
+                    .zip(&tys)
+                    .map(|(name, ty)| format!(" ({name} : {ty})"))
+                    .collect();
+                writeln!(out, "{pad}let rec b{index}{binders} : FeM {result} := do").unwrap();
             } else {
-                format!("fun {} => ", names.join(" "))
-            };
-            writeln!(
-                out,
-                "{pad}let b{} : {ty}FeM {} := {binder}do",
-                join.index(),
-                self.result_ty
-            )
-            .unwrap();
+                let ty: String = tys.iter().map(|ty| format!("{ty} → ")).collect();
+                let names: Vec<_> = names.collect();
+                let binder = if names.is_empty() {
+                    String::new()
+                } else {
+                    format!("fun {} => ", names.join(" "))
+                };
+                writeln!(out, "{pad}let b{index} : {ty}FeM {result} := {binder}do").unwrap();
+            }
             for var in &state {
                 writeln!(out, "{pad}  let mut {var} := {var}").unwrap();
             }
             self.block(join, depth + 1, out)?;
+            if self.loops.contains(&join) {
+                writeln!(out, "{pad}partial_fixpoint").unwrap();
+            }
         }
         match &data.terminator.kind {
             NTerminatorKind::Return(returned) => {
@@ -1138,7 +1156,15 @@ impl<'db> BodyExporter<'_, 'db> {
                 let variants = self.module.variants(*enum_ty);
                 let variants =
                     variants.ok_or_else(|| Unsupported("match on no enum".to_string()))?;
-                writeln!(out, "{pad}match {} with", self.enum_value(value)?).unwrap();
+                // Lean cannot show a recursive function monotone through a
+                // match on a `let`-bound value, so a body with a loop binds
+                // the value first.
+                let value = self.enum_value(value)?;
+                if self.loops.is_empty() {
+                    writeln!(out, "{pad}match {value} with").unwrap();
+                } else {
+                    writeln!(out, "{pad}match (← pure {value}) with").unwrap();
+                }
                 for (variant, target) in cases {
                     let (variant, fields) = &variants[usize::from(variant.0)];
                     let rest = if fields.is_empty() { "" } else { " .." };

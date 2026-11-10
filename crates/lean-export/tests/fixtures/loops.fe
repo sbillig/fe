@@ -1,0 +1,52 @@
+use std::abi::sol
+
+msg LoopsMsg {
+    #[selector = sol("triangle(uint256)")]
+    Triangle { n: u256 } -> u256,
+    #[selector = sol("collatz(uint256,uint256)")]
+    Collatz { start: u256, limit: u256 } -> u256,
+}
+
+fn step(_ value: u256) -> Option<u256> {
+    if value == 1 {
+        Option::None
+    } else if value % 2 == 0 {
+        Option::Some(value / 2)
+    } else {
+        Option::Some(3 * value + 1)
+    }
+}
+
+pub contract Loops {
+    recv LoopsMsg {
+        Triangle { n } -> u256 {
+            var total: u256 = 0
+            var i: u256 = 0
+            while i < n {
+                i += 1
+                total += i
+            }
+            total
+        }
+
+        Collatz { start, limit } -> u256 {
+            var value = start
+            var steps: u256 = 0
+            loop {
+                if steps == limit {
+                    break
+                }
+                match step(value) {
+                    Option::Some(next) => {
+                        value = next
+                        steps += 1
+                    }
+                    Option::None => {
+                        return steps
+                    }
+                }
+            }
+            limit
+        }
+    }
+}
