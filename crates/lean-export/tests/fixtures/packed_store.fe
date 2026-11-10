@@ -1,0 +1,42 @@
+use std::abi::sol
+use std::evm::StoragePackedArray
+
+msg FePackedStoreMsg {
+    #[selector = sol("get0()")]
+    Get0 -> u256,
+    #[selector = sol("get1()")]
+    Get1 -> u256,
+    #[selector = sol("set0(uint256)")]
+    Set0 { value: u256 },
+    #[selector = sol("set1(uint256)")]
+    Set1 { value: u256 },
+    #[selector = sol("setBoth(uint256,uint256)")]
+    SetBoth { first: u256, second: u256 },
+}
+
+pub contract FePackedStore {
+    mut pack: StoragePackedArray<8>,
+
+    recv FePackedStoreMsg {
+        Get0 -> u256 uses (pack) {
+            pack.get(0)
+        }
+
+        Get1 -> u256 uses (pack) {
+            pack.get(1)
+        }
+
+        Set0 { value } uses (mut pack) {
+            pack.set(i: 0, value)
+        }
+
+        Set1 { value } uses (mut pack) {
+            pack.set(i: 1, value)
+        }
+
+        SetBoth { first, second } uses (mut pack) {
+            pack.set(i: 0, value: first)
+            pack.set(i: 1, value: second)
+        }
+    }
+}

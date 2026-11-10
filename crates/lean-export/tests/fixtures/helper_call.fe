@@ -1,0 +1,29 @@
+use std::abi::sol
+use std::evm::StorageMap
+
+msg CounterMsg {
+    #[selector = sol("bump(uint256)")]
+    Bump { by: u256 } -> u256,
+}
+
+struct Store {
+    total: u256,
+    hits: StorageMap<u256, u256>,
+}
+
+fn add(by: u256) -> u256 uses (store: mut Store) {
+    let next = store.total + by
+    store.total = next
+    store.hits[by] += 1
+    next
+}
+
+pub contract Counter {
+    mut store: Store,
+
+    recv CounterMsg {
+        Bump { by } -> u256 uses (mut store) {
+            add(by)
+        }
+    }
+}

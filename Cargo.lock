@@ -2675,6 +2675,7 @@ name = "fe-lean-export"
 version = "26.5.0"
 dependencies = [
  "cranelift-entity 0.136.1",
+ "fe-common",
  "fe-hir",
  "rustc-hash 2.1.1",
 ]

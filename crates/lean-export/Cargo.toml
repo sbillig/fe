@@ -10,6 +10,7 @@ description = "Exports checked normalized Fe bodies as Lean definitions"
 doctest = false
 
 [dependencies]
+common.workspace = true
 cranelift-entity.workspace = true
 hir.workspace = true
 rustc-hash.workspace = true

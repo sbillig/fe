@@ -32,3 +32,13 @@ fn scalar_store() {
 fn erc20() {
     check("erc20");
 }
+
+#[test]
+fn packed_store() {
+    check("packed_store");
+}
+
+#[test]
+fn helper_call() {
+    check("helper_call");
+}
