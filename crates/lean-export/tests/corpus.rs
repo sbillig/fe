@@ -53,7 +53,7 @@ fn export_corpus() {
                 Ok(lean) => {
                     exported += 1;
                     let text = format!(
-                        "import Fe.EVM.Int\nopen Ethereum Ethereum.EVM Fe Fe.EVM\n\
+                        "import Fe.EVM.Storage\nopen Ethereum Ethereum.EVM Fe Fe.EVM\n\
                          namespace Corpus.{id}\nsection\n\
                          set_option linter.unusedVariables false\n\n{lean}\nend\nend Corpus.{id}\n"
                     );

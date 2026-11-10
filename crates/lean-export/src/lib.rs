@@ -7,7 +7,9 @@
 
 use std::fmt::Write;
 
-use common::{compilation::Target as CompilationTarget, ingot::IngotKind};
+use common::{
+    compilation::Target as CompilationTarget, ingot::IngotKind, layout::StorageFieldPlacement,
+};
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
@@ -35,7 +37,7 @@ use hir::{
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, EffectParamSite, LocalBinding},
-            ty_def::{CapabilityKind, TyId, prim_int_bits},
+            ty_def::{BorrowKind, CapabilityKind, TyId, prim_int_bits},
             ty_is_snapshot,
         },
     },
@@ -43,7 +45,7 @@ use hir::{
         Contract, EnumVariant, FieldParent, IdentId, ItemKind, PatId,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
-    semantic::{ProviderSource, storage_field_placements},
+    semantic::{ProviderSource, storage_field_placements, storage_lane_bytes, storage_slot_span},
 };
 use num_traits::Signed;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -75,6 +77,8 @@ const PRELUDE: &[&str] = &[
     "codecopy",
     "codesize",
     "coinbase",
+    "decide",
+    "default",
     "extcodesize",
     "gaslimit",
     "gasprice",
@@ -89,8 +93,10 @@ const PRELUDE: &[&str] = &[
     "mstoreBytes",
     "nonPayable",
     "origin",
+    "packed",
     "panicCode",
     "prevrandao",
+    "pure",
     "readPaddedWord",
     "returnData",
     "revertData",
@@ -103,8 +109,10 @@ const PRELUDE: &[&str] = &[
     "stopCall",
     "store",
     "timestamp",
+    "tload",
     "trap",
     "truncate",
+    "tstore",
     "zeroMem",
 ];
 
@@ -142,9 +150,29 @@ struct ValueTarget<'db> {
     path: Vec<Step>,
 }
 
+/// The bytes of a slot that hold a packed value, counted from its low end.
+#[derive(Clone, Copy)]
+struct Lane {
+    off: u32,
+    width: u32,
+    /// Whether other values lie in the slot.
+    shared: bool,
+    /// Whether the lane is read and written apart from the rest of its slot,
+    /// so that no reference can point at it.
+    partial: bool,
+}
+
+impl Lane {
+    fn lean(self) -> String {
+        format!("⟨{}, {}, {}⟩", self.off, self.width, self.shared)
+    }
+}
+
 /// What a place is in the model.
 enum Target<'db> {
-    Place(String),
+    /// A place in contract state, and the lane of its slot an access to it
+    /// by this name reads and writes, if it is one.
+    Place(String, Option<Lane>),
     Value(ValueTarget<'db>),
     /// The word in memory at an address.
     Memory(String),
@@ -191,6 +219,10 @@ fn export<'db>(
     }
     let mut module = Module {
         db,
+        root: SemanticInstance::new(
+            db,
+            identity_semantic_instance_key(db, BodyOwner::ContractInit { contract }),
+        ),
         names: FxHashMap::default(),
         taken: entries
             .iter()
@@ -223,6 +255,8 @@ fn export<'db>(
 #[derive(Clone)]
 struct Module<'db> {
     db: &'db dyn HirAnalysisDb,
+    /// The contract's `init`, which types are normalized in.
+    root: SemanticInstance<'db>,
     /// The Lean name of each exported function or constant instance, for
     /// each way it receives its access parameters.
     names: FxHashMap<(SemanticInstanceKey<'db>, Vec<Option<Carrier>>), String>,
@@ -261,6 +295,9 @@ impl<'db> Module<'db> {
             joins: FxHashMap::default(),
             joined: FxHashSet::default(),
             loops: FxHashSet::default(),
+            helds: Vec::new(),
+            located: Vec::new(),
+            entries: 0,
         }
         .export()
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))
@@ -614,6 +651,30 @@ impl<'db> Module<'db> {
         Ok(name)
     }
 
+    /// The effects of `key` whose place its callers pass: those its instance
+    /// does not name a contract field or the root object for, by provider.
+    fn effect_params(&self, key: SemanticInstanceKey<'db>) -> Vec<u32> {
+        let Ok(normalized) = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
+        else {
+            return Vec::new();
+        };
+        let mut providers: Vec<_> = normalized
+            .body
+            .roots
+            .iter()
+            .filter_map(|root| match &root.kind {
+                NRootKind::Provider { binding }
+                    if matches!(binding.source, ProviderSource::UsesParam { .. }) =>
+                {
+                    Some(binding.provider_idx)
+                }
+                _ => None,
+            })
+            .collect();
+        providers.sort_unstable();
+        providers
+    }
+
     /// The Lean name of `definition`, a type or layout definition named
     /// `name`, or `name` with a number if a different definition has it.
     fn layout(&mut self, name: String, definition: impl Fn(&str) -> String) -> String {
@@ -919,18 +980,325 @@ impl<'db> Module<'db> {
         }))
     }
 
+    /// The slots a value of `ty` takes in contract state.
+    fn span(&self, ty: TyId<'db>) -> Result<usize, Unsupported> {
+        storage_slot_span(self.db, ty)
+            .map_err(|_| Unsupported(format!("layout of {}", ty.pretty_print(self.db))))
+    }
+
+    /// The bytes a value of `ty` packs into and its one field, if `ty` is a
+    /// newtype of a packable type.
+    fn newtype(&self, ty: TyId<'db>) -> Option<(u32, TyId<'db>)> {
+        let bytes = storage_lane_bytes(self.db, ty)?;
+        let [field] = ty.field_types(self.db)[..] else {
+            return None;
+        };
+        Some((bytes, field))
+    }
+
+    /// The bits of the scalar a packable type holds.
+    fn scalar_bits(&self, ty: TyId<'db>) -> Option<usize> {
+        match (self.int_bits(ty), self.newtype(ty)) {
+            (Some((bits, _)), _) => Some(bits),
+            (None, Some((_, field))) => self.scalar_bits(field),
+            (None, None) => ty.is_bool(self.db).then_some(8),
+        }
+    }
+
+    /// The lane a field of type `ty` placed by `placement` lies in. A lane
+    /// narrower than its scalar is partial too: a write checks the value and
+    /// a read masks it.
+    fn lane(&self, ty: TyId<'db>, placement: StorageFieldPlacement) -> Option<Lane> {
+        let lane = placement.lane?;
+        let narrow = self
+            .scalar_bits(ty)
+            .is_some_and(|bits| bits > lane.bit_width() as usize);
+        Some(Lane {
+            off: lane.byte_offset,
+            width: lane.byte_width,
+            shared: placement.shared,
+            partial: placement.partial_lane().is_some() || narrow,
+        })
+    }
+
+    /// `place` re-rooted in transient storage if values of `ty` are pinned
+    /// there. A type pinned to storage lies in storage already.
+    fn pinned(&self, ty: TyId<'db>, place: String) -> String {
+        match self.root.pinned_space(self.db, ty) {
+            Some(AddressSpace::Transient) => format!("({place}.pin .transient)"),
+            _ => place,
+        }
+    }
+
+    /// The Lean term for the part of `value`, of struct or tuple type `ty`,
+    /// that `steps` reach.
+    fn projected(value: &str, steps: &[String]) -> String {
+        steps
+            .iter()
+            .fold(value.to_string(), |value, step| format!("{value}.{step}"))
+    }
+
+    /// The Lean computation that reads a value of `ty` at `place`: on the
+    /// lane path if it lies in `lane`, and otherwise from whole slots.
+    fn load(
+        &mut self,
+        ty: TyId<'db>,
+        place: &str,
+        lane: Option<Lane>,
+    ) -> Result<String, Unsupported> {
+        let db = self.db;
+        if let Some(int) = self.int_bits(ty) {
+            return Ok(match (lane, int) {
+                (Some(lane), _) => format!("loadIntAt {} {place} {}", int_ty(int), lane.lean()),
+                (None, (256, _)) => format!("load {place}"),
+                (None, _) => format!("loadInt {} {place}", int_ty(int)),
+            });
+        }
+        if ty.is_bool(db) {
+            return Ok(match lane {
+                Some(lane) => format!("loadBoolAt {place} {}", lane.lean()),
+                None => format!("loadBool {place}"),
+            });
+        }
+        // A pointer is its address or slot number.
+        if ty.as_ptr(db).is_some() {
+            return Ok(format!("load {place}"));
+        }
+        // A newtype lies in its field's lane: its own bytes if it has its
+        // slot to itself.
+        if let Some((width, field)) = self.newtype(ty) {
+            let lane = lane.unwrap_or(Lane {
+                off: 0,
+                width,
+                shared: false,
+                partial: false,
+            });
+            let inner = self.load(field, place, Some(lane))?;
+            return Ok(match self.fields(ty)?.as_slice() {
+                [(steps, _)] if steps.is_empty() => inner,
+                _ => format!("{}.mk <$> {inner}", self.value_ty(ty)?),
+            });
+        }
+        if let Some(len) = ty.array_len(db) {
+            let (_, args) = ty.decompose_ty_app(db);
+            let stride = self.span(args[0])?;
+            let elem = self.pinned(args[0], "q".to_string());
+            let elem = self.load(args[0], &elem, None)?;
+            return Ok(format!(
+                "loadArray {stride} (fun q => {elem}) {place} {len}"
+            ));
+        }
+        let name = self.value_ty(ty)?;
+        let mut body = String::new();
+        if let Some(variants) = self.variants(ty) {
+            writeln!(
+                body,
+                "  match (← loadTag {} {} p) with",
+                tag_bits(variants.len()),
+                variants.len()
+            )
+            .unwrap();
+            for (tag, (variant, fields)) in variants.iter().enumerate() {
+                // `loadTag` gives a variant's index, so the last one is every
+                // other number.
+                let pattern = if tag + 1 == variants.len() {
+                    "_".to_string()
+                } else {
+                    tag.to_string()
+                };
+                writeln!(body, "  | {pattern} => do").unwrap();
+                let mut slot = 1;
+                for (index, field) in fields.iter().enumerate() {
+                    let at = self.pinned(*field, format!("(p.offset {slot})"));
+                    writeln!(body, "    let f{index} ← {}", self.load(*field, &at, None)?).unwrap();
+                    slot += self.span(*field)?;
+                }
+                let parts: String = (0..fields.len())
+                    .map(|index| format!(" f{index}"))
+                    .collect();
+                writeln!(body, "    return .{variant}{parts}").unwrap();
+            }
+        } else {
+            let placements = storage_field_placements(db, ty)
+                .ok_or_else(|| Unsupported(format!("layout of {}", ty.pretty_print(db))))?;
+            let fields = self.fields(ty)?;
+            for (index, ((_, field), placement)) in fields.iter().zip(&placements).enumerate() {
+                let at = self.pinned(*field, format!("(p.offset {})", placement.slot));
+                let lane = self.lane(*field, *placement);
+                writeln!(body, "  let f{index} ← {}", self.load(*field, &at, lane)?).unwrap();
+            }
+            let parts: Vec<_> = (0..fields.len()).map(|index| format!("f{index}")).collect();
+            writeln!(body, "  return {}", self.aggregate(ty, &parts)?).unwrap();
+        }
+        let loader = self.layout(
+            format!("load_{}", lean_ident(ty.pretty_print(db))),
+            |loader| {
+                format!(
+                    "def {loader} (p : Place) : FeM {name} := do\n{}",
+                    body.trim_end()
+                )
+            },
+        );
+        Ok(format!("{loader} {place}"))
+    }
+
+    /// The integer type and the word of the scalar `value` of packable type
+    /// `ty` holds.
+    fn scalar(&self, ty: TyId<'db>, value: String) -> Result<(String, String), Unsupported> {
+        match (self.int_bits(ty), self.newtype(ty)) {
+            (Some(int), _) => Ok((int_ty(int), value)),
+            (None, Some((_, field))) => {
+                let (steps, _) = self.fields(ty)?.swap_remove(0);
+                self.scalar(field, Self::projected(&value, &steps))
+            }
+            (None, None) if ty.is_bool(self.db) => {
+                Ok(("(.u 8)".to_string(), format!("(Bool.toUInt256 {value})")))
+            }
+            (None, None) => Err(Unsupported(format!("lane of {}", ty.pretty_print(self.db)))),
+        }
+    }
+
+    /// The Lean computation that writes `value` of `ty` at `place`: on the
+    /// lane path if it lies in `lane`, and otherwise over whole slots.
+    fn store(
+        &mut self,
+        ty: TyId<'db>,
+        place: &str,
+        lane: Option<Lane>,
+        value: &str,
+    ) -> Result<String, Unsupported> {
+        let db = self.db;
+        if let Some(int) = self.int_bits(ty) {
+            return Ok(match (lane, int) {
+                (Some(lane), _) => {
+                    format!("storeIntAt {} {place} {} {value}", int_ty(int), lane.lean())
+                }
+                (None, (256, _)) => format!("store {place} {value}"),
+                (None, _) => format!("storeInt {} {place} {value}", int_ty(int)),
+            });
+        }
+        if ty.is_bool(db) {
+            return Ok(match lane {
+                Some(lane) => format!("storeBoolAt {place} {} {value}", lane.lean()),
+                None => format!("storeBool {place} {value}"),
+            });
+        }
+        if ty.as_ptr(db).is_some() {
+            return Ok(format!("store {place} {value}"));
+        }
+        if let Some((width, field)) = self.newtype(ty) {
+            let lane = lane.unwrap_or(Lane {
+                off: 0,
+                width,
+                shared: false,
+                partial: false,
+            });
+            let (steps, _) = self.fields(ty)?.swap_remove(0);
+            return self.store(field, place, Some(lane), &Self::projected(value, &steps));
+        }
+        if ty.array_len(db).is_some() {
+            let (_, args) = ty.decompose_ty_app(db);
+            let stride = self.span(args[0])?;
+            let elem = self.pinned(args[0], "q".to_string());
+            let elem = self.store(args[0], &elem, None, "x")?;
+            return Ok(format!(
+                "storeArray {stride} (fun q x => {elem}) {place} {value}"
+            ));
+        }
+        let name = self.value_ty(ty)?;
+        let mut body = String::new();
+        if let Some(variants) = self.variants(ty) {
+            body.push_str("  match v with\n");
+            for (tag, (variant, fields)) in variants.iter().enumerate() {
+                let parts: String = (0..fields.len())
+                    .map(|index| format!(" f{index}"))
+                    .collect();
+                writeln!(body, "  | .{variant}{parts} => do").unwrap();
+                // The tag has the enum's first slot, and each field of the
+                // variant whole slots after it. No other slot is written.
+                writeln!(body, "    store p (UInt256.ofNat {tag})").unwrap();
+                let mut slot = 1;
+                for (index, field) in fields.iter().enumerate() {
+                    let at = self.pinned(*field, format!("(p.offset {slot})"));
+                    writeln!(
+                        body,
+                        "    {}",
+                        self.store(*field, &at, None, &format!("f{index}"))?
+                    )
+                    .unwrap();
+                    slot += self.span(*field)?;
+                }
+            }
+        } else {
+            let placements = storage_field_placements(db, ty)
+                .ok_or_else(|| Unsupported(format!("layout of {}", ty.pretty_print(db))))?;
+            // The fields packed into one slot are stored as one word, which
+            // replaces the slot.
+            let mut pending: Vec<(u32, String)> = Vec::new();
+            let mut pending_slot = 0;
+            let flush = |pending: &mut Vec<(u32, String)>, slot: u64, body: &mut String| {
+                if pending.is_empty() {
+                    return;
+                }
+                let lanes: Vec<_> = pending
+                    .drain(..)
+                    .map(|(off, bits)| format!("({off}, {bits})"))
+                    .collect();
+                writeln!(
+                    body,
+                    "  store (p.offset {slot}) (packed [{}])",
+                    lanes.join(", ")
+                )
+                .unwrap();
+            };
+            for (index, ((steps, field), placement)) in
+                self.fields(ty)?.iter().zip(&placements).enumerate()
+            {
+                let part = Self::projected("v", steps);
+                let Some(lane) = self.lane(*field, *placement) else {
+                    flush(&mut pending, pending_slot, &mut body);
+                    if self.span(*field)? > 0 {
+                        let at = self.pinned(*field, format!("(p.offset {})", placement.slot));
+                        writeln!(body, "  {}", self.store(*field, &at, None, &part)?).unwrap();
+                    }
+                    continue;
+                };
+                if placement.slot != pending_slot {
+                    flush(&mut pending, pending_slot, &mut body);
+                    pending_slot = placement.slot;
+                }
+                let (int, word) = self.scalar(*field, part)?;
+                writeln!(
+                    body,
+                    "  let b{index} ← Lane.pack {} {int} {word}",
+                    lane.lean()
+                )
+                .unwrap();
+                pending.push((lane.off, format!("b{index}")));
+            }
+            flush(&mut pending, pending_slot, &mut body);
+            if body.is_empty() {
+                body.push_str("  return ()\n");
+            }
+        }
+        let storer = self.layout(
+            format!("store_{}", lean_ident(ty.pretty_print(db))),
+            |storer| {
+                format!(
+                    "def {storer} (p : Place) (v : {name}) : FeM Unit := do\n{}",
+                    body.trim_end()
+                )
+            },
+        );
+        Ok(format!("{storer} {place} {value}"))
+    }
+
     /// The layout of struct or tuple `ty`: the slot of each field below a
     /// place of `ty` in storage.
     fn struct_layout(&mut self, ty: TyId<'db>) -> Result<String, Unsupported> {
         let pretty = ty.pretty_print(self.db);
         let placements = storage_field_placements(self.db, ty)
             .ok_or_else(|| Unsupported(format!("field of {pretty}")))?;
-        if placements
-            .iter()
-            .any(|placement| placement.partial_lane().is_some())
-        {
-            return Err(Unsupported(format!("packed fields of {pretty}")));
-        }
         let slots: Vec<_> = placements
             .iter()
             .map(|placement| placement.slot.to_string())
@@ -965,6 +1333,15 @@ struct BodyExporter<'a, 'db> {
     /// The joins an edge from a later block enters: the heads of loops,
     /// printed as recursive local functions.
     loops: FxHashSet<NBlockId>,
+    /// The borrows of packed lanes, with the place each borrows and whether
+    /// it is `mut`. A lane has no address, so the borrow holds its value in a
+    /// mutable variable, which a `mut` borrow writes back where it ends.
+    helds: Vec<(NValueId, NPlace<'db>, bool)>,
+    /// The lines that locate the entries the statement being printed names,
+    /// which go before it.
+    located: Vec<String>,
+    /// The number of entries located so far, each bound to its own name.
+    entries: usize,
 }
 
 impl<'db> BodyExporter<'_, 'db> {
@@ -1027,9 +1404,42 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         params.sort_by_key(|(param, _)| *param);
-        let params: String = params.into_iter().map(|(_, text)| text).collect();
+        let mut params: String = params.into_iter().map(|(_, text)| text).collect();
+        for provider in self.module.effect_params(self.body.owner.key(db)) {
+            write!(params, " (e{provider} : Place)").unwrap();
+        }
         for out in &self.outs {
             writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
+        }
+        for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
+            let NStatementKind::Define { result, expr } = &statement.kind else {
+                continue;
+            };
+            let (place, mutable) = match expr {
+                NExpr::Borrow { place, kind, .. } => (place, *kind == BorrowKind::Mut),
+                NExpr::MakeView { place, .. } => (place, false),
+                _ => continue,
+            };
+            if !self.is_access(self.ty(*result))
+                || self.is_root_object(place)
+                || !self.in_state(place)?
+            {
+                continue;
+            }
+            // Only the lane matters here; the entries on the way are located
+            // where the borrow is printed.
+            let entries = self.entries;
+            let (_, lane) = self.place(place)?;
+            self.located.clear();
+            self.entries = entries;
+            if !lane.is_some_and(|lane| lane.partial) {
+                continue;
+            }
+            if self.held(*result).is_none() {
+                let ty = self.module.value_ty(place.ty)?;
+                writeln!(state, "  let mut h{} : {ty} := default", result.index()).unwrap();
+            }
+            self.helds.push((*result, place.clone(), mutable));
         }
         self.result_ty = self.returned_ty()?;
         let never = self.result_ty == "Empty";
@@ -1051,8 +1461,13 @@ impl<'db> BodyExporter<'_, 'db> {
     /// it returns for its `mut` access parameters.
     fn state(&self) -> Vec<String> {
         let slots = self.slots.iter().map(|root| format!("r{}", root.index()));
+        let helds = self.helds.iter().filter_map(|(held, ..)| {
+            let (var, _) = self.held(*held)?;
+            (var == *held).then(|| format!("h{}", held.index()))
+        });
         slots
             .chain(self.outs.iter().copied().map(value_name))
+            .chain(helds)
             .collect()
     }
 
@@ -1148,11 +1563,9 @@ impl<'db> BodyExporter<'_, 'db> {
         let data = &self.body.blocks[block.index()];
         let pad = "  ".repeat(depth);
         for statement in &data.statements {
-            for line in self
-                .statement(statement)?
-                .iter()
-                .flat_map(|text| text.lines())
-            {
+            let text = self.statement(statement)?;
+            let located = std::mem::take(&mut self.located);
+            for line in located.iter().chain(&text).flat_map(|text| text.lines()) {
                 writeln!(out, "{pad}{line}").unwrap();
             }
         }
@@ -1169,6 +1582,11 @@ impl<'db> BodyExporter<'_, 'db> {
             for out in self.outs.clone() {
                 let (_, inner) = self.ty(out).as_capability(self.module.db).unwrap();
                 tys.push(self.module.value_ty(inner)?);
+            }
+            for (held, place, _) in self.helds.clone() {
+                if self.held(held).is_some_and(|(var, _)| var == held) {
+                    tys.push(self.module.value_ty(place.ty)?);
+                }
             }
             for param in params {
                 tys.push(self.lean_ty(self.ty(*param))?);
@@ -1244,7 +1662,10 @@ impl<'db> BodyExporter<'_, 'db> {
                 // Lean cannot show a recursive function monotone through a
                 // match on a `let`-bound value, so a body with a loop binds
                 // the value first.
-                let value = self.enum_value(value)?;
+                let (load, value) = self.enum_value(value)?;
+                if let Some(load) = load {
+                    writeln!(out, "{pad}{load}").unwrap();
+                }
                 if self.loops.is_empty() {
                     writeln!(out, "{pad}match {value} with").unwrap();
                 } else {
@@ -1372,6 +1793,15 @@ impl<'db> BodyExporter<'_, 'db> {
                     {
                         None
                     }
+                    // A borrow of a packed lane holds the lane's value.
+                    NExpr::MakeView { place, .. } | NExpr::Borrow { place, .. }
+                        if self.helds.iter().any(|(held, ..)| held == result) =>
+                    {
+                        let (var, _) = self.held(*result).unwrap();
+                        let (lean, lane) = self.place(place)?;
+                        let load = self.module.load(place.ty, &lean, lane)?;
+                        Some(format!("h{} := (← {load})", var.index()))
+                    }
                     // An access to a local is read and written through the
                     // local's variable, where it is used; one to the root
                     // object reaches no data.
@@ -1409,9 +1839,8 @@ impl<'db> BodyExporter<'_, 'db> {
                         Some(format!("let {name} := {}", self.module.const_value(value)?))
                     }
                     NExpr::Load { place, .. } => Some(match self.target(place)? {
-                        Target::Place(lean) => {
-                            self.word(place)?;
-                            format!("let {name} ← load {lean}")
+                        Target::Place(lean, lane) => {
+                            format!("let {name} ← {}", self.module.load(place.ty, &lean, lane)?)
                         }
                         Target::Value(target) => format!("let {name} := {}", self.read(&target)?),
                         Target::Memory(ptr) => format!("let {name} ← mload {ptr}"),
@@ -1456,7 +1885,12 @@ impl<'db> BodyExporter<'_, 'db> {
                     NExpr::MakeView { place, .. } | NExpr::Borrow { place, .. } => {
                         Some(
                             match (self.target(place)?, self.is_access(self.ty(*result))) {
-                                (Target::Place(lean), true) => format!("let {name} := {lean}"),
+                                (Target::Place(lean, _), true) => format!("let {name} := {lean}"),
+                                // A view of a snapshot type is the value now there.
+                                (Target::Place(lean, lane), false) => {
+                                    let load = self.module.load(place.ty, &lean, lane)?;
+                                    format!("let {name} ← {load}")
+                                }
                                 // A view of a snapshot type is the value now there.
                                 (Target::Value(target), false) => {
                                     format!("let {name} := {}", self.read(&target)?)
@@ -1497,7 +1931,9 @@ impl<'db> BodyExporter<'_, 'db> {
                         Some(format!("let {name} := {ty}.{variant}{fields}"))
                     }
                     NExpr::GetEnumTag { value } => {
-                        Some(format!("let {name} := {}.tag", self.enum_value(value)?))
+                        let (load, value) = self.enum_value(value)?;
+                        let load = load.map_or(String::new(), |load| format!("{load}\n"));
+                        Some(format!("{load}let {name} := {value}.tag"))
                     }
                     NExpr::IsEnumVariant { value, variant } => {
                         let ty = self.ty(value.value);
@@ -1507,12 +1943,13 @@ impl<'db> BodyExporter<'_, 'db> {
                             .ok_or_else(|| Unsupported("variant of no enum".to_string()))?;
                         let (variant, fields) = &variants[usize::from(variant.0)];
                         let rest = if fields.is_empty() { "" } else { " .." };
-                        let value = self.enum_value(value)?;
+                        let (load, value) = self.enum_value(value)?;
+                        let load = load.map_or(String::new(), |load| format!("{load}\n"));
                         Some(if variants.len() == 1 {
-                            format!("let {name} := true")
+                            format!("{load}let {name} := true")
                         } else {
                             format!(
-                                "let {name} := match {value} with | .{variant}{rest} => true | _ => false"
+                                "{load}let {name} := match {value} with | .{variant}{rest} => true | _ => false"
                             )
                         })
                     }
@@ -1522,24 +1959,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         effect_args,
                         ..
                     } => {
-                        // A callee's instance names the provider behind each of
-                        // its effects, so a provider passed whole needs no
-                        // argument.
-                        let whole_provider = |arg: &NEffectArg<'db>| {
-                            matches!(&arg.arg, NEffectArgValue::Place(place)
-                            if place.path.is_empty()
-                                && matches!(place.base, NPlaceBase::Root(root)
-                                    if matches!(
-                                        self.body.roots[root.index()].kind,
-                                        NRootKind::Provider { .. }
-                                    )))
-                        };
-                        if !effect_args.iter().all(whole_provider) {
-                            return Err(Unsupported(
-                                "effect argument below a provider".to_string(),
-                            ));
-                        }
-                        let call = self.call(*result, callee.key, args)?;
+                        let call = self.call(*result, callee.key, args, effect_args)?;
                         Some(self.after_never(*result, call)?)
                     }
                     other => return Err(Unsupported(format!("expression {other:?}"))),
@@ -1548,15 +1968,30 @@ impl<'db> BodyExporter<'_, 'db> {
             NStatementKind::Store { destination, value } => {
                 let value = self.operand(value)?;
                 Some(match self.target(destination)? {
-                    Target::Place(lean) => {
-                        self.word(destination)?;
-                        format!("store {lean} {value}")
+                    Target::Place(lean, lane) => {
+                        self.module.store(destination.ty, &lean, lane, &value)?
                     }
                     Target::Value(target) => self.write(&target, &value)?,
                     Target::Memory(ptr) => format!("mstore {ptr} {value}"),
                 })
             }
-            NStatementKind::End { .. } => None,
+            // A `mut` borrow of a lane writes the value it held back.
+            NStatementKind::End { access } => {
+                let held = self
+                    .helds
+                    .iter()
+                    .find(|(held, _, mutable)| held == access && *mutable)
+                    .cloned();
+                match held {
+                    Some((held, place, _)) => {
+                        let (var, _) = self.held(held).unwrap();
+                        let (lean, lane) = self.place(&place)?;
+                        let value = format!("h{}", var.index());
+                        Some(self.module.store(place.ty, &lean, lane, &value)?)
+                    }
+                    None => None,
+                }
+            }
             // An index known when compiling was checked then.
             NStatementKind::CheckIndex {
                 index: NIndex::Const(_),
@@ -1685,22 +2120,13 @@ impl<'db> BodyExporter<'_, 'db> {
         result: NValueId,
         callee: SemanticInstanceKey<'db>,
         args: &[NOperand],
+        effect_args: &[NEffectArg<'db>],
     ) -> Result<String, Unsupported> {
         let db = self.module.db;
         let name = &value_name(result);
         let BodyOwner::Func(func, _) = callee.owner(db) else {
             return Err(Unsupported("call to a non-function".to_string()));
         };
-        let in_std = matches!(
-            func.scope().ingot(db).kind(db),
-            IngotKind::Std | IngotKind::Core
-        );
-        let callee_name = func.name(db).to_opt().map(|name| name.data(db).as_str());
-        match (in_std, callee_name, args) {
-            (true, Some("caller"), [_evm]) => return Ok(format!("let {name} ← caller")),
-            (true, Some("zero"), []) => return Ok(format!("let {name} := UInt256.ofNat 0")),
-            _ => {}
-        }
         if let Some(kind) = runtime_builtin_func_kind(db, func) {
             return self.builtin(kind, result, callee, args);
         }
@@ -1737,6 +2163,28 @@ impl<'db> BodyExporter<'_, 'db> {
             write!(lean_args, " {}", self.read(&target)?).unwrap();
             if matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _))) {
                 outs.push(target);
+            }
+        }
+        // A callee's instance names the contract field behind an effect. The
+        // place behind any other effect is an argument.
+        for provider in self.module.effect_params(callee) {
+            let place = effect_args
+                .iter()
+                .find(|arg| arg.binding_idx == provider)
+                .and_then(|arg| match &arg.arg {
+                    NEffectArgValue::Place(place) => Some(place),
+                    NEffectArgValue::Value(_) => None,
+                })
+                .ok_or_else(|| Unsupported("effect argument that is no place".to_string()))?;
+            match self.target(place)? {
+                Target::Place(lean, lane) if !lane.is_some_and(|lane| lane.partial) => {
+                    write!(lean_args, " {lean}").unwrap()
+                }
+                _ => {
+                    return Err(Unsupported(
+                        "effect argument outside contract state".to_string(),
+                    ));
+                }
             }
         }
         let callee = self.module.instance(callee, carriers)?;
@@ -1962,15 +2410,22 @@ impl<'db> BodyExporter<'_, 'db> {
         ))
     }
 
-    /// The enum value `operand` holds or, if it is an access to a local,
-    /// reaches.
-    fn enum_value(&self, operand: &NOperand) -> Result<String, Unsupported> {
-        if !self.is_access(self.ty(operand.value)) {
-            return self.operand(operand);
+    /// The enum value `operand` holds or, if it is an access, reaches, and
+    /// the line that reads it from contract state first, if it lies there.
+    fn enum_value(&mut self, operand: &NOperand) -> Result<(Option<String>, String), Unsupported> {
+        let ty = self.ty(operand.value);
+        if !self.is_access(ty) {
+            return Ok((None, self.operand(operand)?));
         }
         match self.carrier(operand.value)? {
-            Carrier::Value => self.read(&self.carrier_value(operand.value)?),
-            _ => Err(Unsupported("enum in contract state".to_string())),
+            Carrier::Value => Ok((None, self.read(&self.carrier_value(operand.value)?)?)),
+            Carrier::Place => {
+                let (_, inner) = ty.as_capability(self.module.db).unwrap();
+                let name = format!("{}_e", value_name(operand.value));
+                let load = self.module.load(inner, &value_name(operand.value), None)?;
+                Ok((Some(format!("let {name} ← {load}")), name))
+            }
+            Carrier::Erased => Err(Unsupported("enum in the root object".to_string())),
         }
     }
 
@@ -1997,6 +2452,9 @@ impl<'db> BodyExporter<'_, 'db> {
     /// How the model holds the access `value`: as a `Place` if it reaches
     /// contract state, and by the value there if it reaches a local.
     fn carrier(&self, value: NValueId) -> Result<Carrier, Unsupported> {
+        if self.held(value).is_some() {
+            return Ok(Carrier::Value);
+        }
         let target = self
             .body
             .carrier_target(self.module.db, value)
@@ -2031,9 +2489,34 @@ impl<'db> BodyExporter<'_, 'db> {
         }
     }
 
+    /// The first borrow of the packed lane the access `value` reaches into,
+    /// whose variable holds the lane's value, and the path below the lane.
+    fn held(&self, value: NValueId) -> Option<(NValueId, NDataPath)> {
+        if self.helds.is_empty() {
+            return None;
+        }
+        let db = self.module.db;
+        let target = self.body.carrier_target(db, value)?;
+        self.helds.iter().find_map(|(held, ..)| {
+            let lane = self.body.carrier_target(db, *held)?;
+            (lane.base == target.base && lane.path.is_prefix_of(&target.path)).then(|| {
+                let below = target.path.as_slice()[lane.path.len()..].to_vec();
+                (*held, NDataPath::new(below))
+            })
+        })
+    }
+
     /// The local value the access `value` reaches.
     fn carrier_value(&self, value: NValueId) -> Result<ValueTarget<'db>, Unsupported> {
         let db = self.module.db;
+        if let Some((held, path)) = self.held(value) {
+            let place = self.helds.iter().find(|(borrow, ..)| *borrow == held);
+            return Ok(ValueTarget {
+                var: format!("h{}", held.index()),
+                ty: place.unwrap().1.ty,
+                path: field_path(&path)?,
+            });
+        }
         let target = self
             .body
             .carrier_target(db, value)
@@ -2073,10 +2556,9 @@ impl<'db> BodyExporter<'_, 'db> {
         })
     }
 
-    /// What `place` is in the model: a `Place` in contract state, or a
-    /// value below a local's variable.
-    fn target(&mut self, place: &NPlace<'db>) -> Result<Target<'db>, Unsupported> {
-        let local = match place.base {
+    /// The value of a local that `place` is below, if it is.
+    fn local(&self, place: &NPlace<'db>) -> Result<Option<ValueTarget<'db>>, Unsupported> {
+        Ok(match place.base {
             NPlaceBase::Root(root) => {
                 let data = &self.body.roots[root.index()];
                 matches!(
@@ -2104,17 +2586,27 @@ impl<'db> BodyExporter<'_, 'db> {
                 Some(self.carrier_value(carrier)?)
             }
             _ => None,
-        };
-        if let NPlaceBase::Deref { pointer } = place.base {
+        })
+    }
+
+    /// Whether `place` lies in contract state.
+    fn in_state(&self, place: &NPlace<'db>) -> Result<bool, Unsupported> {
+        let memory = matches!(place.base, NPlaceBase::Deref { pointer }
+            if matches!(self.ty(pointer).as_ptr(self.module.db), Some((_, AddressSpace::Memory))));
+        Ok(!memory && self.local(place)?.is_none())
+    }
+
+    /// What `place` is in the model: a `Place` in contract state, a value
+    /// below a local's variable, or a word in memory.
+    fn target(&mut self, place: &NPlace<'db>) -> Result<Target<'db>, Unsupported> {
+        if let NPlaceBase::Deref { pointer } = place.base
+            && let Some((_, AddressSpace::Memory)) = self.ty(pointer).as_ptr(self.module.db)
+        {
             let word = self
                 .module
                 .int_bits(place.ty)
                 .is_some_and(|(bits, _)| bits == 256);
-            let memory = matches!(
-                self.ty(pointer).as_ptr(self.module.db),
-                Some((_, AddressSpace::Memory))
-            );
-            if !word || !memory || !place.path.is_empty() {
+            if !word || !place.path.is_empty() {
                 return Err(Unsupported(format!(
                     "place of {} through {}",
                     place.ty.pretty_print(self.module.db),
@@ -2123,8 +2615,9 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             return Ok(Target::Memory(value_name(pointer)));
         }
-        let Some(mut local) = local else {
-            return Ok(Target::Place(self.place(place)?));
+        let Some(mut local) = self.local(place)? else {
+            let (lean, lane) = self.place(place)?;
+            return Ok(Target::Place(lean, lane));
         };
         local.path.extend(field_path(&place.path)?);
         Ok(Target::Value(local))
@@ -2205,34 +2698,79 @@ impl<'db> BodyExporter<'_, 'db> {
         }
     }
 
-    /// Checks that `place` holds one word, as `load` and `store` take.
-    fn word(&mut self, place: &NPlace<'db>) -> Result<(), Unsupported> {
-        match self.lean_ty(place.ty)?.as_str() {
-            "UInt256" => Ok(()),
-            _ => Err(Unsupported("place that is not one word".to_string())),
-        }
-    }
-
-    /// The Lean place `place` names: its base, then a layout step for each
-    /// struct field and an entry step for each `StorageMap` key.
-    fn place(&mut self, place: &NPlace<'db>) -> Result<String, Unsupported> {
+    /// The Lean place `place` names, and the lane of its slot that an access
+    /// by this name reads and writes, if it ends at a packed field. Its base,
+    /// then a step for each field, variant field, element and `StorageMap`
+    /// key; a part pinned to transient storage lies there at the slot number
+    /// it has.
+    fn place(&mut self, place: &NPlace<'db>) -> Result<(String, Option<Lane>), Unsupported> {
         let db = self.module.db;
-        let mut lean = match place.base {
+        let untyped = || Unsupported("untyped place".to_string());
+        let base_ty = self
+            .body
+            .place_prefix_ty(db, place, 0)
+            .ok_or_else(untyped)?;
+        let (base, mut lane) = match place.base {
             NPlaceBase::Root(root) => self.root(root)?,
-            NPlaceBase::CapabilityTarget { carrier } => value_name(carrier),
-            base => return Err(Unsupported(format!("place base {base:?}"))),
+            NPlaceBase::CapabilityTarget { carrier } => (value_name(carrier), None),
+            // A pointer into contract state is a slot number.
+            NPlaceBase::Deref { pointer } => {
+                let space = match self.ty(pointer).as_ptr(db) {
+                    Some((_, AddressSpace::Storage)) => "storage",
+                    Some((_, AddressSpace::Transient)) => "transient",
+                    _ => return Err(Unsupported(format!("place base {:?}", place.base))),
+                };
+                (format!("(Place.mk .{space} {})", value_name(pointer)), None)
+            }
         };
+        let mut lean = self.module.pinned(base_ty, base);
         for (len, projection) in place.path.iter().enumerate() {
             let ty = self
                 .body
                 .place_prefix_ty(db, place, len)
-                .ok_or_else(|| Unsupported("untyped place".to_string()))?;
-            lean = match projection {
+                .ok_or_else(untyped)?;
+            let part = self
+                .body
+                .place_prefix_ty(db, place, len + 1)
+                .ok_or_else(untyped)?;
+            (lean, lane) = match projection {
+                // The field of a newtype lies where the newtype does.
+                NDataProjection::Field(_) if let Some((width, _)) = self.module.newtype(ty) => {
+                    let own = Lane {
+                        off: 0,
+                        width,
+                        shared: false,
+                        partial: false,
+                    };
+                    (lean, Some(lane.unwrap_or(own)))
+                }
                 NDataProjection::Field(index) => {
-                    format!(
-                        "({lean}.field {} {})",
-                        self.module.struct_layout(ty)?,
-                        index.0
+                    let placements = storage_field_placements(db, ty).unwrap_or_default();
+                    let lane = placements
+                        .get(usize::from(index.0))
+                        .and_then(|placement| self.module.lane(part, *placement));
+                    let layout = self.module.struct_layout(ty)?;
+                    (format!("({lean}.field {layout} {})", index.0), lane)
+                }
+                // The tag has the enum's first slot, and each field of a
+                // variant whole slots after it.
+                NDataProjection::VariantField { variant, field } => {
+                    let variants = self.module.variants(ty).ok_or_else(untyped)?;
+                    let (_, fields) = &variants[usize::from(variant.0)];
+                    let mut slot = 1;
+                    for field in &fields[..usize::from(field.0)] {
+                        slot += self.module.span(*field)?;
+                    }
+                    (format!("({lean}.offset {slot})"), None)
+                }
+                NDataProjection::Index(index) => {
+                    let index = match index {
+                        NIndex::Const(index) => format!("(UInt256.ofNat {index})"),
+                        NIndex::Value(value) => value_name(*value),
+                    };
+                    (
+                        format!("({lean}.index {} {index})", self.module.span(part)?),
+                        None,
                     )
                 }
                 NDataProjection::Entry(key) => {
@@ -2243,28 +2781,96 @@ impl<'db> BodyExporter<'_, 'db> {
                     }) && ty
                         .ingot(db)
                         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std);
-                    if !map || self.lean_ty(self.ty(*key))? != "UInt256" {
-                        return Err(Unsupported(format!("entry of {}", ty.pretty_print(db))));
+                    if map && self.lean_ty(self.ty(*key))? == "UInt256" {
+                        (format!("({lean}.entry {})", value_name(*key)), None)
+                    } else {
+                        (self.entry(ty, &lean, *key)?, None)
                     }
-                    format!("({lean}.entry {})", value_name(*key))
                 }
-                other => return Err(Unsupported(format!("place step {other:?}"))),
             };
+            lean = self.module.pinned(part, lean);
         }
-        Ok(lean)
+        Ok((lean, lane))
     }
 
-    /// The place of the contract field `root` provides.
-    fn root(&mut self, root: NRootId) -> Result<String, Unsupported> {
+    /// The place of entry `key` of the collection of type `ty` at
+    /// `collection`: where the collection's `StateIndex::locate` puts it, in
+    /// the state space the collection is pinned to. The compiler calls
+    /// `locate` with the collection, the collection's own slot and the key.
+    fn entry(
+        &mut self,
+        ty: TyId<'db>,
+        collection: &str,
+        key: NValueId,
+    ) -> Result<String, Unsupported> {
+        let db = self.module.db;
+        let unsupported = |what: &str| Unsupported(format!("{what} of {}", ty.pretty_print(db)));
+        let entry = self
+            .body
+            .owner
+            .entry_locate(db, ty)
+            .map_err(|_| unsupported("entry"))?;
+        if entry.lanes.is_some() {
+            return Err(unsupported("entry lane"));
+        }
+        let space = match entry.space {
+            Some(AddressSpace::Storage) => "storage",
+            Some(AddressSpace::Transient) => "transient",
+            _ => return Err(unsupported("entry space")),
+        };
+        if self.is_access(self.ty(key)) {
+            return Err(unsupported("entry key by access"));
+        }
+        // `locate` takes the collection as a place, and a key it views by
+        // value.
+        let callee = SemanticInstance::new(db, entry.callee);
+        let normalized = normalize_semantic_body(db, callee).map_err(|_| unsupported("entry"))?;
+        let scope = entry.callee.owner(db).scope();
+        let mut carriers = vec![None; 3];
+        for value in &normalized.body.values {
+            if let NValueDefinition::EntryParam { param } = value.definition
+                && let Some((kind, inner)) = value.ty.as_capability(db)
+                && (kind != CapabilityKind::View
+                    || !ty_is_snapshot(db, scope, inner, callee.assumptions(db)))
+                && let Some(carrier) = carriers.get_mut(param as usize)
+            {
+                *carrier = Some(if param == 0 {
+                    Carrier::Place
+                } else {
+                    Carrier::Value
+                });
+            }
+        }
+        let locate = self.module.instance(entry.callee, carriers)?;
+        let location = format!("l{}", self.entries);
+        self.entries += 1;
+        self.located.push(format!(
+            "let {location} ← {locate} {collection} {collection}.slot {}",
+            value_name(key)
+        ));
+        Ok(format!("(Place.mk .{space} {location}.slot)"))
+    }
+
+    /// The place of the contract field `root` provides, and its lane if it
+    /// packs into its slot with other fields.
+    fn root(&mut self, root: NRootId) -> Result<(String, Option<Lane>), Unsupported> {
         let db = self.module.db;
         let root = &self.body.roots[root.index()];
         let NRootKind::Provider { binding } = &root.kind else {
             return Err(Unsupported(format!("root {:?}", root.kind)));
         };
-        let ProviderSource::ContractField { field } = binding.source else {
-            return Err(Unsupported(
-                "provider that is not a contract field".to_string(),
-            ));
+        let field = match binding.source {
+            ProviderSource::ContractField { field } => field,
+            // A place the caller passes, which must lie in contract state.
+            ProviderSource::UsesParam { .. }
+                if matches!(
+                    binding.semantics.address_space,
+                    Some(AddressSpace::Storage | AddressSpace::Transient)
+                ) =>
+            {
+                return Ok((format!("e{}", binding.provider_idx), None));
+            }
+            _ => return Err(Unsupported("effect outside contract state".to_string())),
         };
         let layout = field.contract.storage_layout(db);
         let layout = layout
@@ -2272,15 +2878,20 @@ impl<'db> BodyExporter<'_, 'db> {
             .find(|layout| layout.field == field)
             .ok_or_else(|| Unsupported("contract field without a layout".to_string()))?;
         let name = layout.name.data(db);
-        if layout.address_space != AddressSpace::Storage
-            || layout.lane.is_some_and(|lane| lane.partial)
-        {
+        if layout.address_space != AddressSpace::Storage {
             return Err(Unsupported(format!("layout of contract field `{name}`")));
         }
+        let lane = layout.lane.filter(|lane| lane.partial).map(|lane| Lane {
+            off: u32::from(lane.byte_offset),
+            width: u32::from(lane.byte_width),
+            shared: lane.shared,
+            partial: true,
+        });
         let slot = layout.slot_offset;
-        Ok(self.module.layout(format!("Field.{name}"), |name| {
+        let place = self.module.layout(format!("Field.{name}"), |name| {
             format!("def {name} : Place :=\n  .storage (UInt256.ofNat {slot})")
-        }))
+        });
+        Ok((place, lane))
     }
 }
 
@@ -2389,6 +3000,15 @@ fn lean_name(name: &str) -> String {
         format!("«{name}»")
     } else {
         name.to_string()
+    }
+}
+
+/// The width of the tag of an enum of `variants` variants.
+fn tag_bits(variants: usize) -> usize {
+    match variants {
+        0..=0x100 => 8,
+        0x101..=0x1_0000 => 16,
+        _ => 32,
     }
 }
 

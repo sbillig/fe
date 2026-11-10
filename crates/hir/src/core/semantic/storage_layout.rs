@@ -1204,7 +1204,7 @@ pub fn contract_field_lane<'db>(
 /// The slots a value of `ty` takes in storage, as the layout places a
 /// contract field of its type, or why `ty` has no storage layout.
 #[salsa::tracked(returns(clone))]
-pub(crate) fn storage_slot_span<'db>(
+pub fn storage_slot_span<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> Result<usize, ContractLayoutError<'db>> {

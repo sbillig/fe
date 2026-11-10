@@ -1,0 +1,85 @@
+use std::abi::sol
+use std::evm::Address
+use std::evm::effects::TSlot
+
+struct Packed {
+    flag: bool,
+    small: u8,
+    delta: i16,
+    owner: Address,
+    total: u256,
+}
+
+impl Copy for Packed {}
+
+enum Phase {
+    Idle,
+    Running(u64, u256),
+    Done { ok: bool },
+}
+
+msg StateMsg {
+    #[selector = sol("setDelta(int16)")]
+    SetDelta { delta: i16 } -> i16,
+    #[selector = sol("replace(bool,uint8,int16,address,uint256)")]
+    Replace { flag: bool, small: u8, delta: i16, owner: Address, total: u256 } -> u256,
+    #[selector = sol("advance(uint256)")]
+    Advance { by: u256 } -> u256,
+    #[selector = sol("mark(uint256,uint8)")]
+    Mark { at: usize, level: u8 } -> u8,
+    #[selector = sol("lock()")]
+    Lock -> bool,
+}
+
+pub contract State {
+    mut packed: Packed,
+    mut phase: Phase,
+    mut levels: [u8; 3],
+    mut alone: bool,
+    mut narrow: u8,
+    mut lock: TSlot<bool>,
+
+    recv StateMsg {
+        SetDelta { delta } -> i16 uses (mut packed) {
+            let old = packed.delta
+            packed.delta = delta
+            old
+        }
+
+        Replace { flag, small, delta, owner, total } -> u256 uses (mut packed) {
+            let old = packed
+            packed = Packed { flag, small, delta, owner, total }
+            old.total
+        }
+
+        Advance { by } -> u256 uses (mut phase) {
+            match phase {
+                Phase::Idle => {
+                    phase = Phase::Running(1, by)
+                    0
+                }
+                Phase::Running(count, sum) => {
+                    phase = Phase::Done { ok: sum > by }
+                    sum
+                }
+                Phase::Done { ok } => {
+                    if ok { 1 } else { 2 }
+                }
+            }
+        }
+
+        Mark { at, level } -> u8 uses (mut levels, mut narrow) {
+            let old = levels[at]
+            levels[at] = level
+            narrow = old
+            narrow
+        }
+
+        Lock -> bool uses (mut lock, mut alone) {
+            let was = lock.value
+            lock.value = true
+            alone = was
+            alone
+        }
+    }
+}

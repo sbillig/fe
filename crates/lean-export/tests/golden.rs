@@ -99,3 +99,13 @@ fn loops() {
 fn arrays() {
     check("arrays");
 }
+
+#[test]
+fn state() {
+    check("state");
+}
+
+#[test]
+fn entries() {
+    check("entries");
+}

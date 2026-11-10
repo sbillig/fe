@@ -77,6 +77,16 @@ structure SolDecoder where
   base : UInt256
 deriving Inhabited
 
+def caller_1 : FeM UInt256 := do
+  let v1 ← caller
+  let v2 := v1
+  return v2
+
+def zero : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 0)
+  let v1 := v0
+  return v1
+
 def IS_DYNAMIC : FeM Bool := do
   let v0 := false
   return v0
@@ -607,7 +617,7 @@ def emit_Evm_Transfer (v1 : Transfer) : FeM Unit := do
   return ()
 
 def init (v0 : UInt256) : FeM Unit := do
-  let v2 ← caller
+  let v2 ← caller_1
   let v3 := v2
   let v4 := v0
   store ((Field.store.field Layout.TokenStore 0).entry v3) v4
@@ -615,14 +625,14 @@ def init (v0 : UInt256) : FeM Unit := do
   let v6 := v0
   store (Field.store.field Layout.TokenStore 2) v6
   let v7 := ()
-  let v8 := UInt256.ofNat 0
+  let v8 ← zero
   let v9 := v0
   let v10 := (Transfer.mk v8 v3 v9)
   let v12 ← emit_Evm_Transfer v10
   return ()
 
 def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
-  let v3 ← caller
+  let v3 ← caller_1
   let v4 := v3
   let v5 ← load ((Field.store.field Layout.TokenStore 0).entry v4)
   let v6 := decide (v1.toNat ≤ v5.toNat)
@@ -671,7 +681,7 @@ def emit_Evm_Approval (v1 : Approval) : FeM Unit := do
   return ()
 
 def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
-  let v3 ← caller
+  let v3 ← caller_1
   let v4 := v3
   store (((Field.store.field Layout.TokenStore 1).entry v4).entry v0) v1
   let v5 := ()
@@ -681,7 +691,7 @@ def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   return v9
 
 def recv0_arm2 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Bool := do
-  let v4 ← caller
+  let v4 ← caller_1
   let v5 := v4
   let v6 ← load (((Field.store.field Layout.TokenStore 1).entry v0).entry v5)
   let v7 := v6

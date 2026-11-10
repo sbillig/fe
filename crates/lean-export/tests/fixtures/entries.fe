@@ -1,0 +1,31 @@
+use std::abi::sol
+use std::evm::StorageMap
+
+msg EntriesMsg {
+    #[selector = sol("vote(uint256,uint256)")]
+    Vote { voter: u256, proposal: u256 } -> bool,
+    #[selector = sol("flag(bool)")]
+    Flag { on: bool } -> u256,
+}
+
+struct Store {
+    voted: StorageMap<(u256, u256), bool>,
+    flags: StorageMap<bool, u256>,
+}
+
+pub contract Entries {
+    mut store: Store,
+
+    recv EntriesMsg {
+        Vote { voter, proposal } -> bool uses (mut store) {
+            let before = store.voted[(voter, proposal)]
+            store.voted[(voter, proposal)] = true
+            before
+        }
+
+        Flag { on } -> u256 uses (mut store) {
+            store.flags[on] += 1
+            store.flags[on]
+        }
+    }
+}
