@@ -79,3 +79,8 @@ fn decode() {
 fn encode() {
     check("encode");
 }
+
+#[test]
+fn ints() {
+    check("ints");
+}

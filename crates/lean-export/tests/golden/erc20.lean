@@ -364,7 +364,8 @@ def new_uninit (v0 : UInt256) : FeM MemBuffer := do
   let v1 ← alloc_bytes v0
   let v2 := v0
   let v3 := v0
-  return (MemBuffer.mk v1 v2 v3)
+  let v4 := MemBuffer.mk v1 v2 v3
+  return v4
 
 def zero_bytes (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
   let v2 ← zeroMem v0 v1
@@ -384,7 +385,8 @@ def ptr (v0 : MemBuffer) : FeM UInt256 := do
 def from_raw_parts (v0 : UInt256) (v1 : UInt256) : FeM AbiFrame := do
   let v2 := v0
   let v3 := v1
-  return (AbiFrame.mk v2 v3)
+  let v4 := AbiFrame.mk v2 v3
+  return v4
 
 def PANIC_INDEX_OUT_OF_BOUNDS : FeM UInt256 := do
   let v0 := (UInt256.ofNat 50)
@@ -415,7 +417,8 @@ def tail (v0 : AbiFrame) (v1 : UInt256) : FeM AbiFrame := do
     let v10 := v0.len
     let v11 := v1
     let v12 := v10 - v11
-    return (AbiFrame.mk v9 v12)
+    let v13 := AbiFrame.mk v9 v12
+    return v13
 
 def len (v0 : AbiFrame) : FeM UInt256 := do
   let v1 := v0.len
@@ -444,7 +447,8 @@ def slice (v0 : AbiFrame) (v1 : UInt256) (v2 : UInt256) : FeM AbiFrame := do
       let v13 := v0.ptr
       let v14 ← ptr_offset v13 v1
       let v15 := v2
-      return (AbiFrame.mk v14 v15)
+      let v16 := AbiFrame.mk v14 v15
+      return v16
 
 def cast_u8_u256 (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
@@ -530,7 +534,8 @@ def encode_abi_payload_u256 (v0 : UInt256) : FeM MemBuffer := do
 
 def from_raw_parts_ref_u8 (v0 : UInt256) (v1 : UInt256) : FeM MemSlice_u8 := do
   let mut r0 : MemSlice_u8 := default
-  let v3 := (MemSlice_u8.mk v0 v1)
+  let v2 := MemSlice_u8.mk v0 v1
+  let v3 := v2
   r0 := v3
   return r0
 
@@ -579,7 +584,8 @@ def emit_Evm (v0 : Transfer) : FeM Unit := do
   let mut r1 : UInt256 := default
   let mut r2 : UInt256 := default
   let v2 := v0.value
-  let v4 ← encode_abi_payload_u256 v2
+  let v3 := v2
+  let v4 ← encode_abi_payload_u256 v3
   r0 := v4
   let v6 ← span_ref r0
   let v7 := (UInt256.ofNat 100389287136786176327247604509743168900146139575972864366142685224231313322991) -- a constant, as the compiler evaluates it
@@ -611,7 +617,8 @@ def init (v0 : UInt256) : FeM Unit := do
   let v7 := ()
   let v8 := UInt256.ofNat 0
   let v9 := v0
-  let v12 ← emit_Evm_Transfer (Transfer.mk v8 v3 v9)
+  let v10 := Transfer.mk v8 v3 v9
+  let v12 ← emit_Evm_Transfer v10
   return ()
 
 def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
@@ -629,7 +636,8 @@ def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
     let v12 ← checkedAdd v11 v1
     store ((Field.store.field Layout.TokenStore 0).entry v0) v12
     let v13 := ()
-    let v16 ← emit_Evm_Transfer (Transfer.mk v4 v0 v1)
+    let v14 := Transfer.mk v4 v0 v1
+    let v16 ← emit_Evm_Transfer v14
     let v17 := true
     return v17
   else
@@ -640,7 +648,8 @@ def emit_Evm_1 (v0 : Approval) : FeM Unit := do
   let mut r1 : UInt256 := default
   let mut r2 : UInt256 := default
   let v2 := v0.value
-  let v4 ← encode_abi_payload_u256 v2
+  let v3 := v2
+  let v4 ← encode_abi_payload_u256 v3
   r0 := v4
   let v6 ← span_ref r0
   let v7 := (UInt256.ofNat 63486140976153616755203102783360879283472101686154884697241723088393386309925) -- a constant, as the compiler evaluates it
@@ -666,7 +675,8 @@ def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   let v4 := v3
   store (((Field.store.field Layout.TokenStore 1).entry v4).entry v0) v1
   let v5 := ()
-  let v8 ← emit_Evm_Approval (Approval.mk v4 v0 v1)
+  let v6 := Approval.mk v4 v0 v1
+  let v8 ← emit_Evm_Approval v6
   let v9 := true
   return v9
 
@@ -693,7 +703,8 @@ def recv0_arm2 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Bool := do
       let v19 ← checkedAdd v18 v2
       store ((Field.store.field Layout.TokenStore 0).entry v1) v19
       let v20 := ()
-      let v23 ← emit_Evm_Transfer (Transfer.mk v0 v1 v2)
+      let v21 := Transfer.mk v0 v1 v2
+      let v23 ← emit_Evm_Transfer v21
       let v24 := true
       return v24
     else
@@ -715,7 +726,8 @@ def recv0_arm5 : FeM UInt256 := do
 
 def new_1 : FeM CallData := do
   let v0 := (UInt256.ofNat 0)
-  return (CallData.mk v0)
+  let v1 := CallData.mk v0
+  return v1
 
 def input : FeM CallData := do
   let v1 ← new_1
@@ -898,7 +910,8 @@ def decode_from_Sol_CallData (v0 : CallData) (v1 : UInt256) : FeM UInt256 := do
   else
     let v9 := ()
     let v10 := v9
-    return v3
+    let v11 := v3
+    return v11
 
 def decode_from_bounded_Address_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
   let v3 ← HEAD_SIZE
@@ -1006,7 +1019,8 @@ def decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Transfer_1 := do
   let v8 ← checkedAdd v6 v7
   let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v3
   let v10 := v9
-  return (Transfer_1.mk v5 v10)
+  let v11 := Transfer_1.mk v5 v10
+  return v11
 
 def decode_from_prechecked_head_Transfer_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Transfer_1 := do
   let v3 ← decode_from_CallData v0 v1
@@ -1031,7 +1045,8 @@ def decode_runtime_args_Evm_Sol_Transfer : FeM Transfer_1 := do
 def alloc_uninit_32 : FeM FixedMemBuffer_32 := do
   let v0 := (UInt256.ofNat 32)
   let v1 ← alloc_bytes v0
-  return (FixedMemBuffer_32.mk v1)
+  let v2 := FixedMemBuffer_32.mk v1
+  return v2
 
 def alloc_32 : FeM FixedMemBuffer_32 := do
   let v0 ← alloc_uninit_32
@@ -1068,7 +1083,8 @@ def return_data (v1 : MemSlice_u8) : FeM Empty := do
 def alloc_uninit_64 : FeM FixedMemBuffer_64 := do
   let v0 := (UInt256.ofNat 64)
   let v1 ← alloc_bytes v0
-  return (FixedMemBuffer_64.mk v1)
+  let v2 := FixedMemBuffer_64.mk v1
+  return v2
 
 def alloc_64 : FeM FixedMemBuffer_64 := do
   let v0 ← alloc_uninit_64
@@ -1291,7 +1307,8 @@ def decode_from_CallData_1 (v0 : CallData) (v1 : UInt256) : FeM Approve := do
   let v8 ← checkedAdd v6 v7
   let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v3
   let v10 := v9
-  return (Approve.mk v5 v10)
+  let v11 := Approve.mk v5 v10
+  return v11
 
 def decode_from_prechecked_head_Approve_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Approve := do
   let v3 ← decode_from_CallData_1 v0 v1
@@ -1346,7 +1363,8 @@ def decode_from_CallData_2 (v0 : CallData) (v1 : UInt256) : FeM TransferFrom := 
   let v15 ← checkedAdd v13 v14
   let v16 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v15 v3
   let v17 := v16
-  return (TransferFrom.mk v5 v10 v17)
+  let v18 := TransferFrom.mk v5 v10 v17
+  return v18
 
 def decode_from_prechecked_head_TransferFrom_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM TransferFrom := do
   let v3 ← decode_from_CallData_2 v0 v1
@@ -1385,7 +1403,8 @@ def decode_from_CallData_3 (v0 : CallData) (v1 : UInt256) : FeM BalanceOf := do
   let v3 := v2
   let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v3
   let v5 := v4
-  return (BalanceOf.mk v5)
+  let v6 := BalanceOf.mk v5
+  return v6
 
 def decode_from_prechecked_head_BalanceOf_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM BalanceOf := do
   let v3 ← decode_from_CallData_3 v0 v1
@@ -1577,7 +1596,8 @@ def decode_from_CallData_4 (v0 : CallData) (v1 : UInt256) : FeM Allowance := do
   let v8 ← checkedAdd v6 v7
   let v9 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v8 v3
   let v10 := v9
-  return (Allowance.mk v5 v10)
+  let v11 := Allowance.mk v5 v10
+  return v11
 
 def decode_from_prechecked_head_Allowance_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Allowance := do
   let v3 ← decode_from_CallData_4 v0 v1
@@ -1610,7 +1630,8 @@ def HEAD_SIZE_5 : FeM UInt256 := do
   return v0
 
 def decode_from_CallData_5 (v0 : CallData) (v1 : UInt256) : FeM TotalSupply := do
-  return (TotalSupply.mk)
+  let v2 := TotalSupply.mk
+  return v2
 
 def decode_from_prechecked_head_TotalSupply_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM TotalSupply := do
   let v3 ← decode_from_CallData_5 v0 v1
@@ -1662,7 +1683,8 @@ def runtime : FeM Empty := do
 def with_base (v0 : UInt256) : FeM SolDecoder := do
   let v1 := v0
   let v2 := v0
-  return (SolDecoder.mk v1 v2)
+  let v3 := SolDecoder.mk v1 v2
+  return v3
 
 def decoder_new : FeM SolDecoder := do
   let v0 := (UInt256.ofNat 0)
@@ -1815,7 +1837,8 @@ def decode_payload_Sol_u256_SolDecoder_MemSlice_u8 (v0 : SolDecoder) (v1 : MemSl
   let (v3, v3_0) ← decode_field_Sol_u256_SolDecoder_MemSlice_u8 v0 v1
   v0 := v3_0
   let v4 := v3
-  return (v4, v0)
+  let v5 := v4
+  return (v5, v0)
 
 def init_entry (args : ByteArray) : FeM Unit := do
   nonPayable

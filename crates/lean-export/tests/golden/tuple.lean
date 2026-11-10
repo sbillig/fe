@@ -5,13 +5,15 @@ def swap (v0 : (UInt256 × UInt256 × Bool)) : FeM (UInt256 × UInt256 × Bool) 
   let v1 := v0.snd.fst
   let v2 := v0.fst
   let v3 := v0.snd.snd
-  return (v1, v2, v3)
+  let v4 := (v1, v2, v3)
+  return v4
 
 def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let mut r0 : (UInt256 × UInt256 × Bool) := default
   let mut r1 : (UInt256 × UInt256 × Bool) := default
   let v3 := true
-  r1 := (v0, v1, v3)
+  let v4 := (v0, v1, v3)
+  r1 := v4
   let v6 ← swap r1
   let v7 := v6
   r0 := v7

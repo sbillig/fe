@@ -1,0 +1,46 @@
+use std::abi::sol
+use std::evm::{Ctx, Evm}
+
+msg IntsMsg {
+    #[selector = sol("narrow(uint8,uint8)")]
+    Narrow { a: u8, b: u8 } -> u8,
+    #[selector = sol("signed(int32,int32)")]
+    Signed { a: i32, b: i32 } -> i32,
+    #[selector = sol("mixed(int256,uint16)")]
+    Mixed { a: i256, b: u16 } -> i256,
+    #[selector = sol("context()")]
+    Context -> u256,
+}
+
+#[arithmetic(unchecked)]
+fn wrapping(a: i32, b: i32) -> i32 {
+    (a * b) << 3
+}
+
+pub contract Ints {
+    recv IntsMsg {
+        Narrow { a, b } -> u8 {
+            let sum = a + b
+            let low = (sum >> 1) & 0x0f
+            (sum - low) * 2 / b % 7
+        }
+
+        Signed { a, b } -> i32 {
+            if a < b {
+                return -a
+            }
+            wrapping(a, b) + (a / b) - (a % b) + -5
+        }
+
+        Mixed { a, b } -> i256 {
+            let wide = b as u256
+            let small: i8 = a.downcast_truncate()
+            let bits: i256 = wide.downcast_unchecked()
+            (a >> 2) ** 2 + (small as i256) + bits + (!a)
+        }
+
+        Context -> u256 uses (evm: Evm) {
+            evm.address().word() ^ evm.value().as_wei() ^ evm.origin().word() ^ evm.block_number()
+        }
+    }
+}

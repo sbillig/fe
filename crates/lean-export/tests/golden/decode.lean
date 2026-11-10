@@ -7,7 +7,8 @@ def init : FeM Unit := do
 
 def new : FeM CallData := do
   let v0 := (UInt256.ofNat 0)
-  return (CallData.mk v0)
+  let v1 := CallData.mk v0
+  return v1
 
 def input : FeM CallData := do
   let v1 ← new
@@ -230,7 +231,8 @@ def decode_from_prechecked_head_Sol_u256_u256_CallData (v0 : CallData) (v1 : UIn
   let v15 := v14
   let v16 ← decode_field_from_prechecked_head_Sol_u256_CallData v0 v1 v15 v2
   let v17 := v16
-  return (v8, v17)
+  let v18 := (v8, v17)
+  return v18
 
 def decode_frame_from_Sol_u256_u256_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
   let v3 ← HEAD_SIZE_u256_u256

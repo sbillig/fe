@@ -153,7 +153,8 @@ def recv0_arm4 (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
 
 def new : FeM CallData := do
   let v0 := (UInt256.ofNat 0)
-  return (CallData.mk v0)
+  let v1 := CallData.mk v0
+  return v1
 
 def input : FeM CallData := do
   let v1 ← new
@@ -288,7 +289,8 @@ def validate_runtime_head (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Uni
     b3
 
 def decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get0 := do
-  return (Get0.mk)
+  let v2 := Get0.mk
+  return v2
 
 def decode_from_prechecked_head_Get0_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Get0 := do
   let v3 ← decode_from_CallData v0 v1
@@ -493,7 +495,8 @@ def alloc_bytes (v0 : UInt256) : FeM UInt256 := do
 def alloc_uninit_32 : FeM FixedMemBuffer_32 := do
   let v0 := (UInt256.ofNat 32)
   let v1 ← alloc_bytes v0
-  return (FixedMemBuffer_32.mk v1)
+  let v2 := FixedMemBuffer_32.mk v1
+  return v2
 
 def zero_bytes (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
   let v2 ← zeroMem v0 v1
@@ -514,7 +517,8 @@ def ptr_32 (v0 : FixedMemBuffer_32) : FeM UInt256 := do
 def from_raw_parts (v0 : UInt256) (v1 : UInt256) : FeM AbiFrame := do
   let v2 := v0
   let v3 := v1
-  return (AbiFrame.mk v2 v3)
+  let v4 := AbiFrame.mk v2 v3
+  return v4
 
 def PANIC_INDEX_OUT_OF_BOUNDS : FeM UInt256 := do
   let v0 := (UInt256.ofNat 50)
@@ -557,7 +561,8 @@ def slice (v0 : AbiFrame) (v1 : UInt256) (v2 : UInt256) : FeM AbiFrame := do
       let v13 := v0.ptr
       let v14 ← ptr_offset v13 v1
       let v15 := v2
-      return (AbiFrame.mk v14 v15)
+      let v16 := AbiFrame.mk v14 v15
+      return v16
 
 def cast_u8_u256 (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
@@ -592,7 +597,8 @@ def downcast_unchecked_u256_usize (v0 : UInt256) : FeM UInt256 := do
 
 def from_raw_parts_ref_u8 (v0 : UInt256) (v1 : UInt256) : FeM MemSlice_u8 := do
   let mut r0 : MemSlice_u8 := default
-  let v3 := (MemSlice_u8.mk v0 v1)
+  let v2 := MemSlice_u8.mk v0 v1
+  let v3 := v2
   r0 := v3
   return r0
 
@@ -614,7 +620,8 @@ def return_data (v1 : MemSlice_u8) : FeM Empty := do
 def alloc_uninit_64 : FeM FixedMemBuffer_64 := do
   let v0 := (UInt256.ofNat 64)
   let v1 ← alloc_bytes v0
-  return (FixedMemBuffer_64.mk v1)
+  let v2 := FixedMemBuffer_64.mk v1
+  return v2
 
 def alloc_64 : FeM FixedMemBuffer_64 := do
   let v0 ← alloc_uninit_64
@@ -632,7 +639,8 @@ def new_uninit (v0 : UInt256) : FeM MemBuffer := do
   let v1 ← alloc_bytes v0
   let v2 := v0
   let v3 := v0
-  return (MemBuffer.mk v1 v2 v3)
+  let v4 := MemBuffer.mk v1 v2 v3
+  return v4
 
 def new_1 (v0 : UInt256) : FeM MemBuffer := do
   let v1 ← new_uninit v0
@@ -746,7 +754,8 @@ def tail (v0 : AbiFrame) (v1 : UInt256) : FeM AbiFrame := do
     let v10 := v0.len
     let v11 := v1
     let v12 := v10 - v11
-    return (AbiFrame.mk v9 v12)
+    let v13 := AbiFrame.mk v9 v12
+    return v13
 
 def len (v0 : AbiFrame) : FeM UInt256 := do
   let v1 := v0.len
@@ -892,7 +901,8 @@ def recv0_arm0_entry : FeM Empty := do
   return_value_Sol_u256 result
 
 def decode_from_CallData_1 (v0 : CallData) (v1 : UInt256) : FeM Get1 := do
-  return (Get1.mk)
+  let v2 := Get1.mk
+  return v2
 
 def decode_from_prechecked_head_Get1_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Get1 := do
   let v3 ← decode_from_CallData_1 v0 v1
@@ -1036,7 +1046,8 @@ def decode_from_CallData_2 (v0 : CallData) (v1 : UInt256) : FeM Set0 := do
   let v3 := v2
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v3
   let v5 := v4
-  return (Set0.mk v5)
+  let v6 := Set0.mk v5
+  return v6
 
 def decode_from_prechecked_head_Set0_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Set0 := do
   let v3 ← decode_from_CallData_2 v0 v1
@@ -1069,7 +1080,8 @@ def decode_from_CallData_3 (v0 : CallData) (v1 : UInt256) : FeM Set1 := do
   let v3 := v2
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v3
   let v5 := v4
-  return (Set1.mk v5)
+  let v6 := Set1.mk v5
+  return v6
 
 def decode_from_prechecked_head_Set1_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Set1 := do
   let v3 ← decode_from_CallData_3 v0 v1
@@ -1115,7 +1127,8 @@ def decode_from_CallData_4 (v0 : CallData) (v1 : UInt256) : FeM SetBoth := do
   let v8 ← checkedAdd v6 v7
   let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v3
   let v10 := v9
-  return (SetBoth.mk v5 v10)
+  let v11 := SetBoth.mk v5 v10
+  return v11
 
 def decode_from_prechecked_head_SetBoth_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM SetBoth := do
   let v3 ← decode_from_CallData_4 v0 v1

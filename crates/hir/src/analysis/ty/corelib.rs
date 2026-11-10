@@ -272,7 +272,7 @@ define_runtime_intrinsics! {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum NumericExternIntrinsic {
+pub enum NumericExternIntrinsic {
     CheckedBinary(ArithBinOp),
     WrappingBinary(ArithBinOp),
     SaturatingBinary(SaturatingArithmetic),
@@ -333,7 +333,7 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum SaturatingArithmetic {
+pub enum SaturatingArithmetic {
     Add,
     Sub,
     Mul,
@@ -405,7 +405,7 @@ pub(crate) fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrin
     })
 }
 
-pub(crate) fn core_numeric_const_intrinsic<'db>(
+pub fn core_numeric_const_intrinsic<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Option<NumericExternIntrinsic> {

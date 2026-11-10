@@ -24,7 +24,11 @@ use hir::{
         ty::{
             AddressSpace,
             adt_def::AdtRef,
-            corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
+            corelib::{
+                NumericExternIntrinsic, RuntimeBuiltinFuncKind, SaturatingArithmetic,
+                core_numeric_const_intrinsic, lib_func_matches, resolve_core_trait,
+                resolve_lib_func_path, resolve_lib_type_path, runtime_builtin_func_kind,
+            },
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
             registered_root_providers,
             trait_def::TraitInstId,
@@ -34,11 +38,73 @@ use hir::{
             ty_is_snapshot,
         },
     },
-    hir_def::{Contract, FieldParent, IdentId, ItemKind, PatId, expr::CompBinOp},
+    hir_def::{
+        Contract, FieldParent, IdentId, ItemKind, PatId,
+        expr::{ArithBinOp, BinOp, CompBinOp},
+    },
     semantic::{ProviderSource, storage_field_placements},
 };
 use num_traits::Signed;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+/// The names exported code calls the prelude and the entries by, which no
+/// exported function takes.
+const PRELUDE: &[&str] = &[
+    "alloc",
+    "assertData",
+    "balance",
+    "basefee",
+    "blobbasefee",
+    "blobhash",
+    "blockNumber",
+    "blockhash",
+    "calldataSelector",
+    "calldatacopy",
+    "calldataload",
+    "calldatasize",
+    "caller",
+    "callvalue",
+    "chainid",
+    "checkedAdd",
+    "checkedDiv",
+    "checkedMul",
+    "checkedRem",
+    "checkedSub",
+    "codecopy",
+    "codesize",
+    "coinbase",
+    "extcodesize",
+    "gaslimit",
+    "gasprice",
+    "init_entry",
+    "keccak256",
+    "load",
+    "logData",
+    "mcopy",
+    "mload",
+    "mstore",
+    "mstore8",
+    "mstoreBytes",
+    "nonPayable",
+    "origin",
+    "panicCode",
+    "prevrandao",
+    "readPaddedWord",
+    "returnData",
+    "revertData",
+    "revertEmpty",
+    "runtime",
+    "selfAddress",
+    "selfbalance",
+    "sload",
+    "sstore",
+    "stopCall",
+    "store",
+    "timestamp",
+    "trap",
+    "truncate",
+    "zeroMem",
+];
 
 /// A construct the exporter has no model for.
 #[derive(Debug, PartialEq, Eq)]
@@ -116,7 +182,7 @@ fn export<'db>(
         taken: entries
             .iter()
             .flat_map(|(name, _)| [name.clone(), format!("{name}_entry")])
-            .chain(["runtime".to_string()])
+            .chain(PRELUDE.iter().map(|name| name.to_string()))
             .collect(),
         nevers: FxHashSet::default(),
         open: Vec::new(),
@@ -176,7 +242,6 @@ impl<'db> Module<'db> {
             module: self,
             body: &normalized.body,
             carriers,
-            aggregates: FxHashMap::default(),
             slots: Vec::new(),
             outs: Vec::new(),
             result_ty: String::new(),
@@ -598,23 +663,26 @@ impl<'db> Module<'db> {
         Some((prim_int_bits(prim, target)?, prim.is_signed_int()))
     }
 
-    /// The width of `ty` if it is an unsigned integer type.
-    fn uint_bits(&self, ty: TyId<'db>) -> Option<usize> {
-        self.int_bits(ty)
-            .and_then(|(bits, signed)| (!signed).then_some(bits))
-    }
-
-    /// The Lean term for `value` of integer type `from` cast to `to`: the
-    /// word, cut to the width of a narrower unsigned type.
+    /// The Lean term for `value` of type `from` cast to integer type `to`.
+    /// A canonical word is already that of a type that has its value; a
+    /// narrower unsigned type cuts it, and any other cast wraps.
     fn cast(&self, value: &str, from: TyId<'db>, to: TyId<'db>) -> Result<String, Unsupported> {
-        if from.is_bool(self.db) && self.uint_bits(to).is_some() {
+        if from.is_bool(self.db) && self.int_bits(to).is_some() {
             return Ok(format!("Bool.toUInt256 {value}"));
         }
         match (self.int_bits(from), self.int_bits(to)) {
             // A word reinterpreted at its own width.
             (Some((256, _)), Some((256, _))) => Ok(value.to_string()),
-            (Some((from, false)), Some((to, false))) if from <= to => Ok(value.to_string()),
+            (Some((from, false)), Some((to, _))) if from < to => Ok(value.to_string()),
+            (Some((from, signed)), Some((to, to_signed))) if from <= to && signed == to_signed => {
+                Ok(value.to_string())
+            }
             (Some((_, false)), Some((to, false))) => Ok(format!("truncate {to} {value}")),
+            (Some(from), Some(to)) => Ok(format!(
+                "IntTy.cast {} {} {value}",
+                int_ty(from),
+                int_ty(to)
+            )),
             _ => Err(Unsupported(format!(
                 "cast from {} to {}",
                 from.pretty_print(self.db),
@@ -692,9 +760,6 @@ struct BodyExporter<'a, 'db> {
     body: &'a NormalizedBody<'db>,
     /// How the body receives each access parameter, by parameter.
     carriers: &'a [Option<Carrier>],
-    /// The type and fields of each aggregate the body builds, printed where
-    /// it is used.
-    aggregates: FxHashMap<NValueId, (TyId<'db>, Vec<NValueId>)>,
     /// The slots of locals and of parameters, each a mutable Lean variable.
     slots: Vec<NRootId>,
     /// The `mut` access parameters received as values, which the body
@@ -1138,15 +1203,9 @@ impl<'db> BodyExporter<'_, 'db> {
                         Some(format!("let {name} {rhs}"))
                     }
                     NExpr::Unary { op, value } => {
-                        let ty = self.ty(value.value);
+                        let int = self.module.int_bits(self.ty(value.value));
                         let value = self.operand(value)?;
-                        Some(match (op, self.module.uint_bits(ty)) {
-                            (UnaryOp::BitNot, Some(256)) => format!("let {name} := ~~~{value}"),
-                            (UnaryOp::Not, None) if ty.is_bool(self.module.db) => {
-                                format!("let {name} := !{value}")
-                            }
-                            _ => return Err(Unsupported(format!("operator {op:?}"))),
-                        })
+                        Some(format!("let {name} {}", unary(*op, int, &value)?))
                     }
                     NExpr::ScalarCast { value, to } => {
                         let from = self.ty(value.value);
@@ -1173,9 +1232,22 @@ impl<'db> BodyExporter<'_, 'db> {
                         )
                     }
                     NExpr::AggregateMake { ty, fields } => {
-                        let fields = fields.iter().map(|field| field.value).collect();
-                        self.aggregates.insert(*result, (*ty, fields));
-                        None
+                        let fields: Vec<_> =
+                            fields.iter().map(|field| value_name(field.value)).collect();
+                        // A type that is its one field, a tuple of one or an
+                        // address.
+                        let value = if let [(steps, _)] = self.module.fields(*ty)?.as_slice()
+                            && steps.is_empty()
+                        {
+                            fields[0].clone()
+                        } else if ty.is_tuple(self.module.db) {
+                            format!("({})", fields.join(", "))
+                        } else {
+                            let fields: String =
+                                fields.iter().map(|field| format!(" {field}")).collect();
+                            format!("{}.mk{fields}", self.module.value_ty(*ty)?)
+                        };
+                        Some(format!("let {name} := {value}"))
                     }
                     NExpr::Call {
                         callee,
@@ -1344,80 +1416,24 @@ impl<'db> BodyExporter<'_, 'db> {
             IngotKind::Std | IngotKind::Core
         );
         let callee_name = func.name(db).to_opt().map(|name| name.data(db).as_str());
-        let evm = db.compilation_settings().target(db) == CompilationTarget::Evm;
         match (in_std, callee_name, args) {
             (true, Some("caller"), [_evm]) => return Ok(format!("let {name} ← caller")),
             (true, Some("zero"), []) => return Ok(format!("let {name} := UInt256.ofNat 0")),
-            // The externs the prelude defines.
-            (true, Some("calldataload"), [offset]) if func.is_extern(db) => {
-                return Ok(format!(
-                    "let {name} ← calldataload {}",
-                    self.operand(offset)?
-                ));
-            }
-            (true, Some("calldatasize"), []) if func.is_extern(db) => {
-                return Ok(format!("let {name} ← calldatasize"));
-            }
-            (true, Some("revert_empty"), []) if func.is_extern(db) => {
-                return Ok(format!("let {name} ← revertEmpty\nnever"));
-            }
-            (true, Some("alloc_raw"), [size]) if func.is_extern(db) => {
-                return Ok(format!("let {name} ← alloc {}", self.operand(size)?));
-            }
-            (true, Some("dealloc_raw"), [_]) if func.is_extern(db) && evm => {
-                return Ok(format!("let {name} := ()"));
-            }
-            (true, Some("offset_bytes"), [ptr, offset]) if func.is_extern(db) => {
-                let (ptr, offset) = (self.operand(ptr)?, self.operand(offset)?);
-                return Ok(format!("let {name} := {ptr} + {offset}"));
-            }
-            (true, Some("zero_mem"), [ptr, len]) if func.is_extern(db) => {
-                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
-                return Ok(format!("let {name} ← zeroMem {ptr} {len}"));
-            }
-            (true, Some("revert"), [ptr, len]) if func.is_extern(db) => {
-                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
-                return Ok(format!("let {name} ← revertData {ptr} {len}\nnever"));
-            }
-            (true, Some("log0" | "log1" | "log2" | "log3" | "log4"), [ptr, len, topics @ ..])
-                if func.is_extern(db) =>
-            {
-                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
-                let topics: Result<Vec<_>, _> =
-                    topics.iter().map(|topic| self.operand(topic)).collect();
-                return Ok(format!(
-                    "let {name} ← logData {ptr} {len} #[{}]",
-                    topics?.join(", ")
-                ));
-            }
-            (true, Some("read_padded_word"), [ptr, len]) if func.is_extern(db) => {
-                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
-                return Ok(format!("let {name} ← readPaddedWord {ptr} {len}"));
-            }
-            (true, Some("return_data"), [ptr, len]) if func.is_extern(db) => {
-                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
-                return Ok(format!("let {name} ← returnData {ptr} {len}\nnever"));
-            }
-            (true, Some("panic_code"), [code]) if func.is_extern(db) => {
-                return Ok(format!(
-                    "let {name} ← panicCode {}\nnever",
-                    self.operand(code)?
-                ));
-            }
-            // EVM memory is big-endian, and `usize` is a word there.
-            (true, Some("to_be" | "from_be"), [value]) if func.is_extern(db) && evm => {
-                return Ok(format!("let {name} := {}", self.operand(value)?));
-            }
-            (true, Some("__bitnot_usize"), [value]) if func.is_extern(db) && evm => {
-                return Ok(format!("let {name} := ~~~{}", self.operand(value)?));
-            }
-            (true, Some("__bitcast"), [value]) if func.is_extern(db) => {
-                let from = self.ty(value.value);
-                let value = self.operand(value)?;
-                let cast = self.module.cast(&value, from, self.ty(result))?;
-                return Ok(format!("let {name} := {cast}"));
-            }
             _ => {}
+        }
+        if let Some(kind) = runtime_builtin_func_kind(db, func) {
+            return self.builtin(kind, result, callee, args);
+        }
+        if let Some(kind) = core_numeric_const_intrinsic(db, func) {
+            return self.numeric(kind, result, args);
+        }
+        if lib_func_matches(db, func, "core::num::__bitcast")
+            && let [value] = args
+        {
+            let from = self.ty(value.value);
+            let value = self.operand(value)?;
+            let cast = self.module.cast(&value, from, self.ty(result))?;
+            return Ok(format!("let {name} := {cast}"));
         }
         let mut carriers = Vec::new();
         let mut lean_args = String::new();
@@ -1458,6 +1474,195 @@ impl<'db> BodyExporter<'_, 'db> {
         Ok(lines)
     }
 
+    /// A call of the builtin `kind`: the prelude's definition of it. One that
+    /// never returns ends in a `never` line.
+    fn builtin(
+        &mut self,
+        kind: RuntimeBuiltinFuncKind,
+        result: NValueId,
+        callee: SemanticInstanceKey<'db>,
+        args: &[NOperand],
+    ) -> Result<String, Unsupported> {
+        use RuntimeBuiltinFuncKind as Kind;
+        let db = self.module.db;
+        let name = value_name(result);
+        let evm = db.compilation_settings().target(db) == CompilationTarget::Evm;
+        let operands: Result<Vec<_>, _> = args.iter().map(|arg| self.operand(arg)).collect();
+        let operands = operands?;
+        let applied: String = operands.iter().map(|arg| format!(" {arg}")).collect();
+        // The type an integer builtin works at.
+        let int = args
+            .first()
+            .and_then(|arg| self.module.int_bits(self.ty(arg.value)))
+            .map(int_ty);
+        let action = match kind {
+            Kind::Malloc | Kind::TryMalloc if evm => "alloc",
+            Kind::Mload => "mload",
+            Kind::Mstore => "mstore",
+            Kind::Mstore8 => "mstore8",
+            Kind::Mcopy => "mcopy",
+            Kind::ZeroMem => "zeroMem",
+            Kind::ReadPaddedWord => "readPaddedWord",
+            Kind::Sload | Kind::SloadHashed => "sload",
+            Kind::Sstore | Kind::SstoreHashed => "sstore",
+            Kind::CallDataLoad => "calldataload",
+            Kind::CallDataCopy => "calldatacopy",
+            Kind::CallDataSize => "calldatasize",
+            Kind::CodeCopy => "codecopy",
+            Kind::CodeSize => "codesize",
+            Kind::ExtCodeSize => "extcodesize",
+            Kind::Keccak256 => "keccak256",
+            Kind::Address => "selfAddress",
+            Kind::Caller => "caller",
+            Kind::CallValue => "callvalue",
+            Kind::Origin => "origin",
+            Kind::GasPrice => "gasprice",
+            Kind::CoinBase => "coinbase",
+            Kind::Balance => "balance",
+            Kind::Timestamp => "timestamp",
+            Kind::Number => "blockNumber",
+            Kind::PrevRandao => "prevrandao",
+            Kind::GasLimit => "gaslimit",
+            Kind::ChainId => "chainid",
+            Kind::BaseFee => "basefee",
+            Kind::SelfBalance => "selfbalance",
+            Kind::BlockHash => "blockhash",
+            Kind::BlobHash => "blobhash",
+            Kind::BlobBaseFee => "blobbasefee",
+            Kind::Revert => "revertData",
+            Kind::RevertEmpty => "revertEmpty",
+            Kind::ReturnData => "returnData",
+            Kind::Stop => "stopCall",
+            Kind::Panic | Kind::Todo => "trap",
+            Kind::PanicCode => "panicCode",
+            _ => "",
+        };
+        let never = matches!(
+            kind,
+            Kind::Revert
+                | Kind::RevertEmpty
+                | Kind::ReturnData
+                | Kind::Stop
+                | Kind::Panic
+                | Kind::Todo
+                | Kind::PanicCode
+        );
+        if !action.is_empty() {
+            let never = if never { "\nnever" } else { "" };
+            return Ok(format!("let {name} ← {action}{applied}{never}"));
+        }
+        let value = match (kind, operands.as_slice(), int) {
+            (
+                Kind::Log0 | Kind::Log1 | Kind::Log2 | Kind::Log3 | Kind::Log4,
+                [ptr, len, topics @ ..],
+                _,
+            ) => {
+                return Ok(format!(
+                    "let {name} ← logData {ptr} {len} #[{}]",
+                    topics.join(", ")
+                ));
+            }
+            (Kind::PtrOffsetBytes, [ptr, offset], _) => format!("{ptr} + {offset}"),
+            (Kind::PtrEq, [lhs, rhs], _) => format!("decide ({lhs} = {rhs})"),
+            // EVM memory is never reclaimed, and a forgotten value is not
+            // destroyed.
+            (Kind::Free, [_], _) if evm => "()".to_string(),
+            (Kind::Forget, [_], _) => "()".to_string(),
+            // EVM memory is big-endian, so an integer is its own big-endian
+            // representation there.
+            (Kind::ToBigEndian | Kind::FromBigEndian | Kind::BlackBox, [value], _) if evm => {
+                value.clone()
+            }
+            (
+                Kind::ToLittleEndian | Kind::FromLittleEndian | Kind::SwapBytes,
+                [value],
+                Some(int),
+            ) if evm => format!("IntTy.swapBytes {int} {value}"),
+            (Kind::LeadingZeros, [value], Some(int)) => {
+                format!("IntTy.leadingZeros {int} {value}")
+            }
+            (Kind::TrailingZeros, [value], Some(int)) => {
+                format!("IntTy.trailingZeros {int} {value}")
+            }
+            (Kind::AddMod, [a, b, modulus], _) => format!("UInt256.addMod {a} {b} {modulus}"),
+            (Kind::MulMod, [a, b, modulus], _) => format!("UInt256.mulMod {a} {b} {modulus}"),
+            (Kind::Byte, [pos, value], _) => format!("UInt256.byteAt {pos} {value}"),
+            (Kind::SignExtend, [byte, value], _) => format!("UInt256.signextend {byte} {value}"),
+            (Kind::NeedsDrop, [], _) => {
+                let ty = callee.subst(db).generic_args(db)[0];
+                ty_has_drop_glue(db, ty).to_string()
+            }
+            _ => return Err(Unsupported(format!("builtin {kind:?}"))),
+        };
+        Ok(format!("let {name} := {value}"))
+    }
+
+    /// A call of a numeric intrinsic: the operation it names, at the type of
+    /// its operands.
+    fn numeric(
+        &mut self,
+        kind: NumericExternIntrinsic,
+        result: NValueId,
+        args: &[NOperand],
+    ) -> Result<String, Unsupported> {
+        use NumericExternIntrinsic as Kind;
+        let db = self.module.db;
+        let name = value_name(result);
+        let ty = args.first().map(|arg| self.ty(arg.value));
+        let int = ty.and_then(|ty| self.module.int_bits(ty));
+        let operands: Result<Vec<_>, _> = args.iter().map(|arg| self.operand(arg)).collect();
+        let unsupported = || {
+            Unsupported(format!(
+                "numeric intrinsic on {:?}",
+                ty.map(|ty| ty.pretty_print(db))
+            ))
+        };
+        let binary_op = |op, overflow| BinaryOp::new(BinOp::Arith(op), overflow);
+        let rhs = match (kind, operands?.as_slice(), int) {
+            (Kind::CheckedBinary(op), [lhs, rhs], Some(int)) => {
+                let op = binary_op(op, Overflow::Checked).ok_or_else(unsupported)?;
+                binary(op, int, lhs.clone(), rhs.clone())?
+            }
+            (Kind::WrappingBinary(op), [lhs, rhs], Some(int)) => {
+                let op = binary_op(op, Overflow::Wrapping).ok_or_else(unsupported)?;
+                binary(op, int, lhs.clone(), rhs.clone())?
+            }
+            (Kind::Comparison(op), [lhs, rhs], Some(int)) => {
+                binary(BinaryOp::Comp(op), int, lhs.clone(), rhs.clone())?
+            }
+            (Kind::Comparison(CompBinOp::Eq), [lhs, rhs], None) => {
+                format!(":= decide ({lhs} = {rhs})")
+            }
+            (Kind::Comparison(CompBinOp::NotEq), [lhs, rhs], None) => {
+                format!(":= decide ({lhs} ≠ {rhs})")
+            }
+            (Kind::BoolBinary(ArithBinOp::BitAnd), [lhs, rhs], None) => {
+                format!(":= {lhs} && {rhs}")
+            }
+            (Kind::BoolBinary(ArithBinOp::BitOr), [lhs, rhs], None) => {
+                format!(":= {lhs} || {rhs}")
+            }
+            (Kind::BoolBinary(ArithBinOp::BitXor), [lhs, rhs], None) => {
+                format!(":= {lhs} != {rhs}")
+            }
+            (Kind::BoolNot, [value], None) => unary(UnaryOp::Not, None, value)?,
+            (Kind::BitNot, [value], Some(_)) => unary(UnaryOp::BitNot, int, value)?,
+            (Kind::CheckedNeg, [value], Some(_)) => {
+                unary(UnaryOp::Neg(Overflow::Checked), int, value)?
+            }
+            (Kind::SaturatingBinary(op), [lhs, rhs], Some(int)) => {
+                let op = match op {
+                    SaturatingArithmetic::Add => "satAdd",
+                    SaturatingArithmetic::Sub => "satSub",
+                    SaturatingArithmetic::Mul => "satMul",
+                };
+                format!(":= IntTy.{op} {} {lhs} {rhs}", int_ty(int))
+            }
+            _ => return Err(unsupported()),
+        };
+        Ok(format!("let {name} {rhs}"))
+    }
+
     /// The lines of a call, which end in a `never` line if the callee never
     /// returns. The result of such a call has no values, yet the body may
     /// give it the type of the expression it stands in; the name is then
@@ -1477,24 +1682,9 @@ impl<'db> BodyExporter<'_, 'db> {
         ))
     }
 
-    /// `operand` as a Lean term: its variable, or the structure an aggregate
-    /// builds.
-    fn operand(&mut self, operand: &NOperand) -> Result<String, Unsupported> {
-        let Some((ty, fields)) = self.aggregates.get(&operand.value).cloned() else {
-            return Ok(value_name(operand.value));
-        };
-        let fields: Vec<_> = fields.iter().copied().map(value_name).collect();
-        // A type that is its one field, a tuple of one or an address.
-        if let [(steps, _)] = self.module.fields(ty)?.as_slice()
-            && steps.is_empty()
-        {
-            return Ok(fields[0].clone());
-        }
-        if ty.is_tuple(self.module.db) {
-            return Ok(format!("({})", fields.join(", ")));
-        }
-        let fields: String = fields.iter().map(|field| format!(" {field}")).collect();
-        Ok(format!("({}.mk{fields})", self.module.value_ty(ty)?))
+    /// `operand` as a Lean term: its variable.
+    fn operand(&self, operand: &NOperand) -> Result<String, Unsupported> {
+        Ok(value_name(operand.value))
     }
 
     /// Whether a value of `ty` is an access to a place. A view of a snapshot
@@ -1809,6 +1999,11 @@ fn const_value(value: &SemConstValue<'_>) -> Result<String, Unsupported> {
             value: SemConstScalar::Int { value },
             ..
         } if !value.is_negative() => Ok(format!("(UInt256.ofNat {value})")),
+        // A negative integer's canonical word is the same at every width.
+        SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } => Ok(format!("(IntTy.wrap (.i 256) ({value}))")),
         SemConstValue::Scalar {
             value: SemConstScalar::Bool(value),
             ..
@@ -1906,9 +2101,32 @@ fn lean_name(name: &str) -> String {
     }
 }
 
+/// The Lean term for the integer type of `bits` bits, signed or not.
+fn int_ty((bits, signed): (usize, bool)) -> String {
+    format!("(.{} {bits})", if signed { 'i' } else { 'u' })
+}
+
+/// The right-hand side of `let v` for the unary operation `op` on `value`,
+/// an integer of the width and signedness `int`, or a `bool`.
+fn unary(op: UnaryOp, int: Option<(usize, bool)>, value: &str) -> Result<String, Unsupported> {
+    Ok(match (op, int) {
+        (UnaryOp::Not, None) => format!(":= !{value}"),
+        (UnaryOp::BitNot, Some((256, false))) => format!(":= ~~~{value}"),
+        (UnaryOp::BitNot, Some(int)) => format!(":= IntTy.not {} {value}", int_ty(int)),
+        (UnaryOp::Neg(Overflow::Checked), Some(int)) => {
+            format!("← IntTy.neg {} {value}", int_ty(int))
+        }
+        (UnaryOp::Neg(Overflow::Wrapping), Some(int)) => {
+            format!(":= IntTy.negW {} {value}", int_ty(int))
+        }
+        _ => return Err(Unsupported(format!("operator {op:?}"))),
+    })
+}
+
 /// The right-hand side of `let v` for a built-in operation on integers of
-/// `bits` bits, signed or not, each a word. An operation whose result
-/// depends on the width is printed only for a full word.
+/// `bits` bits, signed or not, each a canonical word. `u256` has its own
+/// definitions in the prelude; an operation whose result depends on the width
+/// or the sign is otherwise the one of the prelude's `IntTy`.
 fn binary(
     op: BinaryOp,
     (bits, signed): (usize, bool),
@@ -1916,6 +2134,7 @@ fn binary(
     rhs: String,
 ) -> Result<String, Unsupported> {
     let word = bits == 256 && !signed;
+    let ty = int_ty((bits, signed));
     Ok(match op {
         BinaryOp::Add(Overflow::Checked) if word => format!("← checkedAdd {lhs} {rhs}"),
         BinaryOp::Add(Overflow::Wrapping) if word => format!(":= {lhs} + {rhs}"),
@@ -1929,6 +2148,19 @@ fn binary(
         BinaryOp::Div(_) if !signed => format!("← checkedDiv {lhs} {rhs}"),
         BinaryOp::Rem if !signed => format!("← checkedRem {lhs} {rhs}"),
         BinaryOp::Shr if !signed => format!(":= {lhs} >>> {rhs}"),
+        BinaryOp::Add(Overflow::Checked) => format!("← IntTy.add {ty} {lhs} {rhs}"),
+        BinaryOp::Add(Overflow::Wrapping) => format!(":= IntTy.addW {ty} {lhs} {rhs}"),
+        BinaryOp::Sub(Overflow::Checked) => format!("← IntTy.sub {ty} {lhs} {rhs}"),
+        BinaryOp::Sub(Overflow::Wrapping) => format!(":= IntTy.subW {ty} {lhs} {rhs}"),
+        BinaryOp::Mul(Overflow::Checked) => format!("← IntTy.mul {ty} {lhs} {rhs}"),
+        BinaryOp::Mul(Overflow::Wrapping) => format!(":= IntTy.mulW {ty} {lhs} {rhs}"),
+        BinaryOp::Div(Overflow::Checked) => format!("← IntTy.div {ty} {lhs} {rhs}"),
+        BinaryOp::Div(Overflow::Wrapping) => format!("← IntTy.divW {ty} {lhs} {rhs}"),
+        BinaryOp::Rem => format!("← IntTy.rem {ty} {lhs} {rhs}"),
+        BinaryOp::Pow(Overflow::Checked) => format!("← IntTy.pow {ty} {lhs} {rhs}"),
+        BinaryOp::Pow(Overflow::Wrapping) => format!(":= IntTy.powW {ty} {lhs} {rhs}"),
+        BinaryOp::Shl => format!(":= IntTy.shl {ty} {lhs} {rhs}"),
+        BinaryOp::Shr => format!(":= IntTy.shr {ty} {lhs} {rhs}"),
         BinaryOp::BitAnd => format!(":= {lhs} &&& {rhs}"),
         BinaryOp::BitOr => format!(":= {lhs} ||| {rhs}"),
         BinaryOp::BitXor => format!(":= {lhs} ^^^ {rhs}"),
@@ -1951,6 +2183,5 @@ fn binary(
         BinaryOp::Comp(CompBinOp::Gt) => format!(":= UInt256.sgtBool {lhs} {rhs}"),
         BinaryOp::Comp(CompBinOp::GtEq) => format!(":= !UInt256.sltBool {lhs} {rhs}"),
         BinaryOp::Comp(CompBinOp::LtEq) => format!(":= !UInt256.sgtBool {lhs} {rhs}"),
-        other => return Err(Unsupported(format!("operator {other:?}"))),
     })
 }

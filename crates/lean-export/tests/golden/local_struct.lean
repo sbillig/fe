@@ -61,7 +61,8 @@ def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
   let mut r1 : Span := default
   let v1 := (UInt256.ofNat 0)
   let v2 := (UInt256.ofNat 4)
-  let v4 := (Cursor.mk v1 v2)
+  let v3 := Cursor.mk v1 v2
+  let v4 := v3
   r0 := v4
   let (v6, v6_0) ← advance r0 v0
   r0 := v6_0
@@ -70,7 +71,8 @@ def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
   r0 := v9_0
   let v10 := r0
   let v11 := v10
-  let v13 := (Span.mk v11 v0)
+  let v12 := Span.mk v11 v0
+  let v13 := v12
   r1 := v13
   let v14 := r1.len
   let (v16, v16_0) ← advance r1.start v14
