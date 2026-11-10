@@ -225,21 +225,39 @@ impl<'db> Module<'db> {
         name
     }
 
-    /// The names and types of the fields of struct `ty`.
-    fn struct_fields(&self, ty: TyId<'db>) -> Result<Vec<(String, TyId<'db>)>, Unsupported> {
+    /// The Lean projections and the type of each field of struct or tuple
+    /// `ty`. A tuple is a right-nested product, and a tuple of one field is
+    /// that field.
+    fn fields(&self, ty: TyId<'db>) -> Result<Vec<(Vec<String>, TyId<'db>)>, Unsupported> {
         let db = self.db;
+        let tys = ty.field_types(db);
+        if ty.is_tuple(db) {
+            let last = tys.len().saturating_sub(1);
+            let steps = |index: usize| {
+                let mut steps = vec!["snd".to_string(); index];
+                if index < last {
+                    steps.push("fst".to_string());
+                }
+                steps
+            };
+            return Ok(tys
+                .into_iter()
+                .enumerate()
+                .map(|(i, ty)| (steps(i), ty))
+                .collect());
+        }
         let Some(AdtRef::Struct(item)) = ty.adt_def(db).map(|adt| adt.adt_ref(db)) else {
             return Err(Unsupported(format!("type {}", ty.pretty_print(db))));
         };
         let names = FieldParent::Struct(item).fields(db).map(|field| {
             let name = field.name(db).map(|name| name.data(db).as_str());
-            lean_name(name.unwrap_or("field"))
+            vec![lean_name(name.unwrap_or("field"))]
         });
-        Ok(names.zip(ty.field_types(db)).collect())
+        Ok(names.zip(tys).collect())
     }
 
-    /// The Lean type of a value of `ty`: a word, or the structure a struct
-    /// is defined as.
+    /// The Lean type of a value of `ty`: a word, a product for a tuple, or
+    /// the structure a struct is defined as.
     fn value_ty(&mut self, ty: TyId<'db>) -> Result<String, Unsupported> {
         let pretty = ty.pretty_print(self.db);
         match pretty.as_str() {
@@ -249,12 +267,20 @@ impl<'db> Module<'db> {
             "()" => return Ok("Unit".to_string()),
             _ => {}
         }
-        let mut fields = String::new();
-        for (name, field) in self.struct_fields(ty)? {
-            writeln!(fields, "  {name} : {}", self.value_ty(field)?).unwrap();
+        let fields = self.fields(ty)?;
+        if ty.is_tuple(self.db) {
+            let tys: Result<Vec<_>, _> = fields.iter().map(|(_, ty)| self.value_ty(*ty)).collect();
+            return Ok(match tys?.as_slice() {
+                [ty] => ty.clone(),
+                tys => format!("({})", tys.join(" × ")),
+            });
+        }
+        let mut lines = String::new();
+        for (name, field) in fields {
+            writeln!(lines, "  {} : {}", name[0], self.value_ty(field)?).unwrap();
         }
         Ok(self.layout(lean_ident(pretty), |name| {
-            format!("structure {name} where\n{fields}deriving Inhabited")
+            format!("structure {name} where\n{lines}deriving Inhabited")
         }))
     }
 
@@ -735,11 +761,15 @@ impl<'db> BodyExporter<'_, 'db> {
         let Some((ty, fields)) = self.aggregates.get(&operand.value).cloned() else {
             return Ok(value_name(operand.value));
         };
-        let fields: String = fields
-            .iter()
-            .map(|field| format!(" {}", value_name(*field)))
-            .collect();
-        Ok(format!("({}.mk{fields})", self.module.value_ty(ty)?))
+        let fields: Vec<_> = fields.iter().copied().map(value_name).collect();
+        if ty.is_tuple(self.module.db) {
+            return Ok(format!("({})", fields.join(", ")));
+        }
+        Ok(format!(
+            "({}.mk {})",
+            self.module.value_ty(ty)?,
+            fields.join(" ")
+        ))
     }
 
     /// Whether a value of `ty` is an access to a place. A view of a snapshot
@@ -843,8 +873,10 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut lean = target.var.clone();
         let mut ty = target.ty;
         for &index in &target.path {
-            let (name, field) = self.module.struct_fields(ty)?.swap_remove(index);
-            write!(lean, ".{name}").unwrap();
+            let (steps, field) = self.module.fields(ty)?.swap_remove(index);
+            for step in steps {
+                write!(lean, ".{step}").unwrap();
+            }
             ty = field;
         }
         Ok(lean)
@@ -855,16 +887,20 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut prefix = target.var.clone();
         let mut ty = target.ty;
         let mut open = String::new();
+        let mut depth = 0;
         for &index in &target.path {
-            let (name, field) = self.module.struct_fields(ty)?.swap_remove(index);
-            write!(open, "{{ {prefix} with {name} := ").unwrap();
-            write!(prefix, ".{name}").unwrap();
+            let (steps, field) = self.module.fields(ty)?.swap_remove(index);
+            for step in steps {
+                write!(open, "{{ {prefix} with {step} := ").unwrap();
+                write!(prefix, ".{step}").unwrap();
+                depth += 1;
+            }
             ty = field;
         }
         Ok(format!(
             "{} := {open}{value}{}",
             target.var,
-            " }".repeat(target.path.len())
+            " }".repeat(depth)
         ))
     }
 

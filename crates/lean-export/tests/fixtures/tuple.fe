@@ -1,0 +1,24 @@
+use std::abi::sol
+
+msg PairMsg {
+    #[selector = sol("swap(uint256,uint256)")]
+    Swap { a: u256, b: u256 } -> u256,
+}
+
+fn swap(pair: (u256, u256, bool)) -> (u256, u256, bool) {
+    (pair.1, pair.0, pair.2)
+}
+
+pub contract Pairs {
+    recv PairMsg {
+        Swap { a, b } -> u256 {
+            var pair = swap(pair: (a, b, true))
+            pair.1 = pair.1 + 1
+            if pair.2 {
+                pair.0 - pair.1
+            } else {
+                0
+            }
+        }
+    }
+}

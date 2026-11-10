@@ -52,3 +52,8 @@ fn join() {
 fn local_struct() {
     check("local_struct");
 }
+
+#[test]
+fn tuple() {
+    check("tuple");
+}
