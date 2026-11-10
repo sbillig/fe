@@ -13,17 +13,19 @@ use hir::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BinaryOp, CarrierBase, FailReason, NBlockId, NDataPath, NDataProjection, NEffectArg,
-            NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement,
-            NStatementKind, NSuccessor, NTerminatorKind, NValueDefinition, NValueId,
-            NormalizedBody, Overflow, SConst, SemConstScalar, SemConstValue, SemanticInstance,
-            SemanticInstanceKey, UnaryOp, drop_elaboration, generated_callee_key,
+            BinaryOp, CarrierBase, DropStep, EvalOutcome, FailReason, NBlockId, NDataPath,
+            NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr, NOperand, NPlace,
+            NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind, NSuccessor,
+            NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow, SConst,
+            SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey, UnaryOp,
+            core_method_callee_key, drop_elaboration, eval_const_ref, generated_callee_key,
             identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
             AddressSpace,
             adt_def::AdtRef,
             corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
+            drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
             registered_root_providers,
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
@@ -35,6 +37,7 @@ use hir::{
     hir_def::{Contract, FieldParent, IdentId, ItemKind, PatId, expr::CompBinOp},
     semantic::{ProviderSource, storage_field_placements},
 };
+use num_traits::Signed;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A construct the exporter has no model for.
@@ -138,6 +141,7 @@ fn export<'db>(
 }
 
 /// The definitions exported so far.
+#[derive(Clone)]
 struct Module<'db> {
     db: &'db dyn HirAnalysisDb,
     /// The Lean name of each exported function or constant instance, for
@@ -1075,14 +1079,32 @@ impl<'db> BodyExporter<'_, 'db> {
                         None
                     }
                     NExpr::Forward { src } => Some(format!("let {name} := {}", self.operand(src)?)),
-                    NExpr::Const(SConst::Ref(constant)) => Some(format!(
-                        "let {name} ← {}",
-                        self.module
-                            .instance(constant.instance(self.module.db), Vec::new())?
-                    )),
-                    NExpr::Const(constant) => {
-                        Some(format!("let {name} := {}", self.lean_const(constant)?))
+                    NExpr::Const(SConst::Ref(constant)) => {
+                        let db = self.module.db;
+                        let saved = self.module.clone();
+                        Some(
+                            match self.module.instance(constant.instance(db), Vec::new()) {
+                                Ok(constant) => format!("let {name} ← {constant}"),
+                                // A constant whose definition has no model is
+                                // the value the compiler computes for it.
+                                Err(unsupported) => {
+                                    *self.module = saved;
+                                    let EvalOutcome::Ready(value) = eval_const_ref(db, *constant)
+                                    else {
+                                        return Err(unsupported);
+                                    };
+                                    let value = const_value(value.value(db))?;
+                                    format!(
+                                        "let {name} := {value} -- a constant, as the compiler evaluates it"
+                                    )
+                                }
+                            },
+                        )
                     }
+                    NExpr::Const(SConst::Value(value)) => Some(format!(
+                        "let {name} := {}",
+                        const_value(value.value().value(self.module.db))?
+                    )),
                     NExpr::Load { place, .. } => Some(match self.target(place)? {
                         Target::Place(lean) => {
                             self.word(place)?;
@@ -1196,16 +1218,111 @@ impl<'db> BodyExporter<'_, 'db> {
                 })
             }
             NStatementKind::End { .. } => None,
-            // A drop that destroys nothing: its target holds no value with
-            // a destructor here.
-            NStatementKind::Drop { .. }
-                if drop_elaboration(self.module.db, self.body.owner)
-                    .is_some_and(|drops| drops.parts(statement.id).is_empty()) =>
-            {
-                None
+            NStatementKind::Drop { target } => {
+                let db = self.module.db;
+                let parts = drop_elaboration(db, self.body.owner)
+                    .ok_or_else(|| Unsupported("drop in an unchecked body".to_string()))?
+                    .parts(statement.id);
+                // The target as a value: a local's, or the value itself.
+                let whole = match target {
+                    NDropTarget::Value(value) => ValueTarget {
+                        var: value_name(*value),
+                        ty: self.ty(*value),
+                        path: Vec::new(),
+                    },
+                    NDropTarget::Place(place) => match self.target(place)? {
+                        Target::Value(target) => target,
+                        _ => return Err(Unsupported("drop of contract state".to_string())),
+                    },
+                };
+                // Inside `Drop::drop`, destroying `self` whole destroys its
+                // fields: the destructor is already running.
+                let own_self = match target {
+                    NDropTarget::Value(value) => matches!(
+                        self.body.values[value.index()].definition,
+                        NValueDefinition::EntryParam { param: 0 }
+                    ),
+                    NDropTarget::Place(place) => {
+                        place.path.is_empty()
+                            && matches!(place.base, NPlaceBase::Root(root)
+                            if matches!(
+                                self.body.roots[root.index()].kind,
+                                NRootKind::ParamPlace { param: 0 }
+                            ))
+                    }
+                };
+                let in_drop = matches!(self.body.owner.key(db).owner(db),
+                    BodyOwner::Func(func, _) if implements_drop(db, func));
+                let mut lines = Vec::new();
+                for part in parts {
+                    let mut target = ValueTarget {
+                        var: whole.var.clone(),
+                        ty: whole.ty,
+                        path: whole.path.clone(),
+                    };
+                    for step in &part.path {
+                        let DropStep::Field(field) = step else {
+                            return Err(Unsupported(format!("drop of {step:?}")));
+                        };
+                        target.path.push(usize::from(*field));
+                    }
+                    if !part.flags.is_empty() {
+                        return Err(Unsupported("drop under a flag".to_string()));
+                    }
+                    let mut ty = target.ty;
+                    for &index in &target.path {
+                        ty = self.module.fields(ty)?.swap_remove(index).1;
+                    }
+                    let value = self.read(&target)?;
+                    let field_wise = own_self && in_drop && part.path.is_empty();
+                    self.destroy(&value, ty, field_wise, &mut lines)?;
+                }
+                (!lines.is_empty()).then(|| lines.join("\n"))
             }
             other => return Err(Unsupported(format!("statement {other:?}"))),
         })
+    }
+
+    /// Appends the lines that destroy `value` of type `ty`: a call of its
+    /// `Drop::drop` if its type implements `Drop` and the value is not
+    /// destroyed `field_wise`, and otherwise the destruction of each field
+    /// that needs it.
+    fn destroy(
+        &mut self,
+        value: &str,
+        ty: TyId<'db>,
+        field_wise: bool,
+        lines: &mut Vec<String>,
+    ) -> Result<(), Unsupported> {
+        let db = self.module.db;
+        if !ty_has_drop_glue(db, ty) {
+            return Ok(());
+        }
+        let adt = ty.adt_def(db).map(|adt| adt.adt_ref(db));
+        if !field_wise && adt.is_some_and(|adt| adt_drop_impl(db, adt).is_some()) {
+            let scope = self.body.owner.key(db).owner(db).scope();
+            let key = core_method_callee_key(
+                db,
+                scope,
+                PredicateListId::empty_list(db),
+                &["ops", "Drop"],
+                "drop",
+                vec![ty],
+            )
+            .map_err(|error| Unsupported(format!("drop: generated call: {error:?}")))?;
+            let drop = self.module.instance(key, vec![None])?;
+            lines.push(format!("let _ ← {drop} {value}"));
+            return Ok(());
+        }
+        if !matches!(adt, Some(AdtRef::Struct(_))) && !ty.is_tuple(db) {
+            let ty = ty.pretty_print(db);
+            return Err(Unsupported(format!("drop of {ty}")));
+        }
+        for (steps, field) in self.module.fields(ty)? {
+            let steps: String = steps.iter().map(|step| format!(".{step}")).collect();
+            self.destroy(&format!("{value}{steps}"), field, false, lines)?;
+        }
+        Ok(())
     }
 
     /// A call: to a std function the prelude models, by name, or to an
@@ -1231,20 +1348,6 @@ impl<'db> BodyExporter<'_, 'db> {
         match (in_std, callee_name, args) {
             (true, Some("caller"), [_evm]) => return Ok(format!("let {name} ← caller")),
             (true, Some("zero"), []) => return Ok(format!("let {name} := UInt256.ofNat 0")),
-            (true, Some("emit"), [_evm, event]) => {
-                let (ty, fields) = self
-                    .aggregates
-                    .get(&event.value)
-                    .ok_or_else(|| Unsupported("emit of a value not built in place".to_string()))?;
-                let fields = fields
-                    .iter()
-                    .map(|field| format!(" {}", value_name(*field)));
-                return Ok(format!(
-                    "let {name} ← emit{}{}",
-                    ty.pretty_print(db),
-                    fields.collect::<String>()
-                ));
-            }
             // The externs the prelude defines.
             (true, Some("calldataload"), [offset]) if func.is_extern(db) => {
                 return Ok(format!(
@@ -1275,6 +1378,17 @@ impl<'db> BodyExporter<'_, 'db> {
             (true, Some("revert"), [ptr, len]) if func.is_extern(db) => {
                 let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
                 return Ok(format!("let {name} ← revertData {ptr} {len}\nnever"));
+            }
+            (true, Some("log0" | "log1" | "log2" | "log3" | "log4"), [ptr, len, topics @ ..])
+                if func.is_extern(db) =>
+            {
+                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
+                let topics: Result<Vec<_>, _> =
+                    topics.iter().map(|topic| self.operand(topic)).collect();
+                return Ok(format!(
+                    "let {name} ← logData {ptr} {len} #[{}]",
+                    topics?.join(", ")
+                ));
             }
             (true, Some("read_padded_word"), [ptr, len]) if func.is_extern(db) => {
                 let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
@@ -1595,24 +1709,6 @@ impl<'db> BodyExporter<'_, 'db> {
         }
     }
 
-    fn lean_const(&self, constant: &SConst<'db>) -> Result<String, Unsupported> {
-        let SConst::Value(value) = constant else {
-            return Err(Unsupported(format!("constant {constant:?}")));
-        };
-        match value.value().value(self.module.db) {
-            SemConstValue::Unit => Ok("()".to_string()),
-            SemConstValue::Scalar {
-                value: SemConstScalar::Int { value },
-                ..
-            } => Ok(format!("(UInt256.ofNat {value})")),
-            SemConstValue::Scalar {
-                value: SemConstScalar::Bool(value),
-                ..
-            } => Ok(value.to_string()),
-            other => Err(Unsupported(format!("constant {other:?}"))),
-        }
-    }
-
     /// Checks that `place` holds one word, as `load` and `store` take.
     fn word(&mut self, place: &NPlace<'db>) -> Result<(), Unsupported> {
         match self.lean_ty(place.ty)?.as_str() {
@@ -1703,6 +1799,22 @@ fn lean_ident(text: impl AsRef<str>) -> String {
 
 fn value_name(value: NValueId) -> String {
     format!("v{}", value.index())
+}
+
+/// The Lean term for the constant `value`.
+fn const_value(value: &SemConstValue<'_>) -> Result<String, Unsupported> {
+    match value {
+        SemConstValue::Unit => Ok("()".to_string()),
+        SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } if !value.is_negative() => Ok(format!("(UInt256.ofNat {value})")),
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(value),
+            ..
+        } => Ok(value.to_string()),
+        other => Err(Unsupported(format!("constant {other:?}"))),
+    }
 }
 
 /// The place of `binding` among the patterns `pats`, if it is one of them.

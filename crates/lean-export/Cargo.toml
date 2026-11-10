@@ -13,4 +13,5 @@ doctest = false
 common.workspace = true
 cranelift-entity.workspace = true
 hir.workspace = true
+num-traits.workspace = true
 rustc-hash.workspace = true
