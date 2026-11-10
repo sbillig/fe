@@ -77,11 +77,12 @@ pub fn export_contract<'db>(
     export(db, contract, false)
 }
 
-/// As [`export_contract`], followed by the runtime entry: one definition per
-/// arm that decodes its arguments, runs it and returns its result, and
-/// `runtime`, which dispatches on the selector. They call std's decoder and
-/// encoder as exported.
-pub fn export_contract_with_runtime<'db>(
+/// As [`export_contract`], followed by the contract's entries. The runtime
+/// entry is one definition per arm that decodes its arguments, runs it and
+/// returns its result, and `runtime`, which dispatches on the selector. The
+/// deployment entry, `init_entry`, decodes the constructor arguments and runs
+/// `init`. They call std's decoder and encoder as exported.
+pub fn export_contract_with_entries<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Result<String, Unsupported> {
@@ -91,7 +92,7 @@ pub fn export_contract_with_runtime<'db>(
 fn export<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
-    runtime: bool,
+    with_entries: bool,
 ) -> Result<String, Unsupported> {
     let mut entries = vec![("init".to_string(), BodyOwner::ContractInit { contract })];
     for (recv_idx, recv) in contract.recv_views(db).enumerate() {
@@ -124,8 +125,9 @@ fn export<'db>(
         let (body, _) = module.body(&name, identity_semantic_instance_key(db, owner), &[])?;
         writeln!(module.defs, "def {name}{body}").unwrap();
     }
-    if runtime {
+    if with_entries {
         module.runtime(contract)?;
+        module.init_entry(contract)?;
     }
     let layouts: String = module
         .layouts
@@ -341,7 +343,112 @@ impl<'db> Module<'db> {
             self.defs,
             "def runtime : FeM Empty := do\n  let size ← calldatasize\n  \
              if size.toNat < 4 then\n    {default}\n  else\n    \
-             let selector ← calldataSelector\n    {dispatch}{last}"
+             let selector ← calldataSelector\n    {dispatch}{last}\n"
+        )
+        .unwrap();
+        Ok(())
+    }
+
+    /// Appends the deployment entry: what the compiler synthesizes around
+    /// `init`. It rejects call value unless `init` is payable, copies the
+    /// constructor arguments, the bytes after the creation code, into fresh
+    /// memory, decodes them with `Decode::decode_payload` at the tuple of
+    /// `init`'s parameter types, and runs `init`. Returning the runtime code
+    /// is left to the caller.
+    fn init_entry(&mut self, contract: Contract<'db>) -> Result<(), Unsupported> {
+        let db = self.db;
+        let scope = contract.scope();
+        let missing = |what: &str| Unsupported(format!("init_entry: missing `{what}`"));
+        let generated = |error| Unsupported(format!("init_entry: generated call: {error:?}"));
+        if contract.code_address_space_slot_count(db) != 0 {
+            return Err(Unsupported("init_entry: immutable fields".to_string()));
+        }
+        let mut lines = String::new();
+        if !contract.init(db).is_some_and(|init| init.is_payable(db)) {
+            lines.push_str("  nonPayable\n");
+        }
+        let args_ty = contract.init_args_ty(db);
+        let mut args = String::new();
+        if args_ty != TyId::unit(db) {
+            let lib_ty =
+                |path: &str| resolve_lib_type_path(db, scope, path).ok_or_else(|| missing(path));
+            let abi = lib_ty("std::abi::Sol")?;
+            let decoder_ty = lib_ty("std::abi::sol::SolDecoder")?;
+            let span_ty = lib_ty("core::ptr::MemSpan")?;
+            let method =
+                |segments: &[&str], inst_args: Vec<TyId<'db>>, method: &str, own: &[TyId<'db>]| {
+                    let def = resolve_core_trait(db, scope, segments)
+                        .ok_or_else(|| missing(&segments.join("::")))?;
+                    let func = def
+                        .method_defs(db)
+                        .get(&IdentId::new(db, method.to_string()))
+                        .copied()
+                        .ok_or_else(|| missing(method))?;
+                    let inst = TraitInstId::new_simple(db, def, inst_args);
+                    generated_callee_key(
+                        db,
+                        scope,
+                        PredicateListId::empty_list(db),
+                        func,
+                        Some(inst),
+                        own,
+                    )
+                    .map_err(generated)
+                };
+            let decoder_new = method(&["abi", "Abi"], vec![abi], "decoder_new", &[])?;
+            let decode = method(
+                &["abi", "Decode"],
+                vec![args_ty, abi],
+                "decode_payload",
+                &[decoder_ty, span_ty],
+            )?;
+            let decoder_new = self.instance(decoder_new, Vec::new())?;
+            // The input is a view: the value itself if a span is a snapshot.
+            let input = (!ty_is_snapshot(db, scope, span_ty, PredicateListId::empty_list(db)))
+                .then_some(Carrier::Value);
+            let decode = self.instance(decode, vec![Some(Carrier::Value), input])?;
+            let span = self.value_ty(span_ty)?;
+            lines.push_str("  let size := UInt256.ofNat args.size\n");
+            lines.push_str("  let tail ← alloc size\n  mstoreBytes tail args\n");
+            writeln!(lines, "  let decoder ← {decoder_new}").unwrap();
+            writeln!(
+                lines,
+                "  let (decoded, _) ← {decode} decoder ({span}.mk tail size)"
+            )
+            .unwrap();
+            // `init` takes the fields its body has parameters for.
+            let owner = BodyOwner::ContractInit { contract };
+            let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
+            let normalized = normalize_semantic_body(db, instance)
+                .map_err(|_| Unsupported("init: body does not normalize".to_string()))?;
+            let values = normalized
+                .body
+                .values
+                .iter()
+                .filter_map(|value| match value.definition {
+                    NValueDefinition::EntryParam { param } => Some(param),
+                    _ => None,
+                });
+            let slots = normalized
+                .body
+                .roots
+                .iter()
+                .filter_map(|root| match root.kind {
+                    NRootKind::ParamPlace { param } => Some(param),
+                    _ => None,
+                });
+            let mut params: Vec<_> = values.chain(slots).collect();
+            params.sort_unstable();
+            let fields = self.fields(args_ty)?;
+            for param in params {
+                let (steps, _) = &fields[param as usize];
+                let steps: String = steps.iter().map(|step| format!(".{step}")).collect();
+                write!(args, " decoded{steps}").unwrap();
+            }
+        }
+        writeln!(
+            self.defs,
+            "def init_entry (args : ByteArray) : FeM Unit := do\n{lines}  init{args}\n"
         )
         .unwrap();
         Ok(())
@@ -1168,6 +1275,10 @@ impl<'db> BodyExporter<'_, 'db> {
             (true, Some("revert"), [ptr, len]) if func.is_extern(db) => {
                 let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
                 return Ok(format!("let {name} ← revertData {ptr} {len}\nnever"));
+            }
+            (true, Some("read_padded_word"), [ptr, len]) if func.is_extern(db) => {
+                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
+                return Ok(format!("let {name} ← readPaddedWord {ptr} {len}"));
             }
             (true, Some("return_data"), [ptr, len]) if func.is_extern(db) => {
                 let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);

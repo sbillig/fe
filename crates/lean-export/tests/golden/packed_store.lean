@@ -1161,3 +1161,8 @@ def runtime : FeM Empty := do
       recv0_arm2_entry
     else
       revertEmpty
+
+def init_entry (args : ByteArray) : FeM Unit := do
+  nonPayable
+  init
+

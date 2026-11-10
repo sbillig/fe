@@ -60,6 +60,11 @@ deriving Inhabited
 structure TotalSupply where
 deriving Inhabited
 
+structure SolDecoder where
+  pos : UInt256
+  base : UInt256
+deriving Inhabited
+
 def init (v0 : UInt256) : FeM Unit := do
   let v2 ← caller
   let v3 := v2
@@ -1508,3 +1513,171 @@ def runtime : FeM Empty := do
       recv0_arm4_entry
     else
       revertEmpty
+
+def with_base (v0 : UInt256) : FeM SolDecoder := do
+  let v1 := v0
+  let v2 := v0
+  return (SolDecoder.mk v1 v2)
+
+def decoder_new : FeM SolDecoder := do
+  let v0 := (UInt256.ofNat 0)
+  let v1 ← with_base v0
+  return v1
+
+def downcast_truncate_usize_u64 (v0 : UInt256) : FeM UInt256 := do
+  let v2 ← to_word_1 v0
+  let v3 := v2
+  let v4 ← IS_SIGNED
+  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+    return v1
+  if v4 then
+    let v5 ← MASK
+    let v6 ← SIGN_BIT
+    let v7 ← sign_extend v3 v5 v6
+    let v8 ← from_word v7
+    let v9 := v8
+    b3 v9
+  else
+    let v10 ← MASK
+    let v11 := v3 &&& v10
+    let v12 ← from_word v11
+    let v13 := v12
+    b3 v13
+
+def size_1 (v0 : MemSlice_u8) : FeM UInt256 := do
+  let v1 ← len_u8 v0
+  let v2 ← downcast_truncate_usize_u64 v1
+  return v2
+
+def len_MemSlice_u8 (v0 : MemSlice_u8) : FeM UInt256 := do
+  let v1 ← size_1 v0
+  let v2 := v1
+  return v2
+
+def word_at_1 (v0 : MemSlice_u8) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← len_u8 v0
+  let v3 := v2
+  let v4 := v3
+  let v5 := v1
+  let v6 := decide (v4.toNat ≤ v5.toNat)
+  if v6 then
+    let v7 := (UInt256.ofNat 0)
+    return v7
+  else
+    let v8 := ()
+    let v9 := v8
+    let v10 := v1
+    let v11 := v4 - v10
+    let v12 ← word_to_usize v11
+    let v13 := v12
+    let v14 ← ptr_u8 v0
+    let v15 ← word_to_usize v1
+    let v16 := v14 + v15
+    let v17 ← readPaddedWord v16 v13
+    return v17
+
+def read_word_MemSlice_u8 (v0 : SolDecoder) (v1 : MemSlice_u8) : FeM (UInt256 × SolDecoder) := do
+  let mut v0 := v0
+  let v2 := v0.pos
+  let v3 := (UInt256.ofNat 32)
+  let v4 ← checkedAdd v2 v3
+  let v5 := v4
+  let v6 := v0.pos
+  let v7 := decide (v5.toNat < v6.toNat)
+  let b1 : SolDecoder → FeM (UInt256 × SolDecoder) := fun v0 => do
+    let mut v0 := v0
+    let v16 ← revertEmpty
+    nomatch v16
+  if v7 then
+    b1 v0
+  else
+    let v8 ← len_MemSlice_u8 v1
+    let v9 := decide (v8.toNat < v5.toNat)
+    if v9 then
+      b1 v0
+    else
+      let v10 := ()
+      let v11 := v10
+      let v12 := v0.pos
+      let v13 ← word_at_1 v1 v12
+      let v14 := v13
+      v0 := { v0 with pos := v5 }
+      let v15 := ()
+      return (v14, v0)
+
+def base (v0 : SolDecoder) : FeM UInt256 := do
+  let v1 := v0.base
+  return v1
+
+def pos (v0 : SolDecoder) : FeM UInt256 := do
+  let v1 := v0.pos
+  return v1
+
+def set_base (v0 : SolDecoder) (v1 : UInt256) : FeM (Unit × SolDecoder) := do
+  let mut v0 := v0
+  let v2 := v1
+  v0 := { v0 with base := v2 }
+  let v3 := ()
+  return ((), v0)
+
+def set_pos (v0 : SolDecoder) (v1 : UInt256) : FeM (Unit × SolDecoder) := do
+  let mut v0 := v0
+  let v2 := v1
+  v0 := { v0 with pos := v2 }
+  let v3 := ()
+  return ((), v0)
+
+def decode_payload_Sol_SolDecoder_MemSlice_u8 (v0 : SolDecoder) (v1 : MemSlice_u8) : FeM (UInt256 × SolDecoder) := do
+  let mut v0 := v0
+  let (v2, v2_0) ← read_word_MemSlice_u8 v0 v1
+  v0 := v2_0
+  return (v2, v0)
+
+def decode_field_Sol_u256_SolDecoder_MemSlice_u8 (v0 : SolDecoder) (v1 : MemSlice_u8) : FeM (UInt256 × SolDecoder) := do
+  let mut v0 := v0
+  let v2 ← IS_DYNAMIC
+  if v2 then
+    let (v3, v3_0) ← read_word_MemSlice_u8 v0 v1
+    v0 := v3_0
+    let v4 := v3
+    let v6 ← base v0
+    let v7 := v6
+    let v9 ← pos v0
+    let v10 := v9
+    let v11 ← checked_tail_Sol v7 v4
+    let (v12, v12_0) ← set_base v0 v11
+    v0 := v12_0
+    let v14 ← base v0
+    let (v15, v15_0) ← set_pos v0 v14
+    v0 := v15_0
+    let (v17, v17_0) ← decode_payload_Sol_SolDecoder_MemSlice_u8 v0 v1
+    v0 := v17_0
+    let v18 := v17
+    let (v19, v19_0) ← set_base v0 v7
+    v0 := v19_0
+    let (v20, v20_0) ← set_pos v0 v10
+    v0 := v20_0
+    return (v18, v0)
+  else
+    let v21 := ()
+    let v22 := v21
+    let (v24, v24_0) ← decode_payload_Sol_SolDecoder_MemSlice_u8 v0 v1
+    v0 := v24_0
+    return (v24, v0)
+
+def decode_payload_Sol_u256_SolDecoder_MemSlice_u8 (v0 : SolDecoder) (v1 : MemSlice_u8) : FeM (UInt256 × SolDecoder) := do
+  let mut v0 := v0
+  let (v3, v3_0) ← decode_field_Sol_u256_SolDecoder_MemSlice_u8 v0 v1
+  v0 := v3_0
+  let v4 := v3
+  return (v4, v0)
+
+def init_entry (args : ByteArray) : FeM Unit := do
+  nonPayable
+  let size := UInt256.ofNat args.size
+  let tail ← alloc size
+  mstoreBytes tail args
+  let decoder ← decoder_new
+  let (decoded, _) ← decode_payload_Sol_u256_SolDecoder_MemSlice_u8 decoder (MemSlice_u8.mk tail size)
+  init decoded
+

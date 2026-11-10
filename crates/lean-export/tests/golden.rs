@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-use fe_lean_export::{Unsupported, export_contract, export_contract_with_runtime};
+use fe_lean_export::{Unsupported, export_contract, export_contract_with_entries};
 use hir::{analysis::HirAnalysisDb, hir_def::Contract, test_db::HirAnalysisTestDb};
 
 type Export = for<'db> fn(&'db dyn HirAnalysisDb, Contract<'db>) -> Result<String, Unsupported>;
@@ -37,12 +37,12 @@ fn scalar_store() {
 
 #[test]
 fn erc20() {
-    check_with("erc20", export_contract_with_runtime);
+    check_with("erc20", export_contract_with_entries);
 }
 
 #[test]
 fn packed_store() {
-    check_with("packed_store", export_contract_with_runtime);
+    check_with("packed_store", export_contract_with_entries);
 }
 
 #[test]
