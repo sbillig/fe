@@ -1,0 +1,35 @@
+use std::abi::sol
+
+const WEIGHTS: [u256; 3] = [1, 10, 100]
+
+msg ArraysMsg {
+    #[selector = sol("pick(uint256,uint256)")]
+    Pick { index: usize, value: u256 } -> u256,
+    #[selector = sol("weigh(uint256[3])")]
+    Weigh { values: [u256; 3] } -> u256,
+}
+
+fn bump(items: mut [u256; 4], at: usize, by: u256) {
+    items[at] += by
+}
+
+pub contract Arrays {
+    recv ArraysMsg {
+        Pick { index, value } -> u256 {
+            var items: [u256; 4] = [value; 4]
+            items[0] = 7
+            bump(mut items, at: index, by: 1)
+            items[index] + items[3]
+        }
+
+        Weigh { values } -> u256 {
+            var total: u256 = 0
+            var i: usize = 0
+            while i < 3 {
+                total += values[i] * WEIGHTS[i]
+                i += 1
+            }
+            total
+        }
+    }
+}

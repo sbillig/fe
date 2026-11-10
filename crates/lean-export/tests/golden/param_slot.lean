@@ -9,7 +9,7 @@ def init : FeM Unit := do
 def make (v0 : UInt256) : FeM Cursor := do
   let v1 := v0
   let v2 := (UInt256.ofNat 4)
-  let v3 := Cursor.mk v1 v2
+  let v3 := (Cursor.mk v1 v2)
   return v3
 
 def «end» (v0 : Cursor) : FeM UInt256 := do

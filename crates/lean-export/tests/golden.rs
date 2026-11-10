@@ -94,3 +94,8 @@ fn enums() {
 fn loops() {
     check("loops");
 }
+
+#[test]
+fn arrays() {
+    check("arrays");
+}

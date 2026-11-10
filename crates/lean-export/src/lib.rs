@@ -14,12 +14,12 @@ use hir::{
         HirAnalysisDb,
         semantic::{
             BinaryOp, CarrierBase, DropStep, EvalOutcome, FailReason, NBlockId, NDataPath,
-            NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr, NOperand, NPlace,
-            NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind, NSuccessor,
+            NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr, NIndex, NOperand,
+            NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind, NSuccessor,
             NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow, SConst,
-            SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey, UnaryOp,
-            core_method_callee_key, drop_elaboration, eval_const_ref, generated_callee_key,
-            identity_semantic_instance_key, normalize_semantic_body,
+            SemConstId, SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey,
+            UnaryOp, core_method_callee_key, drop_elaboration, eval_const_ref,
+            generated_callee_key, identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
             AddressSpace,
@@ -66,6 +66,7 @@ const PRELUDE: &[&str] = &[
     "caller",
     "callvalue",
     "chainid",
+    "checkIndex",
     "checkedAdd",
     "checkedDiv",
     "checkedMul",
@@ -129,6 +130,8 @@ enum Step {
     Field(usize),
     /// A field of a variant, of an enum value that is that variant.
     Variant { variant: usize, field: usize },
+    /// An element of an array.
+    Index(NIndex),
 }
 
 /// The value an access or place of a local reaches: a path below a Lean
@@ -702,6 +705,84 @@ impl<'db> Module<'db> {
                     .swap_remove(variant);
                 Ok((vec![format!("{name}_{field}")], fields.swap_remove(field)))
             }
+            // The one name of an element is its index.
+            Step::Index(index) => {
+                let (_, args) = ty.decompose_ty_app(self.db);
+                let elem = args
+                    .first()
+                    .filter(|_| ty.is_array(self.db))
+                    .ok_or_else(|| Unsupported(format!("index of {}", ty.pretty_print(self.db))))?;
+                let index = match index {
+                    NIndex::Const(index) => index.to_string(),
+                    NIndex::Value(value) => format!("{}.toNat", value_name(value)),
+                };
+                Ok((vec![index], *elem))
+            }
+        }
+    }
+
+    /// The Lean term for a value of struct, tuple or array type `ty` with
+    /// the parts `parts`. A type that is its one field, a tuple of one or an
+    /// address, is that field.
+    fn aggregate(&mut self, ty: TyId<'db>, parts: &[String]) -> Result<String, Unsupported> {
+        if ty.is_array(self.db) {
+            return Ok(format!("#v[{}]", parts.join(", ")));
+        }
+        if let [(steps, _)] = self.fields(ty)?.as_slice()
+            && steps.is_empty()
+        {
+            return Ok(parts[0].clone());
+        }
+        if ty.is_tuple(self.db) {
+            return Ok(format!("({})", parts.join(", ")));
+        }
+        let parts: String = parts.iter().map(|part| format!(" {part}")).collect();
+        Ok(format!("({}.mk{parts})", self.value_ty(ty)?))
+    }
+
+    /// The Lean term for the constant `value`.
+    fn const_value(&mut self, value: &SemConstValue<'db>) -> Result<String, Unsupported> {
+        let db = self.db;
+        let mut parts = |parts: &[_]| -> Result<Vec<String>, Unsupported> {
+            let part = |part: &SemConstId<'db>| self.const_value(part.value(db));
+            parts.iter().map(part).collect()
+        };
+        match value {
+            SemConstValue::Unit => Ok("()".to_string()),
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } if !value.is_negative() => Ok(format!("(UInt256.ofNat {value})")),
+            // A negative integer's canonical word is the same at every width.
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } => Ok(format!("(IntTy.wrap (.i 256) ({value}))")),
+            SemConstValue::Scalar {
+                value: SemConstScalar::Bool(value),
+                ..
+            } => Ok(value.to_string()),
+            SemConstValue::Tuple { ty, elems: fields }
+            | SemConstValue::Struct { ty, fields }
+            | SemConstValue::Array { ty, elems: fields } => {
+                let parts = parts(fields)?;
+                self.aggregate(*ty, &parts)
+            }
+            SemConstValue::Enum {
+                ty,
+                variant,
+                fields,
+            } => {
+                let parts: String = parts(fields)?
+                    .iter()
+                    .map(|part| format!(" {part}"))
+                    .collect();
+                let name = self.value_ty(*ty)?;
+                let variants = self.variants(*ty).unwrap_or_default();
+                let (variant, _) = &variants[usize::from(variant.0)];
+                Ok(format!("({name}.{variant}{parts})"))
+            }
+            other => Err(Unsupported(format!("constant {other:?}"))),
         }
     }
 
@@ -762,6 +843,10 @@ impl<'db> Module<'db> {
         }
         if let Some(variants) = self.variants(ty) {
             return self.enum_ty(lean_ident(pretty), &variants);
+        }
+        if let Some(len) = ty.array_len(self.db) {
+            let (_, args) = ty.decompose_ty_app(self.db);
+            return Ok(format!("(Vector {} {len})", self.value_ty(args[0])?));
         }
         let fields = self.fields(ty)?;
         if ty.is_tuple(self.db) {
@@ -1311,7 +1396,7 @@ impl<'db> BodyExporter<'_, 'db> {
                                     else {
                                         return Err(unsupported);
                                     };
-                                    let value = const_value(value.value(db))?;
+                                    let value = self.module.const_value(value.value(db))?;
                                     format!(
                                         "let {name} := {value} -- a constant, as the compiler evaluates it"
                                     )
@@ -1319,10 +1404,10 @@ impl<'db> BodyExporter<'_, 'db> {
                             },
                         )
                     }
-                    NExpr::Const(SConst::Value(value)) => Some(format!(
-                        "let {name} := {}",
-                        const_value(value.value().value(self.module.db))?
-                    )),
+                    NExpr::Const(SConst::Value(value)) => {
+                        let value = value.value().value(self.module.db);
+                        Some(format!("let {name} := {}", self.module.const_value(value)?))
+                    }
                     NExpr::Load { place, .. } => Some(match self.target(place)? {
                         Target::Place(lean) => {
                             self.word(place)?;
@@ -1387,20 +1472,15 @@ impl<'db> BodyExporter<'_, 'db> {
                     NExpr::AggregateMake { ty, fields } => {
                         let fields: Vec<_> =
                             fields.iter().map(|field| value_name(field.value)).collect();
-                        // A type that is its one field, a tuple of one or an
-                        // address.
-                        let value = if let [(steps, _)] = self.module.fields(*ty)?.as_slice()
-                            && steps.is_empty()
-                        {
-                            fields[0].clone()
-                        } else if ty.is_tuple(self.module.db) {
-                            format!("({})", fields.join(", "))
-                        } else {
-                            let fields: String =
-                                fields.iter().map(|field| format!(" {field}")).collect();
-                            format!("{}.mk{fields}", self.module.value_ty(*ty)?)
-                        };
+                        let value = self.module.aggregate(*ty, &fields)?;
                         Some(format!("let {name} := {value}"))
+                    }
+                    NExpr::ArrayRepeat { ty, value } => {
+                        let len = ty
+                            .array_len(self.module.db)
+                            .ok_or_else(|| Unsupported("array of unknown length".to_string()))?;
+                        let value = self.operand(value)?;
+                        Some(format!("let {name} := Vector.replicate {len} {value}"))
                     }
                     NExpr::EnumMake {
                         enum_ty,
@@ -1477,6 +1557,20 @@ impl<'db> BodyExporter<'_, 'db> {
                 })
             }
             NStatementKind::End { .. } => None,
+            // An index known when compiling was checked then.
+            NStatementKind::CheckIndex {
+                index: NIndex::Const(_),
+                ..
+            } => None,
+            NStatementKind::CheckIndex {
+                index: NIndex::Value(index),
+                array,
+            } => {
+                let len = array
+                    .array_len(self.module.db)
+                    .ok_or_else(|| Unsupported("array of unknown length".to_string()))?;
+                Some(format!("checkIndex {} {len}", value_name(*index)))
+            }
             NStatementKind::Drop { target } => {
                 let db = self.module.db;
                 let parts = drop_elaboration(db, self.body.owner)
@@ -1538,7 +1632,6 @@ impl<'db> BodyExporter<'_, 'db> {
                 }
                 (!lines.is_empty()).then(|| lines.join("\n"))
             }
-            other => return Err(Unsupported(format!("statement {other:?}"))),
         })
     }
 
@@ -2042,9 +2135,12 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut lean = target.var.clone();
         let mut ty = target.ty;
         for &step in &target.path {
-            let (steps, part) = self.module.part(ty, step)?;
-            for step in steps {
-                write!(lean, ".{step}").unwrap();
+            let (names, part) = self.module.part(ty, step)?;
+            for name in names {
+                match step {
+                    Step::Index(_) => write!(lean, "[{name}]!").unwrap(),
+                    _ => write!(lean, ".{name}").unwrap(),
+                }
             }
             ty = part;
         }
@@ -2069,8 +2165,15 @@ impl<'db> BodyExporter<'_, 'db> {
                         write!(open, "({prefix}.set_{name} ").unwrap();
                         close.insert(0, ')');
                     }
+                    Step::Index(_) => {
+                        write!(open, "({prefix}.set! {name} ").unwrap();
+                        close.insert(0, ')');
+                    }
                 }
-                write!(prefix, ".{name}").unwrap();
+                match step {
+                    Step::Index(_) => write!(prefix, "[{name}]!").unwrap(),
+                    _ => write!(prefix, ".{name}").unwrap(),
+                }
             }
             ty = part;
         }
@@ -2194,27 +2297,6 @@ fn value_name(value: NValueId) -> String {
     format!("v{}", value.index())
 }
 
-/// The Lean term for the constant `value`.
-fn const_value(value: &SemConstValue<'_>) -> Result<String, Unsupported> {
-    match value {
-        SemConstValue::Unit => Ok("()".to_string()),
-        SemConstValue::Scalar {
-            value: SemConstScalar::Int { value },
-            ..
-        } if !value.is_negative() => Ok(format!("(UInt256.ofNat {value})")),
-        // A negative integer's canonical word is the same at every width.
-        SemConstValue::Scalar {
-            value: SemConstScalar::Int { value },
-            ..
-        } => Ok(format!("(IntTy.wrap (.i 256) ({value}))")),
-        SemConstValue::Scalar {
-            value: SemConstScalar::Bool(value),
-            ..
-        } => Ok(value.to_string()),
-        other => Err(Unsupported(format!("constant {other:?}"))),
-    }
-}
-
 /// The place of `binding` among the patterns `pats`, if it is one of them.
 fn arg_position(binding: Option<LocalBinding<'_>>, pats: &[PatId]) -> Option<usize> {
     let Some(LocalBinding::Local { pat, .. }) = binding else {
@@ -2223,7 +2305,8 @@ fn arg_position(binding: Option<LocalBinding<'_>>, pats: &[PatId]) -> Option<usi
     pats.iter().position(|bound| *bound == pat)
 }
 
-/// The steps of `path`, each to a field of a struct, tuple or variant.
+/// The steps of `path`, each to a field of a struct, tuple or variant, or to
+/// an element of an array.
 fn field_path(path: &NDataPath) -> Result<Vec<Step>, Unsupported> {
     path.iter()
         .map(|projection| match *projection {
@@ -2232,6 +2315,7 @@ fn field_path(path: &NDataPath) -> Result<Vec<Step>, Unsupported> {
                 variant: usize::from(variant.0),
                 field: usize::from(field.0),
             }),
+            NDataProjection::Index(index) => Ok(Step::Index(index)),
             other => Err(Unsupported(format!("step {other:?} in a local"))),
         })
         .collect()

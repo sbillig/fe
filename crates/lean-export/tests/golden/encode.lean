@@ -279,7 +279,7 @@ def new_uninit (v0 : UInt256) : FeM MemBuffer := do
   let v1 ← alloc_bytes v0
   let v2 := v0
   let v3 := v0
-  let v4 := MemBuffer.mk v1 v2 v3
+  let v4 := (MemBuffer.mk v1 v2 v3)
   return v4
 
 def zero_bytes (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
@@ -300,7 +300,7 @@ def ptr (v0 : MemBuffer) : FeM UInt256 := do
 def from_raw_parts (v0 : UInt256) (v1 : UInt256) : FeM AbiFrame := do
   let v2 := v0
   let v3 := v1
-  let v4 := AbiFrame.mk v2 v3
+  let v4 := (AbiFrame.mk v2 v3)
   return v4
 
 def abi_field_head_size_u256 : FeM UInt256 := do
@@ -347,7 +347,7 @@ def tail (v0 : AbiFrame) (v1 : UInt256) : FeM AbiFrame := do
     let v10 := v0.len
     let v11 := v1
     let v12 := v10 - v11
-    let v13 := AbiFrame.mk v9 v12
+    let v13 := (AbiFrame.mk v9 v12)
     return v13
 
 def len (v0 : AbiFrame) : FeM UInt256 := do
@@ -377,7 +377,7 @@ def slice (v0 : AbiFrame) (v1 : UInt256) (v2 : UInt256) : FeM AbiFrame := do
       let v13 := v0.ptr
       let v14 ← ptr_offset v13 v1
       let v15 := v2
-      let v16 := AbiFrame.mk v14 v15
+      let v16 := (AbiFrame.mk v14 v15)
       return v16
 
 def cast_u8_u256 (v0 : UInt256) : FeM UInt256 := do

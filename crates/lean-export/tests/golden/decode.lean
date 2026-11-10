@@ -7,7 +7,7 @@ def init : FeM Unit := do
 
 def new : FeM CallData := do
   let v0 := (UInt256.ofNat 0)
-  let v1 := CallData.mk v0
+  let v1 := (CallData.mk v0)
   return v1
 
 def input : FeM CallData := do

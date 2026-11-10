@@ -159,7 +159,7 @@ def word (v0 : UInt256) : FeM UInt256 := do
 
 def wei (v0 : UInt256) : FeM Wei := do
   let v1 := v0
-  let v2 := Wei.mk v1
+  let v2 := (Wei.mk v1)
   return v2
 
 def value : FeM Wei := do
