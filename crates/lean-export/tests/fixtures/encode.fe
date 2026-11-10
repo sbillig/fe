@@ -1,0 +1,15 @@
+use std::abi::sol
+use std::evm::revert
+
+msg EncodeMsg {
+    #[selector = sol("probe(uint256)")]
+    Probe { value: u256 } -> u256,
+}
+
+pub contract Encoder {
+    recv EncodeMsg {
+        Probe { value } -> u256 {
+            revert(value)
+        }
+    }
+}

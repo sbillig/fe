@@ -67,3 +67,8 @@ fn param_slot() {
 fn decode() {
     check("decode");
 }
+
+#[test]
+fn encode() {
+    check("encode");
+}

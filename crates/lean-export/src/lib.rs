@@ -7,7 +7,7 @@
 
 use std::fmt::Write;
 
-use common::ingot::IngotKind;
+use common::{compilation::Target as CompilationTarget, ingot::IngotKind};
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
@@ -17,7 +17,8 @@ use hir::{
             NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement,
             NStatementKind, NSuccessor, NTerminatorKind, NValueDefinition, NValueId,
             NormalizedBody, Overflow, SConst, SemConstScalar, SemConstValue, SemanticInstance,
-            SemanticInstanceKey, UnaryOp, identity_semantic_instance_key, normalize_semantic_body,
+            SemanticInstanceKey, UnaryOp, drop_elaboration, identity_semantic_instance_key,
+            normalize_semantic_body,
         },
         ty::{
             AddressSpace,
@@ -59,6 +60,8 @@ struct ValueTarget<'db> {
 enum Target<'db> {
     Place(String),
     Value(ValueTarget<'db>),
+    /// The word in memory at an address.
+    Memory(String),
 }
 
 /// The Lean definitions of `contract`: its storage layout, the functions
@@ -84,13 +87,14 @@ pub fn export_contract<'db>(
         db,
         names: FxHashMap::default(),
         taken: entries.iter().map(|(name, _)| name.clone()).collect(),
+        nevers: FxHashSet::default(),
         open: Vec::new(),
         layouts: Vec::new(),
         bodies: FxHashMap::default(),
         defs: String::new(),
     };
     for (name, owner) in entries {
-        let body = module.body(&name, identity_semantic_instance_key(db, owner), &[])?;
+        let (body, _) = module.body(&name, identity_semantic_instance_key(db, owner), &[])?;
         writeln!(module.defs, "def {name}{body}").unwrap();
     }
     let layouts: String = module
@@ -108,6 +112,8 @@ struct Module<'db> {
     /// each way it receives its access parameters.
     names: FxHashMap<(SemanticInstanceKey<'db>, Vec<Option<Carrier>>), String>,
     taken: FxHashSet<String>,
+    /// The exported functions that never return.
+    nevers: FxHashSet<String>,
     /// The instances whose export is under way.
     open: Vec<SemanticInstanceKey<'db>>,
     /// The layout definitions the bodies name, by Lean name.
@@ -120,13 +126,14 @@ struct Module<'db> {
 
 impl<'db> Module<'db> {
     /// The definition of `key`'s body after its name, which `name` is in
-    /// reports. The definitions it uses are exported first.
+    /// reports, and whether the body never returns. The definitions it uses
+    /// are exported first.
     fn body(
         &mut self,
         name: &str,
         key: SemanticInstanceKey<'db>,
         carriers: &[Option<Carrier>],
-    ) -> Result<String, Unsupported> {
+    ) -> Result<(String, bool), Unsupported> {
         let normalized = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
         BodyExporter {
@@ -194,7 +201,7 @@ impl<'db> Module<'db> {
             format!("{name}_{}", lean_ident(arg.pretty_print(db)))
         });
         self.open.push(key);
-        let body = self.body(&base, key, &carriers)?;
+        let (body, never) = self.body(&base, key, &carriers)?;
         self.open.pop();
         // Instances with one definition share it.
         let name = match self.bodies.get(&(base.clone(), body.clone())) {
@@ -214,6 +221,9 @@ impl<'db> Module<'db> {
                 name
             }
         };
+        if never {
+            self.nevers.insert(name.clone());
+        }
         self.names.insert((key, carriers), name.clone());
         Ok(name)
     }
@@ -258,19 +268,27 @@ impl<'db> Module<'db> {
         Ok(names.zip(tys).collect())
     }
 
-    /// The width of `ty` if it is an unsigned integer type.
-    fn uint_bits(&self, ty: TyId<'db>) -> Option<usize> {
+    /// The width of `ty`, and whether it is signed, if it is an integer type.
+    fn int_bits(&self, ty: TyId<'db>) -> Option<(usize, bool)> {
         let prim = ty.as_prim(self.db)?;
         let target = self.db.compilation_settings().target(self.db);
-        prim_int_bits(prim, target).filter(|_| !prim.is_signed_int())
+        Some((prim_int_bits(prim, target)?, prim.is_signed_int()))
     }
 
-    /// The Lean term for `value` of unsigned integer type `from` cast to
-    /// `to`: the word, cut to the width of a narrower type.
+    /// The width of `ty` if it is an unsigned integer type.
+    fn uint_bits(&self, ty: TyId<'db>) -> Option<usize> {
+        self.int_bits(ty)
+            .and_then(|(bits, signed)| (!signed).then_some(bits))
+    }
+
+    /// The Lean term for `value` of integer type `from` cast to `to`: the
+    /// word, cut to the width of a narrower unsigned type.
     fn cast(&self, value: &str, from: TyId<'db>, to: TyId<'db>) -> Result<String, Unsupported> {
-        match (self.uint_bits(from), self.uint_bits(to)) {
-            (Some(from), Some(to)) if from <= to => Ok(value.to_string()),
-            (Some(_), Some(to)) => Ok(format!("truncate {to} {value}")),
+        match (self.int_bits(from), self.int_bits(to)) {
+            // A word reinterpreted at its own width.
+            (Some((256, _)), Some((256, _))) => Ok(value.to_string()),
+            (Some((from, false)), Some((to, false))) if from <= to => Ok(value.to_string()),
+            (Some((_, false)), Some((to, false))) => Ok(format!("truncate {to} {value}")),
             _ => Err(Unsupported(format!(
                 "cast from {} to {}",
                 from.pretty_print(self.db),
@@ -282,8 +300,10 @@ impl<'db> Module<'db> {
     /// The Lean type of a value of `ty`: a word, a product for a tuple, or
     /// the structure a struct is defined as.
     fn value_ty(&mut self, ty: TyId<'db>) -> Result<String, Unsupported> {
-        // An unsigned integer of any width is a word below its bound.
-        if self.uint_bits(ty).is_some() {
+        // An integer of any width is a word: below its bound if unsigned,
+        // sign-extended if signed. A pointer into memory is its address.
+        let memory_ptr = matches!(ty.as_ptr(self.db), Some((_, AddressSpace::Memory)));
+        if self.int_bits(ty).is_some() || memory_ptr {
             return Ok("UInt256".to_string());
         }
         if ty.is_never(self.db) {
@@ -363,8 +383,9 @@ struct BodyExporter<'a, 'db> {
 }
 
 impl<'db> BodyExporter<'_, 'db> {
-    /// The body's definition after its name: parameters, type and value.
-    fn export(mut self) -> Result<String, Unsupported> {
+    /// The body's definition after its name (parameters, type and value),
+    /// and whether the body never returns.
+    fn export(mut self) -> Result<(String, bool), Unsupported> {
         let db = self.module.db;
         // A parameter is an entry value, or a slot if the body needs its
         // address: the slot starts out holding the argument.
@@ -408,6 +429,7 @@ impl<'db> BodyExporter<'_, 'db> {
             writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
         }
         self.result_ty = self.returned_ty()?;
+        let never = self.result_ty == "Empty";
         for out in self.outs.clone() {
             let (_, inner) = self.ty(out).as_capability(db).unwrap();
             let ty = self.module.value_ty(inner)?;
@@ -419,7 +441,7 @@ impl<'db> BodyExporter<'_, 'db> {
         self.find_joins()?;
         let mut out = format!("{params} : FeM {} := do\n{state}", self.result_ty);
         self.block(self.body.entry, 1, &mut out)?;
-        Ok(out)
+        Ok((out, never))
     }
 
     /// The mutable variables of the body: its local slots, then the values
@@ -668,7 +690,11 @@ impl<'db> BodyExporter<'_, 'db> {
                             format!("let {name} ← load {lean}")
                         }
                         Target::Value(target) => format!("let {name} := {}", self.read(&target)?),
+                        Target::Memory(ptr) => format!("let {name} ← mload {ptr}"),
                     }),
+                    NExpr::PointerCast { value, .. } => {
+                        Some(format!("let {name} := {}", self.operand(value)?))
+                    }
                     NExpr::ProjectValue { value, path } => {
                         let target = ValueTarget {
                             var: self.operand(value)?,
@@ -678,13 +704,17 @@ impl<'db> BodyExporter<'_, 'db> {
                         Some(format!("let {name} := {}", self.read(&target)?))
                     }
                     NExpr::Binary { op, lhs, rhs } => {
-                        if self.module.uint_bits(self.ty(lhs.value)) != Some(256) {
-                            return Err(Unsupported(format!("operator {op:?} off a word")));
-                        }
-                        Some(format!(
-                            "let {name} {}",
-                            binary(*op, self.operand(lhs)?, self.operand(rhs)?)?
-                        ))
+                        let ty = self.ty(lhs.value);
+                        let int = self.module.int_bits(ty).ok_or_else(|| {
+                            let ty = ty.pretty_print(self.module.db);
+                            Unsupported(format!("operator {op:?} on {ty}"))
+                        })?;
+                        let (lhs, rhs) = (self.operand(lhs)?, self.operand(rhs)?);
+                        let rhs = binary(*op, int, lhs, rhs).map_err(|error| {
+                            let ty = ty.pretty_print(self.module.db);
+                            Unsupported(format!("{} on {ty}", error.0))
+                        })?;
+                        Some(format!("let {name} {rhs}"))
                     }
                     NExpr::Unary { op, value } => {
                         let ty = self.ty(value.value);
@@ -749,7 +779,8 @@ impl<'db> BodyExporter<'_, 'db> {
                                 "effect argument below a provider".to_string(),
                             ));
                         }
-                        Some(self.call(*result, callee.key, args)?)
+                        let call = self.call(*result, callee.key, args)?;
+                        Some(self.after_never(*result, call)?)
                     }
                     other => return Err(Unsupported(format!("expression {other:?}"))),
                 }
@@ -762,9 +793,18 @@ impl<'db> BodyExporter<'_, 'db> {
                         format!("store {lean} {value}")
                     }
                     Target::Value(target) => self.write(&target, &value)?,
+                    Target::Memory(ptr) => format!("mstore {ptr} {value}"),
                 })
             }
             NStatementKind::End { .. } => None,
+            // A drop that destroys nothing: its target holds no value with
+            // a destructor here.
+            NStatementKind::Drop { .. }
+                if drop_elaboration(self.module.db, self.body.owner)
+                    .is_some_and(|drops| drops.parts(statement.id).is_empty()) =>
+            {
+                None
+            }
             other => return Err(Unsupported(format!("statement {other:?}"))),
         })
     }
@@ -788,6 +828,7 @@ impl<'db> BodyExporter<'_, 'db> {
             IngotKind::Std | IngotKind::Core
         );
         let callee_name = func.name(db).to_opt().map(|name| name.data(db).as_str());
+        let evm = db.compilation_settings().target(db) == CompilationTarget::Evm;
         match (in_std, callee_name, args) {
             (true, Some("caller"), [_evm]) => return Ok(format!("let {name} ← caller")),
             (true, Some("zero"), []) => return Ok(format!("let {name} := UInt256.ofNat 0")),
@@ -816,7 +857,38 @@ impl<'db> BodyExporter<'_, 'db> {
                 return Ok(format!("let {name} ← calldatasize"));
             }
             (true, Some("revert_empty"), []) if func.is_extern(db) => {
-                return Ok(format!("let {name} ← revertEmpty"));
+                return Ok(format!("let {name} ← revertEmpty\nnever"));
+            }
+            (true, Some("alloc_raw"), [size]) if func.is_extern(db) => {
+                return Ok(format!("let {name} ← alloc {}", self.operand(size)?));
+            }
+            (true, Some("dealloc_raw"), [_]) if func.is_extern(db) && evm => {
+                return Ok(format!("let {name} := ()"));
+            }
+            (true, Some("offset_bytes"), [ptr, offset]) if func.is_extern(db) => {
+                let (ptr, offset) = (self.operand(ptr)?, self.operand(offset)?);
+                return Ok(format!("let {name} := {ptr} + {offset}"));
+            }
+            (true, Some("zero_mem"), [ptr, len]) if func.is_extern(db) => {
+                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
+                return Ok(format!("let {name} ← zeroMem {ptr} {len}"));
+            }
+            (true, Some("revert"), [ptr, len]) if func.is_extern(db) => {
+                let (ptr, len) = (self.operand(ptr)?, self.operand(len)?);
+                return Ok(format!("let {name} ← revertData {ptr} {len}\nnever"));
+            }
+            (true, Some("panic_code"), [code]) if func.is_extern(db) => {
+                return Ok(format!(
+                    "let {name} ← panicCode {}\nnever",
+                    self.operand(code)?
+                ));
+            }
+            // EVM memory is big-endian, and `usize` is a word there.
+            (true, Some("to_be" | "from_be"), [value]) if func.is_extern(db) && evm => {
+                return Ok(format!("let {name} := {}", self.operand(value)?));
+            }
+            (true, Some("__bitnot_usize"), [value]) if func.is_extern(db) && evm => {
+                return Ok(format!("let {name} := ~~~{}", self.operand(value)?));
             }
             (true, Some("__bitcast"), [value]) if func.is_extern(db) => {
                 let from = self.ty(value.value);
@@ -851,6 +923,9 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         let callee = self.module.instance(callee, carriers)?;
+        if self.module.nevers.contains(&callee) {
+            return Ok(format!("let {name} ← {callee}{lean_args}\nnever"));
+        }
         if outs.is_empty() {
             return Ok(format!("let {name} ← {callee}{lean_args}"));
         }
@@ -860,6 +935,25 @@ impl<'db> BodyExporter<'_, 'db> {
             write!(lines, "\n{}", self.write(out, &format!("{name}_{n}"))?).unwrap();
         }
         Ok(lines)
+    }
+
+    /// The lines of a call, which end in a `never` line if the callee never
+    /// returns. The result of such a call has no values, yet the body may
+    /// give it the type of the expression it stands in; the name is then
+    /// rebound at that type.
+    fn after_never(&mut self, result: NValueId, call: String) -> Result<String, Unsupported> {
+        let Some(call) = call.strip_suffix("\nnever") else {
+            return Ok(call);
+        };
+        let ty = self.ty(result);
+        if ty.is_never(self.module.db) {
+            return Ok(call.to_string());
+        }
+        let name = value_name(result);
+        Ok(format!(
+            "{call}\nlet {name} : {} := nomatch {name}",
+            self.lean_ty(ty)?
+        ))
     }
 
     /// `operand` as a Lean term: its variable, or the structure an aggregate
@@ -986,6 +1080,24 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             _ => None,
         };
+        if let NPlaceBase::Deref { pointer } = place.base {
+            let word = self
+                .module
+                .int_bits(place.ty)
+                .is_some_and(|(bits, _)| bits == 256);
+            let memory = matches!(
+                self.ty(pointer).as_ptr(self.module.db),
+                Some((_, AddressSpace::Memory))
+            );
+            if !word || !memory || !place.path.is_empty() {
+                return Err(Unsupported(format!(
+                    "place of {} through {}",
+                    place.ty.pretty_print(self.module.db),
+                    self.ty(pointer).pretty_print(self.module.db)
+                )));
+            }
+            return Ok(Target::Memory(value_name(pointer)));
+        }
         let Some(mut local) = local else {
             return Ok(Target::Place(self.place(place)?));
         };
@@ -1187,29 +1299,51 @@ fn lean_name(name: &str) -> String {
     }
 }
 
-/// The right-hand side of `let v` for a built-in operation on `u256`.
-fn binary(op: BinaryOp, lhs: String, rhs: String) -> Result<String, Unsupported> {
+/// The right-hand side of `let v` for a built-in operation on integers of
+/// `bits` bits, signed or not, each a word. An operation whose result
+/// depends on the width is printed only for a full word.
+fn binary(
+    op: BinaryOp,
+    (bits, signed): (usize, bool),
+    lhs: String,
+    rhs: String,
+) -> Result<String, Unsupported> {
+    let word = bits == 256 && !signed;
     Ok(match op {
-        BinaryOp::Add(Overflow::Checked) => format!("← checkedAdd {lhs} {rhs}"),
-        BinaryOp::Add(Overflow::Wrapping) => format!(":= {lhs} + {rhs}"),
-        BinaryOp::Sub(Overflow::Checked) => format!("← checkedSub {lhs} {rhs}"),
-        BinaryOp::Sub(Overflow::Wrapping) => format!(":= {lhs} - {rhs}"),
-        BinaryOp::Mul(Overflow::Checked) => format!("← checkedMul {lhs} {rhs}"),
-        BinaryOp::Mul(Overflow::Wrapping) => format!(":= {lhs} * {rhs}"),
-        // Unsigned division cannot overflow.
-        BinaryOp::Div(_) => format!("← checkedDiv {lhs} {rhs}"),
-        BinaryOp::Rem => format!("← checkedRem {lhs} {rhs}"),
-        BinaryOp::Shl => format!(":= {lhs} <<< {rhs}"),
-        BinaryOp::Shr => format!(":= {lhs} >>> {rhs}"),
+        BinaryOp::Add(Overflow::Checked) if word => format!("← checkedAdd {lhs} {rhs}"),
+        BinaryOp::Add(Overflow::Wrapping) if word => format!(":= {lhs} + {rhs}"),
+        BinaryOp::Sub(Overflow::Checked) if word => format!("← checkedSub {lhs} {rhs}"),
+        BinaryOp::Sub(Overflow::Wrapping) if word => format!(":= {lhs} - {rhs}"),
+        BinaryOp::Mul(Overflow::Checked) if word => format!("← checkedMul {lhs} {rhs}"),
+        BinaryOp::Mul(Overflow::Wrapping) if word => format!(":= {lhs} * {rhs}"),
+        BinaryOp::Shl if word => format!(":= {lhs} <<< {rhs}"),
+        // Unsigned division, remainder and right shift stay below the
+        // operand's bound.
+        BinaryOp::Div(_) if !signed => format!("← checkedDiv {lhs} {rhs}"),
+        BinaryOp::Rem if !signed => format!("← checkedRem {lhs} {rhs}"),
+        BinaryOp::Shr if !signed => format!(":= {lhs} >>> {rhs}"),
         BinaryOp::BitAnd => format!(":= {lhs} &&& {rhs}"),
         BinaryOp::BitOr => format!(":= {lhs} ||| {rhs}"),
         BinaryOp::BitXor => format!(":= {lhs} ^^^ {rhs}"),
         BinaryOp::Comp(CompBinOp::Eq) => format!(":= decide ({lhs} = {rhs})"),
         BinaryOp::Comp(CompBinOp::NotEq) => format!(":= decide ({lhs} ≠ {rhs})"),
-        BinaryOp::Comp(CompBinOp::GtEq) => format!(":= decide ({rhs}.toNat ≤ {lhs}.toNat)"),
-        BinaryOp::Comp(CompBinOp::LtEq) => format!(":= decide ({lhs}.toNat ≤ {rhs}.toNat)"),
-        BinaryOp::Comp(CompBinOp::Lt) => format!(":= decide ({lhs}.toNat < {rhs}.toNat)"),
-        BinaryOp::Comp(CompBinOp::Gt) => format!(":= decide ({rhs}.toNat < {lhs}.toNat)"),
-        BinaryOp::Pow(_) => return Err(Unsupported("operator `**`".to_string())),
+        BinaryOp::Comp(CompBinOp::GtEq) if !signed => {
+            format!(":= decide ({rhs}.toNat ≤ {lhs}.toNat)")
+        }
+        BinaryOp::Comp(CompBinOp::LtEq) if !signed => {
+            format!(":= decide ({lhs}.toNat ≤ {rhs}.toNat)")
+        }
+        BinaryOp::Comp(CompBinOp::Lt) if !signed => {
+            format!(":= decide ({lhs}.toNat < {rhs}.toNat)")
+        }
+        BinaryOp::Comp(CompBinOp::Gt) if !signed => {
+            format!(":= decide ({rhs}.toNat < {lhs}.toNat)")
+        }
+        // Sign-extended words compare as the EVM's signed comparisons do.
+        BinaryOp::Comp(CompBinOp::Lt) => format!(":= UInt256.sltBool {lhs} {rhs}"),
+        BinaryOp::Comp(CompBinOp::Gt) => format!(":= UInt256.sgtBool {lhs} {rhs}"),
+        BinaryOp::Comp(CompBinOp::GtEq) => format!(":= !UInt256.sltBool {lhs} {rhs}"),
+        BinaryOp::Comp(CompBinOp::LtEq) => format!(":= !UInt256.sgtBool {lhs} {rhs}"),
+        other => return Err(Unsupported(format!("operator {other:?}"))),
     })
 }
