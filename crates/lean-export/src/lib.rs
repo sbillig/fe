@@ -23,13 +23,14 @@ use hir::{
         },
         ty::{
             AddressSpace,
-            adt_def::AdtRef,
+            adt_def::{AdtField, AdtRef, instantiate_adt_field_shape},
             corelib::{
                 NumericExternIntrinsic, RuntimeBuiltinFuncKind, SaturatingArithmetic,
                 core_numeric_const_intrinsic, lib_func_matches, resolve_core_trait,
                 resolve_lib_func_path, resolve_lib_type_path, runtime_builtin_func_kind,
             },
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
+            normalize::normalize_ty,
             registered_root_providers,
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
@@ -39,7 +40,7 @@ use hir::{
         },
     },
     hir_def::{
-        Contract, FieldParent, IdentId, ItemKind, PatId,
+        Contract, EnumVariant, FieldParent, IdentId, ItemKind, PatId,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
     semantic::{ProviderSource, storage_field_placements},
@@ -121,12 +122,21 @@ enum Carrier {
     Erased,
 }
 
-/// The value an access or place of a local reaches: a field path below a
-/// Lean variable.
+/// A step from a value to a part of it.
+#[derive(Clone, Copy)]
+enum Step {
+    /// A field of a struct or tuple.
+    Field(usize),
+    /// A field of a variant, of an enum value that is that variant.
+    Variant { variant: usize, field: usize },
+}
+
+/// The value an access or place of a local reaches: a path below a Lean
+/// variable.
 struct ValueTarget<'db> {
     var: String,
     ty: TyId<'db>,
-    path: Vec<usize>,
+    path: Vec<Step>,
 }
 
 /// What a place is in the model.
@@ -656,6 +666,44 @@ impl<'db> Module<'db> {
         Ok(names.zip(tys).collect())
     }
 
+    /// The variants of enum `ty`: the Lean constructor and the field types
+    /// of each.
+    fn variants(&self, ty: TyId<'db>) -> Option<Vec<(String, Vec<TyId<'db>>)>> {
+        let db = self.db;
+        let adt = ty.adt_def(db)?;
+        let AdtRef::Enum(item) = adt.adt_ref(db) else {
+            return None;
+        };
+        let args = ty.generic_args(db);
+        let variant = |(variant, fields): (usize, &AdtField<'db>)| {
+            let name = EnumVariant::new(item, variant).name(db);
+            let field = |field| {
+                let ty = instantiate_adt_field_shape(db, adt, variant, field, args);
+                normalize_ty(db, ty, adt.scope(db), PredicateListId::empty_list(db))
+            };
+            (
+                lean_name(name.unwrap_or("variant")),
+                (0..fields.num_types()).map(field).collect(),
+            )
+        };
+        Some(adt.fields(db).iter().enumerate().map(variant).collect())
+    }
+
+    /// The Lean projections from a value of `ty` to the part `step` reaches,
+    /// and the part's type.
+    fn part(&self, ty: TyId<'db>, step: Step) -> Result<(Vec<String>, TyId<'db>), Unsupported> {
+        match step {
+            Step::Field(index) => Ok(self.fields(ty)?.swap_remove(index)),
+            Step::Variant { variant, field } => {
+                let (name, mut fields) = self
+                    .variants(ty)
+                    .ok_or_else(|| Unsupported(format!("type {}", ty.pretty_print(self.db))))?
+                    .swap_remove(variant);
+                Ok((vec![format!("{name}_{field}")], fields.swap_remove(field)))
+            }
+        }
+    }
+
     /// The width of `ty`, and whether it is signed, if it is an integer type.
     fn int_bits(&self, ty: TyId<'db>) -> Option<(usize, bool)> {
         let prim = ty.as_prim(self.db)?;
@@ -711,6 +759,9 @@ impl<'db> Module<'db> {
             "()" => return Ok("Unit".to_string()),
             _ => {}
         }
+        if let Some(variants) = self.variants(ty) {
+            return self.enum_ty(lean_ident(pretty), &variants);
+        }
         let fields = self.fields(ty)?;
         if ty.is_tuple(self.db) {
             let tys: Result<Vec<_>, _> = fields.iter().map(|(_, ty)| self.value_ty(*ty)).collect();
@@ -725,6 +776,60 @@ impl<'db> Module<'db> {
         }
         Ok(self.layout(lean_ident(pretty), |name| {
             format!("structure {name} where\n{lines}deriving Inhabited")
+        }))
+    }
+
+    /// The Lean type of an enum named `name`: an inductive type, with its
+    /// tag, and for each field of each variant the projection that reads it
+    /// and the function that replaces it. Both leave a value of another
+    /// variant alone.
+    fn enum_ty(
+        &mut self,
+        name: String,
+        variants: &[(String, Vec<TyId<'db>>)],
+    ) -> Result<String, Unsupported> {
+        let mut ctors = String::new();
+        let mut tags = String::new();
+        let mut parts = String::new();
+        let other = if variants.len() > 1 {
+            ("  | _ => default\n", "  | x => x\n")
+        } else {
+            ("", "")
+        };
+        for (tag, (variant, fields)) in variants.iter().enumerate() {
+            let tys: Result<Vec<_>, _> = fields.iter().map(|ty| self.value_ty(*ty)).collect();
+            let tys = tys?;
+            let binders: String = tys
+                .iter()
+                .enumerate()
+                .map(|(field, ty)| format!(" (f{field} : {ty})"))
+                .collect();
+            writeln!(ctors, "  | {variant}{binders}").unwrap();
+            let rest = if fields.is_empty() { "" } else { " .." };
+            writeln!(tags, "  | .{variant}{rest} => UInt256.ofNat {tag}").unwrap();
+            let bound: Vec<_> = (0..tys.len()).map(|field| format!("f{field}")).collect();
+            for (field, ty) in tys.iter().enumerate() {
+                let pattern = format!(".{variant} {}", bound.join(" "));
+                let mut replaced = bound.clone();
+                replaced[field] = "v".to_string();
+                write!(
+                    parts,
+                    "\ndef NAME.{variant}_{field} : NAME → {ty}\n  | {pattern} => f{field}\n{}\n\
+                     def NAME.set_{variant}_{field} (x : NAME) (v : {ty}) : NAME :=\n  match x with\n  \
+                     | {pattern} => .{variant} {}\n{}",
+                    other.0,
+                    replaced.join(" "),
+                    other.1,
+                )
+                .unwrap();
+            }
+        }
+        Ok(self.layout(name, |name| {
+            format!(
+                "inductive {name} where\n{ctors}deriving Inhabited\n\n\
+                 def {name}.tag : {name} → UInt256\n{tags}{}",
+                parts.replace("NAME", name).trim_end()
+            )
         }))
     }
 
@@ -1024,6 +1129,29 @@ impl<'db> BodyExporter<'_, 'db> {
                 writeln!(out, "{pad}else").unwrap();
                 self.jump(else_target, depth + 1, out)?;
             }
+            NTerminatorKind::MatchEnum {
+                value,
+                enum_ty,
+                cases,
+                default,
+            } => {
+                let variants = self.module.variants(*enum_ty);
+                let variants =
+                    variants.ok_or_else(|| Unsupported("match on no enum".to_string()))?;
+                writeln!(out, "{pad}match {} with", self.enum_value(value)?).unwrap();
+                for (variant, target) in cases {
+                    let (variant, fields) = &variants[usize::from(variant.0)];
+                    let rest = if fields.is_empty() { "" } else { " .." };
+                    writeln!(out, "{pad}| .{variant}{rest} =>").unwrap();
+                    self.jump(target, depth + 1, out)?;
+                }
+                if let Some(default) = default
+                    && cases.len() < variants.len()
+                {
+                    writeln!(out, "{pad}| _ =>").unwrap();
+                    self.jump(default, depth + 1, out)?;
+                }
+            }
             NTerminatorKind::Fail(FailReason::Assert {
                 message: Some(message),
             }) => writeln!(
@@ -1073,7 +1201,6 @@ impl<'db> BodyExporter<'_, 'db> {
                     .ok_or_else(|| Unsupported("unreachable code after no call".to_string()))?;
                 writeln!(out, "{pad}nomatch {}", value_name(never)).unwrap();
             }
-            other => return Err(Unsupported(format!("terminator {other:?}"))),
         }
         Ok(())
     }
@@ -1249,6 +1376,40 @@ impl<'db> BodyExporter<'_, 'db> {
                         };
                         Some(format!("let {name} := {value}"))
                     }
+                    NExpr::EnumMake {
+                        enum_ty,
+                        variant,
+                        fields,
+                    } => {
+                        let ty = self.module.value_ty(*enum_ty)?;
+                        let variants = self.module.variants(*enum_ty).unwrap_or_default();
+                        let (variant, _) = &variants[usize::from(variant.0)];
+                        let fields: String = fields
+                            .iter()
+                            .map(|field| format!(" {}", value_name(field.value)))
+                            .collect();
+                        Some(format!("let {name} := {ty}.{variant}{fields}"))
+                    }
+                    NExpr::GetEnumTag { value } => {
+                        Some(format!("let {name} := {}.tag", self.enum_value(value)?))
+                    }
+                    NExpr::IsEnumVariant { value, variant } => {
+                        let ty = self.ty(value.value);
+                        let ty = ty.as_capability(self.module.db).map_or(ty, |(_, ty)| ty);
+                        let variants = self.module.variants(ty);
+                        let variants = variants
+                            .ok_or_else(|| Unsupported("variant of no enum".to_string()))?;
+                        let (variant, fields) = &variants[usize::from(variant.0)];
+                        let rest = if fields.is_empty() { "" } else { " .." };
+                        let value = self.enum_value(value)?;
+                        Some(if variants.len() == 1 {
+                            format!("let {name} := true")
+                        } else {
+                            format!(
+                                "let {name} := match {value} with | .{variant}{rest} => true | _ => false"
+                            )
+                        })
+                    }
                     NExpr::Call {
                         callee,
                         args,
@@ -1336,14 +1497,14 @@ impl<'db> BodyExporter<'_, 'db> {
                         let DropStep::Field(field) = step else {
                             return Err(Unsupported(format!("drop of {step:?}")));
                         };
-                        target.path.push(usize::from(*field));
+                        target.path.push(Step::Field(usize::from(*field)));
                     }
                     if !part.flags.is_empty() {
                         return Err(Unsupported("drop under a flag".to_string()));
                     }
                     let mut ty = target.ty;
-                    for &index in &target.path {
-                        ty = self.module.fields(ty)?.swap_remove(index).1;
+                    for &step in &target.path {
+                        ty = self.module.part(ty, step)?.1;
                     }
                     let value = self.read(&target)?;
                     let field_wise = own_self && in_drop && part.path.is_empty();
@@ -1682,6 +1843,18 @@ impl<'db> BodyExporter<'_, 'db> {
         ))
     }
 
+    /// The enum value `operand` holds or, if it is an access to a local,
+    /// reaches.
+    fn enum_value(&self, operand: &NOperand) -> Result<String, Unsupported> {
+        if !self.is_access(self.ty(operand.value)) {
+            return self.operand(operand);
+        }
+        match self.carrier(operand.value)? {
+            Carrier::Value => self.read(&self.carrier_value(operand.value)?),
+            _ => Err(Unsupported("enum in contract state".to_string())),
+        }
+    }
+
     /// `operand` as a Lean term: its variable.
     fn operand(&self, operand: &NOperand) -> Result<String, Unsupported> {
         Ok(value_name(operand.value))
@@ -1842,12 +2015,12 @@ impl<'db> BodyExporter<'_, 'db> {
     fn read(&self, target: &ValueTarget<'db>) -> Result<String, Unsupported> {
         let mut lean = target.var.clone();
         let mut ty = target.ty;
-        for &index in &target.path {
-            let (steps, field) = self.module.fields(ty)?.swap_remove(index);
+        for &step in &target.path {
+            let (steps, part) = self.module.part(ty, step)?;
             for step in steps {
                 write!(lean, ".{step}").unwrap();
             }
-            ty = field;
+            ty = part;
         }
         Ok(lean)
     }
@@ -1857,21 +2030,25 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut prefix = target.var.clone();
         let mut ty = target.ty;
         let mut open = String::new();
-        let mut depth = 0;
-        for &index in &target.path {
-            let (steps, field) = self.module.fields(ty)?.swap_remove(index);
-            for step in steps {
-                write!(open, "{{ {prefix} with {step} := ").unwrap();
-                write!(prefix, ".{step}").unwrap();
-                depth += 1;
+        let mut close = String::new();
+        for &step in &target.path {
+            let (steps, part) = self.module.part(ty, step)?;
+            for name in steps {
+                match step {
+                    Step::Field(_) => {
+                        write!(open, "{{ {prefix} with {name} := ").unwrap();
+                        close.insert_str(0, " }");
+                    }
+                    Step::Variant { .. } => {
+                        write!(open, "({prefix}.set_{name} ").unwrap();
+                        close.insert(0, ')');
+                    }
+                }
+                write!(prefix, ".{name}").unwrap();
             }
-            ty = field;
+            ty = part;
         }
-        Ok(format!(
-            "{} := {open}{value}{}",
-            target.var,
-            " }".repeat(depth)
-        ))
+        Ok(format!("{} := {open}{value}{close}", target.var))
     }
 
     fn ty(&self, value: NValueId) -> TyId<'db> {
@@ -2020,11 +2197,15 @@ fn arg_position(binding: Option<LocalBinding<'_>>, pats: &[PatId]) -> Option<usi
     pats.iter().position(|bound| *bound == pat)
 }
 
-/// The struct fields `path` steps through.
-fn field_path(path: &NDataPath) -> Result<Vec<usize>, Unsupported> {
+/// The steps of `path`, each to a field of a struct, tuple or variant.
+fn field_path(path: &NDataPath) -> Result<Vec<Step>, Unsupported> {
     path.iter()
-        .map(|projection| match projection {
-            NDataProjection::Field(index) => Ok(usize::from(index.0)),
+        .map(|projection| match *projection {
+            NDataProjection::Field(index) => Ok(Step::Field(usize::from(index.0))),
+            NDataProjection::VariantField { variant, field } => Ok(Step::Variant {
+                variant: usize::from(variant.0),
+                field: usize::from(field.0),
+            }),
             other => Err(Unsupported(format!("step {other:?} in a local"))),
         })
         .collect()

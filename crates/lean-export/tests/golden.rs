@@ -32,7 +32,7 @@ fn check(name: &str) {
 
 #[test]
 fn scalar_store() {
-    check("scalar_store");
+    check_with("scalar_store", export_contract_with_entries);
 }
 
 #[test]
@@ -83,4 +83,9 @@ fn encode() {
 #[test]
 fn ints() {
     check("ints");
+}
+
+#[test]
+fn enums() {
+    check("enums");
 }

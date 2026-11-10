@@ -1,0 +1,64 @@
+use std::abi::sol
+
+enum Shape {
+    Empty,
+    Square(u256),
+    Rect { width: u256, height: u256 },
+}
+
+msg EnumsMsg {
+    #[selector = sol("area(uint256,uint256)")]
+    Area { width: u256, height: u256 } -> u256,
+    #[selector = sol("half(uint256)")]
+    Half { value: u256 } -> u256,
+    #[selector = sol("grow(uint256)")]
+    Grow { side: u256 } -> u256,
+}
+
+fn shape(width: u256, height: u256) -> Shape {
+    if width == 0 {
+        Shape::Empty
+    } else if width == height {
+        Shape::Square(width)
+    } else {
+        Shape::Rect { width, height }
+    }
+}
+
+fn halve(_ value: u256) -> Option<u256> {
+    if value % 2 == 0 {
+        Option::Some(value / 2)
+    } else {
+        Option::None
+    }
+}
+
+pub contract Enums {
+    recv EnumsMsg {
+        Area { width, height } -> u256 {
+            match shape(width, height) {
+                Shape::Empty => 0
+                Shape::Square(side) => side * side
+                Shape::Rect { width, height } => width * height
+            }
+        }
+
+        Half { value } -> u256 {
+            match halve(value) {
+                Option::Some(half) => half
+                _ => value
+            }
+        }
+
+        Grow { side } -> u256 {
+            var current = Shape::Square(side)
+            if let Shape::Square(mut inner) = current {
+                inner += 1
+            }
+            match current {
+                Shape::Square(side) => side
+                _ => 0
+            }
+        }
+    }
+}
