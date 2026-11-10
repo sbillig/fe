@@ -1227,11 +1227,25 @@ pub(crate) fn storage_slot_span<'db>(
 /// grant to a lane is a memory copy.
 #[salsa::tracked]
 pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
-    if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
-        return Vec::new();
-    }
     if newtype_narrows(db, ty) {
         return vec![true];
+    }
+    storage_field_placements(db, ty)
+        .unwrap_or_default()
+        .iter()
+        .map(|placement| placement.partial_lane().is_some())
+        .collect()
+}
+
+/// Where each field of struct or tuple `ty` lies below the first slot of a
+/// value of `ty` in storage or transient storage. None for any other type,
+/// and for one whose fields have no layout.
+pub fn storage_field_placements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<Vec<StorageFieldPlacement>> {
+    if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
+        return None;
     }
     let mut walker = FieldWalker {
         db,
@@ -1247,14 +1261,7 @@ pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
                 .shape()
         })
         .collect();
-    let Ok(layout) = storage_fields_layout(shapes) else {
-        return Vec::new();
-    };
-    layout
-        .placements
-        .iter()
-        .map(|placement| placement.partial_lane().is_some())
-        .collect()
+    Some(storage_fields_layout(shapes).ok()?.placements)
 }
 
 /// How deep the search for a persistent collection under a transient one
