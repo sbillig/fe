@@ -37,7 +37,7 @@ use hir::{
             registered_root_providers,
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, EffectParamSite, LocalBinding},
+            ty_check::{BodyOwner, EffectParamSite, LocalBinding, ReturnProjectionStep},
             ty_def::{BorrowKind, CapabilityKind, TyId, prim_int_bits},
             ty_is_snapshot,
         },
@@ -182,6 +182,10 @@ struct Lane {
     /// Whether the lane is read and written apart from the rest of its slot,
     /// so that no reference can point at it.
     partial: bool,
+    /// For an entry a collection packs into a lane, the body's record of
+    /// the lane's bit offset and of the collection's codec, which reads and
+    /// writes it; the byte offset and width are then unused.
+    codec: Option<usize>,
 }
 
 impl Lane {
@@ -370,6 +374,9 @@ impl<'db> Module<'db> {
             slide_ty: None,
             sessions: Vec::new(),
             slides: FxHashMap::default(),
+            never: None,
+            yielding: false,
+            codecs: Vec::new(),
             located: Vec::new(),
             entries: 0,
         }
@@ -1000,6 +1007,19 @@ impl<'db> Module<'db> {
         if ty.is_never(self.db) {
             return Ok("Empty".to_string());
         }
+        // An access that is part of a value is the place it reaches in
+        // contract state; a view of a snapshot type is the value.
+        if let Some((kind, inner)) = ty.as_capability(self.db) {
+            let scope = self.root.key(self.db).owner(self.db).scope();
+            let snapshot = kind == CapabilityKind::View
+                && ty_is_snapshot(self.db, scope, inner, self.root.assumptions(self.db))
+                && self.root.pinned_space(self.db, inner).is_none();
+            return if snapshot {
+                self.value_ty(inner)
+            } else {
+                Ok("Place".to_string())
+            };
+        }
         let pretty = ty.pretty_print(self.db);
         match pretty.as_str() {
             // An address is its word.
@@ -1124,6 +1144,7 @@ impl<'db> Module<'db> {
             width: lane.byte_width,
             shared: placement.shared,
             partial: placement.partial_lane().is_some() || narrow,
+            codec: None,
         })
     }
 
@@ -1178,6 +1199,7 @@ impl<'db> Module<'db> {
                 width,
                 shared: false,
                 partial: false,
+                codec: None,
             });
             let inner = self.load(field, place, Some(lane))?;
             return Ok(match self.fields(ty)?.as_slice() {
@@ -1408,6 +1430,7 @@ impl<'db> Module<'db> {
                 width,
                 shared: false,
                 partial: false,
+                codec: None,
             });
             let (steps, _) = self.fields(ty)?.swap_remove(0);
             return self.store(field, place, Some(lane), &Self::projected(value, &steps));
@@ -1569,6 +1592,16 @@ struct BodyExporter<'a, 'db> {
     /// Where the slide of each open session of a projection that returns its
     /// slide leaves the values it returns.
     slides: FxHashMap<NValueId, Vec<Out<'db>>>,
+    /// The result of the call printed last in the block being printed that
+    /// never returns.
+    never: Option<String>,
+    /// Whether the block being printed ends in a yield, which a call that
+    /// never returns before it replaces.
+    yielding: bool,
+    /// The lanes of entries a collection packs: the Lean term for each lane's
+    /// bit offset, the collection codec's `get` and `set`, the entry's type,
+    /// and the steps from the entry to the part of it the place names.
+    codecs: Vec<(String, String, String, TyId<'db>, Vec<Step>)>,
     /// The lines that locate the entries the statement being printed names,
     /// which go before it.
     located: Vec<String>,
@@ -1675,7 +1708,7 @@ impl<'db> BodyExporter<'_, 'db> {
             } = &statement.kind
                 && SemanticInstance::new(db, callee.key).is_projection(db)
                 && let Some((CapabilityKind::Mut, inner)) = self.ty(*result).as_capability(db)
-                && !self.granted_in_state(*result)
+                && !self.granted_in_state(*result, &NDataPath::empty())
             {
                 let ty = self.module.value_ty(inner)?;
                 writeln!(state, "  let mut {} : {ty} := default", value_name(*result)).unwrap();
@@ -1898,6 +1931,8 @@ impl<'db> BodyExporter<'_, 'db> {
         // The text of each statement that prints any, and the value it
         // defines.
         let mut printed = Vec::new();
+        self.never = None;
+        self.yielding = matches!(data.terminator.kind, NTerminatorKind::Yield { .. });
         for statement in &data.statements {
             let text = self.statement(statement)?;
             let located = std::mem::take(&mut self.located);
@@ -1910,6 +1945,15 @@ impl<'db> BodyExporter<'_, 'db> {
             if !text.is_empty() {
                 printed.push((text, defined));
             }
+        }
+        // Nothing is granted after a call that never returns: the yield that
+        // follows one names what the path that returns grants elsewhere.
+        if let Some(never) = self.never.take()
+            && std::mem::take(&mut self.yielding)
+        {
+            printed.iter().for_each(|(text, _)| out.push_str(text));
+            writeln!(out, "{pad}nomatch {never}").unwrap();
+            return Ok(());
         }
         if block != self.body.entry || printed.len() <= LONGEST_RUN {
             printed.iter().for_each(|(text, _)| out.push_str(text));
@@ -2241,7 +2285,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     {
                         let (var, _) = self.held(*result).unwrap();
                         let (lean, lane) = self.place(place)?;
-                        let load = self.module.load(place.ty, &lean, lane)?;
+                        let load = self.load(place.ty, &lean, lane)?;
                         Some(format!("h{} := (← {load})", var.index()))
                     }
                     // An access to a local is read and written through the
@@ -2285,7 +2329,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     }
                     NExpr::Load { place, .. } => Some(match self.target(place)? {
                         Target::Place(lean, lane) => {
-                            format!("let {name} ← {}", self.module.load(place.ty, &lean, lane)?)
+                            format!("let {name} ← {}", self.load(place.ty, &lean, lane)?)
                         }
                         Target::Value(target) => format!("let {name} := {}", self.read(&target)?),
                         Target::Memory(address) => {
@@ -2351,7 +2395,7 @@ impl<'db> BodyExporter<'_, 'db> {
                                 (Target::Place(lean, _), true) => format!("let {name} := {lean}"),
                                 // A view of a snapshot type is the value now there.
                                 (Target::Place(lean, lane), false) => {
-                                    let load = self.module.load(place.ty, &lean, lane)?;
+                                    let load = self.load(place.ty, &lean, lane)?;
                                     format!("let {name} ← {load}")
                                 }
                                 // A view of a snapshot type is the value now there.
@@ -2367,6 +2411,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         )
                     }
                     NExpr::AggregateMake { ty, fields } => {
+                        self.parts_in_state(fields)?;
                         let fields: Vec<_> =
                             fields.iter().map(|field| value_name(field.value)).collect();
                         let value = self.module.aggregate(*ty, &fields)?;
@@ -2384,6 +2429,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         variant,
                         fields,
                     } => {
+                        self.parts_in_state(fields)?;
                         let ty = self.module.value_ty(*enum_ty)?;
                         let variants = self.module.variants(*enum_ty).unwrap_or_default();
                         let (variant, _) = &variants[usize::from(variant.0)];
@@ -2431,9 +2477,7 @@ impl<'db> BodyExporter<'_, 'db> {
             NStatementKind::Store { destination, value } => {
                 let value = self.operand(value)?;
                 Some(match self.target(destination)? {
-                    Target::Place(lean, lane) => {
-                        self.module.store(destination.ty, &lean, lane, &value)?
-                    }
+                    Target::Place(lean, lane) => self.store(destination.ty, &lean, lane, &value)?,
                     Target::Value(target) => self.write(&target, &value)?,
                     Target::Memory(address) => {
                         self.module.mstore(destination.ty, &address, &value)?
@@ -2455,9 +2499,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 for (out, value) in outs.iter().zip(&names) {
                     let line = match out {
                         Out::Value(target) => self.write(target, value)?,
-                        Out::Lane(ty, place, lane) => {
-                            self.module.store(*ty, place, Some(*lane), value)?
-                        }
+                        Out::Lane(ty, place, lane) => self.store(*ty, place, Some(*lane), value)?,
                     };
                     write!(lines, "\n{line}").unwrap();
                 }
@@ -2475,7 +2517,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         let (var, _) = self.held(held).unwrap();
                         let (lean, lane) = self.place(&place)?;
                         let value = format!("h{}", var.index());
-                        Some(self.module.store(place.ty, &lean, lane, &value)?)
+                        Some(self.store(place.ty, &lean, lane, &value)?)
                     }
                     None => None,
                 }
@@ -2702,7 +2744,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         return Err(Unsupported("lane behind an access".to_string()));
                     };
                     let held = format!("{name}_e{}", effect.provider);
-                    let load = self.module.load(place.ty, &lean, Some(lane))?;
+                    let load = self.load(place.ty, &lean, Some(lane))?;
                     self.located.push(format!("let {held} ← {load}"));
                     write!(lean_args, " {held}").unwrap();
                     effects.push((effect.provider, Carrier::Value));
@@ -2740,7 +2782,7 @@ impl<'db> BodyExporter<'_, 'db> {
             let value = format!("{name}_{n}");
             let line = match out {
                 Out::Value(target) => self.write(target, &value)?,
-                Out::Lane(ty, place, lane) => self.module.store(*ty, place, Some(*lane), &value)?,
+                Out::Lane(ty, place, lane) => self.store(*ty, place, Some(*lane), &value)?,
             };
             write!(lines, "\n{line}").unwrap();
         }
@@ -2964,8 +3006,9 @@ impl<'db> BodyExporter<'_, 'db> {
         let Some(call) = call.strip_suffix("\nnever") else {
             return Ok(call);
         };
+        self.never = Some(value_name(result));
         let ty = self.ty(result);
-        if ty.is_never(self.module.db) {
+        if ty.is_never(self.module.db) || self.yielding {
             return Ok(call.to_string());
         }
         let name = value_name(result);
@@ -2987,7 +3030,7 @@ impl<'db> BodyExporter<'_, 'db> {
             Carrier::Place => {
                 let (_, inner) = ty.as_capability(self.module.db).unwrap();
                 let name = format!("{}_e", value_name(operand.value));
-                let load = self.module.load(inner, &value_name(operand.value), None)?;
+                let load = self.load(inner, &value_name(operand.value), None)?;
                 Ok((Some(format!("let {name} ← {load}")), name))
             }
             Carrier::Erased => Err(Unsupported("enum in the root object".to_string())),
@@ -3052,7 +3095,7 @@ impl<'db> BodyExporter<'_, 'db> {
             // A grant into contract state is the place the projection
             // returned.
             CarrierBase::Grant { session, component }
-                if component.is_empty() && self.granted_in_state(session) =>
+                if self.granted_in_state(session, &component) =>
             {
                 Ok(Carrier::Place)
             }
@@ -3085,9 +3128,23 @@ impl<'db> BodyExporter<'_, 'db> {
         }
     }
 
-    /// Whether the one access the projection call `session` grants reaches
-    /// contract state.
-    fn granted_in_state(&self, session: NValueId) -> bool {
+    /// Checks that each access among `parts`, the parts of a value being
+    /// built, reaches contract state: there it is a place, which a value can
+    /// hold.
+    fn parts_in_state(&self, parts: &[NOperand]) -> Result<(), Unsupported> {
+        for part in parts {
+            if self.is_access(self.ty(part.value)) && self.carrier(part.value)? != Carrier::Place {
+                return Err(Unsupported(
+                    "value that holds an access to a local".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the access at `component` of what the projection call
+    /// `session` grants reaches contract state.
+    fn granted_in_state(&self, session: NValueId, component: &NDataPath) -> bool {
         let db = self.module.db;
         let NValueDefinition::Statement { block, statement } =
             self.body.values[session.index()].definition
@@ -3102,11 +3159,23 @@ impl<'db> BodyExporter<'_, 'db> {
         else {
             return false;
         };
-        let spaces = projection_component_spaces(db, SemanticInstance::new(db, callee.key));
-        matches!(
-            spaces.as_slice(),
-            [(steps, Some(AddressSpace::Storage | AddressSpace::Transient))] if steps.is_empty()
-        )
+        let step = |step: &NDataProjection| match *step {
+            NDataProjection::Field(field) => Some(ReturnProjectionStep::Field(field.0)),
+            NDataProjection::VariantField { variant, field } => {
+                Some(ReturnProjectionStep::VariantField {
+                    variant: variant.0,
+                    field: field.0,
+                })
+            }
+            _ => None,
+        };
+        let component: Option<Vec<_>> = component.iter().map(step).collect();
+        projection_component_spaces(db, SemanticInstance::new(db, callee.key))
+            .iter()
+            .any(|(steps, space)| {
+                Some(steps) == component.as_ref()
+                    && matches!(space, Some(AddressSpace::Storage | AddressSpace::Transient))
+            })
     }
 
     /// The first borrow of the packed lane the access `value` reaches into,
@@ -3205,14 +3274,15 @@ impl<'db> BodyExporter<'_, 'db> {
                 ty: self.body.roots[root.index()].ty,
                 path: Vec::new(),
             }),
+            // A value of several accesses holds places.
+            NPlaceBase::CapabilityTarget { carrier }
+                if self.ty(carrier).as_capability(self.module.db).is_none() =>
+            {
+                None
+            }
             // A view of a snapshot type is the value itself.
             NPlaceBase::CapabilityTarget { carrier } if !self.is_access(self.ty(carrier)) => {
-                let (_, ty) = self
-                    .ty(carrier)
-                    .as_capability(self.module.db)
-                    .ok_or_else(|| {
-                        Unsupported("place below a value of several accesses".to_string())
-                    })?;
+                let (_, ty) = self.ty(carrier).as_capability(self.module.db).unwrap();
                 Some(ValueTarget {
                     var: value_name(carrier),
                     ty,
@@ -3377,9 +3447,34 @@ impl<'db> BodyExporter<'_, 'db> {
             .body
             .place_prefix_ty(db, place, 0)
             .ok_or_else(untyped)?;
+        // A value of several accesses holds a place for each: the steps to
+        // one of them select it, and the rest go on below that place.
+        let mut selected = 0;
+        let mut base_ty = base_ty;
+        let mut selecting = None;
+        if let NPlaceBase::CapabilityTarget { carrier } = place.base
+            && self.ty(carrier).as_capability(db).is_none()
+        {
+            let mut ty = self.ty(carrier);
+            let mut lean = value_name(carrier);
+            while ty.as_capability(db).is_none() {
+                let step = place.path.as_slice().get(selected).ok_or_else(untyped)?;
+                let step = field_path(&NDataPath::new(vec![*step]))?[0];
+                let (names, part) = self.module.part(ty, step)?;
+                lean = names
+                    .iter()
+                    .fold(lean, |lean, name| format!("{lean}.{name}"));
+                ty = part;
+                selected += 1;
+            }
+            base_ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+            selecting = Some(lean);
+        }
         let (base, mut lane) = match place.base {
             NPlaceBase::Root(root) => self.root(root)?,
-            NPlaceBase::CapabilityTarget { carrier } => (value_name(carrier), None),
+            NPlaceBase::CapabilityTarget { carrier } => {
+                (selecting.unwrap_or_else(|| value_name(carrier)), None)
+            }
             // A pointer into contract state is a slot number.
             NPlaceBase::Deref { pointer } => {
                 let space = match self.ty(pointer).as_ptr(db) {
@@ -3391,7 +3486,7 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         };
         let mut lean = self.module.pinned(base_ty, base);
-        for (len, projection) in place.path.iter().enumerate() {
+        for (len, projection) in place.path.iter().enumerate().skip(selected) {
             let ty = self
                 .body
                 .place_prefix_ty(db, place, len)
@@ -3400,6 +3495,13 @@ impl<'db> BodyExporter<'_, 'db> {
                 .body
                 .place_prefix_ty(db, place, len + 1)
                 .ok_or_else(untyped)?;
+            // A step below an entry packed into a lane names a part of the
+            // entry's value.
+            if let Some(codec) = lane.and_then(|lane| lane.codec) {
+                let step = field_path(&NDataPath::new(vec![*projection]))?;
+                self.codecs[codec].4.extend(step);
+                continue;
+            }
             (lean, lane) = match projection {
                 // The field of a newtype lies where the newtype does.
                 NDataProjection::Field(_) if let Some((width, _)) = self.module.newtype(ty) => {
@@ -3408,6 +3510,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         width,
                         shared: false,
                         partial: false,
+                        codec: None,
                     };
                     (lean, Some(lane.unwrap_or(own)))
                 }
@@ -3451,13 +3554,73 @@ impl<'db> BodyExporter<'_, 'db> {
                     if map && self.lean_ty(self.ty(*key))? == "UInt256" {
                         (format!("({lean}.entry {})", value_name(*key)), None)
                     } else {
-                        (self.entry(ty, &lean, *key)?, None)
+                        self.entry(ty, &lean, *key)?
                     }
                 }
             };
             lean = self.module.pinned(part, lean);
         }
         Ok((lean, lane))
+    }
+
+    /// The computation that reads a value of `ty` at `place` in contract
+    /// state. An entry a collection packs into a lane is read by the
+    /// collection's codec from the word there.
+    fn load(
+        &mut self,
+        ty: TyId<'db>,
+        place: &str,
+        lane: Option<Lane>,
+    ) -> Result<String, Unsupported> {
+        match lane.and_then(|lane| lane.codec) {
+            Some(codec) => {
+                let (offset, get, _, entry, path) = self.codecs[codec].clone();
+                let part = self.read(&ValueTarget {
+                    var: "entry".to_string(),
+                    ty: entry,
+                    path,
+                })?;
+                Ok(format!(
+                    "(do let entry ← {get} (← load {place}) {offset}; pure {part})"
+                ))
+            }
+            None => self.module.load(ty, place, lane),
+        }
+    }
+
+    /// The computation that writes `value` of `ty` at `place` in contract
+    /// state. The codec of a packed entry puts the value into the word
+    /// there, which is then stored.
+    fn store(
+        &mut self,
+        ty: TyId<'db>,
+        place: &str,
+        lane: Option<Lane>,
+        value: &str,
+    ) -> Result<String, Unsupported> {
+        match lane.and_then(|lane| lane.codec) {
+            // A part of a packed entry is written into the entry as read.
+            Some(codec) => {
+                let (offset, get, set, entry, path) = self.codecs[codec].clone();
+                let word = format!("(← load {place})");
+                if path.is_empty() {
+                    return Ok(format!(
+                        "(do store {place} (← {set} {word} {offset} {value}))"
+                    ));
+                }
+                let target = ValueTarget {
+                    var: "entry".to_string(),
+                    ty: entry,
+                    path,
+                };
+                Ok(format!(
+                    "(do let mut entry ← {get} {word} {offset}; {}; \
+                     store {place} (← {set} {word} {offset} entry))",
+                    self.write(&target, value)?
+                ))
+            }
+            None => self.module.store(ty, place, lane, value),
+        }
     }
 
     /// The place of entry `key` of the collection of type `ty` at
@@ -3469,7 +3632,7 @@ impl<'db> BodyExporter<'_, 'db> {
         ty: TyId<'db>,
         collection: &str,
         key: NValueId,
-    ) -> Result<String, Unsupported> {
+    ) -> Result<(String, Option<Lane>), Unsupported> {
         let db = self.module.db;
         let unsupported = |what: &str| Unsupported(format!("{what} of {}", ty.pretty_print(db)));
         let entry = self
@@ -3477,9 +3640,6 @@ impl<'db> BodyExporter<'_, 'db> {
             .owner
             .entry_locate(db, ty)
             .map_err(|_| unsupported("entry"))?;
-        if entry.lanes.is_some() {
-            return Err(unsupported("entry lane"));
-        }
         let space = match entry.space {
             Some(AddressSpace::Storage) => "storage",
             Some(AddressSpace::Transient) => "transient",
@@ -3515,7 +3675,41 @@ impl<'db> BodyExporter<'_, 'db> {
             "let {location} ← {locate} {collection} {collection}.slot {}",
             value_name(key)
         ));
-        Ok(format!("(Place.mk .{space} {location}.slot)"))
+        let place = format!("(Place.mk .{space} {location}.slot)");
+        let Some(lanes) = entry.lanes else {
+            return Ok((place, None));
+        };
+        // The collection packs its entries: this one is the bits its codec
+        // reads at the location's offset in the word there.
+        let scope = self.body.owner.key(db).owner(db).scope();
+        let mut codec = |method| {
+            let key = core_method_callee_key(
+                db,
+                scope,
+                self.body.owner.assumptions(db),
+                &["ops", "LaneCodec"],
+                method,
+                vec![lanes.codec, entry.entry_ty],
+            )
+            .map_err(|_| unsupported("entry lane"))?;
+            self.module.instance(key, Carriers::default())
+        };
+        let (get, set) = (codec("get")?, codec("set")?);
+        self.codecs.push((
+            format!("{location}.offset"),
+            get,
+            set,
+            entry.entry_ty,
+            Vec::new(),
+        ));
+        let lane = Lane {
+            off: 0,
+            width: 0,
+            shared: true,
+            partial: true,
+            codec: Some(self.codecs.len() - 1),
+        };
+        Ok((place, Some(lane)))
     }
 
     /// The place of the contract field `root` provides, and its lane if it
@@ -3550,6 +3744,7 @@ impl<'db> BodyExporter<'_, 'db> {
             width: u32::from(lane.byte_width),
             shared: lane.shared,
             partial: true,
+            codec: None,
         });
         let slot = layout.slot_offset;
         let place = self.module.layout(format!("Field.{name}"), |name| {
