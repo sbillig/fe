@@ -2,9 +2,14 @@
 //! fe-equivm-proofs. Both tests are ignored: they read their input from the
 //! environment.
 
-use std::{collections::BTreeMap, env, fs, panic};
+use std::{collections::BTreeMap, env, fmt::Write, fs, panic};
 
+use codegen::{
+    OptLevel, SonatinaTestOptions, emit_module_sonatina_bytecode, emit_test_module_sonatina,
+};
+use common::InputDb;
 use cranelift_entity::EntityRef;
+use driver::DriverDataBase;
 use fe_lean_export::{Unsupported, export_contract_with_entries};
 use hir::{
     analysis::{
@@ -16,13 +21,20 @@ use hir::{
     },
     test_db::HirAnalysisTestDb,
 };
+use num_bigint::BigUint;
+use url::Url;
 
 /// Exports every contract of the colon-separated files in
-/// `LEAN_EXPORT_CORPUS`. Writes each export to
-/// `LEAN_EXPORT_CORPUS_OUT/<file>_<n>.lean`, importing the modules
-/// `LEAN_EXPORT_CORPUS_IMPORTS` names and wrapped in a namespace so that it
-/// elaborates on its own, and prints the construct each other contract
-/// stopped at as `BLOCK <ids>\t<reason>`.
+/// `LEAN_EXPORT_CORPUS`. Writes the exports of each file to
+/// `LEAN_EXPORT_CORPUS_OUT/<file>.lean`, importing the modules
+/// `LEAN_EXPORT_CORPUS_IMPORTS` names, each contract in a namespace so that
+/// the file elaborates on its own, and prints the construct each other
+/// contract stopped at as `BLOCK <ids>\t<reason>`.
+///
+/// A file with tests ends in a call of `Fe.EVM.Diff.main` on the creation
+/// bytecode of its exported contracts and the bytecode of its tests, which
+/// runs each test and compares every call it makes on such a contract with
+/// the contract's model.
 #[test]
 #[ignore = "reads its input from the environment"]
 fn export_corpus() {
@@ -33,55 +45,109 @@ fn export_corpus() {
         .map(|module| format!("import {module}\n"))
         .collect();
     let mut blockers = BTreeMap::<String, Vec<String>>::new();
-    let (mut exported, mut skipped, mut total) = (0, Vec::new(), 0);
+    let (mut exported, mut skipped, mut uncompiled, mut total) = (0, Vec::new(), Vec::new(), 0);
     let files = env::var("LEAN_EXPORT_CORPUS").unwrap();
     for path in files.split(':') {
         let source = fs::read_to_string(path).unwrap();
         let name = path.rsplit('/').next().unwrap().trim_end_matches(".fe");
-        // A file with diagnostics is skipped. A panic of the exporter is
-        // reported as what stopped the contract.
+        // A file with errors is skipped. A panic of the exporter is reported
+        // as what stopped the contract.
         let analyzed = panic::catch_unwind(|| {
-            let mut db = HirAnalysisTestDb::default();
-            let file = db.new_stand_alone("corpus.fe".into(), &source);
-            let (top_mod, _) = db.top_mod(file);
-            db.assert_no_diags(top_mod);
-            (db, file)
+            let mut db = DriverDataBase::default();
+            let url = Url::from_file_path(path).unwrap();
+            let file = db.workspace().touch(&mut db, url, Some(source.clone()));
+            let has_errors = db.run_on_top_mod(db.top_mod(file)).has_errors(&db);
+            (!has_errors).then_some((db, file))
         });
-        let Ok((db, file)) = analyzed else {
+        let Ok(Some((db, file))) = analyzed else {
             skipped.push(name);
             continue;
         };
-        let (top_mod, _) = db.top_mod(file);
         let db = &db;
-        let export = |contract: &_| {
-            panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                export_contract_with_entries(db, *contract)
-            }))
-            .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())))
-        };
-        let results: Vec<_> = top_mod.all_contracts(db).iter().map(export).collect();
-        for (index, result) in results.into_iter().enumerate() {
+        let top_mod = db.top_mod(file);
+        let mut text = format!("{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n");
+        let mut models = Vec::new();
+        for (index, &contract) in top_mod.all_contracts(db).iter().enumerate() {
             total += 1;
             let id = format!("{name}_{index}");
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                export_contract_with_entries(db, contract)
+            }))
+            .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
             match result {
                 Ok(lean) => {
                     exported += 1;
-                    let text = format!(
-                        "{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n\
-                         namespace Corpus.{id}\nsection\n\
+                    write!(
+                        text,
+                        "\nnamespace Corpus.{id}\nsection\n\
                          set_option linter.unusedVariables false\n\n{lean}\nend\nend Corpus.{id}\n"
-                    );
-                    fs::write(format!("{out}/{id}.lean"), text).unwrap();
+                    )
+                    .unwrap();
+                    let contract = contract.name(db).unwrap().data(db).to_string();
+                    models.push((contract, id));
                 }
                 Err(reason) => blockers.entry(reason.0).or_default().push(id),
             }
         }
+        if models.is_empty() {
+            continue;
+        }
+        let compiled = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let options = SonatinaTestOptions::default();
+            let code = emit_module_sonatina_bytecode(db, top_mod, OptLevel::O1, None).ok()?;
+            let tests = emit_test_module_sonatina(db, top_mod, OptLevel::O1, options, None).ok()?;
+            Some((code, tests.tests))
+        }));
+        match compiled {
+            Ok(Some((code, tests))) if !tests.is_empty() => {
+                let targets: Vec<_> = models
+                    .iter()
+                    .map(|(contract, id)| {
+                        let creation = hex(&code[contract].deploy);
+                        format!(
+                            "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{creation}\", \
+                             model := ⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime⟩ }}"
+                        )
+                    })
+                    .collect();
+                let tests: Vec<_> = tests
+                    .iter()
+                    .map(|test| {
+                        let balance = BigUint::from_bytes_be(
+                            test.initial_balance.as_deref().unwrap_or_default(),
+                        );
+                        format!(
+                            "{{ name := \"{}\", code := Fe.EVM.Diff.hex \"{}\", balance := {balance} }}",
+                            test.hir_name,
+                            hex(&test.bytecode)
+                        )
+                    })
+                    .collect();
+                write!(
+                    text,
+                    "\n#eval Fe.EVM.Diff.main \"{name}\"\n  [{}]\n  [{}]\n",
+                    targets.join(",\n   "),
+                    tests.join(",\n   ")
+                )
+                .unwrap();
+            }
+            Ok(Some(_)) => {}
+            _ => uncompiled.push(name),
+        }
+        fs::write(format!("{out}/{name}.lean"), text).unwrap();
     }
-    println!("contracts: {total}, exported: {exported}, files skipped: {skipped:?}");
+    println!(
+        "contracts: {total}, exported: {exported}, files skipped: {skipped:?}, \
+         not compiled: {uncompiled:?}"
+    );
     for (reason, ids) in &blockers {
         let reason: String = reason.chars().take(400).collect();
         println!("BLOCK {}\t{reason}", ids.join(","));
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Prints the normalized body of every instance the contracts of the file

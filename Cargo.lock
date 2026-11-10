@@ -2675,11 +2675,14 @@ name = "fe-lean-export"
 version = "26.5.0"
 dependencies = [
  "cranelift-entity 0.136.1",
+ "fe-codegen",
  "fe-common",
+ "fe-driver",
  "fe-hir",
  "num-bigint",
  "num-traits",
  "rustc-hash 2.1.1",
+ "url",
 ]
 
 [[package]]

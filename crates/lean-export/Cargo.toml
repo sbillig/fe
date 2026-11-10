@@ -16,3 +16,8 @@ hir.workspace = true
 num-bigint.workspace = true
 num-traits.workspace = true
 rustc-hash.workspace = true
+
+[dev-dependencies]
+codegen.workspace = true
+driver.workspace = true
+url.workspace = true
