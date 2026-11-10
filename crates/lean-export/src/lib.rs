@@ -15,8 +15,8 @@ use hir::{
         semantic::{
             BinaryOp, FailReason, NBlockId, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
             NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
-            NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow, SConst,
-            SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey,
+            NSuccessor, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow,
+            SConst, SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey,
             identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
@@ -101,6 +101,9 @@ impl<'db> Module<'db> {
             module: self,
             body: &normalized.body,
             aggregates: FxHashMap::default(),
+            result_ty: String::new(),
+            joins: FxHashMap::default(),
+            joined: FxHashSet::default(),
         }
         .export()
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))
@@ -217,6 +220,12 @@ struct BodyExporter<'a, 'db> {
     /// The type name and fields of each aggregate a body builds, which only
     /// a std call consumes.
     aggregates: FxHashMap<NValueId, (String, Vec<NValueId>)>,
+    /// The Lean type of the value the body returns.
+    result_ty: String,
+    /// The blocks printed as local functions, under the block that
+    /// immediately dominates each, in the order they are defined.
+    joins: FxHashMap<NBlockId, Vec<NBlockId>>,
+    joined: FxHashSet<NBlockId>,
 }
 
 impl<'db> BodyExporter<'_, 'db> {
@@ -228,14 +237,15 @@ impl<'db> BodyExporter<'_, 'db> {
                 write!(params, " (v{index} : {})", self.lean_ty(value.ty)?).unwrap();
             }
         }
-        let result_ty = self.result_ty()?;
-        let mut out = format!("{params} : FeM {result_ty} := do\n");
-        self.block(self.body.entry, 1, &mut vec![], &mut out)?;
+        self.result_ty = self.returned_ty()?;
+        self.find_joins()?;
+        let mut out = format!("{params} : FeM {} := do\n", self.result_ty);
+        self.block(self.body.entry, 1, &mut out)?;
         Ok(out)
     }
 
     /// The type every `Return` of the body gives.
-    fn result_ty(&self) -> Result<String, Unsupported> {
+    fn returned_ty(&self) -> Result<String, Unsupported> {
         let returned = self
             .body
             .blocks
@@ -250,44 +260,101 @@ impl<'db> BodyExporter<'_, 'db> {
         }
     }
 
-    /// Prints `block` and, inline, the blocks it leads to. A block reached
-    /// again on its own path is a loop.
+    /// Finds the join blocks: those more than one edge enters, and those
+    /// that take parameters. Each is printed once, as a local function of
+    /// the block that immediately dominates it. An edge to an earlier block
+    /// is a loop.
+    fn find_joins(&mut self) -> Result<(), Unsupported> {
+        let order = self.body.reverse_postorder();
+        let position: FxHashMap<_, _> = order.iter().enumerate().map(|(i, b)| (*b, i)).collect();
+        let mut preds: FxHashMap<NBlockId, Vec<NBlockId>> = FxHashMap::default();
+        for &block in &order {
+            for successor in self.body.blocks[block.index()].terminator.kind.successors() {
+                if position[&successor.block] <= position[&block] {
+                    return Err(Unsupported("loop".to_string()));
+                }
+                preds.entry(successor.block).or_default().push(block);
+            }
+        }
+        let mut idom: FxHashMap<NBlockId, NBlockId> = FxHashMap::default();
+        for &block in &order[1..] {
+            let dominator = preds[&block]
+                .iter()
+                .copied()
+                .reduce(|mut a, mut b| {
+                    while a != b {
+                        if position[&a] > position[&b] {
+                            a = idom[&a];
+                        } else {
+                            b = idom[&b];
+                        }
+                    }
+                    a
+                })
+                .unwrap();
+            idom.insert(block, dominator);
+            if preds[&block].len() > 1 || !self.body.blocks[block.index()].params.is_empty() {
+                self.joined.insert(block);
+                // A later join can be the target of an earlier one, so it is
+                // defined first.
+                self.joins.entry(dominator).or_default().insert(0, block);
+            }
+        }
+        Ok(())
+    }
+
+    /// Prints `block`: its statements, the joins it dominates, and where it
+    /// goes, with each block only it enters inline.
     fn block(
         &mut self,
         block: NBlockId,
         depth: usize,
-        path: &mut Vec<NBlockId>,
         out: &mut String,
     ) -> Result<(), Unsupported> {
-        if path.contains(&block) {
-            return Err(Unsupported("loop".to_string()));
-        }
         let data = &self.body.blocks[block.index()];
-        if !data.params.is_empty() {
-            return Err(Unsupported("block parameters".to_string()));
-        }
         let pad = "  ".repeat(depth);
         for statement in &data.statements {
             if let Some(line) = self.statement(statement)? {
                 writeln!(out, "{pad}{line}").unwrap();
             }
         }
-        path.push(block);
+        for join in self.joins.get(&block).cloned().unwrap_or_default() {
+            let params = &self.body.blocks[join.index()].params;
+            let mut ty = String::new();
+            for param in params {
+                write!(ty, "{} → ", self.lean_ty(self.ty(*param))?).unwrap();
+            }
+            let binder = match &params[..] {
+                [] => String::new(),
+                params => {
+                    let names: Vec<_> = params.iter().copied().map(value_name).collect();
+                    format!("fun {} => ", names.join(" "))
+                }
+            };
+            writeln!(
+                out,
+                "{pad}let b{} : {ty}FeM {} := {binder}do",
+                join.index(),
+                self.result_ty
+            )
+            .unwrap();
+            self.block(join, depth + 1, out)?;
+        }
         match &data.terminator.kind {
             NTerminatorKind::Return(None) => writeln!(out, "{pad}return ()").unwrap(),
             NTerminatorKind::Return(Some(operand)) => {
                 writeln!(out, "{pad}return {}", value_name(operand.value)).unwrap()
             }
-            NTerminatorKind::Goto(target) => self.block(target.block, depth, path, out)?,
+            NTerminatorKind::Goto(target) => self.jump(target, depth, out)?,
             NTerminatorKind::Branch {
                 cond,
                 then_target,
                 else_target,
             } => {
                 writeln!(out, "{pad}if {} then", value_name(cond.value)).unwrap();
-                self.block(then_target.block, depth + 1, path, out)?;
+                self.jump(then_target, depth + 1, out)?;
                 writeln!(out, "{pad}else").unwrap();
-                self.block(else_target.block, depth + 1, path, out)?;
+                self.jump(else_target, depth + 1, out)?;
             }
             NTerminatorKind::Fail(FailReason::Assert {
                 message: Some(message),
@@ -302,7 +369,26 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             other => return Err(Unsupported(format!("terminator {other:?}"))),
         }
-        path.pop();
+        Ok(())
+    }
+
+    /// Prints the step to `target`: a call of its local function if it is a
+    /// join, and the block itself otherwise.
+    fn jump(
+        &mut self,
+        target: &NSuccessor,
+        depth: usize,
+        out: &mut String,
+    ) -> Result<(), Unsupported> {
+        if !self.joined.contains(&target.block) {
+            return self.block(target.block, depth, out);
+        }
+        let args: String = target
+            .args
+            .iter()
+            .map(|arg| format!(" {}", operand(arg)))
+            .collect();
+        writeln!(out, "{}b{}{args}", "  ".repeat(depth), target.block.index()).unwrap();
         Ok(())
     }
 

@@ -42,3 +42,8 @@ fn packed_store() {
 fn helper_call() {
     check("helper_call");
 }
+
+#[test]
+fn join() {
+    check("join");
+}
