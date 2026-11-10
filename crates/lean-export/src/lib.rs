@@ -346,7 +346,7 @@ struct Module<'db> {
     /// Whether the body exported last is such a projection.
     lens: bool,
     /// The instances whose export is under way.
-    open: Vec<SemanticInstanceKey<'db>>,
+    open: Vec<(SemanticInstanceKey<'db>, Carriers)>,
     /// The layout definitions the bodies name, by Lean name.
     layouts: Vec<(String, String)>,
     /// The name of each exported function or constant, by its base name and
@@ -713,30 +713,43 @@ impl<'db> Module<'db> {
             }
             owner => return Err(Unsupported(format!("call to {owner:?}"))),
         };
-        if self.open.contains(&key) {
-            return Err(Unsupported(format!("recursion through `{base}`")));
-        }
         let args = key.subst(db).generic_args(db).iter();
         let base = args.fold(base, |name, arg| {
             format!("{name}_{}", lean_ident(arg.pretty_print(db)))
         });
-        self.open.push(key);
+        // A function that calls itself is named before its body is done.
+        let instance = (key, carriers.clone());
+        if self.open.last() == Some(&instance) {
+            let name = self.fresh(&base);
+            self.names.insert(instance, name.clone());
+            return Ok(name);
+        }
+        if self.open.iter().any(|(open, _)| *open == key) {
+            return Err(Unsupported(format!("recursion through `{base}`")));
+        }
+        self.open.push(instance.clone());
         let (body, never) = self.body(&base, key, &carriers)?;
         let lens = std::mem::take(&mut self.lens);
         self.open.pop();
-        // Instances with one definition share it.
-        let name = match self.bodies.get(&(base.clone(), body.clone())) {
-            Some(name) => name.clone(),
-            None => {
-                let name = (0..)
-                    .map(|n| match n {
-                        0 => base.clone(),
-                        n => format!("{base}_{n}"),
-                    })
-                    .find(|name| !self.taken.contains(name))
-                    .unwrap();
-                self.taken.insert(name.clone());
-                let name = lean_name(&name);
+        let name = match (
+            self.names.get(&instance),
+            self.bodies.get(&(base.clone(), body.clone())),
+        ) {
+            // The body called itself by this name: it is the least fixed
+            // point of its definition, which diverges where the calls do
+            // not end.
+            (Some(_), _) if body.contains(CUT) => {
+                return Err(Unsupported(format!("recursion through long `{base}`")));
+            }
+            (Some(name), _) => {
+                let name = name.clone();
+                self.define(&name, &format!("{body}partial_fixpoint\n"));
+                name
+            }
+            // Instances with one definition share it.
+            (None, Some(name)) => name.clone(),
+            (None, None) => {
+                let name = self.fresh(&base);
                 self.define(&name, &body);
                 self.bodies.insert((base, body), name.clone());
                 name
@@ -750,6 +763,19 @@ impl<'db> Module<'db> {
         }
         self.names.insert((key, carriers), name.clone());
         Ok(name)
+    }
+
+    /// A Lean name no definition has yet: `base`, or `base` with a number.
+    fn fresh(&mut self, base: &str) -> String {
+        let name = (0..)
+            .map(|n| match n {
+                0 => base.to_string(),
+                n => format!("{base}_{n}"),
+            })
+            .find(|name| !self.taken.contains(name))
+            .unwrap();
+        self.taken.insert(name.clone());
+        lean_name(&name)
     }
 
     /// The effects of `key` its callers pass an argument for: those its
@@ -999,6 +1025,8 @@ impl<'db> Module<'db> {
     /// A canonical word is already that of a type that has its value; a
     /// narrower unsigned type cuts it, and any other cast wraps.
     fn cast(&self, value: &str, from: TyId<'db>, to: TyId<'db>) -> Result<String, Unsupported> {
+        // A view of a scalar is the scalar.
+        let from = from.as_capability(self.db).map_or(from, |(_, inner)| inner);
         if from.is_bool(self.db) && self.int_bits(to).is_some() {
             return Ok(format!("Bool.toUInt256 {value}"));
         }
@@ -3303,6 +3331,8 @@ impl<'db> BodyExporter<'_, 'db> {
             NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
                 Some(format!("r{}", root.index()))
             }
+            // A temporary is the value it was made for.
+            NRootKind::Temporary { value } => Some(value_name(*value)),
             NRootKind::Provider { binding } => self
                 .effects
                 .iter()
