@@ -248,10 +248,12 @@ impl<'db> Module<'db> {
                 let normalized = normalize_semantic_body(db, instance)
                     .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
                 let pats = self.arg_pats(owner);
-                let values = normalized.body.values.iter().filter_map(|value| {
-                    matches!(value.definition, NValueDefinition::EntryParam { .. })
-                        .then(|| arg_position(value.source, &pats))
-                });
+                let values = normalized
+                    .body
+                    .values
+                    .iter()
+                    .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+                    .map(|value| arg_position(value.source, &pats));
                 let slots = normalized
                     .body
                     .roots
