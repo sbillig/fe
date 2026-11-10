@@ -1,0 +1,48 @@
+use std::abi::sol
+
+msg SpillMsg {
+    #[selector = sol("sum(uint256)")]
+    Sum { step: u256 } -> u256,
+}
+
+struct Cursor {
+    pos: u256,
+    base: u256,
+}
+
+impl Cursor {
+    fn advance(mut self, by: u256) -> u256 {
+        let at = self.pos
+        self.pos = at + by
+        at
+    }
+
+    fn end(self) -> u256 {
+        self.pos + self.base
+    }
+}
+
+fn make(pos: u256) -> Cursor {
+    Cursor { pos, base: 4 }
+}
+
+fn consume(var _ c: own Cursor, by: u256) -> u256 {
+    c.advance(by) + c_end(c: make(pos: by))
+}
+
+fn c_end(c: Cursor) -> u256 {
+    c.end()
+}
+
+fn bump(var by: own u256) -> u256 {
+    by += 1
+    by
+}
+
+pub contract Walker {
+    recv SpillMsg {
+        Sum { step } -> u256 {
+            make(pos: step).end() + consume(make(pos: 1), by: step) + bump(by: step)
+        }
+    }
+}

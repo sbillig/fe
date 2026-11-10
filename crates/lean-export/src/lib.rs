@@ -319,7 +319,7 @@ struct BodyExporter<'a, 'db> {
     /// The type and fields of each aggregate the body builds, printed where
     /// it is used.
     aggregates: FxHashMap<NValueId, (TyId<'db>, Vec<NValueId>)>,
-    /// The local slots, each a mutable Lean variable.
+    /// The slots of locals and of parameters, each a mutable Lean variable.
     slots: Vec<NRootId>,
     /// The `mut` access parameters received as values, which the body
     /// returns after its result.
@@ -336,7 +336,9 @@ impl<'db> BodyExporter<'_, 'db> {
     /// The body's definition after its name: parameters, type and value.
     fn export(mut self) -> Result<String, Unsupported> {
         let db = self.module.db;
-        let mut params = String::new();
+        // A parameter is an entry value, or a slot if the body needs its
+        // address: the slot starts out holding the argument.
+        let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
             let NValueDefinition::EntryParam { param } = value.definition else {
                 continue;
@@ -351,16 +353,26 @@ impl<'db> BodyExporter<'_, 'db> {
                 }
                 _ => self.lean_ty(value.ty)?,
             };
-            write!(params, " (v{index} : {ty})").unwrap();
+            params.push((param, format!(" (v{index} : {ty})")));
         }
         let mut state = String::new();
         for (index, root) in self.body.roots.iter().enumerate() {
-            if matches!(root.kind, NRootKind::LocalSlot { .. }) {
-                self.slots.push(NRootId::new(index));
-                let ty = self.module.value_ty(root.ty)?;
+            let ty = match root.kind {
+                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+                    self.module.value_ty(root.ty)?
+                }
+                _ => continue,
+            };
+            self.slots.push(NRootId::new(index));
+            if let NRootKind::ParamPlace { param } = root.kind {
+                params.push((param, format!(" (r{index} : {ty})")));
+                writeln!(state, "  let mut r{index} := r{index}").unwrap();
+            } else {
                 writeln!(state, "  let mut r{index} : {ty} := default").unwrap();
             }
         }
+        params.sort_by_key(|(param, _)| *param);
+        let params: String = params.into_iter().map(|(_, text)| text).collect();
         for out in &self.outs {
             writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
         }
@@ -797,7 +809,7 @@ impl<'db> BodyExporter<'_, 'db> {
         match target.base {
             CarrierBase::Root(root) => match self.body.roots[root.index()].kind {
                 NRootKind::Provider { .. } => Ok(Carrier::Place),
-                NRootKind::LocalSlot { .. } => Ok(Carrier::Value),
+                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => Ok(Carrier::Value),
                 ref kind => Err(Unsupported(format!("access to root {kind:?}"))),
             },
             CarrierBase::Param { param } => self
@@ -848,7 +860,11 @@ impl<'db> BodyExporter<'_, 'db> {
         let local = match place.base {
             NPlaceBase::Root(root) => {
                 let data = &self.body.roots[root.index()];
-                matches!(data.kind, NRootKind::LocalSlot { .. }).then(|| ValueTarget {
+                matches!(
+                    data.kind,
+                    NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. }
+                )
+                .then(|| ValueTarget {
                     var: format!("r{}", root.index()),
                     ty: data.ty,
                     path: Vec::new(),

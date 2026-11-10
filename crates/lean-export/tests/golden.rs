@@ -57,3 +57,8 @@ fn local_struct() {
 fn tuple() {
     check("tuple");
 }
+
+#[test]
+fn param_slot() {
+    check("param_slot");
+}
