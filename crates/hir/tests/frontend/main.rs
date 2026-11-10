@@ -7,6 +7,7 @@ mod decision_tree;
 mod def_analysis;
 mod desugar;
 mod early_path_resolution;
+mod entry_locate;
 mod failures;
 mod import;
 mod invalid_string_constants;
