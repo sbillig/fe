@@ -17,13 +17,13 @@ use hir::{
             NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement,
             NStatementKind, NSuccessor, NTerminatorKind, NValueDefinition, NValueId,
             NormalizedBody, Overflow, SConst, SemConstScalar, SemConstValue, SemanticInstance,
-            SemanticInstanceKey, identity_semantic_instance_key, normalize_semantic_body,
+            SemanticInstanceKey, UnaryOp, identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
             AddressSpace,
             adt_def::AdtRef,
             ty_check::BodyOwner,
-            ty_def::{CapabilityKind, TyId},
+            ty_def::{CapabilityKind, TyId, prim_int_bits},
             ty_is_snapshot,
         },
     },
@@ -43,6 +43,8 @@ enum Carrier {
     Place,
     /// As the value there. The body returns the value a `mut` access leaves.
     Value,
+    /// Not at all: the target's root object holds no data.
+    Erased,
 }
 
 /// The value an access or place of a local reaches: a field path below a
@@ -256,13 +258,41 @@ impl<'db> Module<'db> {
         Ok(names.zip(tys).collect())
     }
 
+    /// The width of `ty` if it is an unsigned integer type.
+    fn uint_bits(&self, ty: TyId<'db>) -> Option<usize> {
+        let prim = ty.as_prim(self.db)?;
+        let target = self.db.compilation_settings().target(self.db);
+        prim_int_bits(prim, target).filter(|_| !prim.is_signed_int())
+    }
+
+    /// The Lean term for `value` of unsigned integer type `from` cast to
+    /// `to`: the word, cut to the width of a narrower type.
+    fn cast(&self, value: &str, from: TyId<'db>, to: TyId<'db>) -> Result<String, Unsupported> {
+        match (self.uint_bits(from), self.uint_bits(to)) {
+            (Some(from), Some(to)) if from <= to => Ok(value.to_string()),
+            (Some(_), Some(to)) => Ok(format!("truncate {to} {value}")),
+            _ => Err(Unsupported(format!(
+                "cast from {} to {}",
+                from.pretty_print(self.db),
+                to.pretty_print(self.db)
+            ))),
+        }
+    }
+
     /// The Lean type of a value of `ty`: a word, a product for a tuple, or
     /// the structure a struct is defined as.
     fn value_ty(&mut self, ty: TyId<'db>) -> Result<String, Unsupported> {
+        // An unsigned integer of any width is a word below its bound.
+        if self.uint_bits(ty).is_some() {
+            return Ok("UInt256".to_string());
+        }
+        if ty.is_never(self.db) {
+            return Ok("Empty".to_string());
+        }
         let pretty = ty.pretty_print(self.db);
         match pretty.as_str() {
             // An address is its word.
-            "u256" | "Address" => return Ok("UInt256".to_string()),
+            "Address" => return Ok("UInt256".to_string()),
             "bool" => return Ok("Bool".to_string()),
             "()" => return Ok("Unit".to_string()),
             _ => {}
@@ -345,6 +375,7 @@ impl<'db> BodyExporter<'_, 'db> {
             };
             let carrier = self.carriers.get(param as usize).copied().flatten();
             let ty = match (value.ty.as_capability(db), carrier) {
+                (Some(_), Some(Carrier::Erased)) => continue,
                 (Some((kind, inner)), Some(Carrier::Value)) => {
                     if kind == CapabilityKind::Mut {
                         self.outs.push(NValueId::new(index));
@@ -412,7 +443,9 @@ impl<'db> BodyExporter<'_, 'db> {
             });
         match returned {
             Some(Some(operand)) => self.lean_ty(self.ty(operand.value)),
-            Some(None) | None => Ok("Unit".to_string()),
+            Some(None) => Ok("Unit".to_string()),
+            // A body that never returns gives no value.
+            None => Ok("Empty".to_string()),
         }
     }
 
@@ -556,6 +589,25 @@ impl<'db> BodyExporter<'_, 'db> {
             NTerminatorKind::Fail(FailReason::Assert { message: None }) => {
                 writeln!(out, "{pad}M.panic 0x01").unwrap()
             }
+            // Control stops at a call that never returns, whose result has
+            // no values.
+            NTerminatorKind::Unreachable => {
+                let never =
+                    data.statements
+                        .iter()
+                        .rev()
+                        .find_map(|statement| match &statement.kind {
+                            NStatementKind::Define { result, .. }
+                                if self.ty(*result).is_never(self.module.db) =>
+                            {
+                                Some(*result)
+                            }
+                            _ => None,
+                        });
+                let never = never
+                    .ok_or_else(|| Unsupported("unreachable code after no call".to_string()))?;
+                writeln!(out, "{pad}nomatch {}", value_name(never)).unwrap();
+            }
             other => return Err(Unsupported(format!("terminator {other:?}"))),
         }
         Ok(())
@@ -593,10 +645,11 @@ impl<'db> BodyExporter<'_, 'db> {
                         None
                     }
                     // An access to a local is read and written through the
-                    // local's variable, where it is used.
+                    // local's variable, where it is used; one to the root
+                    // object reaches no data.
                     NExpr::Forward { .. } | NExpr::MakeView { .. } | NExpr::Borrow { .. }
                         if self.is_access(self.ty(*result))
-                            && self.carrier(*result)? == Carrier::Value =>
+                            && self.carrier(*result)? != Carrier::Place =>
                     {
                         None
                     }
@@ -625,12 +678,31 @@ impl<'db> BodyExporter<'_, 'db> {
                         Some(format!("let {name} := {}", self.read(&target)?))
                     }
                     NExpr::Binary { op, lhs, rhs } => {
-                        if self.ty(lhs.value).pretty_print(self.module.db) != "u256" {
-                            return Err(Unsupported(format!("operator {op:?} off `u256`")));
+                        if self.module.uint_bits(self.ty(lhs.value)) != Some(256) {
+                            return Err(Unsupported(format!("operator {op:?} off a word")));
                         }
                         Some(format!(
                             "let {name} {}",
                             binary(*op, self.operand(lhs)?, self.operand(rhs)?)?
+                        ))
+                    }
+                    NExpr::Unary { op, value } => {
+                        let ty = self.ty(value.value);
+                        let value = self.operand(value)?;
+                        Some(match (op, self.module.uint_bits(ty)) {
+                            (UnaryOp::BitNot, Some(256)) => format!("let {name} := ~~~{value}"),
+                            (UnaryOp::Not, None) if ty.is_bool(self.module.db) => {
+                                format!("let {name} := !{value}")
+                            }
+                            _ => return Err(Unsupported(format!("operator {op:?}"))),
+                        })
+                    }
+                    NExpr::ScalarCast { value, to } => {
+                        let from = self.ty(value.value);
+                        let value = self.operand(value)?;
+                        Some(format!(
+                            "let {name} := {}",
+                            self.module.cast(&value, from, *to)?
                         ))
                     }
                     NExpr::MakeView { place, .. } | NExpr::Borrow { place, .. } => {
@@ -677,7 +749,7 @@ impl<'db> BodyExporter<'_, 'db> {
                                 "effect argument below a provider".to_string(),
                             ));
                         }
-                        Some(self.call(&name, callee.key, args)?)
+                        Some(self.call(*result, callee.key, args)?)
                     }
                     other => return Err(Unsupported(format!("expression {other:?}"))),
                 }
@@ -702,11 +774,12 @@ impl<'db> BodyExporter<'_, 'db> {
     /// a `mut` one stores the value the callee returns for it.
     fn call(
         &mut self,
-        name: &str,
+        result: NValueId,
         callee: SemanticInstanceKey<'db>,
         args: &[NOperand],
     ) -> Result<String, Unsupported> {
         let db = self.module.db;
+        let name = &value_name(result);
         let BodyOwner::Func(func, _) = callee.owner(db) else {
             return Err(Unsupported("call to a non-function".to_string()));
         };
@@ -732,6 +805,25 @@ impl<'db> BodyExporter<'_, 'db> {
                     fields.collect::<String>()
                 ));
             }
+            // The externs the prelude defines.
+            (true, Some("calldataload"), [offset]) if func.is_extern(db) => {
+                return Ok(format!(
+                    "let {name} ← calldataload {}",
+                    self.operand(offset)?
+                ));
+            }
+            (true, Some("calldatasize"), []) if func.is_extern(db) => {
+                return Ok(format!("let {name} ← calldatasize"));
+            }
+            (true, Some("revert_empty"), []) if func.is_extern(db) => {
+                return Ok(format!("let {name} ← revertEmpty"));
+            }
+            (true, Some("__bitcast"), [value]) if func.is_extern(db) => {
+                let from = self.ty(value.value);
+                let value = self.operand(value)?;
+                let cast = self.module.cast(&value, from, self.ty(result))?;
+                return Ok(format!("let {name} := {cast}"));
+            }
             _ => {}
         }
         let mut carriers = Vec::new();
@@ -745,6 +837,9 @@ impl<'db> BodyExporter<'_, 'db> {
                 None
             };
             carriers.push(carrier);
+            if carrier == Some(Carrier::Erased) {
+                continue;
+            }
             if carrier != Some(Carrier::Value) {
                 write!(lean_args, " {}", self.operand(arg)?).unwrap();
                 continue;
@@ -807,10 +902,15 @@ impl<'db> BodyExporter<'_, 'db> {
             .carrier_target(self.module.db, value)
             .ok_or_else(|| Unsupported("access without one target".to_string()))?;
         match target.base {
-            CarrierBase::Root(root) => match self.body.roots[root.index()].kind {
+            CarrierBase::Root(root) => match &self.body.roots[root.index()].kind {
+                NRootKind::Provider { binding }
+                    if matches!(binding.source, ProviderSource::RootProvider { .. }) =>
+                {
+                    Ok(Carrier::Erased)
+                }
                 NRootKind::Provider { .. } => Ok(Carrier::Place),
                 NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => Ok(Carrier::Value),
-                ref kind => Err(Unsupported(format!("access to root {kind:?}"))),
+                kind => Err(Unsupported(format!("access to root {kind:?}"))),
             },
             CarrierBase::Param { param } => self
                 .carriers
@@ -867,6 +967,15 @@ impl<'db> BodyExporter<'_, 'db> {
                 .then(|| ValueTarget {
                     var: format!("r{}", root.index()),
                     ty: data.ty,
+                    path: Vec::new(),
+                })
+            }
+            // A view of a snapshot type is the value itself.
+            NPlaceBase::CapabilityTarget { carrier } if !self.is_access(self.ty(carrier)) => {
+                let (_, ty) = self.ty(carrier).as_capability(self.module.db).unwrap();
+                Some(ValueTarget {
+                    var: value_name(carrier),
+                    ty,
                     path: Vec::new(),
                 })
             }

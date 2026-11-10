@@ -62,3 +62,8 @@ fn tuple() {
 fn param_slot() {
     check("param_slot");
 }
+
+#[test]
+fn decode() {
+    check("decode");
+}

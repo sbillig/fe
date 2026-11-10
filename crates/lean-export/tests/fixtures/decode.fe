@@ -1,0 +1,16 @@
+use std::abi::sol
+use std::evm::Evm
+
+msg DecodeMsg {
+    #[selector = sol("probe()")]
+    Probe -> u256,
+}
+
+pub contract Decoder uses (evm: Evm) {
+    recv DecodeMsg {
+        Probe -> u256 uses (evm) {
+            let args: (u256, u256) = evm.decode_args()
+            args.0 + args.1
+        }
+    }
+}
