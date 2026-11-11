@@ -1808,14 +1808,6 @@ impl<'db> BodyExporter<'_, 'db> {
             self.helds.push((*result, place.clone(), mutable));
         }
         self.result_ty = self.returned_ty()?;
-        // A function that returns a value and whose body returns none has
-        // no body of its own: the compiler supplies its result.
-        if let BodyOwner::Func(func, _) = owner
-            && self.result_ty == "Unit"
-            && func.return_ty(db) != TyId::unit(db)
-        {
-            return Err(Unsupported("body the compiler supplies".to_string()));
-        }
         let never = self.result_ty == "Empty";
         let mut returned = Vec::new();
         for out in self.outs.clone() {
@@ -1934,7 +1926,18 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         match returned {
             Some(Some(operand)) => self.lean_ty(self.ty(operand.value)),
-            Some(None) => Ok("Unit".to_string()),
+            // A function that returns a value and whose body returns none
+            // has no body of its own: the compiler supplies its result.
+            Some(None) => {
+                let db = self.module.db;
+                let key = self.body.owner.key(db);
+                if matches!(key.owner(db), BodyOwner::Func(..))
+                    && key.typed_body(db).result_ty() != TyId::unit(db)
+                {
+                    return Err(Unsupported("body the compiler supplies".to_string()));
+                }
+                Ok("Unit".to_string())
+            }
             // A body that never returns gives no value.
             None => Ok("Empty".to_string()),
         }
