@@ -384,6 +384,7 @@ impl<'db> Module<'db> {
             slide_ty: None,
             sessions: Vec::new(),
             slides: FxHashMap::default(),
+            reloads: FxHashMap::default(),
             never: None,
             yielding: false,
             codecs: Vec::new(),
@@ -1650,6 +1651,9 @@ struct BodyExporter<'a, 'db> {
     /// Where the slide of each open session of a projection that returns its
     /// slide leaves the values it returns.
     slides: FxHashMap<NValueId, Vec<Out<'db>>>,
+    /// The lines that load again, where each open session ends, the lanes
+    /// the body holds and the session's callee writes itself.
+    reloads: FxHashMap<NValueId, String>,
     /// The result of the call printed last in the block being printed that
     /// never returns.
     never: Option<String>,
@@ -2569,6 +2573,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     };
                     write!(lines, "\n{line}").unwrap();
                 }
+                lines.push_str(&self.reloads[access]);
                 Some(lines)
             }
             // A `mut` borrow of a lane writes the value it held back.
@@ -2765,7 +2770,8 @@ impl<'db> BodyExporter<'_, 'db> {
         // A callee's instance names the contract field behind an effect.
         // Any other effect is an argument: its place in contract state, or
         // the value of the local it is, which a `mut` effect leaves changed.
-        for effect in self.module.effect_params(callee) {
+        let params = self.module.effect_params(callee);
+        for effect in &params {
             let arg = effect_args
                 .iter()
                 .find(|arg| arg.binding_idx == effect.provider)
@@ -2821,6 +2827,42 @@ impl<'db> BodyExporter<'_, 'db> {
                 _ => return Err(Unsupported("effect argument in memory".to_string())),
             }
         }
+        // A callee whose instance names the contract field behind an effect
+        // reads and writes the field itself. Where the body holds the
+        // field's lane, the callee finds what the body wrote, and the body
+        // loads what a `mut` effect leaves.
+        let mut reloads = String::new();
+        for arg in effect_args {
+            let carrier = match &arg.arg {
+                NEffectArgValue::Place(NPlace {
+                    base: NPlaceBase::CapabilityTarget { carrier },
+                    ..
+                }) => *carrier,
+                NEffectArgValue::Value(operand) => operand.value,
+                NEffectArgValue::Place(_) => continue,
+            };
+            if params
+                .iter()
+                .any(|effect| effect.provider == arg.binding_idx)
+            {
+                continue;
+            }
+            let Some((held, _)) = self.held(carrier) else {
+                continue;
+            };
+            let (_, place, mutable) = self.helds.iter().find(|(lane, ..)| *lane == held).unwrap();
+            let (place, mutable) = (place.clone(), *mutable);
+            let (lean, lane) = self.place(&place)?;
+            let var = format!("h{}", held.index());
+            if mutable {
+                let store = self.store(place.ty, &lean, lane, &var)?;
+                self.located.push(store);
+            }
+            if arg.required_mut {
+                let load = self.load(place.ty, &lean, lane)?;
+                write!(reloads, "\n{var} := (← {load})").unwrap();
+            }
+        }
         let carriers = Carriers {
             params: carriers,
             effects,
@@ -2833,14 +2875,17 @@ impl<'db> BodyExporter<'_, 'db> {
         // session ends, and the values it returns are written back there.
         if self.module.lenses.contains(&callee) {
             self.slides.insert(result, outs);
+            self.reloads.insert(result, reloads.clone());
             return Ok(if self.sessions.contains(&result) {
-                format!("let ({name}_g, {name}_k) ← {callee}{lean_args}\n{name} := {name}_g")
+                format!(
+                    "let ({name}_g, {name}_k) ← {callee}{lean_args}\n{name} := {name}_g{reloads}"
+                )
             } else {
-                format!("let ({name}, {name}_k) ← {callee}{lean_args}")
+                format!("let ({name}, {name}_k) ← {callee}{lean_args}{reloads}")
             });
         }
         if outs.is_empty() {
-            return Ok(format!("let {name} ← {callee}{lean_args}"));
+            return Ok(format!("let {name} ← {callee}{lean_args}{reloads}"));
         }
         let returned: String = (0..outs.len()).map(|n| format!(", {name}_{n}")).collect();
         let mut lines = format!("let ({name}{returned}) ← {callee}{lean_args}");
@@ -2852,6 +2897,7 @@ impl<'db> BodyExporter<'_, 'db> {
             };
             write!(lines, "\n{line}").unwrap();
         }
+        lines.push_str(&reloads);
         Ok(lines)
     }
 
