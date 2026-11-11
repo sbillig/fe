@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, env, fmt::Write, fs, panic};
 
 use codegen::{
-    OptLevel, SonatinaTestOptions, emit_module_sonatina_bytecode, emit_test_module_sonatina,
+    OptLevel, SonatinaTestOptions, emit_module_sonatina_bytecode, emit_test_suite_sonatina,
 };
 use common::InputDb;
 use cranelift_entity::EntityRef;
@@ -32,9 +32,9 @@ use url::Url;
 /// contract stopped at as `BLOCK <ids>\t<reason>`.
 ///
 /// A file with tests ends in a call of `Fe.EVM.Diff.main` on the creation
-/// bytecode of its exported contracts and the bytecode of its tests, which
-/// runs each test and compares every call it makes on such a contract with
-/// the contract's model.
+/// and runtime bytecode of its exported contracts and the object its tests
+/// compile to, which runs each test and compares every call it makes on such
+/// a contract with the contract's model.
 #[test]
 #[ignore = "reads its input from the environment"]
 fn export_corpus() {
@@ -83,8 +83,8 @@ fn export_corpus() {
                          set_option linter.unusedVariables false\n\n{lean}\nend\nend Corpus.{id}\n"
                     )
                     .unwrap();
-                    let contract = contract.name(db).unwrap().data(db).to_string();
-                    models.push((contract, id));
+                    let name = contract.name(db).unwrap().data(db).to_string();
+                    models.push((name, id, contract.code_address_space_slot_count(db) * 32));
                 }
                 Err(reason) => blockers.entry(reason.0).or_default().push(id),
             }
@@ -95,38 +95,41 @@ fn export_corpus() {
         let compiled = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             let options = SonatinaTestOptions::default();
             let code = emit_module_sonatina_bytecode(db, top_mod, OptLevel::O1, None).ok()?;
-            let tests = emit_test_module_sonatina(db, top_mod, OptLevel::O1, options, None).ok()?;
-            Some((code, tests.tests))
+            let suite = emit_test_suite_sonatina(db, &[top_mod], OptLevel::O1, options, None);
+            Some((code, suite.ok()?))
         }));
         match compiled {
-            Ok(Some((code, tests))) if !tests.is_empty() => {
+            Ok(Some((code, Some(suite)))) => {
                 let targets: Vec<_> = models
                     .iter()
-                    .map(|(contract, id)| {
+                    .map(|(contract, id, bytes)| {
                         let creation = hex(&code[contract].deploy);
+                        let runtime = hex(&code[contract].runtime);
                         format!(
                             "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{creation}\", \
-                             model := ⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime⟩ }}"
+                             runtime := Fe.EVM.Diff.hex \"{runtime}\", \
+                             model := ⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩ }}"
                         )
                     })
                     .collect();
-                let tests: Vec<_> = tests
+                let tests: Vec<_> = suite
+                    .tests
                     .iter()
                     .map(|test| {
                         let balance = BigUint::from_bytes_be(
                             test.initial_balance.as_deref().unwrap_or_default(),
                         );
                         format!(
-                            "{{ name := \"{}\", code := Fe.EVM.Diff.hex \"{}\", balance := {balance} }}",
-                            test.hir_name,
-                            hex(&test.bytecode)
+                            "{{ name := \"{}\", selector := {}, balance := {balance} }}",
+                            test.name, test.selector
                         )
                     })
                     .collect();
                 write!(
                     text,
-                    "\n#eval Fe.EVM.Diff.main \"{name}\"\n  [{}]\n  [{}]\n",
+                    "\n#eval Fe.EVM.Diff.main \"{name}\"\n  [{}]\n  (Fe.EVM.Diff.hex \"{}\")\n  [{}]\n",
                     targets.join(",\n   "),
+                    hex(&suite.bytecode),
                     tests.join(",\n   ")
                 )
                 .unwrap();
