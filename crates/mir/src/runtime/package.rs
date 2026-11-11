@@ -1,4 +1,4 @@
-use common::{compilation::Target, indexmap::IndexMap};
+use common::{compilation::Target, indexmap::IndexMap, ingot::IngotKind};
 use hir::analysis::ty::AddressSpace;
 use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
@@ -22,6 +22,7 @@ use hir::{
     },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::iter;
 
 use crate::{
     db::MirDb,
@@ -340,12 +341,47 @@ pub fn build_ingot_module_runtime_package<'db>(
         .transpose()
 }
 
+/// Build the package of an EVM test run: one object for every selected test
+/// of `top_mods`. Its entry runs the test whose index, in the order of
+/// [`collect_test_funcs`], is the calldata selector. The tests share one
+/// object so that the code they have in common is compiled once.
 pub fn build_test_runtime_package<'db>(
     db: &'db dyn MirDb,
-    top_mod: TopLevelMod<'db>,
+    top_mods: &[TopLevelMod<'db>],
     filter: Option<&str>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
-    build_test_package(db, top_mod, &collect_test_funcs(db, &[top_mod], filter))
+    require_target(db, Target::Evm)?;
+    let &top_mod = top_mods.first().ok_or_else(|| {
+        LowerError::Unsupported("test runtime package needs a source module".into())
+    })?;
+    let dispatch = collect_test_funcs(db, top_mods, filter)
+        .iter()
+        .zip(0..)
+        .map(|(test, selector)| {
+            Ok(DispatchArm {
+                selector,
+                wrapper: test_root(db, test)?,
+            })
+        })
+        .collect::<Result<Box<[_]>, LowerError>>()?;
+    let mut roots = Vec::new();
+    let mut objects = Vec::new();
+    if !dispatch.is_empty() {
+        let root = synthetic_instance(
+            db,
+            RuntimeSyntheticSpec::TestSuiteRoot { dispatch },
+            Vec::new(),
+        );
+        roots.push(root);
+        objects.push((
+            ObjectId::TestSuite,
+            vec![(RuntimeSectionName::TestSuite, root)],
+        ));
+    }
+    let package = build_sectioned_package(db, top_mod, roots, objects)?;
+    verify_runtime_package(db, package)
+        .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
+    Ok(package)
 }
 
 /// Build one reachable runtime graph for every selected native test in a suite.
@@ -413,15 +449,21 @@ pub fn collect_test_funcs<'db>(
     tests
 }
 
-/// Build the package of one test of a WebAssembly test run: a module with the
-/// test and what it reaches, and nothing else.
+/// Build the package of `tests` of a WebAssembly test run: a module with the
+/// tests and what they reach, and nothing else. Its roots are in the order of
+/// `tests`. Several tests share a module only if every import is one of
+/// `std::wasm`'s: the test host supplies no other, and a module that imports
+/// one does not start, which would fail every test in it.
 pub fn build_wasm_test_runtime_package<'db>(
     db: &'db dyn MirDb,
-    test: &TestFunc<'db>,
+    tests: &[TestFunc<'db>],
 ) -> Result<RuntimePackage<'db>, LowerError> {
     require_target(db, Target::Wasm)?;
-    let package = build_test_package(db, test.func.top_mod(db), std::slice::from_ref(test))?;
-    check_wasm_imports(db, &package)?;
+    let first = tests
+        .first()
+        .ok_or_else(|| LowerError::Unsupported("a test module needs a test".into()))?;
+    let package = build_test_package(db, first.func.top_mod(db), tests)?;
+    check_wasm_imports(db, &package, tests.len() > 1)?;
     Ok(package)
 }
 
@@ -432,30 +474,47 @@ fn build_test_package<'db>(
 ) -> Result<RuntimePackage<'db>, LowerError> {
     let mut roots = Vec::new();
     let mut objects = Vec::new();
-    for &TestFunc { func, ref name } in tests {
-        let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(func, None))?;
-        let entry_args =
-            entry_semantic_args_plan(db, EntryEffectContext::TestFunc { func }, semantic)?;
-        let runtime_root = runtime_instance_for_semantic(db, semantic);
-        let root = synthetic_instance(
-            db,
-            RuntimeSyntheticSpec::TestRoot {
-                name: name.clone(),
-                callee: runtime_root,
-                entry_args,
-            },
-            Vec::new(),
-        );
+    for test in tests {
+        let root = test_root(db, test)?;
         roots.push(root);
         objects.push((
-            ObjectId::Test(func),
-            vec![(RuntimeSectionName::Test(name.clone()), root)],
+            ObjectId::Test(test.func),
+            vec![(RuntimeSectionName::Test(test.name.clone()), root)],
         ));
+    }
+    // A WebAssembly test passes revert data to the test host, as a native
+    // one does; any other WebAssembly module traps.
+    if db.compilation_settings().target(db) == Target::Wasm {
+        for func in [NativeRuntimeFunc::HostPanic, NativeRuntimeFunc::HostRevert] {
+            roots.push(func.instance(db, top_mod)?);
+        }
     }
     let package = build_sectioned_package(db, top_mod, roots, objects)?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid runtime package: {err:?}")))?;
     Ok(package)
+}
+
+/// The root that runs `test` with the effects of a test entry.
+fn test_root<'db>(
+    db: &'db dyn MirDb,
+    test: &TestFunc<'db>,
+) -> Result<RuntimeInstance<'db>, LowerError> {
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(test.func, None))?;
+    let entry_args = entry_semantic_args_plan(
+        db,
+        EntryEffectContext::TestFunc { func: test.func },
+        semantic,
+    )?;
+    Ok(synthetic_instance(
+        db,
+        RuntimeSyntheticSpec::TestRoot {
+            name: test.name.clone(),
+            callee: runtime_instance_for_semantic(db, semantic),
+            entry_args,
+        },
+        Vec::new(),
+    ))
 }
 
 fn build_contract_package<'db>(
@@ -566,6 +625,11 @@ pub fn build_native_package<'db>(
 /// function cannot be exported under it.
 pub const WASM_MEMORY_EXPORT: &str = "memory";
 
+/// The name under which a WebAssembly module with imports exports the global
+/// that holds the top of its stack, which a host puts back after a call that
+/// an import ended by throwing. A function cannot be exported under it.
+pub const WASM_STACK_EXPORT: &str = "stack_top";
+
 /// The names of the exports that give the host an allocator. A module has them
 /// when an export takes text, and no function of the module may use them.
 pub const WASM_ALLOCATOR_EXPORTS: [&str; 3] = ["alloc", "arena_mark", "arena_release"];
@@ -621,22 +685,15 @@ pub struct WasmExportPackage<'db> {
     pub exports: Vec<WasmExport<'db>>,
 }
 
-/// Build the package of a WebAssembly module. Its exports are the `pub fn`
-/// items of the root scope that are not generic, not `extern` and not tests.
-/// Each is rooted with its own signature, which must consist of `bool` and
-/// integers of at most 64 bits. An export that is not scalar is an error that
-/// names it, and so is a module with no exports.
-pub fn build_wasm_export_package<'db>(
+/// The exports of the WebAssembly module of `top_mod`, in name order: the
+/// `pub fn` items of its root scope that are not generic, not `extern` and not
+/// tests. Each is rooted with its own signature, which must consist of `bool`
+/// and integers of at most 64 bits. An export that is not scalar is an error
+/// that names it.
+pub fn wasm_exports<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-) -> Result<WasmExportPackage<'db>, LowerError> {
-    require_target(db, Target::Wasm)?;
-    if let Some(func) = native_exports(db, top_mod).first() {
-        return Err(LowerError::Unsupported(format!(
-            "`#[unsafe(export)]` requires `--backend native`, but `{}` is exported; a WebAssembly module exports the `pub fn` items in the root of the file",
-            func.scope().pretty_path(db).unwrap_or_default()
-        )));
-    }
+) -> Result<Vec<WasmExport<'db>>, LowerError> {
     let mut exports = Vec::new();
     for item in top_mod.children_non_nested(db) {
         let ItemKind::Func(func) = item else {
@@ -654,9 +711,27 @@ pub fn build_wasm_export_package<'db>(
         }
     }
     exports.sort_by_cached_key(|export| func_display_name(db, export.func));
+    Ok(exports)
+}
+
+/// Build the package of a WebAssembly module from `top_mod`, a standalone file
+/// or the root module of an ingot, and what its `wasm_exports` reach. A module
+/// with no exports is an error.
+pub fn build_wasm_export_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<WasmExportPackage<'db>, LowerError> {
+    require_target(db, Target::Wasm)?;
+    if let Some(func) = native_exports(db, top_mod).first() {
+        return Err(LowerError::Unsupported(format!(
+            "`#[unsafe(export)]` requires `--backend native`, but `{}` is exported; a WebAssembly module exports the `pub fn` items of its root module",
+            func.scope().pretty_path(db).unwrap_or_default()
+        )));
+    }
+    let exports = wasm_exports(db, top_mod)?;
     if exports.is_empty() {
         return Err(LowerError::Unsupported(
-            "WebAssembly output needs at least one exported function: a non-generic `pub fn` in the root of the file".to_string(),
+            "WebAssembly output needs at least one exported function: a non-generic `pub fn` in the root module".to_string(),
         ));
     }
 
@@ -689,17 +764,19 @@ pub fn build_wasm_export_package<'db>(
     )?;
     verify_runtime_package(db, package)
         .map_err(|err| LowerError::Unsupported(format!("invalid WebAssembly package: {err:?}")))?;
-    check_wasm_imports(db, &package)?;
+    check_wasm_imports(db, &package, false)?;
     Ok(WasmExportPackage { package, exports })
 }
 
 /// The imports of a module are the `extern` functions that its exports or its
 /// test reach.
 /// Their signatures cross the boundary by value, so they follow the rule for
-/// exports: `bool` and integers of at most 64 bits.
+/// exports: `bool` and integers of at most 64 bits. With `host_only`, an
+/// import declared outside `std::wasm`, the host contract, is an error too.
 fn check_wasm_imports<'db>(
     db: &'db dyn MirDb,
     package: &RuntimePackage<'db>,
+    host_only: bool,
 ) -> Result<(), LowerError> {
     for function in package.functions(db) {
         let instance = function.instance(db);
@@ -714,10 +791,24 @@ fn check_wasm_imports<'db>(
             continue;
         };
         // `core::rt`'s `malloc` and `free` are the module's own allocator.
-        if func.top_mod(db).ingot(db).is_core(db) {
+        let ingot = func.top_mod(db).ingot(db);
+        if ingot.is_core(db) {
             continue;
         }
         let name = func_display_name(db, func);
+        // The modules from the root of `std` down to the declaration.
+        let mut modules = iter::successors(Some(func.top_mod(db)), |module| module.parent(db))
+            .collect::<Vec<_>>();
+        modules.reverse();
+        let in_host_contract = ingot.kind(db) == IngotKind::Std
+            && modules
+                .get(1)
+                .is_some_and(|module| module.name(db).data(db) == "wasm");
+        if host_only && !in_host_contract {
+            return Err(LowerError::Unsupported(format!(
+                "`{name}` is not an import of `std::wasm`, so a test that calls it needs its own module"
+            )));
+        }
         let signature = instance.interface_signature(db);
         let scalar = vec![WasmParamShape::Scalar; signature.params.len()];
         let result = if signature.ret.is_some() {
@@ -954,9 +1045,13 @@ fn wasm_export_for_func<'db>(
             ));
         }
     };
-    if name == WASM_MEMORY_EXPORT {
+    let reserved = [
+        (WASM_MEMORY_EXPORT, "linear memory"),
+        (WASM_STACK_EXPORT, "stack of the module"),
+    ];
+    if let Some((_, what)) = reserved.iter().find(|(reserved, _)| name == *reserved) {
         return Err(LowerError::Unsupported(format!(
-            "cannot export `{name}` to WebAssembly: the name is reserved for the linear memory"
+            "cannot export `{name}` to WebAssembly: the name is reserved for the {what}"
         )));
     }
     let entry_args =
@@ -1483,13 +1578,16 @@ fn build_non_contract_package<'db>(
 
 /// A `core::rt` function that native code calls to allocate memory or report
 /// a panic. Every native package holds them all, and every WebAssembly package
-/// those that allocate, since its module traps at a panic. The backend drops
-/// those its module never calls.
+/// those that allocate, since its module traps at a panic; a WebAssembly test
+/// package also holds those that pass revert data to the test host. The
+/// backend drops those its module never calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeRuntimeFunc {
     Alloc,
     TryAlloc,
     Dealloc,
+    Realloc,
+    TryRealloc,
     ReportTrap,
     ReportPanic,
     ReportRevert,
@@ -1498,10 +1596,12 @@ pub enum NativeRuntimeFunc {
 }
 
 impl NativeRuntimeFunc {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Alloc,
         Self::TryAlloc,
         Self::Dealloc,
+        Self::Realloc,
+        Self::TryRealloc,
         Self::ReportTrap,
         Self::ReportPanic,
         Self::ReportRevert,
@@ -1509,8 +1609,15 @@ impl NativeRuntimeFunc {
         Self::HostRevert,
     ];
 
-    /// The functions that allocate, which import only `malloc` and `free`.
-    pub const ALLOCATION: [Self; 3] = [Self::Alloc, Self::TryAlloc, Self::Dealloc];
+    /// The functions that allocate, which on WebAssembly import only `malloc`
+    /// and `free`.
+    pub const ALLOCATION: [Self; 5] = [
+        Self::Alloc,
+        Self::TryAlloc,
+        Self::Dealloc,
+        Self::Realloc,
+        Self::TryRealloc,
+    ];
 
     /// The function's instance in the packages of `top_mod`.
     pub fn instance<'db>(
@@ -1518,10 +1625,16 @@ impl NativeRuntimeFunc {
         db: &'db dyn MirDb,
         top_mod: TopLevelMod<'db>,
     ) -> Result<RuntimeInstance<'db>, LowerError> {
+        // WebAssembly's allocator has no `realloc`, so a resize there copies.
+        let wasm = db.compilation_settings().target(db) == Target::Wasm;
         let name = match self {
             Self::Alloc => "alloc",
             Self::TryAlloc => "try_alloc",
             Self::Dealloc => "dealloc",
+            Self::Realloc if wasm => "reallocate_by_copy",
+            Self::TryRealloc if wasm => "try_reallocate_by_copy",
+            Self::Realloc => "reallocate",
+            Self::TryRealloc => "try_reallocate",
             Self::ReportTrap => "report_trap",
             Self::ReportPanic => "report_panic",
             Self::ReportRevert => "report_revert",
@@ -1581,18 +1694,10 @@ fn build_sectioned_package<'db>(
                         let entry = *functions_by_instance
                             .get(&entry_instance)
                             .expect("section entry should be declared as a runtime function");
-                        let reachable = collect_reachable_from_entry(
-                            &graph,
-                            entry_instance,
-                            &mut reachable_cache,
-                        );
                         RuntimeSection {
                             name: section_name,
                             entry,
                             embeds: Vec::new(),
-                            const_regions: collect_const_regions_for_reachable(
-                                db, &graph, &reachable,
-                            ),
                         }
                     })
                     .collect(),
@@ -1714,6 +1819,7 @@ fn resolved_section_region<'db>(
             )),
             RuntimeSectionName::Main
             | RuntimeSectionName::Test(_)
+            | RuntimeSectionName::TestSuite
             | RuntimeSectionName::Export(_) => None,
         },
         RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ManualContractRoot {
@@ -1731,6 +1837,7 @@ fn resolved_section_region<'db>(
         RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::TestSuiteRoot { .. }
             | RuntimeSyntheticSpec::ExportRoot { .. }
             | RuntimeSyntheticSpec::ContractInitAbi { .. }
             | RuntimeSyntheticSpec::ContractRecvAbi { .. },
@@ -1823,33 +1930,6 @@ fn collect_reachable_from_entry<'db>(
     seen
 }
 
-fn collect_const_regions_for_reachable<'db>(
-    db: &'db dyn MirDb,
-    graph: &RuntimeGraph<'db>,
-    reachable: &FxHashSet<RuntimeInstance<'db>>,
-) -> Vec<ConstRegionId<'db>> {
-    let mut seen = FxHashSet::default();
-    let mut regions = Vec::new();
-    let mut instances = reachable.iter().copied().collect::<Vec<_>>();
-    instances.sort_by_cached_key(|instance| {
-        (
-            runtime_instance_sort_key(db, *instance),
-            runtime_instance_symbol_key(db, *instance),
-        )
-    });
-    for instance in instances {
-        let Some(node) = graph.nodes.get(&instance) else {
-            continue;
-        };
-        for region in node.referenced_const_regions.iter().copied() {
-            if seen.insert(region) {
-                regions.push(region);
-            }
-        }
-    }
-    regions
-}
-
 fn materialized_contracts_for_roots<'db>(
     db: &'db dyn MirDb,
     roots: &[RuntimeInstance<'db>],
@@ -1862,6 +1942,7 @@ fn materialized_contracts_for_roots<'db>(
                 | RuntimeSyntheticSpec::ContractRuntimeRoot { contract, .. } => Some(*contract),
                 RuntimeSyntheticSpec::MainRoot { .. }
                 | RuntimeSyntheticSpec::TestRoot { .. }
+                | RuntimeSyntheticSpec::TestSuiteRoot { .. }
                 | RuntimeSyntheticSpec::ExportRoot { .. }
                 | RuntimeSyntheticSpec::ManualContractRoot { .. }
                 | RuntimeSyntheticSpec::ContractInitAbi { .. }
@@ -2195,26 +2276,6 @@ fn memory_span_ty<'db>(
         .ok_or_else(|| LowerError::Unsupported("missing core::ptr::MemSpan".to_string()))
 }
 
-fn make_runtime_function<'db>(
-    db: &'db dyn MirDb,
-    instance: RuntimeInstance<'db>,
-    symbol: String,
-    linkage: RuntimeLinkage,
-    inline_hint: RuntimeInlineHint,
-    owner: RuntimeFunctionOwner<'db>,
-    referenced_const_regions: Vec<ConstRegionId<'db>>,
-) -> RuntimeFunction<'db> {
-    RuntimeFunction::new(
-        db,
-        instance,
-        symbol,
-        linkage,
-        inline_hint,
-        owner,
-        referenced_const_regions,
-    )
-}
-
 fn make_runtime_object<'db>(
     db: &'db dyn MirDb,
     name: String,
@@ -2321,7 +2382,7 @@ fn runtime_function_for_instance<'db>(
     referenced_const_regions: Vec<ConstRegionId<'db>>,
 ) -> RuntimeFunction<'db> {
     match instance.key(db).source(db) {
-        RuntimeInstanceSource::Semantic(semantic) => make_runtime_function(
+        RuntimeInstanceSource::Semantic(semantic) => RuntimeFunction::new(
             db,
             instance,
             symbol,
@@ -2331,6 +2392,7 @@ fn runtime_function_for_instance<'db>(
                 RuntimeLinkage::Private
             },
             inline_hint_for_semantic(db, semantic),
+            matches!(semantic.key(db).owner(db), BodyOwner::Func(func, _) if func.is_cold(db)),
             RuntimeFunctionOwner::Semantic(semantic),
             referenced_const_regions,
         ),
@@ -2343,12 +2405,13 @@ fn runtime_function_for_instance<'db>(
                 // shared memory footprint, including otherwise small call paths.
                 _ => RuntimeInlineHint::Auto,
             };
-            make_runtime_function(
+            RuntimeFunction::new(
                 db,
                 instance,
                 symbol,
                 RuntimeLinkage::Private,
                 inline_hint,
+                false,
                 RuntimeFunctionOwner::Synthetic(spec),
                 referenced_const_regions,
             )
@@ -2456,6 +2519,14 @@ fn runtime_synthetic_spec_key<'db>(
             "__synthetic:test_root:{name}:{}:{}",
             instance_key(callee),
             entry_semantic_args_sort_key(db, &entry_args)
+        ),
+        RuntimeSyntheticSpec::TestSuiteRoot { dispatch } => format!(
+            "__synthetic:test_suite_root:{}",
+            dispatch
+                .iter()
+                .map(|arm| format!("{}:{}", arm.selector, instance_key(arm.wrapper)))
+                .collect::<Vec<_>>()
+                .join(",")
         ),
         RuntimeSyntheticSpec::ExportRoot { callee, entry_args } => format!(
             "__synthetic:export_root:{}:{}",
@@ -2890,6 +2961,7 @@ fn symbol_base_for_runtime_instance<'db>(
         RuntimeSyntheticSpec::TestRoot { name, .. } => {
             format!("test_root_{}", sanitize_symbol(name))
         }
+        RuntimeSyntheticSpec::TestSuiteRoot { .. } => "test_suite_root".to_string(),
         RuntimeSyntheticSpec::ManualContractRoot { func, .. } => {
             let (contract_name, section) = match func.manual_contract_root_attr(db) {
                 Some(ManualContractRootAttr::Init { contract_name }) => {
@@ -3088,8 +3160,68 @@ pub fn main() -> i32 {
             .touch(&mut db, file_url, Some(source.to_string()));
         let top_mod = db.top_mod(file);
         let package =
-            build_test_runtime_package(&db, top_mod, filter).expect("test package should build");
+            build_test_runtime_package(&db, &[top_mod], filter).expect("test package should build");
         f(&db, package)
+    }
+
+    #[test]
+    fn selected_evm_tests_share_one_object() {
+        let source = r#"
+fn helper() -> u256 {
+    1
+}
+
+#[test]
+fn first() {
+    assert!(helper() == 1)
+}
+
+#[test]
+fn second() {
+    assert!(helper() == 1)
+}
+
+#[test]
+fn other() {}
+"#;
+        for (filter, expected) in [
+            (None, vec!["first", "second", "other"]),
+            (Some("s"), vec!["first", "second"]),
+        ] {
+            with_test_runtime_package("test_suite.fe", source, filter, |db, package| {
+                let [object] = package.objects(db) else {
+                    panic!("the tests should share one object");
+                };
+                let [section] = object.sections(db).as_slice() else {
+                    panic!("the test suite object should have one section");
+                };
+                assert_eq!(section.name, RuntimeSectionName::TestSuite);
+                let RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::TestSuiteRoot {
+                    dispatch,
+                }) = section.entry.owner(db)
+                else {
+                    panic!("the test suite section should be entered through its root");
+                };
+                let tests: Vec<_> = dispatch
+                    .iter()
+                    .map(|arm| {
+                        let RuntimeInstanceSource::Synthetic(synthetic) =
+                            arm.wrapper.key(db).source(db)
+                        else {
+                            panic!("a test should be run by a synthetic root");
+                        };
+                        let RuntimeSyntheticSpec::TestRoot { name, .. } = synthetic.spec(db) else {
+                            panic!("a test should be run by a test root");
+                        };
+                        (arm.selector, name.as_str())
+                    })
+                    .collect();
+                assert_eq!(tests, (0..).zip(expected).collect::<Vec<_>>());
+            });
+        }
+        with_test_runtime_package("test_suite.fe", source, Some("absent"), |db, package| {
+            assert!(package.objects(db).is_empty());
+        });
     }
 
     #[test]
@@ -3255,15 +3387,15 @@ fn deploys_both() uses (evm: mut Evm) {
 "#,
             None,
             |db, package| {
-                assert_eq!(package_root_object_names(db, package), vec!["deploys_both"]);
+                assert_eq!(package_root_object_names(db, package), vec!["test_suite"]);
                 let mut names = package_object_names(db, package);
                 names.sort();
                 assert_eq!(
                     names,
                     vec![
-                        "deploys_both",
                         "same_named_deployed__C",
-                        "same_named_deployed__inner__C"
+                        "same_named_deployed__inner__C",
+                        "test_suite"
                     ]
                 );
             },
@@ -3317,8 +3449,8 @@ fn ignored() {
 "#,
             Some("selected"),
             |db, package| {
-                assert_eq!(package_root_object_names(db, package), vec!["selected"]);
-                assert_eq!(package_object_names(db, package), vec!["selected"]);
+                assert_eq!(package_root_object_names(db, package), vec!["test_suite"]);
+                assert_eq!(package_object_names(db, package), vec!["test_suite"]);
             },
         );
     }
@@ -3356,7 +3488,7 @@ fn selected() uses (evm: mut Evm) {
             |db, package| {
                 let object_names = package_object_names(db, package);
 
-                assert_eq!(package_root_object_names(db, package), vec!["selected"]);
+                assert_eq!(package_root_object_names(db, package), vec!["test_suite"]);
                 assert!(
                     object_names.contains(&"Child".to_string()),
                     "selected test package should discover create2 contract dependency: {object_names:?}"

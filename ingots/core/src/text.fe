@@ -6,7 +6,7 @@
 //!
 //! Text is bytes here: searches compare bytes, which is exact for UTF-8, and
 //! offsets count bytes.
-use super::abi::{Bytes, DynString}
+use super::abi::{ByteSource, Bytes, DynString}
 use super::fixed::{Fixed, UFixed}
 use super::iter::Driver
 use super::marker::Copy
@@ -291,25 +291,41 @@ fn digit_value(_ byte: u8) -> u256 {
 /// Returns the standard base64 encoding of `data`, with `=` padding
 /// (Solidity `Base64.encode`).
 pub fn base64(_ data: MemSpan) -> DynString {
-    let len = data.len()
-    let out = DynString::zeroed(4 * ((len + 2) / 3))
-    let dest = out.span().ptr()
-    var i: usize = 0
-    var j: usize = 0
-    while i < len {
-        let a = data.byte_at(i)
-        let b = if i + 1 < len { data.byte_at(i + 1) } else { 0 }
-        let c = if i + 2 < len { data.byte_at(i + 2) } else { 0 }
-        unsafe {
-            *ptr::offset_bytes(dest, j) = base64_digit(a >> 2)
-            *ptr::offset_bytes(dest, j + 1) = base64_digit(((a & 3) << 4) | (b >> 4))
-            *ptr::offset_bytes(dest, j + 2) = if i + 1 < len { base64_digit(((b & 15) << 2) | (c >> 6)) } else { 61 }
-            *ptr::offset_bytes(dest, j + 3) = if i + 2 < len { base64_digit(c & 63) } else { 61 }
-        }
-        i += 3
-        j += 4
+    var out = DynString::zeroed(4 * ((data.len() + 2) / 3))
+    // The alphabet from byte 31 on: the word read at a digit's index ends
+    // with the digit, which `mstore8` stores as it is.
+    let table: DynString = "                               ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let digits = table.span()
+    // Four digits for each group of three bytes, and for the one or two
+    // bytes after the last group.
+    let (groups, rest) = data.as_chunks<3>()
+    let (mut encoded, _) = out.span().as_chunks<4>()
+    let (mut body, mut last) = encoded.split_at(groups.len())
+    for k in 0..groups.len() {
+        let bits = groups.word_at(k)
+        let o = mut body[k]
+        o[0] = base64_digit(digits, bits, 0)
+        o[1] = base64_digit(digits, bits, 1)
+        o[2] = base64_digit(digits, bits, 2)
+        o[3] = base64_digit(digits, bits, 3)
+    }
+    if !rest.is_empty() {
+        let bits = rest.word_at(0)
+        let o = mut last[0]
+        o[0] = base64_digit(digits, bits, 0)
+        o[1] = base64_digit(digits, bits, 1)
+        o[2] = if rest.len() > 1 { base64_digit(digits, bits, 2) } else { b'=' }
+        o[3] = b'='
     }
     out
+}
+
+// Digit `n` of the bytes at the start of `bits`, from their six bits from
+// bit `6 * n` on, counted from the top.
+#[inline(always)]
+fn base64_digit(_ digits: MemSpan, _ bits: u256, _ n: u256) -> u8 {
+    let index: usize = ((bits >> (250 - 6 * n)) & 63).downcast_truncate()
+    digits.read_word(index).downcast_truncate()
 }
 
 /// Decodes standard base64 with `=` padding, the inverse of `base64`.
@@ -382,21 +398,7 @@ pub fn decode_hex<T: Text>(_ input: T) -> Option<Bytes> {
     Option::Some(decoded)
 }
 
-fn base64_digit(_ value: u8) -> u8 {
-    if value < 26 {
-        value + 65
-    } else if value < 52 {
-        value + 71
-    } else if value < 62 {
-        value - 4
-    } else if value == 62 {
-        43
-    } else {
-        47
-    }
-}
-
-// Inverse of `base64_digit`, 64 for a byte outside the alphabet.
+// The index of `byte` in the base64 alphabet, 64 for a byte outside it.
 fn base64_value(_ byte: u8) -> u256 {
     let c = byte as u256
     if c >= 65 && c <= 90 {

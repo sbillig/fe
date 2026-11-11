@@ -91,7 +91,7 @@ macro_rules! with_test_runtime_package {
             .expect("file should be loaded");
         let top_mod = $db.top_mod(file);
         let $package =
-            build_test_runtime_package(&$db, top_mod, None).expect("runtime test package");
+            build_test_runtime_package(&$db, &[top_mod], None).expect("runtime test package");
         $body
     }};
 }
@@ -1691,6 +1691,68 @@ pub fn main() -> u8 {
 }
 
 #[test]
+fn one_scalar_constants_do_not_become_const_regions() {
+    with_runtime_package!(
+        "one_scalar_constants_do_not_become_const_regions.fe",
+        r#"pub struct Id { v: usize }
+impl Copy for Id {}
+
+pub struct Outer { id: Id }
+impl Copy for Outer {}
+
+const START: Id = Id { v: 1 }
+const ORIGIN: Outer = Outer { id: Id { v: 2 } }
+
+fn id_next(_ i: Id) -> Id {
+    Id { v: i.v + 1 }
+}
+
+fn outer_depth(_ o: Outer) -> usize {
+    o.id.v * 2
+}
+
+fn flag_value(_ t: (bool,)) -> usize {
+    match t {
+        (true,) => 1,
+        (false,) => 0,
+    }
+}
+
+pub fn main() -> usize {
+    var total: usize = id_next(START).v + outer_depth(ORIGIN) + flag_value((true,))
+    var i: usize = 0
+    while i < 3 {
+        total += id_next(Id { v: i }).v
+        total += outer_depth(Outer { id: Id { v: i } })
+        total += flag_value((i > 1,))
+        i += 1
+    }
+    total
+}"#,
+        |db, package| {
+            assert!(
+                package.const_regions(&db).is_empty(),
+                "one-scalar constants should not create const regions:\n{:#?}",
+                package.const_regions(&db)
+            );
+            for name in ["id_next", "outer_depth", "flag_value"] {
+                let instances = package
+                    .functions(&db)
+                    .iter()
+                    .map(|function| function.symbol(&db))
+                    .filter(|symbol| *symbol == name || symbol.contains(&format!("__{name}_")))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    instances.len(),
+                    1,
+                    "constant and computed arguments should share one `{name}` instance: {instances:?}"
+                );
+            }
+        }
+    );
+}
+
+#[test]
 fn immutable_code_view_parameter_forwarding_does_not_load_aggregate() {
     let ir = sonatina_ir_for_source(
         "immutable_code_view_parameter_forwarding.fe",
@@ -2541,10 +2603,13 @@ fn exercise() {
         |db, package| {
             let output = emit_runtime_package_sonatina_ir_optimized(&db, &package, OptLevel::O0)
                 .expect("Sonatina IR");
-            assert!(
-                !output.contains("enum.set_tag") && !output.contains("br_table"),
-                "a struct result should keep its enum field inside one whole store:\n{output}"
-            );
+            for name in ["build", "exercise"] {
+                let body = sonatina_function_body(&output, name);
+                assert!(
+                    !body.contains("enum.set_tag") && !body.contains("br_table"),
+                    "a struct result should keep its enum field inside one whole store:\n{body}"
+                );
+            }
         }
     );
 }
@@ -2664,7 +2729,10 @@ fn in_memory() {
     with_top_mod_for_source("sum_shapes.fe", source, |db, top_mod| {
         for (package, symbol) in [
             (build_runtime_package(db, top_mod), "__C_recv_0_0"),
-            (build_test_runtime_package(db, top_mod, None), "in_memory"),
+            (
+                build_test_runtime_package(db, &[top_mod], None),
+                "in_memory",
+            ),
         ] {
             let package = package.expect("the package lowers");
             let body = runtime_body_for_symbol(db, package, symbol);

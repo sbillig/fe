@@ -3114,6 +3114,12 @@ impl<'db> RmirEmitter<'db> {
             };
             return Some(self.lower_panic_code(bb, *code));
         }
+        if kind == RuntimeBuiltinFuncKind::Sha256Compress {
+            let [state, block] = args.as_slice() else {
+                return None;
+            };
+            return Some(self.lower_sha256_compress(bb, *state, *block));
+        }
         // The argument moved into the call, which destroys nothing; EVM
         // memory is never reclaimed.
         if kind == RuntimeBuiltinFuncKind::Forget
@@ -3575,6 +3581,23 @@ impl<'db> RmirEmitter<'db> {
             RuntimeBuiltinFuncKind::Free => {
                 let [ptr] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::Free { ptr: *ptr }, None)
+            }
+            RuntimeBuiltinFuncKind::Realloc | RuntimeBuiltinFuncKind::TryRealloc => {
+                let [ptr, used, size] = args else {
+                    return None;
+                };
+                let (ptr, used, size) = (*ptr, *used, *size);
+                builtin(
+                    if kind == RuntimeBuiltinFuncKind::Realloc {
+                        crate::runtime::RuntimeBuiltin::Realloc { ptr, used, size }
+                    } else {
+                        crate::runtime::RuntimeBuiltin::TryRealloc { ptr, used, size }
+                    },
+                    self.top_level_class_for_ty(
+                        semantic_return_ty(self.db, semantic),
+                        AddressSpace::Memory,
+                    ),
+                )
             }
             RuntimeBuiltinFuncKind::PtrOffsetBytes => {
                 let [ptr, offset] = args else { return None };
@@ -4136,7 +4159,8 @@ impl<'db> RmirEmitter<'db> {
             | RuntimeBuiltinFuncKind::Forget
             | RuntimeBuiltinFuncKind::NeedsDrop => return None,
             RuntimeBuiltinFuncKind::IntrinsicKeccak256
-            | RuntimeBuiltinFuncKind::IntrinsicKeccakWords => return None,
+            | RuntimeBuiltinFuncKind::IntrinsicKeccakWords
+            | RuntimeBuiltinFuncKind::Sha256Compress => return None,
         })
     }
 
@@ -4247,6 +4271,37 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         Some(ret)
+    }
+
+    /// Compresses `std::native::sha256_compress`'s state array by its block
+    /// array, each read as an array value.
+    fn lower_sha256_compress(
+        &mut self,
+        bb: RBlockId,
+        state: RLocalId,
+        block: RLocalId,
+    ) -> RLocalId {
+        let array = |this: &mut Self, local: RLocalId| {
+            let ty = this.locals[local.index()].semantic_ty;
+            let class = RuntimeClass::AggregateValue {
+                layout: this.layout_for_ty(ty),
+            };
+            (ty, class.clone(), this.coerce_value(bb, local, &class))
+        };
+        let (state_ty, state_class, state) = array(self, state);
+        let (_, _, block) = array(self, block);
+        let ret = self.alloc_runtime_temp(state_ty, RuntimeCarrier::Value(state_class));
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: ret,
+                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::Sha256Compress {
+                    state,
+                    block,
+                }),
+            },
+        );
+        ret
     }
 
     fn lower_intrinsic_keccak256_call(
@@ -6366,7 +6421,7 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
-        let package = build_test_runtime_package(&db, top_mod, Some("test_deterministic"));
+        let package = build_test_runtime_package(&db, &[top_mod], Some("test_deterministic"));
         assert!(
             package.is_ok(),
             "poseidon_mock should lower through range consts with runtime-zst fields: {package:#?}"

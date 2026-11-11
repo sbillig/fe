@@ -818,6 +818,9 @@ pub struct RuntimeFunction<'db> {
     pub linkage: RuntimeLinkage,
     #[returns(copy)]
     pub inline_hint: RuntimeInlineHint,
+    /// A `#[cold]` function: rarely called.
+    #[returns(copy)]
+    pub cold: bool,
     pub owner: RuntimeFunctionOwner<'db>,
     pub referenced_const_regions: Vec<ConstRegionId<'db>>,
 }
@@ -853,6 +856,11 @@ pub enum RuntimeSyntheticSpec<'db> {
         name: String,
         callee: RuntimeInstance<'db>,
         entry_args: EntrySemanticArgsPlan<'db>,
+    },
+    /// The entry of an EVM test suite. It runs the test root that the
+    /// calldata selector names, and reverts for any other calldata.
+    TestSuiteRoot {
+        dispatch: Box<[DispatchArm<'db>]>,
     },
     ManualContractRoot {
         func: Func<'db>,
@@ -1065,7 +1073,6 @@ pub struct RuntimeSection<'db> {
     pub name: RuntimeSectionName,
     pub entry: RuntimeFunction<'db>,
     pub embeds: Vec<RuntimeEmbed>,
-    pub const_regions: Vec<ConstRegionId<'db>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
@@ -1074,6 +1081,8 @@ pub enum RuntimeSectionName {
     Runtime,
     Main,
     Test(String),
+    /// The selected tests of an EVM test run.
+    TestSuite,
     /// A native object's `#[unsafe(export)]` function, defined under this symbol.
     Export(String),
 }
@@ -1278,6 +1287,13 @@ pub enum RuntimeBuiltin<'db> {
     KeccakWords {
         words: Box<[RValueId]>,
     },
+    /// One SHA-256 compression: the eight state words of `state` after the
+    /// 64 rounds of the sixteen message words of `block`, each an array value.
+    /// Native targets only.
+    Sha256Compress {
+        state: RValueId,
+        block: RValueId,
+    },
     AddMod {
         lhs: RValueId,
         rhs: RValueId,
@@ -1363,9 +1379,23 @@ pub enum RuntimeBuiltin<'db> {
     TryMalloc {
         size: RValueId,
     },
-    /// Releases an allocation from `Malloc` or `TryMalloc`.
+    /// Releases an allocation from `Malloc`, `TryMalloc` or a resize.
     Free {
         ptr: RValueId,
+    },
+    /// Resizes the allocation at `ptr` to `size` bytes, keeping its first
+    /// `used`, and yields the address that replaces `ptr`.
+    Realloc {
+        ptr: RValueId,
+        used: RValueId,
+        size: RValueId,
+    },
+    /// Like `Realloc`, but yields a null address, leaving the allocation as it
+    /// was, when the host cannot allocate.
+    TryRealloc {
+        ptr: RValueId,
+        used: RValueId,
+        size: RValueId,
     },
     PtrOffsetBytes {
         ptr: RValueId,
@@ -1688,6 +1718,8 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::ExtCodeCopy { .. }
             | Self::BlackBox { .. }
             | Self::Free { .. }
+            | Self::Realloc { .. }
+            | Self::TryRealloc { .. }
             | Self::Call { .. }
             | Self::StaticCall { .. }
             | Self::DelegateCall { .. }
@@ -1712,6 +1744,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::ExtCodeHash { .. }
             | Self::Keccak256 { .. }
             | Self::KeccakWords { .. }
+            | Self::Sha256Compress { .. }
             | Self::AddMod { .. }
             | Self::MulMod { .. }
             | Self::LeadingZeros { .. }
@@ -1798,6 +1831,16 @@ impl<'db> RuntimeBuiltin<'db> {
                 offset: b,
                 len: c,
             }
+            | Self::Realloc {
+                ptr: a,
+                used: b,
+                size: c,
+            }
+            | Self::TryRealloc {
+                ptr: a,
+                used: b,
+                size: c,
+            }
             | Self::AddMod {
                 lhs: a,
                 rhs: b,
@@ -1877,6 +1920,7 @@ impl<'db> RuntimeBuiltin<'db> {
                 ret_len,
             } => vec![gas, addr, value, args_offset, args_len, ret_offset, ret_len],
             Self::KeccakWords { words } => words.iter_mut().collect(),
+            Self::Sha256Compress { state, block } => vec![state, block],
             Self::Msize
             | Self::CallValue
             | Self::ReturnDataSize

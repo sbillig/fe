@@ -60,7 +60,7 @@ use sonatina_ir::{
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
             EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memcopy,
             Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
-            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            ObjProj, ObjStore, Sha256Compress, SymAddr, SymSize, SymbolRef,
         },
         downcast,
         evm::{
@@ -78,7 +78,7 @@ use sonatina_ir::{
         logic::{And, Bswap, Clz, Ctz, Not, Or, Xor},
     },
     isa::Isa,
-    module::{FuncRef, ModuleCtx},
+    module::{FuncHints, FuncRef, ModuleCtx},
     object::EmbedSymbol,
     types::{CompoundType, EnumReprHint, EnumVariantRef, VariantData},
 };
@@ -350,7 +350,6 @@ struct ModuleLowerer<'db, 'a, I: 'static> {
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
-    explicit_code_region_sections: FxHashSet<(String, mir::RuntimeSectionName)>,
     external_code: FxHashMap<(String, mir::RuntimeSectionName), GlobalVariableRef>,
     /// The constant byte strings code copies, one global each.
     const_bytes: FxHashMap<Box<[u8]>, GlobalVariableRef>,
@@ -442,7 +441,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
-            explicit_code_region_sections: FxHashSet::default(),
             external_code: FxHashMap::default(),
             const_bytes: FxHashMap::default(),
             adapted: adapters.iter().map(|adapter| adapter.instance).collect(),
@@ -685,7 +683,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     }
                 })?;
             declared.entry(symbol).or_insert((function, external));
-            self.apply_inline_hint(func_ref, function.inline_hint(self.db));
+            self.apply_func_hints(func_ref, function);
             self.func_map.insert(function.instance(self.db), func_ref);
         }
         Ok(())
@@ -715,8 +713,13 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 // The host sees `bool` and narrow integers as an `i32` holding
                 // the zero-extended value. The package builder has already
                 // named any other type.
+                // The compiler's own imports also pass addresses, as an `i32`.
+                let address = |ty: &Type| {
+                    symbol.starts_with(COMPILER_SYMBOL_PREFIX) && ty.is_pointer(&self.builder.ctx)
+                };
                 if args.iter().chain(ret.iter()).any(|ty| {
                     !matches!(ty, Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64)
+                        && !address(ty)
                 }) {
                     return Err(LowerError::Unsupported(format!(
                         "extern function `{symbol}` requires bool and integer ABI values of at most 64 bits on WebAssembly"
@@ -772,14 +775,19 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         Ok(signature)
     }
 
-    fn apply_inline_hint(&self, func_ref: FuncRef, hint: RuntimeInlineHint) {
-        let hint = match hint {
+    /// Every runtime function of a symbol shares its Sonatina function,
+    /// which is cold if any of them is.
+    fn apply_func_hints(&self, func_ref: FuncRef, function: RuntimeFunction<'db>) {
+        let hint = match function.inline_hint(self.db) {
             RuntimeInlineHint::Auto => sonatina_ir::InlineHint::Auto,
             RuntimeInlineHint::Hint => sonatina_ir::InlineHint::Inline,
             RuntimeInlineHint::Always => sonatina_ir::InlineHint::Always,
             RuntimeInlineHint::Never => sonatina_ir::InlineHint::Never,
         };
         self.builder.ctx.set_inline_hint(func_ref, hint);
+        if function.cold(self.db) {
+            self.builder.ctx.set_func_hints(func_ref, FuncHints::COLD);
+        }
     }
 
     fn lower_const_regions(&mut self) -> Result<(), LowerError> {
@@ -973,11 +981,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 let section_builder =
                     object_builder.section(super::section_name_for_runtime(&section.name));
                 section_builder.entry(self.func_ref(section.entry.instance(self.db))?);
-                if self.section_needs_const_data(object, &section.name) {
-                    for region in &section.const_regions {
-                        section_builder.data(self.lower_const_region(*region)?);
-                    }
-                }
                 for embed in &section.embeds {
                     match &embed.source {
                         mir::RuntimeSectionRef::Local { object: _, section } => {
@@ -1005,30 +1008,6 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 .map_err(|err| LowerError::Internal(format!("failed to declare object: {err}")))?;
         }
         Ok(())
-    }
-
-    fn section_needs_const_data(
-        &self,
-        object: mir::RuntimeObject<'db>,
-        section: &mir::RuntimeSectionName,
-    ) -> bool {
-        self.explicit_code_region_sections
-            .contains(&(object.name(self.db).clone(), section.clone()))
-    }
-
-    fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
-        let Some(resolved) = self
-            .package
-            .code_regions(self.db)
-            .iter()
-            .copied()
-            .find(|resolved| resolved.region(self.db) == region)
-        else {
-            return;
-        };
-        let source = resolved.source(self.db);
-        self.explicit_code_region_sections
-            .insert((source.object().to_string(), source.section().clone()));
     }
 
     fn func_ref(&self, instance: mir::RuntimeInstance<'db>) -> Result<FuncRef, LowerError> {
@@ -2958,6 +2937,19 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     Type::I256,
                 )
             }
+            RuntimeBuiltin::Sha256Compress { state, block } => {
+                let ty = self.local_ty(*state)?;
+                let state = self.local_value(*state)?;
+                let block = self.local_value(*block)?;
+                self.fb.insert_inst(
+                    Sha256Compress::new(
+                        self.module.required_inst::<Sha256Compress>()?,
+                        state,
+                        block,
+                    ),
+                    ty,
+                )
+            }
             RuntimeBuiltin::AddMod { lhs, rhs, modulus } => {
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
@@ -3185,6 +3177,38 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     self.call_native_runtime(NativeRuntimeFunc::Dealloc, &[ptr])?;
                 }
                 zero_for_type(&mut self.fb, Type::Unit)
+            }
+            RuntimeBuiltin::Realloc { ptr, used, size }
+            | RuntimeBuiltin::TryRealloc { ptr, used, size } => {
+                let ptr = self.local_value(*ptr)?;
+                let used = self.local_value(*used)?;
+                let size = self.local_value(*size)?;
+                let pointer = self.fb.ptr_type(Type::I8);
+                if self.module.is_native_target() {
+                    let func = if matches!(builtin, RuntimeBuiltin::TryRealloc { .. }) {
+                        NativeRuntimeFunc::TryRealloc
+                    } else {
+                        NativeRuntimeFunc::Realloc
+                    };
+                    let address = self
+                        .call_native_runtime(func, &[ptr, used, size])?
+                        .expect("a resize returns its address");
+                    self.coerce_value_to_ty(address, pointer)?
+                } else {
+                    // EVM memory runs out only with the gas and is never
+                    // reclaimed, so a resize is a fresh allocation and a copy.
+                    let address = self.fb.insert_inst(
+                        EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
+                        pointer,
+                    );
+                    self.fb.insert_inst_no_result(EvmMcopy::new(
+                        self.module.required_inst::<EvmMcopy>()?,
+                        address,
+                        ptr,
+                        used,
+                    ));
+                    address
+                }
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
                 let ptr = self.local_value(*ptr)?;
@@ -3474,11 +3498,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         })
     }
 
-    fn code_region_symbol_ref(&mut self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
+    fn code_region_symbol_ref(&self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
         if let Some(symbol) = self.module.external_code_symbol(region) {
             return symbol;
         }
-        self.module.mark_explicit_code_region(region);
         if !self.current_sections.is_empty()
             && self
                 .module

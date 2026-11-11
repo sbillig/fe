@@ -51,6 +51,7 @@ pub(super) fn verify_contract_storage_seam<'db>(
         | RuntimeFunctionOwner::Synthetic(
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
+            | RuntimeSyntheticSpec::TestSuiteRoot { .. }
             | RuntimeSyntheticSpec::ExportRoot { .. }
             | RuntimeSyntheticSpec::ManualContractRoot { .. }
             | RuntimeSyntheticSpec::ContractInitRoot { .. }
@@ -480,6 +481,7 @@ pub contract Other {
             function.symbol(db),
             RuntimeLinkage::Private,
             RuntimeInlineHint::Auto,
+            false,
             RuntimeFunctionOwner::Synthetic(spec),
             vec![],
         );

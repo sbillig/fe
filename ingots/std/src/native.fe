@@ -8,7 +8,8 @@ pub struct Host { unsafe seal: Private }
 
 struct Private {}
 
-/// Seals the host capabilities, so that only `Host` provides them.
+/// Seals the host capabilities, so that only the root effects provide them:
+/// `Host`, and `std::wasm::Host` for the streams of `std::io`.
 pub(ingot) trait HostCapabilitySeal {}
 
 impl HostCapabilitySeal for Host {}
@@ -16,6 +17,13 @@ impl HostCapabilitySeal for Host {}
 extern {
     // Host process accounting. The scalar-only signature gives it no access to Fe memory.
     fn clock() -> i64
+}
+
+extern {
+    /// One SHA-256 compression: `state` after the 64 rounds of the sixteen
+    /// message words of `block`, which the caller has read big-endian. A host
+    /// with SHA instructions (x86-64 SHA extensions) computes it with them.
+    pub fn sha256_compress(_ state: [u32; 8], _ block: [u32; 16]) -> [u32; 8]
 }
 
 /// Process CPU time in host clock ticks. Negative readings are unavailable.

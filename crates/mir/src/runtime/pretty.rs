@@ -214,9 +214,6 @@ fn write_section_summary<'db>(db: &'db dyn MirDb, out: &mut String, section: &Ru
             embed.as_symbol
         );
     }
-    for const_region in &section.const_regions {
-        let _ = writeln!(out, "        const {const_region:?}");
-    }
 }
 
 fn write_function_summary<'db>(
@@ -231,9 +228,10 @@ fn write_function_summary<'db>(
     };
     let _ = writeln!(
         out,
-        "    {} ({linkage}, inline={:?}, owner={:?})",
+        "    {} ({linkage}, inline={:?}{}, owner={:?})",
         function.symbol(db),
         function.inline_hint(db),
+        if function.cold(db) { ", cold" } else { "" },
         function.owner(db)
     );
     if !function.referenced_const_regions(db).is_empty() {
@@ -352,6 +350,7 @@ fn format_section_name(name: &RuntimeSectionName) -> String {
         RuntimeSectionName::Runtime => "runtime".to_string(),
         RuntimeSectionName::Main => "main".to_string(),
         RuntimeSectionName::Test(name) => format!("test({name})"),
+        RuntimeSectionName::TestSuite => "test_suite".to_string(),
         RuntimeSectionName::Export(symbol) => format!("export({symbol})"),
     }
 }
@@ -750,6 +749,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        RuntimeBuiltin::Sha256Compress { state, block } => format!(
+            "sha256_compress {}, {}",
+            format_local_id(*state),
+            format_local_id(*block)
+        ),
         RuntimeBuiltin::AddMod { lhs, rhs, modulus } => format!(
             "addmod {}, {}, {}",
             format_local_id(*lhs),
@@ -824,6 +828,18 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
         RuntimeBuiltin::TryMalloc { size } => format!("try_malloc {}", format_local_id(*size)),
         RuntimeBuiltin::Free { ptr } => format!("free {}", format_local_id(*ptr)),
+        RuntimeBuiltin::Realloc { ptr, used, size } => format!(
+            "realloc {}, {}, {}",
+            format_local_id(*ptr),
+            format_local_id(*used),
+            format_local_id(*size)
+        ),
+        RuntimeBuiltin::TryRealloc { ptr, used, size } => format!(
+            "try_realloc {}, {}, {}",
+            format_local_id(*ptr),
+            format_local_id(*used),
+            format_local_id(*size)
+        ),
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => format!(
             "ptr_offset_bytes {}, {}",
             format_local_id(*ptr),

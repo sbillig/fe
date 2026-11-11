@@ -3865,11 +3865,14 @@ fn test_fe_test(fixture: Fixture<&str>) {
     );
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
+#[cfg(any(
+    feature = "wasm",
+    all(
+        feature = "cranelift",
+        any(
+            all(target_arch = "x86_64", target_os = "linux"),
+            all(target_arch = "aarch64", target_os = "macos")
+        )
     )
 ))]
 /// `fe_test` fixtures that need the EVM: contracts, storage, EVM
@@ -3900,6 +3903,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "closure_effects",
     "closure_trait_effects",
     "code_backed_array_storage_copy",
+    "code_backed_field_const_data",
     "code_backed_scalar_field",
     "code_struct_field_offsets",
     "coin",
@@ -4002,6 +4006,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "receiver_returns_non_mem_with_same_typed_memory_arg",
     "recv_arm_variant_paths",
     "recv_fallback",
+    "recv_field_patterns",
     "recv_short_calldata_selector_guard",
     "reentrancy_mutex",
     "reentrancy_mutex_storage_map",
@@ -4013,6 +4018,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "signature",
     "simple_amm",
     "snapshot_effects",
+    "snapshot_view_call_effects",
     "sol_array_lanes",
     "sol_compat_int_abi_roundtrip",
     "sol_slot",
@@ -4125,6 +4131,30 @@ fn test_fe_test_native(fixture: Fixture<&str>) {
             "native fe test failed for {path} at O{level}:\n{output}\n\nTo reproduce:\n  cargo run --features cranelift --bin fe -- test --backend native -O {level} --jobs 1 {path}",
         );
     }
+}
+
+/// The fixtures that need no EVM also run on WebAssembly, where `usize` has
+/// 32 bits. The run needs Node.js, as the other WebAssembly tests do.
+#[cfg(feature = "wasm")]
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
+    glob: "*.fe",
+)]
+fn test_fe_test_wasm(fixture: Fixture<&str>) {
+    let path = fixture.path();
+    let name = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .expect("fixture name");
+    // `buffer_capacity_bound` has a `usize` literal of more than 32 bits.
+    if EVM_ONLY_FE_TESTS.binary_search(&name).is_ok() || name == "buffer_capacity_bound" {
+        return;
+    }
+    let (output, exit_code) = run_fe_main(&["test", "--backend", "wasm", "--jobs", "1", path]);
+    assert_eq!(
+        exit_code, 0,
+        "wasm fe test failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --features wasm --bin fe -- test --backend wasm {path}",
+    );
 }
 
 #[test]
