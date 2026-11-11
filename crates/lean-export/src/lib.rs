@@ -1551,8 +1551,10 @@ impl<'db> Module<'db> {
             {
                 let part = Self::projected("v", steps);
                 let Some(lane) = self.lane(*field, *placement) else {
-                    flush(&mut pending, pending_slot, &mut body);
+                    // A field of no slots leaves the fields around it in
+                    // one word.
                     if self.span(*field)? > 0 {
+                        flush(&mut pending, pending_slot, &mut body);
                         let at = self.pinned(*field, format!("(p.offset {})", placement.slot));
                         writeln!(body, "  {}", self.store(*field, &at, None, &part)?).unwrap();
                     }
