@@ -116,6 +116,11 @@ fn wide() {
 }
 
 #[test]
+fn immutables() {
+    check_with("immutables", export_contract_with_entries);
+}
+
+#[test]
 fn projections() {
     check("projections");
 }

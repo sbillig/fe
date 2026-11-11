@@ -1,0 +1,52 @@
+use std::abi::sol
+
+msg ImmutablesMsg {
+    #[selector = sol("limit()")]
+    Limit -> u256,
+    #[selector = sol("sum()")]
+    Sum -> u256,
+    #[selector = sol("bump(uint256)")]
+    Bump { by: u256 } -> u256,
+}
+
+struct Config {
+    small: u8,
+    on: bool,
+    limit: u256,
+}
+
+fn capped(by: u256) -> u256 uses (config: Config) {
+    if by > config.limit { config.limit } else { by }
+}
+
+fn set_small(_ v: u8) uses (config: mut Config) {
+    config.small = v
+}
+
+pub contract Immutables {
+    config: Config,
+    words: [u256; 2],
+    mut count: u256,
+
+    init(limit: u256) uses (mut config, mut words, mut count) {
+        config = Config { small: 0, on: true, limit }
+        with (config) { set_small(7) }
+        words = [limit, 2]
+        count = 1
+    }
+
+    recv ImmutablesMsg {
+        Limit -> u256 uses (config) {
+            if config.on { config.limit + (config.small as u256) } else { 0 }
+        }
+
+        Sum -> u256 uses (words) {
+            words[0] + words[1]
+        }
+
+        Bump { by } -> u256 uses (config, mut count) {
+            count += with (config) { capped(by) }
+            count
+        }
+    }
+}

@@ -1127,12 +1127,13 @@ def decode_payload_Sol_u256_SolDecoder_MemSlice_u8 (v0 : SolDecoder) (v1 : MemSl
   let v5 := v4
   return (v5, v0)
 
-def init_entry (args : ByteArray) : FeM Unit := do
+def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let size := UInt256.ofNat args.size
   let tail ← alloc size
   mstoreBytes tail args
   let decoder ← decoder_new
   let (decoded, _) ← decode_payload_Sol_u256_SolDecoder_MemSlice_u8 decoder (MemSlice_u8.mk tail size)
-  init decoded
+  let _ ← init decoded
+  return ByteArray.empty
 

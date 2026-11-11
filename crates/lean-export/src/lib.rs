@@ -47,7 +47,10 @@ use hir::{
         Contract, EnumVariant, FieldParent, IdentId, ItemKind, PatId,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
-    semantic::{ProviderSource, storage_field_placements, storage_lane_bytes, storage_slot_span},
+    semantic::{
+        ContractFieldId, FieldStorageLayout, ProviderSource, storage_field_placements,
+        storage_lane_bytes, storage_slot_span,
+    },
 };
 use num_bigint::BigUint;
 use num_traits::Signed;
@@ -77,6 +80,7 @@ const PRELUDE: &[&str] = &[
     "checkedMul",
     "checkedRem",
     "checkedSub",
+    "cload",
     "codecopy",
     "codesize",
     "coinbase",
@@ -90,11 +94,13 @@ const PRELUDE: &[&str] = &[
     "gas",
     "gaslimit",
     "gasprice",
+    "immutableAt",
     "init_entry",
     "keccak256",
     "load",
     "logData",
     "mcopy",
+    "memoryBytes",
     "mload",
     "mstore",
     "mstore8",
@@ -374,6 +380,7 @@ impl<'db> Module<'db> {
             slots: Vec::new(),
             outs: Vec::new(),
             effects: Vec::new(),
+            immutables: Vec::new(),
             result_ty: String::new(),
             binders: Vec::new(),
             joins: FxHashMap::default(),
@@ -566,22 +573,25 @@ impl<'db> Module<'db> {
     /// `init`. It rejects call value unless `init` is payable, copies the
     /// constructor arguments, the bytes after the creation code, into fresh
     /// memory, decodes them with `Decode::decode_payload` at the tuple of
-    /// `init`'s parameter types, and runs `init`. Returning the runtime code
-    /// is left to the caller.
+    /// `init`'s parameter types, and runs `init`. It returns the words of
+    /// the immutable fields, which the deployed code holds after the runtime
+    /// code: fresh memory that takes each field `init` leaves at the field's
+    /// word.
     fn init_entry(&mut self, contract: Contract<'db>) -> Result<(), Unsupported> {
         let db = self.db;
         let scope = contract.scope();
         let missing = |what: &str| Unsupported(format!("init_entry: missing `{what}`"));
         let generated = |error| Unsupported(format!("init_entry: generated call: {error:?}"));
-        if contract.code_address_space_slot_count(db) != 0 {
-            return Err(Unsupported("init_entry: immutable fields".to_string()));
-        }
         let mut lines = String::new();
         if !contract.init(db).is_some_and(|init| init.is_payable(db)) {
             lines.push_str("  nonPayable\n");
         }
         let args_ty = contract.init_args_ty(db);
         let mut args = String::new();
+        let owner = BodyOwner::ContractInit { contract };
+        let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
+        let normalized = normalize_semantic_body(db, instance)
+            .map_err(|_| Unsupported("init: body does not normalize".to_string()))?;
         if args_ty != TyId::unit(db) {
             let lib_ty =
                 |path: &str| resolve_lib_type_path(db, scope, path).ok_or_else(|| missing(path));
@@ -630,10 +640,6 @@ impl<'db> Module<'db> {
             )
             .unwrap();
             // `init` takes the fields its body has parameters for.
-            let owner = BodyOwner::ContractInit { contract };
-            let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
-            let normalized = normalize_semantic_body(db, instance)
-                .map_err(|_| Unsupported("init: body does not normalize".to_string()))?;
             let values = normalized
                 .body
                 .values
@@ -659,9 +665,45 @@ impl<'db> Module<'db> {
                 write!(args, " decoded{steps}").unwrap();
             }
         }
+        // `init` takes each immutable field it names, unset, and returns it.
+        let mut fields: Vec<_> = normalized
+            .body
+            .roots
+            .iter()
+            .filter_map(|root| {
+                if let NRootKind::Provider { binding } = &root.kind
+                    && let ProviderSource::ContractField { field } = binding.source
+                    && root.address_space == AddressSpace::Memory
+                {
+                    Some((binding.provider_idx, field, root.ty))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        fields.sort_unstable_by_key(|(provider, ..)| *provider);
+        let bytes = contract.code_address_space_slot_count(db) * 32;
+        if bytes == 0 {
+            writeln!(lines, "  let _ ← init{args}\n  return ByteArray.empty").unwrap();
+        } else {
+            let left: String = fields
+                .iter()
+                .map(|(provider, ..)| format!(", e{provider}"))
+                .collect();
+            let unset = " default".repeat(fields.len());
+            writeln!(lines, "  let words ← alloc (UInt256.ofNat {bytes})").unwrap();
+            writeln!(lines, "  let (_{left}) ← init{args}{unset}").unwrap();
+            for (provider, field, ty) in fields {
+                let slot = self.field_layout(field)?.slot_offset;
+                let at = format!("(words + UInt256.ofNat ({slot} * 32))");
+                let value = format!("e{provider}");
+                writeln!(lines, "  {}", self.mstore(ty, &at, &value)?).unwrap();
+            }
+            writeln!(lines, "  memoryBytes words (UInt256.ofNat {bytes})").unwrap();
+        }
         writeln!(
             self.defs,
-            "def init_entry (args : ByteArray) : FeM Unit := do\n{lines}  init{args}\n"
+            "def init_entry (args : ByteArray) : FeM ByteArray := do\n{lines}"
         )
         .unwrap();
         Ok(())
@@ -779,11 +821,25 @@ impl<'db> Module<'db> {
         lean_name(&name)
     }
 
+    /// Where the contract field `field` lies.
+    fn field_layout(
+        &self,
+        field: ContractFieldId<'db>,
+    ) -> Result<&'db FieldStorageLayout<'db>, Unsupported> {
+        field
+            .contract
+            .storage_layout(self.db)
+            .values()
+            .find(|layout| layout.field == field)
+            .ok_or_else(|| Unsupported("contract field without a layout".to_string()))
+    }
+
     /// The effects of `key` its callers pass an argument for: those its
-    /// instance does not name a contract field or the root object for. Each
-    /// by provider, with its type, whether it lies in contract state, where
-    /// the argument is its place, and otherwise whether it is `mut`, where
-    /// the argument is its value and the callee returns the value it leaves.
+    /// instance does not name a contract field in state or the root object
+    /// for. Each by provider, with its type, whether it lies in contract
+    /// state, where the argument is its place, and otherwise whether it is
+    /// `mut`, where the argument is its value and the callee returns the
+    /// value it leaves.
     fn effect_params(&self, key: SemanticInstanceKey<'db>) -> Vec<Effect<'db>> {
         let Ok(normalized) = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
         else {
@@ -794,8 +850,16 @@ impl<'db> Module<'db> {
             .roots
             .iter()
             .filter_map(|root| match &root.kind {
+                // An immutable field is in memory while `init` runs, which
+                // holds it by value.
                 NRootKind::Provider { binding }
-                    if matches!(binding.source, ProviderSource::UsesParam { .. }) =>
+                    if match binding.source {
+                        ProviderSource::UsesParam { .. } => true,
+                        ProviderSource::ContractField { .. } => {
+                            root.address_space == AddressSpace::Memory
+                        }
+                        ProviderSource::RootProvider { .. } => false,
+                    } =>
                 {
                     Some(Effect {
                         provider: binding.provider_idx,
@@ -1335,32 +1399,33 @@ impl<'db> Module<'db> {
             .ok_or_else(|| Unsupported(format!("size of {}", ty.pretty_print(self.db))))
     }
 
-    /// The Lean computation that reads a value of `ty` in memory at
-    /// `address`: a scalar's bytes, or an aggregate's parts one after
-    /// another.
-    fn mload(&mut self, ty: TyId<'db>, address: &str) -> Result<String, Unsupported> {
+    /// The Lean computation that reads a value of `ty` at `address` of
+    /// `space`, memory (`m`) or the running code (`c`): a scalar's bytes, or
+    /// an aggregate's parts one after another.
+    fn mload(&mut self, space: char, ty: TyId<'db>, address: &str) -> Result<String, Unsupported> {
         let db = self.db;
         match self.int_bits(ty) {
-            Some((256, _)) => return Ok(format!("mload {address}")),
-            Some(int) => return Ok(format!("mloadInt {} {address}", int_ty(int))),
+            Some((256, _)) => return Ok(format!("{space}load {address}")),
+            Some(int) => return Ok(format!("{space}loadInt {} {address}", int_ty(int))),
             None => {}
         }
         if ty.is_bool(db) {
-            return Ok(format!("mloadBool {address}"));
+            return Ok(format!("{space}loadBool {address}"));
         }
         if ty.as_ptr(db).is_some() {
-            return Ok(format!("mload {address}"));
+            return Ok(format!("{space}load {address}"));
         }
         if let Some(len) = ty.array_len(db) {
             let (_, args) = ty.decompose_ty_app(db);
-            let elem = self.mload(args[0], "q")?;
+            let elem = self.mload(space, args[0], "q")?;
             let stride = self.size(args[0])?;
             return Ok(format!(
-                "mloadArray {stride} (fun q => {elem}) {address} {len}"
+                "{space}loadArray {stride} (fun q => {elem}) {address} {len}"
             ));
         }
         if self.variants(ty).is_some() {
-            return Err(Unsupported(format!("{} in memory", ty.pretty_print(db))));
+            let space = if space == 'm' { "memory" } else { "code" };
+            return Err(Unsupported(format!("{} in {space}", ty.pretty_print(db))));
         }
         let name = self.value_ty(ty)?;
         let fields = self.fields(ty)?;
@@ -1368,13 +1433,13 @@ impl<'db> Module<'db> {
         let mut offset = 0;
         for (index, (_, field)) in fields.iter().enumerate() {
             let at = format!("(p + UInt256.ofNat {offset})");
-            writeln!(body, "  let f{index} ← {}", self.mload(*field, &at)?).unwrap();
+            writeln!(body, "  let f{index} ← {}", self.mload(space, *field, &at)?).unwrap();
             offset += self.size(*field)?;
         }
         let parts: Vec<_> = (0..fields.len()).map(|index| format!("f{index}")).collect();
         writeln!(body, "  return {}", self.aggregate(ty, &parts)?).unwrap();
         let loader = self.layout(
-            format!("mload_{}", lean_ident(ty.pretty_print(db))),
+            format!("{space}load_{}", lean_ident(ty.pretty_print(db))),
             |loader| {
                 format!(
                     "def {loader} (p : UInt256) : FeM {name} := do\n{}",
@@ -1625,6 +1690,9 @@ struct BodyExporter<'a, 'db> {
     /// The effects received as values, each a mutable variable `eN`. The
     /// body returns those of the `mut` ones after `outs`.
     effects: Vec<Effect<'db>>,
+    /// The providers of the immutable fields the body reads, each a
+    /// variable `eN` that holds the field's value in the running code.
+    immutables: Vec<u32>,
     /// The Lean type of the value the body returns.
     result_ty: String,
     /// The name and type of each parameter of the definition.
@@ -1758,6 +1826,23 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         let params = binders(&self.binders);
+        // An immutable field is words of the code's tail, at its memory
+        // layout. Nothing writes it, so the body reads it once.
+        for root in &self.body.roots {
+            if let NRootKind::Provider { binding } = &root.kind
+                && let ProviderSource::ContractField { field } = binding.source
+                && root.address_space == AddressSpace::Code
+            {
+                let slot = self.module.field_layout(field)?.slot_offset;
+                let total = field.contract.code_address_space_slot_count(db);
+                let at = format!("(← immutableAt {total} {slot})");
+                let name = format!("e{}", binding.provider_idx);
+                let load = self.module.mload('c', root.ty, &at)?;
+                writeln!(state, "  let {name} ← {load}").unwrap();
+                self.binders.push((name, self.module.value_ty(root.ty)?));
+                self.immutables.push(binding.provider_idx);
+            }
+        }
         for out in &self.outs {
             writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
         }
@@ -2406,7 +2491,10 @@ impl<'db> BodyExporter<'_, 'db> {
                         }
                         Target::Value(target) => format!("let {name} := {}", self.read(&target)?),
                         Target::Memory(address) => {
-                            format!("let {name} ← {}", self.module.mload(place.ty, &address)?)
+                            format!(
+                                "let {name} ← {}",
+                                self.module.mload('m', place.ty, &address)?
+                            )
                         }
                     }),
                     NExpr::PointerCast { value, .. } => {
@@ -3375,8 +3463,8 @@ impl<'db> BodyExporter<'_, 'db> {
         })
     }
 
-    /// The mutable variable that holds the value of `root`: a local's slot,
-    /// a parameter's, or an effect received by value.
+    /// The variable that holds the value of `root`: a local's slot, a
+    /// parameter's, an effect received by value, or an immutable field.
     fn root_var(&self, root: NRootId) -> Option<String> {
         match &self.body.roots[root.index()].kind {
             NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
@@ -3384,14 +3472,12 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             // A temporary is the value it was made for.
             NRootKind::Temporary { value } => Some(value_name(*value)),
-            NRootKind::Provider { binding } => self
-                .effects
-                .iter()
-                .any(|effect| {
-                    effect.provider == binding.provider_idx
-                        && matches!(binding.source, ProviderSource::UsesParam { .. })
-                })
-                .then(|| format!("e{}", binding.provider_idx)),
+            NRootKind::Provider { binding } => (self.immutables.contains(&binding.provider_idx)
+                || self
+                    .effects
+                    .iter()
+                    .any(|effect| effect.provider == binding.provider_idx))
+            .then(|| format!("e{}", binding.provider_idx)),
             _ => None,
         }
     }
@@ -3860,11 +3946,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 return Err(Unsupported("place in the root object".to_string()));
             }
         };
-        let layout = field.contract.storage_layout(db);
-        let layout = layout
-            .values()
-            .find(|layout| layout.field == field)
-            .ok_or_else(|| Unsupported("contract field without a layout".to_string()))?;
+        let layout = self.module.field_layout(field)?;
         let name = layout.name.data(db);
         if layout.address_space != AddressSpace::Storage {
             return Err(Unsupported(format!("layout of contract field `{name}`")));
