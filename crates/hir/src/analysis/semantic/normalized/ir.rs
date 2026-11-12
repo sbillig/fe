@@ -131,7 +131,8 @@ impl<'db> NormalizedBody<'db> {
     }
 
     /// The base and path the access at `component` of `value` reaches.
-    fn access_target(
+    /// `None` too where `value` is another variant than `component` names.
+    pub fn access_target(
         &self,
         db: &'db dyn HirAnalysisDb,
         value: NValueId,

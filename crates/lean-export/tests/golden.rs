@@ -139,3 +139,8 @@ fn memory_access() {
 fn projections() {
     check("projections");
 }
+
+#[test]
+fn products() {
+    check("products");
+}

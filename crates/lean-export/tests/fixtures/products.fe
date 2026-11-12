@@ -1,0 +1,73 @@
+use std::abi::sol
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Pair {
+    // A value and an access. The access is a place for a pair in contract
+    // state, and the value there for a local pair, which comes back when
+    // the grant ends.
+    fn at(mut self) -> (own u256, mut u256) {
+        (self.a, mut self.b)
+    }
+}
+
+struct Small {
+    a: u8,
+    b: u8,
+}
+
+impl Small {
+    // A lane of a storage word has no place: the grant is its value.
+    fn maybe(mut self, _ second: bool) -> Option<mut u8> {
+        if second { Option::Some(mut self.b) } else { Option::None }
+    }
+}
+
+// Each part of the parameter is held as its argument is.
+fn add_to(_ (mut a, b): (mut u256, ref u256)) {
+    a += b
+}
+
+fn bump(_ (by, mut x): (own u256, mut u256)) -> u256 {
+    x += by
+    x
+}
+
+msg ProductsMsg {
+    #[selector = sol("parts(uint256)")]
+    Parts { by: u256 } -> u256,
+    #[selector = sol("granted(uint256)")]
+    Granted { by: u256 } -> u256,
+    #[selector = sol("lane(bool)")]
+    Lane { second: bool } -> u256,
+}
+
+pub contract Products {
+    mut pair: Pair,
+    mut small: Small,
+
+    recv ProductsMsg {
+        Parts { by } -> u256 uses (mut pair) {
+            var local: u256 = by
+            add_to((mut pair.a, ref local))
+            add_to((mut local, ref pair.a))
+            local
+        }
+
+        Granted { by } -> u256 uses (mut pair) {
+            let stored = bump(pair.at())
+            var local = Pair { a: by, b: 1 }
+            stored + bump(local.at())
+        }
+
+        Lane { second } -> u256 uses (mut small) {
+            if let Option::Some(mut x) = small.maybe(second) {
+                x += 40
+            }
+            small.b as u256
+        }
+    }
+}

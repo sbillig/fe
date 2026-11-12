@@ -19,14 +19,14 @@ use hir::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BinaryOp, CarrierBase, DropStep, EvalOutcome, FailReason, NBlockId, NDataPath,
-            NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr, NIndex, NOperand,
-            NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind, NSuccessor,
-            NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow, SConst,
-            SemConstId, SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey,
-            UnaryOp, core_method_callee_key, drop_elaboration, eval_const_ref,
-            generated_callee_key, identity_semantic_instance_key, normalize_semantic_body,
-            projection_component_spaces, runtime_size_bytes,
+            BinaryOp, CarrierBase, DropStep, EvalOutcome, FailReason, FieldIndex, NBlockId,
+            NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr, NIndex,
+            NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
+            NSuccessor, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow,
+            SConst, SemConstId, SemConstScalar, SemConstValue, SemanticInstance,
+            SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key, drop_elaboration,
+            eval_const_ref, generated_callee_key, identity_semantic_instance_key,
+            normalize_semantic_body, projection_component_spaces, runtime_size_bytes,
         },
         ty::{
             AddressSpace,
@@ -322,8 +322,8 @@ fn export<'db>(
             .chain(PRELUDE.iter().map(|name| name.to_string()))
             .collect(),
         nevers: FxHashSet::default(),
-        lenses: FxHashSet::default(),
-        lens: false,
+        lenses: FxHashMap::default(),
+        lens: None,
         open: Vec::new(),
         layouts: Vec::new(),
         bodies: FxHashMap::default(),
@@ -360,10 +360,12 @@ struct Module<'db> {
     nevers: FxHashSet<String>,
     /// The exported projections that return the value they grant with their
     /// slide: a function from the value the caller leaves there to the
-    /// values the projection's `mut` parameters end with.
-    lenses: FxHashSet<String>,
-    /// Whether the body exported last is such a projection.
-    lens: bool,
+    /// values the projection's `mut` parameters end with. Each with the
+    /// Lean type of its slide.
+    lenses: FxHashMap<String, String>,
+    /// The Lean type of the slide of the body exported last, if it is such
+    /// a projection.
+    lens: Option<String>,
     /// The instances whose export is under way.
     open: Vec<(SemanticInstanceKey<'db>, Carriers)>,
     /// The layout definitions the bodies name, by Lean name.
@@ -402,6 +404,8 @@ impl<'db> Module<'db> {
             helds: Vec::new(),
             slide: FxHashSet::default(),
             slide_ty: None,
+            yielded: None,
+            grants: Vec::new(),
             sessions: Vec::new(),
             slides: FxHashMap::default(),
             reloads: FxHashMap::default(),
@@ -824,8 +828,8 @@ impl<'db> Module<'db> {
         if never {
             self.nevers.insert(name.clone());
         }
-        if lens {
-            self.lenses.insert(name.clone());
+        if let Some(slide) = lens {
+            self.lenses.insert(name.clone(), slide);
         }
         self.names.insert((key, carriers), name.clone());
         Ok(name)
@@ -996,9 +1000,49 @@ impl<'db> Module<'db> {
         Some(adt.fields(db).iter().enumerate().map(variant).collect())
     }
 
+    /// Appends to `parts` the steps to each access or view a value of `ty`
+    /// holds, after `steps`, with its type.
+    fn accesses(
+        &self,
+        ty: TyId<'db>,
+        steps: &mut Vec<NDataProjection>,
+        parts: &mut Vec<(NDataPath, TyId<'db>)>,
+    ) {
+        let db = self.db;
+        if ty.as_capability(db).is_some() {
+            parts.push((NDataPath::new(steps.clone()), ty));
+            return;
+        }
+        // Only a type argument puts an access in a value: a tuple's part, or
+        // the payload of a generic enum.
+        if ty.decompose_ty_app(db).1.is_empty() {
+            return;
+        }
+        if let Some(variants) = self.variants(ty) {
+            for (variant, (_, fields)) in variants.into_iter().enumerate() {
+                for (field, ty) in fields.into_iter().enumerate() {
+                    steps.push(NDataProjection::VariantField {
+                        variant: VariantIndex(variant as u16),
+                        field: FieldIndex(field as u16),
+                    });
+                    self.accesses(ty, steps, parts);
+                    steps.pop();
+                }
+            }
+        } else if ty.is_tuple(db) {
+            for (field, ty) in ty.field_types(db).into_iter().enumerate() {
+                steps.push(NDataProjection::Field(FieldIndex(field as u16)));
+                self.accesses(ty, steps, parts);
+                steps.pop();
+            }
+        }
+    }
+
     /// The Lean projections from a value of `ty` to the part `step` reaches,
     /// and the part's type.
     fn part(&self, ty: TyId<'db>, step: Step) -> Result<(Vec<String>, TyId<'db>), Unsupported> {
+        // A part of what an access reaches is a part of the value there.
+        let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
         match step {
             Step::Field(index) => Ok(self.fields(ty)?.swap_remove(index)),
             Step::Variant { variant, field } => {
@@ -1142,6 +1186,19 @@ impl<'db> Module<'db> {
     /// The Lean type of a value of `ty`: a word, a product for a tuple, or
     /// the structure a struct is defined as.
     fn value_ty(&mut self, ty: TyId<'db>) -> Result<String, Unsupported> {
+        self.shape_ty(ty, &mut Vec::new(), &[])
+    }
+
+    /// The Lean type of a value of `ty`, the part at `steps` of a value
+    /// that holds each access `held` names as `held` says: the place it
+    /// reaches, its address in memory, or the value there. An access `held`
+    /// leaves out is a place.
+    fn shape_ty(
+        &mut self,
+        ty: TyId<'db>,
+        steps: &mut Vec<NDataProjection>,
+        held: &[(NDataPath, Carrier)],
+    ) -> Result<String, Unsupported> {
         // An integer of any width is a word: below its bound if unsigned,
         // sign-extended if signed. A pointer is its address in memory, or
         // its slot number in contract state.
@@ -1158,10 +1215,15 @@ impl<'db> Module<'db> {
             let snapshot = kind == CapabilityKind::View
                 && ty_is_snapshot(self.db, scope, inner, self.root.assumptions(self.db))
                 && self.root.pinned_space(self.db, inner).is_none();
-            return if snapshot {
-                self.value_ty(inner)
-            } else {
-                Ok("Place".to_string())
+            let held = held
+                .iter()
+                .find(|(part, _)| part.as_slice() == steps.as_slice());
+            return match held {
+                _ if snapshot => self.value_ty(inner),
+                Some((_, Carrier::Value)) => self.value_ty(inner),
+                Some((_, Carrier::Memory)) => Ok("UInt256".to_string()),
+                Some((_, Carrier::Erased)) => Ok("Unit".to_string()),
+                Some((_, Carrier::Place)) | None => Ok("Place".to_string()),
             };
         }
         let pretty = ty.pretty_print(self.db);
@@ -1173,38 +1235,55 @@ impl<'db> Module<'db> {
             _ => {}
         }
         if let Some(variants) = self.variants(ty) {
-            return self.enum_ty(lean_ident(pretty), &variants);
+            let mut lean = Vec::new();
+            for (variant, (name, fields)) in variants.into_iter().enumerate() {
+                let mut tys = Vec::new();
+                for (field, ty) in fields.into_iter().enumerate() {
+                    steps.push(NDataProjection::VariantField {
+                        variant: VariantIndex(variant as u16),
+                        field: FieldIndex(field as u16),
+                    });
+                    tys.push(self.shape_ty(ty, steps, held)?);
+                    steps.pop();
+                }
+                lean.push((name, tys));
+            }
+            return Ok(self.enum_ty(lean_ident(pretty), &lean));
         }
         if let Some(len) = ty.array_len(self.db) {
             let (_, args) = ty.decompose_ty_app(self.db);
             return Ok(format!("(Vector {} {len})", self.value_ty(args[0])?));
         }
-        let fields = self.fields(ty)?;
+        let mut tys = Vec::new();
+        for (field, (name, ty)) in self.fields(ty)?.into_iter().enumerate() {
+            steps.push(NDataProjection::Field(FieldIndex(field as u16)));
+            tys.push((name, self.shape_ty(ty, steps, held)?));
+            steps.pop();
+        }
         if ty.is_tuple(self.db) {
-            let tys: Result<Vec<_>, _> = fields.iter().map(|(_, ty)| self.value_ty(*ty)).collect();
-            return Ok(match tys?.as_slice() {
-                [ty] => ty.clone(),
-                tys => format!("({})", tys.join(" × ")),
+            return Ok(match tys.as_slice() {
+                [(_, ty)] => ty.clone(),
+                tys => {
+                    let tys: Vec<_> = tys.iter().map(|(_, ty)| ty.as_str()).collect();
+                    format!("({})", tys.join(" × "))
+                }
             });
         }
         let mut lines = String::new();
-        for (name, field) in fields {
-            writeln!(lines, "  {} : {}", name[0], self.value_ty(field)?).unwrap();
+        for (name, ty) in tys {
+            writeln!(lines, "  {} : {ty}", name[0]).unwrap();
         }
         Ok(self.layout(lean_ident(pretty), |name| {
             format!("structure {name} where\n{lines}deriving Inhabited")
         }))
     }
 
-    /// The Lean type of an enum named `name`: an inductive type, with its
-    /// tag, and for each field of each variant the projection that reads it
-    /// and the function that replaces it. Both leave a value of another
-    /// variant alone.
-    fn enum_ty(
-        &mut self,
-        name: String,
-        variants: &[(String, Vec<TyId<'db>>)],
-    ) -> Result<String, Unsupported> {
+    /// The Lean type of an enum named `name` whose variants have fields of
+    /// the Lean types `variants` gives: an inductive type, with its tag, and
+    /// for each field of each variant the projection that reads it and the
+    /// function that replaces it. Both leave a value of another variant
+    /// alone.
+    fn enum_ty(&mut self, name: String, variants: &[(String, Vec<String>)]) -> String {
         let mut ctors = String::new();
         let mut tags = String::new();
         let mut parts = String::new();
@@ -1213,16 +1292,14 @@ impl<'db> Module<'db> {
         } else {
             ("", "")
         };
-        for (tag, (variant, fields)) in variants.iter().enumerate() {
-            let tys: Result<Vec<_>, _> = fields.iter().map(|ty| self.value_ty(*ty)).collect();
-            let tys = tys?;
+        for (tag, (variant, tys)) in variants.iter().enumerate() {
             let binders: String = tys
                 .iter()
                 .enumerate()
                 .map(|(field, ty)| format!(" (f{field} : {ty})"))
                 .collect();
             writeln!(ctors, "  | {variant}{binders}").unwrap();
-            let rest = if fields.is_empty() { "" } else { " .." };
+            let rest = if tys.is_empty() { "" } else { " .." };
             writeln!(tags, "  | .{variant}{rest} => UInt256.ofNat {tag}").unwrap();
             let bound: Vec<_> = (0..tys.len()).map(|field| format!("f{field}")).collect();
             for (field, ty) in tys.iter().enumerate() {
@@ -1241,13 +1318,13 @@ impl<'db> Module<'db> {
                 .unwrap();
             }
         }
-        Ok(self.layout(name, |name| {
+        self.layout(name, |name| {
             format!(
                 "inductive {name} where\n{ctors}deriving Inhabited\n\n\
                  def {name}.tag : {name} → UInt256\n{tags}{}",
                 parts.replace("NAME", name).trim_end()
             )
-        }))
+        })
     }
 
     /// The slots a value of `ty` takes in contract state.
@@ -1740,12 +1817,18 @@ struct BodyExporter<'a, 'db> {
     /// The Lean type of what a slide returns, if the body is a projection
     /// that returns its slide.
     slide_ty: Option<String>,
+    /// The type of what the body yields, if it is a projection, and how it
+    /// grants each access of that, by the steps to it: as its callers take
+    /// the access from their session.
+    yielded: Option<TyId<'db>>,
+    grants: Vec<(NDataPath, Carrier)>,
     /// The calls of projections that grant `mut` access to a local: the
-    /// session is a mutable variable holding the granted value.
+    /// session is a mutable variable holding what the projection granted,
+    /// with the value of the local where the access is.
     sessions: Vec<NValueId>,
     /// Where the slide of each open session of a projection that returns its
-    /// slide leaves the values it returns.
-    slides: FxHashMap<NValueId, Vec<Out<'db>>>,
+    /// slide leaves the values it returns, and the slide's Lean type.
+    slides: FxHashMap<NValueId, (Vec<Out<'db>>, String)>,
     /// The lines that load again, where each open session ends, the lanes
     /// the body holds and the session's callee writes itself.
     reloads: FxHashMap<NValueId, String>,
@@ -1875,18 +1958,22 @@ impl<'db> BodyExporter<'_, 'db> {
             writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
         }
         // A call of a projection that grants `mut` access to a local holds
-        // the granted value in a mutable variable.
+        // what it granted in a mutable variable.
         for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
             if let NStatementKind::Define {
                 result,
                 expr: NExpr::Call { callee, .. },
             } = &statement.kind
                 && SemanticInstance::new(db, callee.key).is_projection(db)
-                && let Some((CapabilityKind::Mut, inner)) = self.ty(*result).as_capability(db)
-                && !self.granted_in_state(*result, &NDataPath::empty())
-                && self.carrier(*result).ok() != Some(Carrier::Memory)
+                && self
+                    .access_parts(self.ty(*result))
+                    .iter()
+                    .any(|(part, access)| {
+                        matches!(access.as_capability(db), Some((CapabilityKind::Mut, _)))
+                            && self.carrier_at(*result, part).ok() == Some(Carrier::Value)
+                    })
             {
-                let ty = self.module.value_ty(inner)?;
+                let ty = self.held_ty(*result)?;
                 writeln!(state, "  let mut {} : {ty} := default", value_name(*result)).unwrap();
                 self.sessions.push(*result);
             }
@@ -1921,6 +2008,33 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             self.helds.push((*result, place.clone(), mutable));
         }
+        // A projection grants each access of what it yields as its callers
+        // take it.
+        let yields: Vec<_> = self
+            .body
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator.kind {
+                NTerminatorKind::Yield { value, resume } => Some((value.value, resume.block)),
+                _ => None,
+            })
+            .collect();
+        let mut writes = false;
+        if let Some((yielded, _)) = yields.first() {
+            let ty = self.ty(*yielded);
+            for (part, access) in self.access_parts(ty) {
+                // A view of a snapshot type is the value.
+                if !self.is_access(access) {
+                    self.grants.push((part, Carrier::Value));
+                    continue;
+                }
+                let carrier = self.granted(&part)?;
+                writes |= carrier == Carrier::Value
+                    && matches!(access.as_capability(db), Some((CapabilityKind::Mut, _)));
+                self.grants.push((part, carrier));
+            }
+            self.yielded = Some(ty);
+        }
         self.result_ty = self.returned_ty()?;
         let never = self.result_ty == "Empty";
         let mut returned = Vec::new();
@@ -1937,23 +2051,11 @@ impl<'db> BodyExporter<'_, 'db> {
         // come back, or its slide does anything, it returns the slide too: a
         // function from the value the caller leaves to the values the
         // projection's `mut` parameters end with.
-        let yields: Vec<_> = self
-            .body
-            .blocks
-            .iter()
-            .filter_map(|block| match &block.terminator.kind {
-                NTerminatorKind::Yield { value, resume } => Some((value.value, resume.block)),
-                _ => None,
-            })
-            .collect();
-        let mut direct = returned.is_empty();
-        for (value, resume) in &yields {
-            let ty = self.ty(*value);
-            let place = self.is_access(ty)
-                && matches!(self.carrier(*value)?, Carrier::Place | Carrier::Memory);
-            let read_only = !matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)));
-            direct &= (read_only || place) && self.slide_is_empty(*resume);
-        }
+        let direct = returned.is_empty()
+            && !writes
+            && yields
+                .iter()
+                .all(|(_, resume)| self.slide_is_empty(*resume));
         if !yields.is_empty() && !direct {
             let mut pending: Vec<_> = yields.iter().map(|(_, resume)| *resume).collect();
             while let Some(block) = pending.pop() {
@@ -1975,7 +2077,10 @@ impl<'db> BodyExporter<'_, 'db> {
         self.find_joins();
         let mut out = format!("{params} : FeM {} := do\n{state}", self.result_ty);
         self.block(self.body.entry, 1, &mut out)?;
-        self.module.lens = self.slide_ty.is_some();
+        self.module.lens = match self.slide_ty.clone() {
+            Some(outs) => Some(format!("({} → FeM {outs})", self.returned_ty()?)),
+            None => None,
+        };
         Ok((out, never))
     }
 
@@ -2021,27 +2126,11 @@ impl<'db> BodyExporter<'_, 'db> {
                 NTerminatorKind::Return(operand) => Some(operand),
                 _ => None,
             });
-        // A projection gives what it yields: the place its access reaches
-        // in contract state, or the value it reaches in a local.
-        let yielded = self
-            .body
-            .blocks
-            .iter()
-            .find_map(|block| match &block.terminator.kind {
-                NTerminatorKind::Yield { value, .. } => Some(value.value),
-                _ => None,
-            });
-        if let Some(yielded) = yielded {
-            let ty = self.ty(yielded);
-            if self.is_access(ty) {
-                match self.carrier(yielded)? {
-                    Carrier::Place => return Ok("Place".to_string()),
-                    Carrier::Memory => return Ok("UInt256".to_string()),
-                    _ => {}
-                }
-            }
-            let inner = ty.as_capability(self.module.db).map_or(ty, |(_, ty)| ty);
-            return self.module.value_ty(inner);
+        // A projection gives what it yields, each access as it grants it:
+        // the place it reaches in contract state, its address in memory, or
+        // the value it reaches in a local.
+        if let Some(yielded) = self.yielded {
+            return self.module.shape_ty(yielded, &mut Vec::new(), &self.grants);
         }
         match returned {
             Some(Some(operand)) => self.lean_ty(self.ty(operand.value)),
@@ -2175,8 +2264,16 @@ impl<'db> BodyExporter<'_, 'db> {
                 .filter(|(name, _)| !state.contains(name))
                 .cloned()
                 .collect();
+            // A session's slide is live with it, and a session the body
+            // holds in a mutable variable is passed with those.
             for value in &defined {
-                live.push((value_name(*value), self.lean_ty(self.ty(*value))?));
+                let name = value_name(*value);
+                if let Some((_, slide)) = self.slides.get(value) {
+                    live.push((format!("{name}_k"), slide.clone()));
+                }
+                if !state.contains(&name) {
+                    live.push((name, self.held_ty(*value)?));
+                }
             }
             live.retain(|(name, _)| mentions(&rest, name));
             live.extend(state.iter().cloned().zip(state_tys.iter().cloned()));
@@ -2213,8 +2310,7 @@ impl<'db> BodyExporter<'_, 'db> {
             tys.push(self.module.value_ty(effect.ty)?);
         }
         for session in self.sessions.clone() {
-            let (_, inner) = self.ty(session).as_capability(self.module.db).unwrap();
-            tys.push(self.module.value_ty(inner)?);
+            tys.push(self.held_ty(session)?);
         }
         for (held, place, _) in self.helds.clone() {
             if self.held(held).is_some_and(|(var, _)| var == held) {
@@ -2356,20 +2452,38 @@ impl<'db> BodyExporter<'_, 'db> {
             NTerminatorKind::Fail(FailReason::Assert { message: None }) => {
                 writeln!(out, "{pad}M.panic 0x01").unwrap()
             }
-            // A projection that grants read access to a value and then only
-            // ends its own sessions returns the value.
+            // A projection whose callers write nothing back, and which then
+            // only ends its own sessions, returns what it grants.
             NTerminatorKind::Yield { value, resume } => {
                 let db = self.module.db;
                 let ty = self.ty(value.value);
-                let place = self.is_access(ty)
-                    && matches!(self.carrier(value.value)?, Carrier::Place | Carrier::Memory);
-                let target = (self.is_access(ty) && !place)
-                    .then(|| self.carrier_value(value.value))
-                    .transpose()?;
-                let granted = match &target {
-                    Some(target) => self.read(target)?,
-                    None => self.operand(value)?,
-                };
+                // The body holds each access it yields here as it grants the
+                // access, and takes back the value of one it grants `mut` by
+                // value.
+                let mut writes = Vec::new();
+                for (part, access) in self.access_parts(ty) {
+                    if !self.is_access(access)
+                        || self
+                            .body
+                            .access_target(db, value.value, part.clone())
+                            .is_none()
+                    {
+                        continue;
+                    }
+                    let held = self.carrier_at(value.value, &part)?;
+                    let granted = self.grants.iter().find(|(granted, _)| *granted == part);
+                    if granted.is_none_or(|(_, carrier)| *carrier != held) {
+                        return Err(Unsupported(format!(
+                            "grant held as {held:?} that callers take otherwise"
+                        )));
+                    }
+                    if held == Carrier::Value
+                        && matches!(access.as_capability(db), Some((CapabilityKind::Mut, _)))
+                    {
+                        writes.push(part);
+                    }
+                }
+                let granted = self.whole(value.value, &mut Vec::new())?;
                 let Some(outs) = self.slide_ty.clone() else {
                     writeln!(out, "{pad}return {granted}").unwrap();
                     return Ok(());
@@ -2385,10 +2499,15 @@ impl<'db> BodyExporter<'_, 'db> {
                 for var in self.state() {
                     writeln!(out, "{pad}  let mut {var} := {var}").unwrap();
                 }
-                if let Some(target) = &target
-                    && matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)))
-                {
-                    writeln!(out, "{pad}  {}", self.write(target, "g")?).unwrap();
+                for part in writes {
+                    let left = ValueTarget {
+                        var: "g".to_string(),
+                        ty,
+                        path: field_path(&part)?,
+                    };
+                    let target = self.carrier_value_at(value.value, &part)?;
+                    let write = self.write(&target, &self.read(&left)?)?;
+                    writeln!(out, "{pad}  {write}").unwrap();
                 }
                 self.jump(resume, depth + 1, out)?;
                 writeln!(out, "{pad}return ({granted}, slide)").unwrap();
@@ -2454,6 +2573,7 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         let mut args: String = self.state().iter().map(|var| format!(" {var}")).collect();
         for arg in &target.args {
+            self.holds_places(arg.value)?;
             write!(args, " {}", self.operand(arg)?).unwrap();
         }
         writeln!(out, "{}b{}{args}", "  ".repeat(depth), target.block.index()).unwrap();
@@ -2484,7 +2604,10 @@ impl<'db> BodyExporter<'_, 'db> {
                     // An access to a local is read and written through the
                     // local's variable, where it is used; one to the root
                     // object reaches no data.
-                    NExpr::Forward { .. } | NExpr::MakeView { .. } | NExpr::Borrow { .. }
+                    NExpr::Forward { .. }
+                    | NExpr::MakeView { .. }
+                    | NExpr::Borrow { .. }
+                    | NExpr::ProjectValue { .. }
                         if self.is_access(self.ty(*result))
                             && !matches!(
                                 self.carrier(*result)?,
@@ -2652,9 +2775,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         )
                     }
                     NExpr::AggregateMake { ty, fields } => {
-                        self.parts_in_state(fields)?;
-                        let fields: Vec<_> =
-                            fields.iter().map(|field| value_name(field.value)).collect();
+                        let fields = self.parts(fields)?;
                         let value = self.module.aggregate(*ty, &fields)?;
                         Some(format!("let {name} := {value}"))
                     }
@@ -2670,13 +2791,13 @@ impl<'db> BodyExporter<'_, 'db> {
                         variant,
                         fields,
                     } => {
-                        self.parts_in_state(fields)?;
-                        let ty = self.module.value_ty(*enum_ty)?;
+                        let ty = self.held_ty(*result)?;
                         let variants = self.module.variants(*enum_ty).unwrap_or_default();
                         let (variant, _) = &variants[usize::from(variant.0)];
-                        let fields: String = fields
+                        let fields: String = self
+                            .parts(fields)?
                             .iter()
-                            .map(|field| format!(" {}", value_name(field.value)))
+                            .map(|field| format!(" {field}"))
                             .collect();
                         Some(format!("let {name} := {ty}.{variant}{fields}"))
                     }
@@ -2716,6 +2837,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 }
             }
             NStatementKind::Store { destination, value } => {
+                self.holds_places(value.value)?;
                 let value = self.operand(value)?;
                 Some(match self.target(destination)? {
                     Target::Place(lean, lane) => self.store(destination.ty, &lean, lane, &value)?,
@@ -2731,7 +2853,7 @@ impl<'db> BodyExporter<'_, 'db> {
             // The end of a session runs the projection's slide on the value
             // the session leaves.
             NStatementKind::End { access } if self.slides.contains_key(access) => {
-                let outs = self.slides[access].clone();
+                let outs = self.slides[access].0.clone();
                 let name = value_name(*access);
                 let names: Vec<_> = (0..outs.len()).map(|n| format!("{name}_{n}")).collect();
                 let binder = match names.as_slice() {
@@ -2920,11 +3042,13 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut effects = Vec::new();
         let mut lean_args = String::new();
         let mut outs = Vec::new();
-        for arg in args {
+        let taken = normalize_semantic_body(db, SemanticInstance::new(db, callee)).ok();
+        for (param, arg) in args.iter().enumerate() {
             let ty = self.ty(arg.value);
             let carrier = if self.is_access(ty) {
                 Some(self.carrier(arg.value)?)
             } else {
+                self.holds_places(arg.value)?;
                 None
             };
             carriers.push(carrier);
@@ -2937,7 +3061,17 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             let target = self.carrier_value(arg.value)?;
             write!(lean_args, " {}", self.read(&target)?).unwrap();
-            if matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _))) {
+            // The callee returns the value its parameter leaves if the
+            // parameter is `mut`, which a `mut` argument's need not be.
+            let entry = NValueDefinition::EntryParam {
+                param: param as u32,
+            };
+            let taken = taken.as_ref().and_then(|callee| {
+                let mut values = callee.body.values.iter();
+                values.find(|value| value.definition == entry)
+            });
+            let taken = taken.map_or(ty, |value| value.ty);
+            if matches!(taken.as_capability(db), Some((CapabilityKind::Mut, _))) {
                 outs.push(Out::Value(target));
             }
         }
@@ -3059,8 +3193,8 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         // A projection that returns its slide: the slide runs where the
         // session ends, and the values it returns are written back there.
-        if self.module.lenses.contains(&callee) {
-            self.slides.insert(result, outs);
+        if let Some(slide) = self.module.lenses.get(&callee).cloned() {
+            self.slides.insert(result, (outs, slide));
             self.reloads.insert(result, reloads.clone());
             return Ok(if self.sessions.contains(&result) {
                 format!(
@@ -3340,7 +3474,7 @@ impl<'db> BodyExporter<'_, 'db> {
         let name = value_name(result);
         Ok(format!(
             "{call}\nlet {name} : {} := nomatch {name}",
-            self.lean_ty(ty)?
+            self.held_ty(result)?
         ))
     }
 
@@ -3396,14 +3530,21 @@ impl<'db> BodyExporter<'_, 'db> {
     /// How the model holds the access `value`: as a `Place` if it reaches
     /// contract state, and by the value there if it reaches a local.
     fn carrier(&self, value: NValueId) -> Result<Carrier, Unsupported> {
-        if self.held(value).is_some() {
+        self.carrier_at(value, &NDataPath::empty())
+    }
+
+    /// How the model holds the access at `component` of `value`, a value
+    /// that holds several if `component` has steps.
+    fn carrier_at(&self, value: NValueId, component: &NDataPath) -> Result<Carrier, Unsupported> {
+        let db = self.module.db;
+        if self.held_at(value, component).is_some() {
             return Ok(Carrier::Value);
         }
-        let target = self
+        let (base, _) = self
             .body
-            .carrier_target(self.module.db, value)
+            .access_target(db, value, component.clone())
             .ok_or_else(|| Unsupported("access without one target".to_string()))?;
-        match target.base {
+        match base {
             CarrierBase::Root(root) => match &self.body.roots[root.index()].kind {
                 NRootKind::Provider { binding }
                     if matches!(binding.source, ProviderSource::RootProvider { .. }) =>
@@ -3415,7 +3556,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 kind => Err(Unsupported(format!("access to root {kind:?}"))),
             },
             CarrierBase::Param { param } => {
-                let owner = self.body.owner.key(self.module.db).owner(self.module.db);
+                let owner = self.body.owner.key(db).owner(db);
                 let entry = matches!(
                     owner,
                     BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. }
@@ -3425,58 +3566,125 @@ impl<'db> BodyExporter<'_, 'db> {
                     .or(entry.then_some(Carrier::Value))
                     .ok_or_else(|| Unsupported("access parameter without a carrier".to_string()))
             }
-            // An access through a pointer into memory, or what a projection
-            // grants of one, is the address there.
-            CarrierBase::Grant { .. } | CarrierBase::Raw { .. }
-                if in_memory(self.module.db, self.body, value, 16, &|param| {
+            // An access through a pointer is the address there in memory,
+            // or the place at that slot of contract state.
+            CarrierBase::Raw { pointer } => match self.ty(pointer).as_ptr(db) {
+                Some((_, AddressSpace::Memory)) => Ok(Carrier::Memory),
+                Some((_, AddressSpace::Storage | AddressSpace::Transient)) => Ok(Carrier::Place),
+                _ => Err(Unsupported(format!("access to {base:?}"))),
+            },
+            // What a projection grants is what it returned for the access,
+            // as `granted` has it for the projection: an address in memory,
+            // a place in contract state, or the value of a local, which the
+            // session holds.
+            CarrierBase::Grant { session, component } => {
+                let Some((_, NExpr::Call { callee, .. })) = self.body.defining_expr(session) else {
+                    return Err(Unsupported("grant of no call".to_string()));
+                };
+                let memory = |param: u32| {
                     self.carriers.params.get(param as usize).copied().flatten()
                         == Some(Carrier::Memory)
-                })? =>
-            {
-                Ok(Carrier::Memory)
+                };
+                Ok(
+                    if in_memory(db, self.body, session, &component, 16, &memory)? == Some(true) {
+                        Carrier::Memory
+                    } else if granted_in_state(db, callee.key, &component) {
+                        Carrier::Place
+                    } else {
+                        Carrier::Value
+                    },
+                )
             }
-            // A grant into contract state is the place the projection
-            // returned.
-            CarrierBase::Grant { session, component }
-                if self.granted_in_state(session, &component) =>
-            {
-                Ok(Carrier::Place)
-            }
-            // A `mut` grant of a local is the value the session holds.
-            CarrierBase::Grant { session, component }
-                if component.is_empty() && self.sessions.contains(&session) =>
-            {
-                Ok(Carrier::Value)
-            }
-            // A read-only grant is the value the projection returned.
-            CarrierBase::Grant { session, .. }
-                if !matches!(
-                    self.ty(session).as_capability(self.module.db),
-                    Some((CapabilityKind::Mut, _))
-                ) =>
-            {
-                Ok(Carrier::Value)
-            }
-            // An access through a pointer into contract state reaches the
-            // place at that slot.
-            CarrierBase::Raw { pointer }
-                if matches!(
-                    self.ty(pointer).as_ptr(self.module.db),
-                    Some((_, AddressSpace::Storage | AddressSpace::Transient))
-                ) =>
-            {
-                Ok(Carrier::Place)
-            }
-            base => Err(Unsupported(format!("access to {base:?}"))),
         }
     }
 
-    /// Checks that each access among `parts`, the parts of a value being
-    /// built, reaches contract state: there it is a place, which a value can
-    /// hold.
-    fn parts_in_state(&self, parts: &[NOperand]) -> Result<(), Unsupported> {
-        for part in parts {
-            if self.is_access(self.ty(part.value)) && self.carrier(part.value)? != Carrier::Place {
+    /// How the body, a projection, grants the access at `component` of what
+    /// it yields, which is how a caller takes the access from its session:
+    /// as its address if it lies below a pointer into memory, as a place if
+    /// it lies in contract state, and otherwise as the value there.
+    fn granted(&self, component: &NDataPath) -> Result<Carrier, Unsupported> {
+        let db = self.module.db;
+        let memory = |param: u32| {
+            self.carriers.params.get(param as usize).copied().flatten() == Some(Carrier::Memory)
+        };
+        Ok(
+            if granted_in_memory(db, self.body, component, 16, &memory)? {
+                Carrier::Memory
+            } else if granted_in_state(db, self.body.owner.key(db), component) {
+                Carrier::Place
+            } else {
+                Carrier::Value
+            },
+        )
+    }
+
+    /// The steps to each access or view a value of `ty` holds, with its
+    /// type: no steps to `ty` itself, if it is one.
+    fn access_parts(&self, ty: TyId<'db>) -> Vec<(NDataPath, TyId<'db>)> {
+        let mut parts = Vec::new();
+        self.module.accesses(ty, &mut Vec::new(), &mut parts);
+        parts
+    }
+
+    /// The Lean type of the variable that holds `value`, with each access as
+    /// the body holds it. An access with no target, in a variant the value
+    /// is not, is as the body grants it if it yields the value's type.
+    fn held_ty(&mut self, value: NValueId) -> Result<String, Unsupported> {
+        let db = self.module.db;
+        let ty = self.ty(value);
+        let mut held = Vec::new();
+        for (part, access) in self.access_parts(ty) {
+            // A view of a snapshot type is the value.
+            let carrier = if !self.is_access(access) {
+                Some(Carrier::Value)
+            } else if self.body.access_target(db, value, part.clone()).is_some() {
+                self.carrier_at(value, &part).ok()
+            } else {
+                let granted = |(granted, carrier): &(NDataPath, Carrier)| {
+                    (*granted == part).then_some(*carrier)
+                };
+                (self.yielded == Some(ty))
+                    .then(|| self.grants.iter().find_map(granted))
+                    .flatten()
+            };
+            held.extend(carrier.map(|carrier| (part, carrier)));
+        }
+        self.module.shape_ty(ty, &mut Vec::new(), &held)
+    }
+
+    /// The Lean terms for `parts`, the parts of a value being built: an
+    /// access as the body holds it, its place, its address, or the value now
+    /// there.
+    fn parts(&self, parts: &[NOperand]) -> Result<Vec<String>, Unsupported> {
+        parts
+            .iter()
+            .map(|part| {
+                if !self.is_access(self.ty(part.value)) {
+                    return Ok(value_name(part.value));
+                }
+                Ok(match self.carrier(part.value)? {
+                    Carrier::Place | Carrier::Memory => value_name(part.value),
+                    Carrier::Value => self.read(&self.carrier_value(part.value)?)?,
+                    Carrier::Erased => "()".to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// Checks that each access `value` holds, if it is no access itself,
+    /// reaches contract state: where the value goes, one of its type holds
+    /// places.
+    fn holds_places(&self, value: NValueId) -> Result<(), Unsupported> {
+        let db = self.module.db;
+        let ty = self.ty(value);
+        if ty.as_capability(db).is_some() {
+            return Ok(());
+        }
+        for (part, access) in self.access_parts(ty) {
+            if self.is_access(access)
+                && self.body.access_target(db, value, part.clone()).is_some()
+                && self.carrier_at(value, &part)? != Carrier::Place
+            {
                 return Err(Unsupported(
                     "value that holds an access to a local".to_string(),
                 ));
@@ -3485,54 +3693,87 @@ impl<'db> BodyExporter<'_, 'db> {
         Ok(())
     }
 
-    /// Whether the access at `component` of what the projection call
-    /// `session` grants reaches contract state.
-    fn granted_in_state(&self, session: NValueId, component: &NDataPath) -> bool {
-        let db = self.module.db;
-        let NValueDefinition::Statement { block, statement } =
-            self.body.values[session.index()].definition
-        else {
-            return false;
-        };
-        let statement = &self.body.blocks[block.index()].statements[statement as usize];
-        let NStatementKind::Define {
-            expr: NExpr::Call { callee, .. },
-            ..
-        } = &statement.kind
-        else {
-            return false;
-        };
-        let step = |step: &NDataProjection| match *step {
-            NDataProjection::Field(field) => Some(ReturnProjectionStep::Field(field.0)),
-            NDataProjection::VariantField { variant, field } => {
-                Some(ReturnProjectionStep::VariantField {
-                    variant: variant.0,
-                    field: field.0,
+    /// The Lean term for `value` where the body yields it, the part at
+    /// `steps` of what it yields: each access as the body grants it, with
+    /// the value now below one it grants by value.
+    fn whole(
+        &mut self,
+        value: NValueId,
+        steps: &mut Vec<NDataProjection>,
+    ) -> Result<String, Unsupported> {
+        let ty = self.ty(value);
+        if self.is_access(ty) {
+            return match self.carrier(value)? {
+                Carrier::Value => self.read(&self.carrier_value(value)?),
+                _ => Ok(value_name(value)),
+            };
+        }
+        let accesses = self.access_parts(ty);
+        if !accesses.iter().any(|(_, access)| self.is_access(*access)) {
+            return Ok(value_name(value));
+        }
+        let body = self.body;
+        match body.defining_expr(value) {
+            Some((_, NExpr::Forward { src })) => self.whole(src.value, steps),
+            Some((_, NExpr::AggregateMake { ty, fields })) => {
+                let mut parts = Vec::new();
+                for (field, part) in fields.iter().enumerate() {
+                    steps.push(NDataProjection::Field(FieldIndex(field as u16)));
+                    parts.push(self.whole(part.value, steps)?);
+                    steps.pop();
+                }
+                self.module.aggregate(*ty, &parts)
+            }
+            Some((
+                _,
+                NExpr::EnumMake {
+                    enum_ty,
+                    variant,
+                    fields,
+                },
+            )) => {
+                let ty = self.module.shape_ty(*enum_ty, steps, &self.grants)?;
+                let variants = self.module.variants(*enum_ty).unwrap_or_default();
+                let mut term = format!("{ty}.{}", variants[usize::from(variant.0)].0);
+                for (field, part) in fields.iter().enumerate() {
+                    steps.push(NDataProjection::VariantField {
+                        variant: *variant,
+                        field: FieldIndex(field as u16),
+                    });
+                    write!(term, " {}", self.whole(part.value, steps)?).unwrap();
+                    steps.pop();
+                }
+                Ok(if fields.is_empty() {
+                    term
+                } else {
+                    format!("({term})")
                 })
             }
-            _ => None,
-        };
-        let component: Option<Vec<_>> = component.iter().map(step).collect();
-        projection_component_spaces(db, SemanticInstance::new(db, callee.key))
-            .iter()
-            .any(|(steps, space)| {
-                Some(steps) == component.as_ref()
-                    && matches!(space, Some(AddressSpace::Storage | AddressSpace::Transient))
-            })
+            // A session holds what its projection granted, as it is now.
+            Some((_, NExpr::Call { .. })) => Ok(value_name(value)),
+            _ => Err(Unsupported(
+                "yield of a value of several accesses made elsewhere".to_string(),
+            )),
+        }
     }
 
     /// The first borrow of the packed lane the access `value` reaches into,
     /// whose variable holds the lane's value, and the path below the lane.
     fn held(&self, value: NValueId) -> Option<(NValueId, NDataPath)> {
+        self.held_at(value, &NDataPath::empty())
+    }
+
+    /// As `held`, for the access at `component` of `value`.
+    fn held_at(&self, value: NValueId, component: &NDataPath) -> Option<(NValueId, NDataPath)> {
         if self.helds.is_empty() {
             return None;
         }
         let db = self.module.db;
-        let target = self.body.carrier_target(db, value)?;
+        let (base, path) = self.body.access_target(db, value, component.clone())?;
         self.helds.iter().find_map(|(held, ..)| {
             let lane = self.body.carrier_target(db, *held)?;
-            (lane.base == target.base && lane.path.is_prefix_of(&target.path)).then(|| {
-                let below = target.path.as_slice()[lane.path.len()..].to_vec();
+            (lane.base == base && lane.path.is_prefix_of(&path)).then(|| {
+                let below = path.as_slice()[lane.path.len()..].to_vec();
                 (*held, NDataPath::new(below))
             })
         })
@@ -3540,8 +3781,17 @@ impl<'db> BodyExporter<'_, 'db> {
 
     /// The local value the access `value` reaches.
     fn carrier_value(&self, value: NValueId) -> Result<ValueTarget<'db>, Unsupported> {
+        self.carrier_value_at(value, &NDataPath::empty())
+    }
+
+    /// The local value the access at `component` of `value` reaches.
+    fn carrier_value_at(
+        &self,
+        value: NValueId,
+        component: &NDataPath,
+    ) -> Result<ValueTarget<'db>, Unsupported> {
         let db = self.module.db;
-        if let Some((held, path)) = self.held(value) {
+        if let Some((held, path)) = self.held_at(value, component) {
             let place = self.helds.iter().find(|(borrow, ..)| *borrow == held);
             return Ok(ValueTarget {
                 var: format!("h{}", held.index()),
@@ -3549,12 +3799,11 @@ impl<'db> BodyExporter<'_, 'db> {
                 path: field_path(&path)?,
             });
         }
-        let target = self
+        let (base, path) = self
             .body
-            .carrier_target(db, value)
+            .access_target(db, value, component.clone())
             .ok_or_else(|| Unsupported("access without one target".to_string()))?;
-        let several = || Unsupported("access below a value of several accesses".to_string());
-        let (var, ty) = match target.base {
+        let (var, ty) = match base {
             CarrierBase::Root(root) => (
                 self.root_var(root)
                     .ok_or_else(|| Unsupported("access to a root with no value".to_string()))?,
@@ -3568,17 +3817,20 @@ impl<'db> BodyExporter<'_, 'db> {
                     .enumerate()
                     .find(|(_, value)| value.definition == NValueDefinition::EntryParam { param })
                     .ok_or_else(|| Unsupported("access to an unknown parameter".to_string()))?;
-                let (_, inner) = value.ty.as_capability(db).ok_or_else(several)?;
+                let (_, inner) = value.ty.as_capability(db).ok_or_else(|| {
+                    Unsupported("access below a value of several accesses".to_string())
+                })?;
                 (format!("v{index}"), inner)
             }
+            // The session holds the value, at the steps to the access.
             CarrierBase::Grant { session, component } => {
-                let (_, inner) = self.ty(session).as_capability(db).ok_or_else(several)?;
-                let mut path = field_path(&component)?;
-                path.extend(field_path(&target.path)?);
+                let ty = self.ty(session);
+                let mut steps = field_path(&component)?;
+                steps.extend(field_path(&path)?);
                 return Ok(ValueTarget {
                     var: value_name(session),
-                    ty: inner,
-                    path,
+                    ty: ty.as_capability(db).map_or(ty, |(_, inner)| inner),
+                    path: steps,
                 });
             }
             base => return Err(Unsupported(format!("access to {base:?}"))),
@@ -3586,7 +3838,7 @@ impl<'db> BodyExporter<'_, 'db> {
         Ok(ValueTarget {
             var,
             ty,
-            path: field_path(&target.path)?,
+            path: field_path(&path)?,
         })
     }
 
@@ -3609,56 +3861,99 @@ impl<'db> BodyExporter<'_, 'db> {
         }
     }
 
-    /// The value of a local that `place` is below, if it is.
-    fn local(&self, place: &NPlace<'db>) -> Result<Option<ValueTarget<'db>>, Unsupported> {
-        Ok(match place.base {
-            NPlaceBase::Root(root) => self.root_var(root).map(|var| ValueTarget {
-                var,
-                ty: self.body.roots[root.index()].ty,
-                path: Vec::new(),
-            }),
-            // A value of several accesses holds places.
-            NPlaceBase::CapabilityTarget { carrier }
-                if self.ty(carrier).as_capability(self.module.db).is_none() =>
-            {
-                None
+    /// The steps of `path` that select, among the accesses the value
+    /// `carrier` holds, the one a place below it along `path` lies under,
+    /// and that access's type: no steps if `carrier` is an access itself.
+    fn selected(
+        &self,
+        carrier: NValueId,
+        path: &NDataPath,
+    ) -> Result<(NDataPath, TyId<'db>), Unsupported> {
+        let db = self.module.db;
+        let mut ty = self.ty(carrier);
+        let mut steps = Vec::new();
+        for step in path.iter() {
+            if ty.as_capability(db).is_some() {
+                break;
             }
-            // A view of a snapshot type is the value itself.
-            NPlaceBase::CapabilityTarget { carrier } if !self.is_access(self.ty(carrier)) => {
-                let (_, ty) = self.ty(carrier).as_capability(self.module.db).unwrap();
-                Some(ValueTarget {
-                    var: value_name(carrier),
-                    ty,
-                    path: Vec::new(),
-                })
-            }
-            NPlaceBase::CapabilityTarget { carrier }
-                if self.carrier(carrier)? == Carrier::Value =>
-            {
-                Some(self.carrier_value(carrier)?)
-            }
-            _ => None,
-        })
+            let part = field_path(&NDataPath::new(vec![*step]))?[0];
+            ty = self.module.part(ty, part)?.1;
+            steps.push(*step);
+        }
+        Ok((NDataPath::new(steps), ty))
     }
 
-    /// The value that is the address `place` lies below in memory or
-    /// calldata, if it does, and whether that is calldata: a pointer there,
-    /// or an access held as an address in memory.
-    fn bytes_base(&self, place: &NPlace<'db>) -> Result<Option<(NValueId, bool)>, Unsupported> {
+    /// The value of a local that `place` is, if it lies below one.
+    fn local(&self, place: &NPlace<'db>) -> Result<Option<ValueTarget<'db>>, Unsupported> {
+        let db = self.module.db;
+        let (mut local, below) = match place.base {
+            NPlaceBase::Root(root) => {
+                let Some(var) = self.root_var(root) else {
+                    return Ok(None);
+                };
+                let ty = self.body.roots[root.index()].ty;
+                (
+                    ValueTarget {
+                        var,
+                        ty,
+                        path: Vec::new(),
+                    },
+                    place.path.as_slice(),
+                )
+            }
+            NPlaceBase::CapabilityTarget { carrier } => {
+                let (component, access) = self.selected(carrier, &place.path)?;
+                let ty = self.ty(carrier);
+                // A view of a snapshot type is the value itself, which a
+                // value of several accesses holds where the view is.
+                let local = if access.as_capability(db).is_some() && !self.is_access(access) {
+                    ValueTarget {
+                        var: value_name(carrier),
+                        ty: ty.as_capability(db).map_or(ty, |(_, inner)| inner),
+                        path: field_path(&component)?,
+                    }
+                } else if self.carrier_at(carrier, &component)? == Carrier::Value {
+                    self.carrier_value_at(carrier, &component)?
+                } else {
+                    return Ok(None);
+                };
+                (local, &place.path.as_slice()[component.len()..])
+            }
+            NPlaceBase::Deref { .. } => return Ok(None),
+        };
+        local.path.extend(field_path(&NDataPath::new(below))?);
+        Ok(Some(local))
+    }
+
+    /// The address `place` lies below in memory or calldata, if it does, the
+    /// steps of its path that led there, and whether that is calldata: a
+    /// pointer there, or an access held as an address in memory.
+    fn bytes_base(
+        &self,
+        place: &NPlace<'db>,
+    ) -> Result<Option<(String, usize, bool)>, Unsupported> {
         let db = self.module.db;
         Ok(match place.base {
             NPlaceBase::Deref { pointer } => match self.ty(pointer).as_ptr(db) {
-                Some((_, AddressSpace::Memory)) => Some((pointer, false)),
-                Some((_, AddressSpace::Calldata)) => Some((pointer, true)),
+                Some((_, AddressSpace::Memory)) => Some((value_name(pointer), 0, false)),
+                Some((_, AddressSpace::Calldata)) => Some((value_name(pointer), 0, true)),
                 _ => None,
             },
-            NPlaceBase::CapabilityTarget { carrier }
-                if self.is_access(self.ty(carrier))
-                    && self.carrier(carrier)? == Carrier::Memory =>
-            {
-                Some((carrier, false))
+            NPlaceBase::CapabilityTarget { carrier } => {
+                let (component, access) = self.selected(carrier, &place.path)?;
+                if !self.is_access(access)
+                    || self.carrier_at(carrier, &component)? != Carrier::Memory
+                {
+                    return Ok(None);
+                }
+                let address = ValueTarget {
+                    var: value_name(carrier),
+                    ty: self.ty(carrier),
+                    path: field_path(&component)?,
+                };
+                Some((self.read(&address)?, component.len(), false))
             }
-            _ => None,
+            NPlaceBase::Root(_) => None,
         })
     }
 
@@ -3671,13 +3966,12 @@ impl<'db> BodyExporter<'_, 'db> {
     /// below a local's variable, or a word in memory.
     fn target(&mut self, place: &NPlace<'db>) -> Result<Target<'db>, Unsupported> {
         let db = self.module.db;
-        if let Some((base, calldata)) = self.bytes_base(place)? {
+        if let Some((mut address, taken, calldata)) = self.bytes_base(place)? {
             // The parts of a value in memory follow one another, so a part
             // lies the sizes of those before it after the value's address.
             let untyped = || Unsupported("untyped place".to_string());
-            let mut address = value_name(base);
             let mut offset = 0;
-            for (len, projection) in place.path.iter().enumerate() {
+            for (len, projection) in place.path.iter().enumerate().skip(taken) {
                 let ty = self
                     .body
                     .place_prefix_ty(db, place, len)
@@ -3716,12 +4010,13 @@ impl<'db> BodyExporter<'_, 'db> {
                 Target::Memory(address)
             });
         }
-        let Some(mut local) = self.local(place)? else {
-            let (lean, lane) = self.place(place)?;
-            return Ok(Target::Place(lean, lane));
-        };
-        local.path.extend(field_path(&place.path)?);
-        Ok(Target::Value(local))
+        Ok(match self.local(place)? {
+            Some(local) => Target::Value(local),
+            None => {
+                let (lean, lane) = self.place(place)?;
+                Target::Place(lean, lane)
+            }
+        })
     }
 
     /// The Lean term for the value at `target`.
@@ -3819,20 +4114,15 @@ impl<'db> BodyExporter<'_, 'db> {
         if let NPlaceBase::CapabilityTarget { carrier } = place.base
             && self.ty(carrier).as_capability(db).is_none()
         {
-            let mut ty = self.ty(carrier);
-            let mut lean = value_name(carrier);
-            while ty.as_capability(db).is_none() {
-                let step = place.path.as_slice().get(selected).ok_or_else(untyped)?;
-                let step = field_path(&NDataPath::new(vec![*step]))?[0];
-                let (names, part) = self.module.part(ty, step)?;
-                lean = names
-                    .iter()
-                    .fold(lean, |lean, name| format!("{lean}.{name}"));
-                ty = part;
-                selected += 1;
-            }
-            base_ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
-            selecting = Some(lean);
+            let (component, access) = self.selected(carrier, &place.path)?;
+            let (_, inner) = access.as_capability(db).ok_or_else(untyped)?;
+            selecting = Some(self.read(&ValueTarget {
+                var: value_name(carrier),
+                ty: self.ty(carrier),
+                path: field_path(&component)?,
+            })?);
+            base_ty = inner;
+            selected = component.len();
         }
         let (base, mut lane) = match place.base {
             NPlaceBase::Root(root) => self.root(root)?,
@@ -4114,66 +4404,102 @@ impl<'db> BodyExporter<'_, 'db> {
     }
 }
 
-/// Whether the access `value` of `body` reaches memory through a pointer, so
-/// that the model holds it as an address: one below a pointer into memory,
-/// an access parameter held so (`params`), or what a projection grants of
-/// either. `depth` bounds the projections followed.
+/// Whether the projection `callee` grants the access at `component` of its
+/// result in contract state.
+fn granted_in_state<'db>(
+    db: &'db dyn HirAnalysisDb,
+    callee: SemanticInstanceKey<'db>,
+    component: &NDataPath,
+) -> bool {
+    let step = |step: &NDataProjection| match *step {
+        NDataProjection::Field(field) => Some(ReturnProjectionStep::Field(field.0)),
+        NDataProjection::VariantField { variant, field } => {
+            Some(ReturnProjectionStep::VariantField {
+                variant: variant.0,
+                field: field.0,
+            })
+        }
+        NDataProjection::Index(_) | NDataProjection::Entry(_) => None,
+    };
+    let component: Option<Vec<_>> = component.iter().map(step).collect();
+    projection_component_spaces(db, SemanticInstance::new(db, callee))
+        .iter()
+        .any(|(steps, space)| {
+            Some(steps) == component.as_ref()
+                && matches!(space, Some(AddressSpace::Storage | AddressSpace::Transient))
+        })
+}
+
+/// Whether the access at `component` of `value` in `body` reaches memory
+/// through a pointer, so that the model holds it as an address: one below a
+/// pointer into memory, an access parameter held so (`params`), or what a
+/// projection grants of either. `None` if `value` holds no such access.
+/// `depth` bounds the projections followed.
 fn in_memory<'db>(
     db: &'db dyn HirAnalysisDb,
     body: &NormalizedBody<'db>,
     value: NValueId,
+    component: &NDataPath,
     depth: usize,
     params: &dyn Fn(u32) -> bool,
-) -> Result<bool, Unsupported> {
-    let Some(target) = body.carrier_target(db, value) else {
-        return Ok(false);
+) -> Result<Option<bool>, Unsupported> {
+    let Some((base, _)) = body.access_target(db, value, component.clone()) else {
+        return Ok(None);
     };
-    match target.base {
-        CarrierBase::Raw { pointer } => Ok(matches!(
+    Ok(Some(match base {
+        CarrierBase::Raw { pointer } => matches!(
             body.values[pointer.index()].ty.as_ptr(db),
             Some((_, AddressSpace::Memory))
-        )),
-        CarrierBase::Param { param } => Ok(params(param)),
-        CarrierBase::Grant { session, component } if component.is_empty() && depth > 0 => {
-            let NValueDefinition::Statement { block, statement } =
-                body.values[session.index()].definition
-            else {
-                return Ok(false);
-            };
-            let NStatementKind::Define {
-                expr: NExpr::Call { callee, args, .. },
-                ..
-            } = &body.blocks[block.index()].statements[statement as usize].kind
-            else {
-                return Ok(false);
+        ),
+        CarrierBase::Param { param } => params(param),
+        CarrierBase::Grant { session, component } if depth > 0 => {
+            let Some((_, NExpr::Call { callee, args, .. })) = body.defining_expr(session) else {
+                return Ok(Some(false));
             };
             let Ok(callee) = normalize_semantic_body(db, SemanticInstance::new(db, callee.key))
             else {
-                return Ok(false);
+                return Ok(Some(false));
             };
             let given = |param: u32| {
                 args.get(param as usize).is_some_and(|arg| {
-                    in_memory(db, body, arg.value, depth - 1, params).unwrap_or(false)
+                    let whole = NDataPath::empty();
+                    in_memory(db, body, arg.value, &whole, depth - 1, params)
+                        .ok()
+                        .flatten()
+                        == Some(true)
                 })
             };
-            let mut sites = (0, 0);
-            for block in &callee.body.blocks {
-                if let NTerminatorKind::Yield { value, .. } = &block.terminator.kind {
-                    sites.0 += 1;
-                    if in_memory(db, &callee.body, value.value, depth - 1, &given)? {
-                        sites.1 += 1;
-                    }
-                }
-            }
-            match sites {
-                (_, 0) => Ok(false),
-                (all, memory) if all == memory => Ok(true),
-                _ => Err(Unsupported(
-                    "grant in memory at some yields only".to_string(),
-                )),
-            }
+            granted_in_memory(db, &callee.body, &component, depth - 1, &given)?
         }
-        _ => Ok(false),
+        _ => false,
+    }))
+}
+
+/// Whether the projection `body` grants the access at `component` of what it
+/// yields in memory, as `in_memory` has it: at every yield that grants the
+/// access.
+fn granted_in_memory<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedBody<'db>,
+    component: &NDataPath,
+    depth: usize,
+    params: &dyn Fn(u32) -> bool,
+) -> Result<bool, Unsupported> {
+    let mut sites = (0, 0);
+    for block in &body.blocks {
+        if let NTerminatorKind::Yield { value, .. } = &block.terminator.kind
+            && let Some(memory) = in_memory(db, body, value.value, component, depth, params)?
+        {
+            sites.0 += 1;
+            sites.1 += usize::from(memory);
+        }
+    }
+    match sites {
+        (_, 0) => Ok(false),
+        (all, memory) if all == memory => Ok(true),
+        _ => Err(Unsupported(
+            "grant in memory at some yields only".to_string(),
+        )),
     }
 }
 
