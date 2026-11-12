@@ -116,6 +116,11 @@ fn wide() {
 }
 
 #[test]
+fn calldata_read() {
+    check("calldata_read");
+}
+
+#[test]
 fn code_scalar() {
     check_with("code_scalar", export_contract_with_entries);
 }

@@ -1,0 +1,20 @@
+use std::abi::sol
+use std::evm::Evm
+
+msg CalldataMsg {
+    #[selector = sol("second(uint256,uint256)")]
+    Second { a: u256, b: u256 } -> u256,
+}
+
+fn second() -> u256 uses (words: [u256; 2]) {
+    words[1]
+}
+
+pub contract Calldata {
+    recv CalldataMsg {
+        Second { .. } -> u256 uses (evm: Evm) {
+            let data = unsafe { evm.calldata_ptr<[u256; 2]>(4) }
+            unsafe { with (*data) { second() } }
+        }
+    }
+}

@@ -76,6 +76,7 @@ const PRELUDE: &[&str] = &[
     "calldataload",
     "calldatasize",
     "caller",
+    "cdload",
     "callvalue",
     "chainid",
     "checkIndex",
@@ -265,6 +266,8 @@ enum Target<'db> {
     Value(ValueTarget<'db>),
     /// A value in memory at an address.
     Memory(String),
+    /// A value in calldata at an offset, which nothing writes.
+    Calldata(String),
 }
 
 /// The Lean definitions of `contract`: its storage layout, the functions
@@ -1420,9 +1423,9 @@ impl<'db> Module<'db> {
     }
 
     /// The Lean computation that reads a value of `ty` at `address` of
-    /// `space`, memory (`m`) or the running code (`c`): a scalar's bytes, or
-    /// an aggregate's parts one after another.
-    fn mload(&mut self, space: char, ty: TyId<'db>, address: &str) -> Result<String, Unsupported> {
+    /// `space`, memory (`m`), the running code (`c`) or calldata (`cd`): a
+    /// scalar's bytes, or an aggregate's parts one after another.
+    fn mload(&mut self, space: &str, ty: TyId<'db>, address: &str) -> Result<String, Unsupported> {
         let db = self.db;
         match self.int_bits(ty) {
             Some((256, _)) => return Ok(format!("{space}load {address}")),
@@ -1444,7 +1447,11 @@ impl<'db> Module<'db> {
             ));
         }
         if self.variants(ty).is_some() {
-            let space = if space == 'm' { "memory" } else { "code" };
+            let space = match space {
+                "m" => "memory",
+                "c" => "code",
+                _ => "calldata",
+            };
             return Err(Unsupported(format!("{} in {space}", ty.pretty_print(db))));
         }
         let name = self.value_ty(ty)?;
@@ -1858,7 +1865,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let total = field.contract.code_address_space_slot_count(db);
                 let at = format!("(← immutableAt {total} {slot})");
                 let name = format!("e{}", binding.provider_idx);
-                let load = self.module.mload('c', root.ty, &at)?;
+                let load = self.module.mload("c", root.ty, &at)?;
                 writeln!(state, "  let {name} ← {load}").unwrap();
                 self.binders.push((name, self.module.value_ty(root.ty)?));
                 self.immutables.push(binding.provider_idx);
@@ -2546,7 +2553,13 @@ impl<'db> BodyExporter<'_, 'db> {
                         Target::Memory(address) => {
                             format!(
                                 "let {name} ← {}",
-                                self.module.mload('m', place.ty, &address)?
+                                self.module.mload("m", place.ty, &address)?
+                            )
+                        }
+                        Target::Calldata(offset) => {
+                            format!(
+                                "let {name} ← {}",
+                                self.module.mload("cd", place.ty, &offset)?
                             )
                         }
                     }),
@@ -2616,8 +2629,15 @@ impl<'db> BodyExporter<'_, 'db> {
                                     format!("let {name} ← {load}")
                                 }
                                 (Target::Memory(address), false) => {
-                                    let load = self.module.mload('m', place.ty, &address)?;
+                                    let load = self.module.mload("m", place.ty, &address)?;
                                     format!("let {name} ← {load}")
+                                }
+                                (Target::Calldata(offset), false) => {
+                                    let load = self.module.mload("cd", place.ty, &offset)?;
+                                    format!("let {name} ← {load}")
+                                }
+                                (Target::Calldata(_), true) => {
+                                    return Err(Unsupported("access into calldata".to_string()));
                                 }
                                 // A view of a snapshot type is the value now there.
                                 (Target::Value(target), false) => {
@@ -2702,6 +2722,9 @@ impl<'db> BodyExporter<'_, 'db> {
                     Target::Value(target) => self.write(&target, &value)?,
                     Target::Memory(address) => {
                         self.module.mstore(destination.ty, &address, &value)?
+                    }
+                    Target::Calldata(_) => {
+                        return Err(Unsupported("store into calldata".to_string()));
                     }
                 })
             }
@@ -2974,6 +2997,18 @@ impl<'db> BodyExporter<'_, 'db> {
                     if effect.mutable {
                         outs.push(Out::Lane(place.ty, lean, lane));
                     }
+                }
+                // Nothing writes calldata, so an effect there is the value
+                // it holds.
+                Target::Calldata(offset) if !effect.mutable => {
+                    let NEffectArgValue::Place(place) = &arg.arg else {
+                        return Err(Unsupported("calldata behind an access".to_string()));
+                    };
+                    let held = format!("{name}_e{}", effect.provider);
+                    let load = self.module.mload("cd", place.ty, &offset)?;
+                    self.located.push(format!("let {held} ← {load}"));
+                    write!(lean_args, " {held}").unwrap();
+                    effects.push((effect.provider, Carrier::Value));
                 }
                 _ => return Err(Unsupported("effect argument in memory".to_string())),
             }
@@ -3328,7 +3363,7 @@ impl<'db> BodyExporter<'_, 'db> {
             Carrier::Memory => {
                 let (_, inner) = ty.as_capability(self.module.db).unwrap();
                 let name = format!("{}_e", value_name(operand.value));
-                let load = self.module.mload('m', inner, &value_name(operand.value))?;
+                let load = self.module.mload("m", inner, &value_name(operand.value))?;
                 Ok((Some(format!("let {name} ← {load}")), name))
             }
             Carrier::Erased => Err(Unsupported("enum in the root object".to_string())),
@@ -3606,21 +3641,22 @@ impl<'db> BodyExporter<'_, 'db> {
         })
     }
 
-    /// The value that is the address `place` lies below in memory, if it
-    /// does: a pointer into memory, or an access held as an address.
-    fn memory_base(&self, place: &NPlace<'db>) -> Result<Option<NValueId>, Unsupported> {
+    /// The value that is the address `place` lies below in memory or
+    /// calldata, if it does, and whether that is calldata: a pointer there,
+    /// or an access held as an address in memory.
+    fn bytes_base(&self, place: &NPlace<'db>) -> Result<Option<(NValueId, bool)>, Unsupported> {
         let db = self.module.db;
         Ok(match place.base {
-            NPlaceBase::Deref { pointer }
-                if matches!(self.ty(pointer).as_ptr(db), Some((_, AddressSpace::Memory))) =>
-            {
-                Some(pointer)
-            }
+            NPlaceBase::Deref { pointer } => match self.ty(pointer).as_ptr(db) {
+                Some((_, AddressSpace::Memory)) => Some((pointer, false)),
+                Some((_, AddressSpace::Calldata)) => Some((pointer, true)),
+                _ => None,
+            },
             NPlaceBase::CapabilityTarget { carrier }
                 if self.is_access(self.ty(carrier))
                     && self.carrier(carrier)? == Carrier::Memory =>
             {
-                Some(carrier)
+                Some((carrier, false))
             }
             _ => None,
         })
@@ -3628,14 +3664,14 @@ impl<'db> BodyExporter<'_, 'db> {
 
     /// Whether `place` lies in contract state.
     fn in_state(&self, place: &NPlace<'db>) -> Result<bool, Unsupported> {
-        Ok(self.memory_base(place)?.is_none() && self.local(place)?.is_none())
+        Ok(self.bytes_base(place)?.is_none() && self.local(place)?.is_none())
     }
 
     /// What `place` is in the model: a `Place` in contract state, a value
     /// below a local's variable, or a word in memory.
     fn target(&mut self, place: &NPlace<'db>) -> Result<Target<'db>, Unsupported> {
         let db = self.module.db;
-        if let Some(base) = self.memory_base(place)? {
+        if let Some((base, calldata)) = self.bytes_base(place)? {
             // The parts of a value in memory follow one another, so a part
             // lies the sizes of those before it after the value's address.
             let untyped = || Unsupported("untyped place".to_string());
@@ -3674,7 +3710,11 @@ impl<'db> BodyExporter<'_, 'db> {
             if offset > 0 {
                 address = format!("({address} + UInt256.ofNat {offset})");
             }
-            return Ok(Target::Memory(address));
+            return Ok(if calldata {
+                Target::Calldata(address)
+            } else {
+                Target::Memory(address)
+            });
         }
         let Some(mut local) = self.local(place)? else {
             let (lean, lane) = self.place(place)?;
