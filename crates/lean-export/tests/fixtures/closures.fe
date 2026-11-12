@@ -1,0 +1,38 @@
+use std::abi::sol
+
+struct Store {
+    n: u256,
+}
+
+fn bump(_ by: u256) uses (store: mut Store) {
+    store.n += by
+}
+
+msg ClosuresMsg {
+    #[selector = sol("scaled(uint256,uint256,uint256)")]
+    Scaled { a: u256, b: u256, by: u256 } -> u256,
+    #[selector = sol("tally(uint256,uint256)")]
+    Tally { a: u256, b: u256 } -> u256,
+}
+
+pub contract Closures {
+    mut store: Store,
+
+    recv ClosuresMsg {
+        // A closure is the values it captures, and its body a function of
+        // them.
+        Scaled { a, b, by } -> u256 {
+            let xs: [u256; 2] = [a, b]
+            xs.fold(0, |acc, x| acc + x * by)
+        }
+
+        // The body uses the effects in scope where the closure is called.
+        Tally { a, b } -> u256 uses (mut store) {
+            let xs: [u256; 2] = [a, b]
+            xs.fold(0, |acc, x| {
+                bump(x)
+                acc + store.n
+            })
+        }
+    }
+}

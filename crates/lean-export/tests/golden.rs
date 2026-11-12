@@ -154,3 +154,8 @@ fn drops() {
 fn mutual() {
     check("mutual");
 }
+
+#[test]
+fn closures() {
+    check("closures");
+}

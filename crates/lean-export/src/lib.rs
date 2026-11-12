@@ -821,6 +821,7 @@ impl<'db> Module<'db> {
                     .and_then(|constant| constant.name.to_opt())
                     .map_or("const".to_string(), |name| name.data(db).to_string())
             }
+            BodyOwner::Closure { .. } => "closure".to_string(),
             owner => return Err(Unsupported(format!("call to {owner:?}"))),
         };
         let args = key.subst(db).generic_args(db).iter();
@@ -1020,7 +1021,8 @@ impl<'db> Module<'db> {
         if ty.pretty_print(db) == "Address" {
             return Ok(tys.into_iter().map(|ty| (Vec::new(), ty)).collect());
         }
-        if ty.is_tuple(db) {
+        // A closure is the tuple of what it captures.
+        if ty.is_tuple(db) || ty.as_closure(db).is_some() {
             let last = tys.len().saturating_sub(1);
             let steps = |index: usize| {
                 let mut steps = vec!["snd".to_string(); index];
@@ -1081,9 +1083,9 @@ impl<'db> Module<'db> {
             parts.push((NDataPath::new(steps.clone()), ty));
             return;
         }
-        // Only a type argument puts an access in a value: a tuple's part, or
-        // the payload of a generic enum.
-        if ty.decompose_ty_app(db).1.is_empty() {
+        // Only a type argument puts an access in a value, a tuple's part or
+        // the payload of a generic enum, or a closure's capture.
+        if ty.decompose_ty_app(db).1.is_empty() && ty.as_closure(db).is_none() {
             return;
         }
         if let Some(variants) = self.variants(ty) {
@@ -1097,7 +1099,7 @@ impl<'db> Module<'db> {
                     steps.pop();
                 }
             }
-        } else if ty.is_tuple(db) {
+        } else if ty.is_tuple(db) || ty.as_closure(db).is_some() {
             for (field, ty) in ty.field_types(db).into_iter().enumerate() {
                 steps.push(NDataProjection::Field(FieldIndex(field as u16)));
                 self.accesses(ty, steps, parts);
@@ -1148,7 +1150,7 @@ impl<'db> Module<'db> {
         {
             return Ok(parts[0].clone());
         }
-        if ty.is_tuple(self.db) {
+        if ty.is_tuple(self.db) || ty.as_closure(self.db).is_some() {
             return Ok(format!("({})", parts.join(", ")));
         }
         let parts: String = parts.iter().map(|part| format!(" {part}")).collect();
@@ -1328,8 +1330,9 @@ impl<'db> Module<'db> {
             tys.push((name, self.shape_ty(ty, steps, held)?));
             steps.pop();
         }
-        if ty.is_tuple(self.db) {
+        if ty.is_tuple(self.db) || ty.as_closure(self.db).is_some() {
             return Ok(match tys.as_slice() {
+                [] => "Unit".to_string(),
                 [(_, ty)] => ty.clone(),
                 tys => {
                     let tys: Vec<_> = tys.iter().map(|(_, ty)| ty.as_str()).collect();
@@ -3230,22 +3233,28 @@ impl<'db> BodyExporter<'_, 'db> {
     ) -> Result<String, Unsupported> {
         let db = self.module.db;
         let name = &value_name(result);
-        let BodyOwner::Func(func, _) = callee.owner(db) else {
-            return Err(Unsupported("call to a non-function".to_string()));
+        // A closure's body is called as a function is: its first argument
+        // is the closure, the values it captured.
+        let func = match callee.owner(db) {
+            BodyOwner::Func(func, _) => Some(func),
+            BodyOwner::Closure { .. } => None,
+            _ => return Err(Unsupported("call to a non-function".to_string())),
         };
-        if let Some(kind) = runtime_builtin_func_kind(db, func) {
-            return self.builtin(kind, result, callee, args);
-        }
-        if let Some(kind) = core_numeric_const_intrinsic(db, func) {
-            return self.numeric(kind, result, args);
-        }
-        if lib_func_matches(db, func, "core::num::__bitcast")
-            && let [value] = args
-        {
-            let from = self.ty(value.value);
-            let value = self.operand(value)?;
-            let cast = self.module.cast(&value, from, self.ty(result))?;
-            return Ok(format!("let {name} := {cast}"));
+        if let Some(func) = func {
+            if let Some(kind) = runtime_builtin_func_kind(db, func) {
+                return self.builtin(kind, result, callee, args);
+            }
+            if let Some(kind) = core_numeric_const_intrinsic(db, func) {
+                return self.numeric(kind, result, args);
+            }
+            if lib_func_matches(db, func, "core::num::__bitcast")
+                && let [value] = args
+            {
+                let from = self.ty(value.value);
+                let value = self.operand(value)?;
+                let cast = self.module.cast(&value, from, self.ty(result))?;
+                return Ok(format!("let {name} := {cast}"));
+            }
         }
         let mut carriers = Vec::new();
         let mut effects = Vec::new();
