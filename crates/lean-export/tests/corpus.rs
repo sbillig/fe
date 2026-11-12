@@ -28,8 +28,9 @@ use url::Url;
 /// `LEAN_EXPORT_CORPUS`. Writes the exports of each file to
 /// `LEAN_EXPORT_CORPUS_OUT/<file>.lean`, importing the modules
 /// `LEAN_EXPORT_CORPUS_IMPORTS` names, each contract in a namespace so that
-/// the file elaborates on its own, and prints the construct each other
-/// contract stopped at as `BLOCK <ids>\t<reason>`.
+/// the file elaborates on its own, after the creation code of each contract
+/// an export deploys, and prints the construct each other contract stopped at
+/// as `BLOCK <ids>\t<reason>`.
 ///
 /// A file with tests ends in a call of `Fe.EVM.Diff.main` on the creation
 /// and runtime bytecode of its exported contracts and the object its tests
@@ -65,7 +66,7 @@ fn export_corpus() {
         };
         let db = &db;
         let top_mod = db.top_mod(file);
-        let mut text = format!("{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n");
+        let mut text = String::new();
         let mut models = Vec::new();
         for (index, &contract) in top_mod.all_contracts(db).iter().enumerate() {
             total += 1;
@@ -98,6 +99,20 @@ fn export_corpus() {
             let suite = emit_test_suite_sonatina(db, &[top_mod], OptLevel::O1, options, None);
             Some((code, suite.ok()?))
         }));
+        // An export that deploys a contract names the contract's creation code.
+        if let Ok(Some((code, _))) = &compiled {
+            let creations: String = code
+                .iter()
+                .filter(|(contract, _)| text.contains(&format!("creation_{contract}")))
+                .map(|(contract, code)| {
+                    format!(
+                        "\ndef creation_{contract} : ByteArray :=\n  Fe.EVM.Diff.hex \"{}\"\n",
+                        hex(&code.deploy)
+                    )
+                })
+                .collect();
+            text.insert_str(0, &creations);
+        }
         match compiled {
             Ok(Some((code, Some(suite)))) => {
                 let targets: Vec<_> = models
@@ -137,7 +152,8 @@ fn export_corpus() {
             Ok(Some(_)) => {}
             _ => uncompiled.push(name),
         }
-        fs::write(format!("{out}/{name}.lean"), text).unwrap();
+        let header = format!("{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n");
+        fs::write(format!("{out}/{name}.lean"), header + &text).unwrap();
     }
     println!(
         "contracts: {total}, exported: {exported}, files skipped: {skipped:?}, \

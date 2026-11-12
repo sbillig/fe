@@ -4,6 +4,10 @@
 //!
 //! A body the exporter has no model for is reported by the construct it
 //! stopped at, never skipped.
+//!
+//! A contract that deploys another reads the other's creation code from its
+//! own code. The export names that code `creation_<contract>`, a `ByteArray`
+//! its embedding defines.
 
 use std::fmt::Write;
 
@@ -28,8 +32,8 @@ use hir::{
             AddressSpace,
             adt_def::{AdtField, AdtRef, instantiate_adt_field_shape},
             corelib::{
-                NumericExternIntrinsic, RuntimeBuiltinFuncKind, SaturatingArithmetic,
-                contract_metadata_kind, core_numeric_const_intrinsic, lib_func_matches,
+                ContractMetadataKind, NumericExternIntrinsic, RuntimeBuiltinFuncKind,
+                SaturatingArithmetic, core_numeric_const_intrinsic, lib_func_matches,
                 resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
                 runtime_builtin_func_kind,
             },
@@ -95,6 +99,8 @@ const PRELUDE: &[&str] = &[
     "gaslimit",
     "gasprice",
     "immutableAt",
+    "initCodeLen",
+    "initCodeOffset",
     "init_entry",
     "keccak256",
     "load",
@@ -125,13 +131,13 @@ const PRELUDE: &[&str] = &[
     "staticcall",
     "stopCall",
     "store",
+    "stringLiteral",
     "timestamp",
     "tload",
     "trap",
     "truncate",
     "tstore",
     "zeroMem",
-    "stringLiteral",
 ];
 
 /// The types exported code names from Lean and the prelude, which no exported
@@ -729,9 +735,19 @@ impl<'db> Module<'db> {
                     return Err(Unsupported(format!("extern function `{name}`")));
                 }
                 // The compiler implements these for each contract from where
-                // its init code lies in the artifact.
-                if contract_metadata_kind(db, func.trait_method_def(db).unwrap_or(func)).is_some() {
-                    return Err(Unsupported(format!("`{name}` of a contract's init code")));
+                // its creation code lies in the artifact. The model finds
+                // that code, which its embedding names, in the running code.
+                if let Some((kind, contract)) = SemanticInstance::new(db, key).contract_metadata(db)
+                {
+                    let read = match kind {
+                        ContractMetadataKind::InitCodeOffset => "initCodeOffset",
+                        ContractMetadataKind::InitCodeLen => "initCodeLen",
+                    };
+                    let contract = contract
+                        .name(db)
+                        .to_opt()
+                        .ok_or_else(|| Unsupported(format!("`{name}` of an unnamed contract")))?;
+                    return Ok(format!("{read} creation_{}", contract.data(db)));
                 }
                 match mode {
                     Some(mode) => format!("{name}_{mode:?}").to_lowercase(),
@@ -3105,6 +3121,16 @@ impl<'db> BodyExporter<'_, 'db> {
             let never = if never { "\nnever" } else { "" };
             return Ok(format!("let {name} ← {action}{applied}{never}"));
         }
+        // EVM memory is never reclaimed, so a resize is a fresh allocation
+        // and a copy of the bytes in use.
+        if matches!(kind, Kind::Realloc | Kind::TryRealloc)
+            && evm
+            && let [ptr, used, size] = operands.as_slice()
+        {
+            return Ok(format!(
+                "let {name} ← alloc {size}\nmcopy {name} {ptr} {used}"
+            ));
+        }
         // `clear` zeroes a place: its slots in contract state, or the value a
         // local or a held lane has.
         if kind == Kind::Clear
@@ -3121,16 +3147,6 @@ impl<'db> BodyExporter<'_, 'db> {
                     let target = self.carrier_value(place.value)?;
                     format!("{}\nlet {name} := ()", self.write(&target, "default")?)
                 }
-        // EVM memory is never reclaimed, so a resize is a fresh allocation
-        // and a copy of the bytes in use.
-        if matches!(kind, Kind::Realloc | Kind::TryRealloc)
-            && evm
-            && let [ptr, used, size] = operands.as_slice()
-        {
-            return Ok(format!(
-                "let {name} ← alloc {size}\nmcopy {name} {ptr} {used}"
-            ));
-        }
                 Carrier::Erased => format!("let {name} := ()"),
             });
         }
