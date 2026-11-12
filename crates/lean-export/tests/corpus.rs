@@ -2,14 +2,15 @@
 //! fe-equivm-proofs. Both tests are ignored: they read their input from the
 //! environment.
 
-use std::{collections::BTreeMap, env, fmt::Write, fs, panic};
+use std::{collections::BTreeMap, env, fmt::Write, fs, panic, path::Path};
 
 use codegen::{
-    OptLevel, SonatinaTestOptions, emit_module_sonatina_bytecode, emit_test_suite_sonatina,
+    OptLevel, SonatinaTestOptions, emit_ingot_sonatina_bytecode, emit_module_sonatina_bytecode,
+    emit_test_suite_sonatina,
 };
 use common::InputDb;
 use cranelift_entity::EntityRef;
-use driver::DriverDataBase;
+use driver::{DriverDataBase, init_ingot};
 use fe_lean_export::{Unsupported, export_contract_with_entries};
 use hir::{
     analysis::{
@@ -19,13 +20,14 @@ use hir::{
         },
         ty::ty_check::BodyOwner,
     },
+    hir_def::HirIngot,
     test_db::HirAnalysisTestDb,
 };
 use num_bigint::BigUint;
 use url::Url;
 
-/// Exports every contract of the colon-separated files in
-/// `LEAN_EXPORT_CORPUS`. Writes the exports of each file to
+/// Exports every contract of the colon-separated files and ingot directories
+/// in `LEAN_EXPORT_CORPUS`. Writes the exports of each file to
 /// `LEAN_EXPORT_CORPUS_OUT/<file>.lean`, importing the modules
 /// `LEAN_EXPORT_CORPUS_IMPORTS` names, each contract in a namespace so that
 /// the file elaborates on its own, after the creation code of each contract
@@ -49,26 +51,45 @@ fn export_corpus() {
     let (mut exported, mut skipped, mut uncompiled, mut total) = (0, Vec::new(), Vec::new(), 0);
     let files = env::var("LEAN_EXPORT_CORPUS").unwrap();
     for path in files.split(':') {
-        let source = fs::read_to_string(path).unwrap();
         let name = path.rsplit('/').next().unwrap().trim_end_matches(".fe");
-        // A file with errors is skipped. A panic of the exporter is reported
-        // as what stopped the contract.
+        let is_ingot = Path::new(path).is_dir();
+        // A file or ingot with errors is skipped. A panic of the exporter is
+        // reported as what stopped the contract.
         let analyzed = panic::catch_unwind(|| {
             let mut db = DriverDataBase::default();
-            let url = Url::from_file_path(path).unwrap();
-            let file = db.workspace().touch(&mut db, url, Some(source.clone()));
-            let has_errors = db.run_on_top_mod(db.top_mod(file)).has_errors(&db);
-            (!has_errors).then_some((db, file))
+            let (url, has_errors) = if is_ingot {
+                let url = Url::from_directory_path(path).unwrap();
+                let has_errors = init_ingot(&mut db, &url) || {
+                    let ingot = db.workspace().containing_ingot(&db, url.clone()).unwrap();
+                    db.run_on_ingot(ingot).has_errors(&db)
+                };
+                (url, has_errors)
+            } else {
+                let url = Url::from_file_path(path).unwrap();
+                let source = fs::read_to_string(path).unwrap();
+                let file = db.workspace().touch(&mut db, url.clone(), Some(source));
+                (url, db.run_on_top_mod(db.top_mod(file)).has_errors(&db))
+            };
+            (!has_errors).then_some((db, url))
         });
-        let Ok(Some((db, file))) = analyzed else {
+        let Ok(Some((db, url))) = analyzed else {
             skipped.push(name);
             continue;
         };
         let db = &db;
-        let top_mod = db.top_mod(file);
+        let ingot = is_ingot.then(|| db.workspace().containing_ingot(db, url.clone()).unwrap());
+        let modules = match ingot {
+            Some(ingot) => {
+                let mut modules = ingot.all_modules(db).to_vec();
+                modules.sort_by_key(|module| module.name(db));
+                modules
+            }
+            None => vec![db.top_mod(db.workspace().get(db, &url).unwrap())],
+        };
         let mut text = String::new();
         let mut models = Vec::new();
-        for (index, &contract) in top_mod.all_contracts(db).iter().enumerate() {
+        let contracts = modules.iter().flat_map(|module| module.all_contracts(db));
+        for (index, &contract) in contracts.enumerate() {
             total += 1;
             let id = format!("{name}_{index}");
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
@@ -95,9 +116,12 @@ fn export_corpus() {
         }
         let compiled = panic::catch_unwind(panic::AssertUnwindSafe(|| {
             let options = SonatinaTestOptions::default();
-            let code = emit_module_sonatina_bytecode(db, top_mod, OptLevel::O1, None).ok()?;
-            let suite = emit_test_suite_sonatina(db, &[top_mod], OptLevel::O1, options, None);
-            Some((code, suite.ok()?))
+            let code = match ingot {
+                Some(ingot) => emit_ingot_sonatina_bytecode(db, ingot, OptLevel::O1, None),
+                None => emit_module_sonatina_bytecode(db, modules[0], OptLevel::O1, None),
+            };
+            let suite = emit_test_suite_sonatina(db, &modules, OptLevel::O1, options, None);
+            Some((code.ok()?, suite.ok()?))
         }));
         // An export that deploys a contract names the contract's creation code.
         if let Ok(Some((code, _))) = &compiled {
