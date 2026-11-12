@@ -18,7 +18,10 @@ use hir::{
             NExpr, NStatementKind, SConst, SemanticInstance, SemanticInstanceKey,
             identity_semantic_instance_key, normalize_semantic_body,
         },
-        ty::ty_check::BodyOwner,
+        ty::{
+            abi_ty::semantic_ty_to_abi_desc, corelib::resolve_lib_type_path, ty_check::BodyOwner,
+            ty_def::TyId,
+        },
     },
     hir_def::HirIngot,
     test_db::HirAnalysisTestDb,
@@ -34,10 +37,12 @@ use url::Url;
 /// an export deploys, and prints the construct each other contract stopped at
 /// as `BLOCK <ids>\t<reason>`.
 ///
-/// A file with tests ends in a call of `Fe.EVM.Diff.main` on the creation
-/// and runtime bytecode of its exported contracts and the object its tests
-/// compile to, which runs each test and compares every call it makes on such
-/// a contract with the contract's model.
+/// A file that compiles ends in `Corpus.targets`, the creation and runtime
+/// bytecode, model and interface of each exported contract. A call of
+/// `Fe.EVM.Diff.main` on them and the object the file's tests compile to
+/// runs each test and compares every call it makes on such a contract with
+/// the contract's model. A call of `Fe.EVM.Diff.generated` does the same for
+/// generated calls.
 #[test]
 #[ignore = "reads its input from the environment"]
 fn export_corpus() {
@@ -106,7 +111,43 @@ fn export_corpus() {
                     )
                     .unwrap();
                     let name = contract.name(db).unwrap().data(db).to_string();
-                    models.push((name, id, contract.code_address_space_slot_count(db) * 32));
+                    // The argument types generated calls are made from. An
+                    // arm whose types have no ABI form gets arbitrary words.
+                    let sol = resolve_lib_type_path(db, contract.scope(), "std::abi::Sol").unwrap();
+                    let canonical = |ty| {
+                        semantic_ty_to_abi_desc(db, ty)
+                            .map(|desc| desc.canonical_type)
+                            .unwrap_or_default()
+                    };
+                    let arms: Vec<_> = contract
+                        .recv_views(db)
+                        .flat_map(|recv| recv.arms(db))
+                        .filter_map(|arm| {
+                            let info = arm.abi_info(db, sol);
+                            let payable = arm.arm(db).is_some_and(|arm| arm.is_payable(db));
+                            let inputs = canonical(info.args_ty);
+                            Some(format!(
+                                "⟨{}, \"{inputs}\", {payable}⟩",
+                                info.selector_value?
+                            ))
+                        })
+                        .collect();
+                    let init_args = contract.init_args_ty(db);
+                    let init = if init_args == TyId::unit(db) {
+                        "()".to_string()
+                    } else {
+                        canonical(init_args)
+                    };
+                    let init_payable = contract.init(db).is_some_and(|init| init.is_payable(db));
+                    let bytes = contract.code_address_space_slot_count(db) * 32;
+                    models.push((
+                        name,
+                        format!("⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩"),
+                        format!(
+                            "{{ init := \"{init}\", initPayable := {init_payable}, arms := [{}] }}",
+                            arms.join(", ")
+                        ),
+                    ));
                 }
                 Err(reason) => blockers.entry(reason.0).or_default().push(id),
             }
@@ -124,7 +165,7 @@ fn export_corpus() {
             Some((code.ok()?, suite.ok()?))
         }));
         // An export that deploys a contract names the contract's creation code.
-        if let Ok(Some((code, _))) = &compiled {
+        if let Ok(Some((code, suite))) = compiled {
             let creations: String = code
                 .iter()
                 .filter(|(contract, _)| text.contains(&format!("creation_{contract}")))
@@ -136,21 +177,25 @@ fn export_corpus() {
                 })
                 .collect();
             text.insert_str(0, &creations);
-        }
-        match compiled {
-            Ok(Some((code, Some(suite)))) => {
-                let targets: Vec<_> = models
-                    .iter()
-                    .map(|(contract, id, bytes)| {
-                        let creation = hex(&code[contract].deploy);
-                        let runtime = hex(&code[contract].runtime);
-                        format!(
-                            "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{creation}\", \
-                             runtime := Fe.EVM.Diff.hex \"{runtime}\", \
-                             model := ⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩ }}"
-                        )
-                    })
-                    .collect();
+            let targets: Vec<_> = models
+                .iter()
+                .map(|(contract, model, interface)| {
+                    format!(
+                        "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{}\", \
+                         runtime := Fe.EVM.Diff.hex \"{}\",\n     model := {model},\n     \
+                         interface := {interface} }}",
+                        hex(&code[contract].deploy),
+                        hex(&code[contract].runtime)
+                    )
+                })
+                .collect();
+            write!(
+                text,
+                "\ndef Corpus.targets : List Fe.EVM.Diff.Target :=\n  [{}]\n",
+                targets.join(",\n   ")
+            )
+            .unwrap();
+            if let Some(suite) = suite {
                 let tests: Vec<_> = suite
                     .tests
                     .iter()
@@ -166,15 +211,19 @@ fn export_corpus() {
                     .collect();
                 write!(
                     text,
-                    "\n#eval Fe.EVM.Diff.main \"{name}\"\n  [{}]\n  (Fe.EVM.Diff.hex \"{}\")\n  [{}]\n",
-                    targets.join(",\n   "),
+                    "\n#eval Fe.EVM.Diff.main \"{name}\" Corpus.targets\n  (Fe.EVM.Diff.hex \"{}\")\n  [{}]\n",
                     hex(&suite.bytecode),
                     tests.join(",\n   ")
                 )
                 .unwrap();
             }
-            Ok(Some(_)) => {}
-            _ => uncompiled.push(name),
+            writeln!(
+                text,
+                "\n#eval Fe.EVM.Diff.generated \"{name}\" Corpus.targets"
+            )
+            .unwrap();
+        } else {
+            uncompiled.push(name);
         }
         let header = format!("{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n");
         fs::write(format!("{out}/{name}.lean"), header + &text).unwrap();
