@@ -1,14 +1,3 @@
-def Field.pair : Place :=
-  .storage (UInt256.ofNat 0)
-
-def Layout.Pair : Layout :=
-  { storage := [0, 1] }
-
-structure Pair where
-  a : UInt256
-  b : UInt256
-deriving Inhabited
-
 inductive Option_mut_u8 where
   | None
   | Some (f0 : UInt256)
@@ -26,6 +15,17 @@ def Option_mut_u8.set_Some_0 (x : Option_mut_u8) (v : UInt256) : Option_mut_u8 :
   match x with
   | .Some f0 => .Some v
   | x => x
+
+def Field.pair : Place :=
+  .storage (UInt256.ofNat 0)
+
+def Layout.Pair : Layout :=
+  { storage := [0, 1] }
+
+structure Pair where
+  a : UInt256
+  b : UInt256
+deriving Inhabited
 
 def Field.small : Place :=
   .storage (UInt256.ofNat 2)

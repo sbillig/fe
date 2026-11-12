@@ -1,3 +1,27 @@
+def start_u256_2 (v0 : (Vector UInt256 2)) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def has_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM Bool := do
+  let v2 := v1
+  let v3 := (UInt256.ofNat 2)
+  let v4 := decide (v2.toNat < v3.toNat)
+  return v4
+
+def at_ref_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
+  checkIndex v1 2
+  return v0[v1.toNat]!
+
+def wrapping_add (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v0 + v1
+  return v2
+
+def next_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← wrapping_add v3 v2
+  return v4
+
 def Field.store : Place :=
   .storage (UInt256.ofNat 0)
 
@@ -15,20 +39,6 @@ def Layout.Store : Layout :=
 def init : FeM Unit := do
   return ()
 
-def start_u256_2 (v0 : (Vector UInt256 2)) : FeM UInt256 := do
-  let v1 := (UInt256.ofNat 0)
-  return v1
-
-def has_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM Bool := do
-  let v2 := v1
-  let v3 := (UInt256.ofNat 2)
-  let v4 := decide (v2.toNat < v3.toNat)
-  return v4
-
-def at_ref_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
-  checkIndex v1 2
-  return v0[v1.toNat]!
-
 def closure (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
   let mut v0 := v0
   let v3 := v2
@@ -36,16 +46,6 @@ def closure (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt2
   let v5 ← checkedMul v3 v4
   let v6 ← checkedAdd v1 v5
   return (v6, v0)
-
-def wrapping_add (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
-  let v2 := v0 + v1
-  return v2
-
-def next_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
-  let v2 := (UInt256.ofNat 1)
-  let v3 := v1
-  let v4 ← wrapping_add v3 v2
-  return v4
 
 def fold_u256_2___u256_own_u256_u256_u256 (v0 : (Vector UInt256 2)) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
   let mut r0 : UInt256 := default

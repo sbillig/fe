@@ -1,9 +1,3 @@
-def Field.store : Place :=
-  .storage (UInt256.ofNat 0)
-
-def Layout.Store : Layout :=
-  { storage := [0, 1] }
-
 structure Location where
   slot : UInt256
   offset : UInt256
@@ -19,9 +13,6 @@ structure MemSlice_u8 where
   ptr : UInt256
   len : UInt256
 deriving Inhabited
-
-def init : FeM Unit := do
-  return ()
 
 def encoded_len (v0 : UInt256) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 32)
@@ -479,18 +470,6 @@ def locate_u256_u256_bool (v0 : Place) (v1 : UInt256) (v2 : (UInt256 × UInt256)
   let v5 := (Location.mk v3 v4)
   return v5
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
-  let v2 := (v0, v1)
-  let l0 ← locate_u256_u256_bool (Field.store.field Layout.Store 0) (Field.store.field Layout.Store 0).slot v2
-  let v3 ← loadBool (Place.mk .storage l0.slot)
-  let v4 := v3
-  let v5 := true
-  let v6 := (v0, v1)
-  let l1 ← locate_u256_u256_bool (Field.store.field Layout.Store 0) (Field.store.field Layout.Store 0).slot v6
-  storeBool (Place.mk .storage l1.slot) v5
-  let v7 := ()
-  return v4
-
 def encoded_len_1 (v0 : Bool) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 32)
   return v1
@@ -538,6 +517,27 @@ def locate_bool_u256 (v0 : Place) (v1 : UInt256) (v2 : Bool) : FeM Location := d
   let v4 := (UInt256.ofNat 0)
   let v5 := (Location.mk v3 v4)
   return v5
+
+def Field.store : Place :=
+  .storage (UInt256.ofNat 0)
+
+def Layout.Store : Layout :=
+  { storage := [0, 1] }
+
+def init : FeM Unit := do
+  return ()
+
+def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
+  let v2 := (v0, v1)
+  let l0 ← locate_u256_u256_bool (Field.store.field Layout.Store 0) (Field.store.field Layout.Store 0).slot v2
+  let v3 ← loadBool (Place.mk .storage l0.slot)
+  let v4 := v3
+  let v5 := true
+  let v6 := (v0, v1)
+  let l1 ← locate_u256_u256_bool (Field.store.field Layout.Store 0) (Field.store.field Layout.Store 0).slot v6
+  storeBool (Place.mk .storage l1.slot) v5
+  let v7 := ()
+  return v4
 
 def recv0_arm1 (v0 : Bool) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 1)

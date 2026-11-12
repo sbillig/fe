@@ -2,9 +2,6 @@ structure CallData where
   base : UInt256
 deriving Inhabited
 
-def init : FeM Unit := do
-  return ()
-
 def new : FeM CallData := do
   let v0 := (UInt256.ofNat 0)
   let v1 := (CallData.mk v0)
@@ -255,6 +252,9 @@ def decode_args_u256_u256 : FeM (UInt256 × UInt256) := do
   let v4 := r0
   let v5 ← decode_input_at_u256_u256_CallData v4 v3
   return v5
+
+def init : FeM Unit := do
+  return ()
 
 def recv0_arm0 : FeM UInt256 := do
   let v1 ← decode_args_u256_u256

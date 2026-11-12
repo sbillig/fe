@@ -1,6 +1,3 @@
-def init : FeM Unit := do
-  return ()
-
 def max : FeM UInt256 := do
   let v0 := (UInt256.ofNat 18446744073709551615)
   return v0
@@ -210,6 +207,9 @@ def alloc_bytes (v0 : UInt256) : FeM UInt256 := do
     let v7 := v6
     let v8 ← alloc v0
     return v8
+
+def init : FeM Unit := do
+  return ()
 
 def cast_u8_Cell (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0

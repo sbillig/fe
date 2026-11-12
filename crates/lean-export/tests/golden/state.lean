@@ -1,3 +1,6 @@
+def Layout.TSlot_bool : Layout :=
+  { storage := [0] }
+
 def Field.packed : Place :=
   .storage (UInt256.ofNat 0)
 
@@ -101,9 +104,6 @@ def Field.narrow : Place :=
 
 def Field.lock : Place :=
   .storage (UInt256.ofNat 0)
-
-def Layout.TSlot_bool : Layout :=
-  { storage := [0] }
 
 def Field.alone : Place :=
   .storage (UInt256.ofNat 8)

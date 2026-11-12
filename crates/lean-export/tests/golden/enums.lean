@@ -1,3 +1,21 @@
+inductive Option_u256 where
+  | None
+  | Some (f0 : UInt256)
+deriving Inhabited
+
+def Option_u256.tag : Option_u256 → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_u256.Some_0 : Option_u256 → UInt256
+  | .Some f0 => f0
+  | _ => default
+
+def Option_u256.set_Some_0 (x : Option_u256) (v : UInt256) : Option_u256 :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
 inductive Shape where
   | Empty
   | Square (f0 : UInt256)
@@ -34,24 +52,6 @@ def Shape.Rect_1 : Shape → UInt256
 def Shape.set_Rect_1 (x : Shape) (v : UInt256) : Shape :=
   match x with
   | .Rect f0 f1 => .Rect f0 v
-  | x => x
-
-inductive Option_u256 where
-  | None
-  | Some (f0 : UInt256)
-deriving Inhabited
-
-def Option_u256.tag : Option_u256 → UInt256
-  | .None => UInt256.ofNat 0
-  | .Some .. => UInt256.ofNat 1
-
-def Option_u256.Some_0 : Option_u256 → UInt256
-  | .Some f0 => f0
-  | _ => default
-
-def Option_u256.set_Some_0 (x : Option_u256) (v : UInt256) : Option_u256 :=
-  match x with
-  | .Some f0 => .Some v
   | x => x
 
 def init : FeM Unit := do

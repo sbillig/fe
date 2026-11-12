@@ -9,9 +9,6 @@ structure AbiFrame where
   len : UInt256
 deriving Inhabited
 
-def init : FeM Unit := do
-  return ()
-
 def HEAD_SIZE : FeM UInt256 := do
   let v0 := (UInt256.ofNat 32)
   return v0
@@ -467,6 +464,9 @@ def revert_u256 (v0 : UInt256) : FeM Empty := do
   let v7 := v6
   let v8 ← revertData v4 v7
   nomatch v8
+
+def init : FeM Unit := do
+  return ()
 
 def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
   let v1 ← revert_u256 v0

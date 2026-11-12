@@ -1,14 +1,14 @@
 use std::{env, fs, path::PathBuf};
 
-use fe_lean_export::{Unsupported, export_contract, export_contract_with_entries};
+use fe_lean_export::{Export, Library, Unsupported, export_contract, export_contract_with_entries};
 use hir::{analysis::HirAnalysisDb, hir_def::Contract, test_db::HirAnalysisTestDb};
 
-type Export = for<'db> fn(&'db dyn HirAnalysisDb, Contract<'db>) -> Result<String, Unsupported>;
+type Exporter =
+    for<'db> fn(&'db dyn HirAnalysisDb, Contract<'db>, &mut Library) -> Result<Export, Unsupported>;
 
-/// Exports the one contract of `tests/fixtures/<name>.fe` with `export` and
-/// compares it with `tests/golden/<name>.lean`. `LEAN_EXPORT_BLESS=1`
-/// rewrites the golden file.
-fn check_with(name: &str, export: Export) {
+/// The one contract of `tests/fixtures/<name>.fe` as `export` gives it
+/// with `library`.
+fn exported(name: &str, export: Exporter, library: &mut Library) -> Export {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
     let source = fs::read_to_string(dir.join(format!("fixtures/{name}.fe"))).unwrap();
     let mut db = HirAnalysisTestDb::default();
@@ -18,31 +18,44 @@ fn check_with(name: &str, export: Export) {
     let [contract] = top_mod.all_contracts(&db).as_slice() else {
         panic!("expected one contract");
     };
-    let lean = export(&db, *contract).expect("exported");
-    let golden = dir.join(format!("golden/{name}.lean"));
+    export(&db, *contract, library).expect("exported")
+}
+
+/// Compares `lean` with `tests/golden/<name>.lean`. `LEAN_EXPORT_BLESS=1`
+/// rewrites the golden file.
+fn compare(name: &str, lean: &str) {
+    let golden =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/{name}.lean"));
     if env::var_os("LEAN_EXPORT_BLESS").is_some() {
-        fs::write(&golden, &lean).unwrap();
+        fs::write(&golden, lean).unwrap();
     }
     assert_eq!(lean, fs::read_to_string(&golden).unwrap());
+}
+
+/// Checks the fixture `name` exported alone: the library's definitions,
+/// then its own.
+fn check_with(name: &str, export: Exporter) {
+    let mut library = Library::default();
+    let own = exported(name, export, &mut library);
+    compare(name, &format!("{}{}", library.text(), own.text));
 }
 
 fn check(name: &str) {
     check_with(name, export_contract);
 }
 
+/// The contracts with bytecode certificates share one library,
+/// `golden/lib.lean`. Each golden file has the contract's own definitions,
+/// after the names they call the library's by, for a library in a namespace
+/// `Lib`.
 #[test]
-fn scalar_store() {
-    check_with("scalar_store", export_contract_with_entries);
-}
-
-#[test]
-fn erc20() {
-    check_with("erc20", export_contract_with_entries);
-}
-
-#[test]
-fn packed_store() {
-    check_with("packed_store", export_contract_with_entries);
+fn certified() {
+    let mut library = Library::default();
+    for name in ["scalar_store", "code_scalar", "packed_store", "erc20"] {
+        let own = exported(name, export_contract_with_entries, &mut library);
+        compare(name, &format!("{}{}", own.uses_command("Lib"), own.text));
+    }
+    compare("lib", library.text());
 }
 
 #[test]
@@ -118,11 +131,6 @@ fn wide() {
 #[test]
 fn calldata_read() {
     check("calldata_read");
-}
-
-#[test]
-fn code_scalar() {
-    check_with("code_scalar", export_contract_with_entries);
 }
 
 #[test]

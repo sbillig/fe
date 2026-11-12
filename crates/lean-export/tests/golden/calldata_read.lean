@@ -1,10 +1,10 @@
-def init : FeM Unit := do
-  return ()
-
 def calldata_ptr_Evm_u256_2 (v1 : UInt256) : FeM UInt256 := do
   let v2 := v1
   let v3 := v2
   return v3
+
+def init : FeM Unit := do
+  return ()
 
 def second_u256_2 (e0 : (Vector UInt256 2)) : FeM UInt256 := do
   let mut e0 := e0

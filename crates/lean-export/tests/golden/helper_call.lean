@@ -1,9 +1,3 @@
-def Field.store : Place :=
-  .storage (UInt256.ofNat 0)
-
-def Layout.Store : Layout :=
-  { storage := [0, 1] }
-
 structure Location where
   slot : UInt256
   offset : UInt256
@@ -19,9 +13,6 @@ structure MemSlice_u8 where
   ptr : UInt256
   len : UInt256
 deriving Inhabited
-
-def init : FeM Unit := do
-  return ()
 
 def encoded_len (v0 : UInt256) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 32)
@@ -458,6 +449,15 @@ def locate_u256_u256 (v0 : Place) (v1 : UInt256) (v2 : UInt256) : FeM Location :
   let v4 := (UInt256.ofNat 0)
   let v5 := (Location.mk v3 v4)
   return v5
+
+def Field.store : Place :=
+  .storage (UInt256.ofNat 0)
+
+def Layout.Store : Layout :=
+  { storage := [0, 1] }
+
+def init : FeM Unit := do
+  return ()
 
 def add_Store (v0 : UInt256) : FeM UInt256 := do
   let v1 ← load (Field.store.field Layout.Store 0)

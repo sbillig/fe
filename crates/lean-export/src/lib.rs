@@ -8,10 +8,19 @@
 //! A contract that deploys another reads the other's creation code from its
 //! own code. The export names that code `creation_<contract>`, a `ByteArray`
 //! its embedding defines.
+//!
+//! Contracts exported with one [`Library`] share the definitions of core and
+//! std that name nothing of a contract's own. A contract's text names them
+//! as its own: its embedding gives the ones in [`Export::uses`] those names
+//! in the contract's namespace, as Lean's `export` does.
 
 use std::fmt::Write;
 
-use common::{compilation::Target as CompilationTarget, layout::StorageFieldPlacement};
+use common::{
+    compilation::Target as CompilationTarget,
+    ingot::{Ingot, IngotKind},
+    layout::StorageFieldPlacement,
+};
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
@@ -288,15 +297,72 @@ struct Member<'db> {
     low: usize,
     name: String,
     body: String,
+    own: bool,
 }
 
-/// The Lean definitions of `contract`: its storage layout, the functions
-/// and constants its entries reach, then its `init` and `recv` arms.
+/// The definitions exports share: those of core and std that name nothing
+/// of a contract's own. A contract exported with a library uses the
+/// definitions in it and adds the ones it is first to reach, so its own text
+/// follows the library's.
+#[derive(Clone, Default)]
+pub struct Library {
+    text: String,
+    /// The names the library defines, and those of them that are types.
+    names: FxHashSet<String>,
+    types: FxHashSet<String>,
+    taken: FxHashSet<String>,
+    nevers: FxHashSet<String>,
+    lenses: FxHashMap<String, String>,
+    layouts: Vec<Item>,
+    bodies: FxHashMap<(String, String), String>,
+}
+
+impl Library {
+    /// The shared definitions, in an order Lean accepts.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// A contract's own definitions.
+pub struct Export {
+    /// The library's definitions that `text` names, in order: a function,
+    /// constant or type, or what a type's namespace holds, such as a
+    /// structure's constructor.
+    pub uses: Vec<String>,
+    pub text: String,
+}
+
+impl Export {
+    /// The Lean command that gives `uses` their names in the current
+    /// namespace, for a library in the namespace `library`. Empty if the
+    /// text names none of the library's.
+    pub fn uses_command(&self, library: &str) -> String {
+        if self.uses.is_empty() {
+            return String::new();
+        }
+        format!("export {library} ({})\n\n", self.uses.join(" "))
+    }
+}
+
+/// A definition, or the definitions of one recursion: the names it defines,
+/// its text, and whether it is a contract's own.
+#[derive(Clone)]
+struct Item {
+    names: Vec<String>,
+    text: String,
+    own: bool,
+}
+
+/// The Lean definitions of `contract` that are its own: its storage layout,
+/// the functions and constants its entries reach, then its `init` and `recv`
+/// arms. The definitions of core and std they use are `library`'s.
 pub fn export_contract<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
-) -> Result<String, Unsupported> {
-    export(db, contract, false)
+    library: &mut Library,
+) -> Result<Export, Unsupported> {
+    export(db, contract, false, library)
 }
 
 /// As [`export_contract`], followed by the contract's entries. The runtime
@@ -307,15 +373,17 @@ pub fn export_contract<'db>(
 pub fn export_contract_with_entries<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
-) -> Result<String, Unsupported> {
-    export(db, contract, true)
+    library: &mut Library,
+) -> Result<Export, Unsupported> {
+    export(db, contract, true, library)
 }
 
 fn export<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
     with_entries: bool,
-) -> Result<String, Unsupported> {
+    library: &mut Library,
+) -> Result<Export, Unsupported> {
     let mut entries = vec![("init".to_string(), BodyOwner::ContractInit { contract })];
     for (recv_idx, recv) in contract.recv_views(db).enumerate() {
         entries.extend(recv.arms(db).enumerate().map(|(arm_idx, _)| {
@@ -340,31 +408,86 @@ fn export<'db>(
             .iter()
             .flat_map(|(name, _)| [name.clone(), format!("{name}_entry")])
             .chain(PRELUDE.iter().map(|name| name.to_string()))
+            .chain(library.taken.iter().cloned())
             .collect(),
-        nevers: FxHashSet::default(),
-        lenses: FxHashMap::default(),
+        nevers: library.nevers.clone(),
+        lenses: library.lenses.clone(),
         lens: None,
         open: Vec::new(),
         members: Vec::new(),
-        layouts: Vec::new(),
-        bodies: FxHashMap::default(),
-        defs: String::new(),
+        layouts: library.layouts.clone(),
+        bodies: library.bodies.clone(),
+        defs: Vec::new(),
+        embedded: FxHashSet::default(),
     };
     for (name, owner) in entries {
         let key = identity_semantic_instance_key(db, owner);
         let (body, _) = module.body(&name, key, &Carriers::default())?;
-        module.define(&name, &body);
+        module.define(&name, &body, true);
     }
     if with_entries {
         module.runtime(contract)?;
         module.init_entry(contract)?;
     }
-    let layouts: String = module
-        .layouts
-        .iter()
-        .map(|(_, def)| format!("{def}\n\n"))
+    // A definition that names one of the contract's own, or the creation
+    // code of a contract it deploys, is its own.
+    let mut layouts = module.layouts.split_off(library.layouts.len());
+    let mut own = module.embedded;
+    loop {
+        let before = own.len();
+        for item in layouts.iter_mut().chain(&mut module.defs) {
+            item.own |= names_any(&item.text, &own);
+            if item.own {
+                own.extend(item.names.iter().cloned());
+            }
+        }
+        if own.len() == before {
+            break;
+        }
+    }
+    let text = |own: bool| -> String {
+        let layouts = layouts.iter().filter(|item| item.own == own);
+        let defs = module.defs.iter().filter(|item| item.own == own);
+        layouts
+            .map(|item| format!("{}\n\n", item.text))
+            .chain(defs.map(|item| item.text.clone()))
+            .collect()
+    };
+    let exported = text(true);
+    library.text.push_str(&text(false));
+    let shared = layouts.iter().chain(&module.defs).filter(|item| !item.own);
+    for name in shared.flat_map(|item| &item.names) {
+        library.names.insert(name.clone());
+        library.taken.insert(name.clone());
+    }
+    for item in layouts.into_iter().filter(|item| !item.own) {
+        if item.text.starts_with("structure ") || item.text.starts_with("inductive ") {
+            library.types.extend(item.names.iter().cloned());
+        }
+        library.layouts.push(item);
+    }
+    let mut uses: Vec<_> = tokens(&exported)
+        .filter(|token| {
+            let spaces = token.match_indices('.').map(|(at, _)| &token[..at]);
+            library.names.contains(*token)
+                || spaces
+                    .into_iter()
+                    .any(|space| library.types.contains(space))
+        })
+        .map(str::to_string)
         .collect();
-    Ok(layouts + &module.defs)
+    uses.sort_unstable();
+    uses.dedup();
+    module.nevers.retain(|name| !own.contains(name));
+    module.lenses.retain(|name, _| !own.contains(name));
+    module.bodies.retain(|_, name| !own.contains(name));
+    library.nevers = module.nevers;
+    library.lenses = module.lenses;
+    library.bodies = module.bodies;
+    Ok(Export {
+        uses,
+        text: exported,
+    })
 }
 
 /// The definitions exported so far.
@@ -392,12 +515,15 @@ struct Module<'db> {
     /// The definitions that wait for an instance under way: each is on a
     /// recursion through it, and is defined with it.
     members: Vec<Member<'db>>,
-    /// The layout definitions the bodies name, by Lean name.
-    layouts: Vec<(String, String)>,
+    /// The type and layout definitions the bodies name, the library's first.
+    layouts: Vec<Item>,
     /// The name of each exported function or constant, by its base name and
     /// the text of its definition after the name.
     bodies: FxHashMap<(String, String), String>,
-    defs: String,
+    /// The functions and constants defined so far, without the library's.
+    defs: Vec<Item>,
+    /// The names the bodies call a deployed contract's creation code by.
+    embedded: FxHashSet<String>,
 }
 
 impl<'db> Module<'db> {
@@ -578,7 +704,11 @@ impl<'db> Module<'db> {
                         writeln!(lines, "  {return_value} result").unwrap();
                     }
                 }
-                writeln!(self.defs, "def {name}_entry : FeM Empty := do\n{lines}").unwrap();
+                self.defs.push(Item {
+                    names: vec![format!("{name}_entry")],
+                    text: format!("def {name}_entry : FeM Empty := do\n{lines}\n"),
+                    own: true,
+                });
                 match info.selector_value {
                     _ if info.is_fallback => default = format!("{name}_entry"),
                     Some(selector) => cases.push((selector, name)),
@@ -601,13 +731,15 @@ impl<'db> Module<'db> {
         } else {
             format!("\n      {default}")
         };
-        writeln!(
-            self.defs,
-            "def runtime : FeM Empty := do\n  let size ← calldatasize\n  \
-             if size.toNat < 4 then\n    {default}\n  else\n    \
-             let selector ← calldataSelector\n    {dispatch}{last}\n"
-        )
-        .unwrap();
+        self.defs.push(Item {
+            names: vec!["runtime".to_string()],
+            text: format!(
+                "def runtime : FeM Empty := do\n  let size ← calldatasize\n  \
+                 if size.toNat < 4 then\n    {default}\n  else\n    \
+                 let selector ← calldataSelector\n    {dispatch}{last}\n\n"
+            ),
+            own: true,
+        });
         Ok(())
     }
 
@@ -743,11 +875,11 @@ impl<'db> Module<'db> {
             }
             writeln!(lines, "  memoryBytes words (UInt256.ofNat {bytes})").unwrap();
         }
-        writeln!(
-            self.defs,
-            "def init_entry (args : ByteArray) : FeM ByteArray := do\n{lines}"
-        )
-        .unwrap();
+        self.defs.push(Item {
+            names: vec!["init_entry".to_string()],
+            text: format!("def init_entry (args : ByteArray) : FeM ByteArray := do\n{lines}\n"),
+            own: true,
+        });
         Ok(())
     }
 
@@ -795,7 +927,9 @@ impl<'db> Module<'db> {
                         .name(db)
                         .to_opt()
                         .ok_or_else(|| Unsupported(format!("`{name}` of an unnamed contract")))?;
-                    return Ok(format!("{read} creation_{}", contract.data(db)));
+                    let code = format!("creation_{}", contract.data(db));
+                    self.embedded.insert(code.clone());
+                    return Ok(format!("{read} {code}"));
                 }
                 match mode {
                     Some(mode) => format!("{name}_{mode:?}").to_lowercase(),
@@ -822,8 +956,10 @@ impl<'db> Module<'db> {
             BodyOwner::Closure { .. } => "closure".to_string(),
             owner => return Err(Unsupported(format!("call to {owner:?}"))),
         };
-        let args = key.subst(db).generic_args(db).iter();
-        let base = args.fold(base, |name, arg| {
+        let args = key.subst(db).generic_args(db);
+        let own = !shared_ingot(db, key.owner(db).scope().ingot(db))
+            || args.iter().any(|arg| self.own_ty(*arg));
+        let base = args.iter().fold(base, |name, arg| {
             format!("{name}_{}", lean_ident(arg.pretty_print(db)))
         });
         // A function called while its export is under way is named before
@@ -862,6 +998,7 @@ impl<'db> Module<'db> {
                     low: open.low,
                     name: name.clone(),
                     body,
+                    own,
                 });
                 name
             }
@@ -871,15 +1008,20 @@ impl<'db> Module<'db> {
             // calls do not end.
             (Some(name), _) => {
                 let members = self.members.split_off(open.members);
-                if !members.is_empty() {
-                    self.defs.push_str("mutual\n");
-                }
-                self.define(&name, &format!("{body}partial_fixpoint\n"));
+                let first = self.defs.len();
+                self.define(&name, &format!("{body}partial_fixpoint\n"), own);
                 for member in &members {
-                    self.define(&member.name, &format!("{}partial_fixpoint\n", member.body));
+                    let body = format!("{}partial_fixpoint\n", member.body);
+                    self.define(&member.name, &body, member.own);
                 }
                 if !members.is_empty() {
-                    self.defs.push_str("end\n\n");
+                    let defs = self.defs.split_off(first);
+                    let texts: String = defs.iter().map(|item| item.text.as_str()).collect();
+                    self.defs.push(Item {
+                        names: defs.iter().flat_map(|item| item.names.clone()).collect(),
+                        text: format!("mutual\n{texts}end\n\n"),
+                        own: defs.iter().any(|item| item.own),
+                    });
                 }
                 name
             }
@@ -887,7 +1029,7 @@ impl<'db> Module<'db> {
             (None, Some(name)) => name.clone(),
             (None, None) => {
                 let name = self.fresh(&base);
-                self.define(&name, &body);
+                self.define(&name, &body, own);
                 self.bodies.insert((base, body), name.clone());
                 name
             }
@@ -975,38 +1117,59 @@ impl<'db> Module<'db> {
     /// Appends the definition of `name` with the text `body` gives after the
     /// name: the pieces cut from it, last first, each named after it, then
     /// the definition.
-    fn define(&mut self, name: &str, body: &str) {
+    fn define(&mut self, name: &str, body: &str, own: bool) {
         let mut texts = body.split(CUT);
         let main = texts.next().unwrap();
         let piece = name.trim_matches(['«', '»']);
-        for text in texts.rev() {
-            writeln!(self.defs, "{}", text.replace(SELF, piece)).unwrap();
+        let mut text = String::new();
+        for cut in texts.rev() {
+            writeln!(text, "{}", cut.replace(SELF, piece)).unwrap();
         }
-        writeln!(self.defs, "def {name}{}", main.replace(SELF, piece)).unwrap();
+        writeln!(text, "def {name}{}", main.replace(SELF, piece)).unwrap();
+        self.defs.push(Item {
+            names: vec![name.to_string()],
+            text,
+            own,
+        });
     }
 
     /// The Lean name of `definition`, a type or layout definition named
     /// `name`, or `name` with a number if a different definition has it.
-    fn layout(&mut self, name: String, definition: impl Fn(&str) -> String) -> String {
+    fn layout(&mut self, name: String, own: bool, definition: impl Fn(&str) -> String) -> String {
         for n in 0.. {
             let name = match n {
                 0 => name.clone(),
                 n => format!("{name}_{n}"),
             };
-            let definition = definition(&name);
-            match self.layouts.iter().find(|(known, _)| *known == name) {
-                Some((_, known)) if *known == definition => return name,
+            let text = definition(&name);
+            match self.layouts.iter().find(|known| known.names[0] == name) {
+                Some(known) if known.text == text => return name,
                 Some(_) => {}
                 // A type the exported text names from Lean or the prelude
                 // keeps its name.
                 None if TYPES.contains(&name.as_str()) => {}
                 None => {
-                    self.layouts.push((name.clone(), definition));
+                    self.layouts.push(Item {
+                        names: vec![name.clone()],
+                        text,
+                        own,
+                    });
                     return name;
                 }
             }
         }
         unreachable!()
+    }
+
+    /// Whether `ty` names a type that neither core nor std defines.
+    fn own_ty(&self, ty: TyId<'db>) -> bool {
+        let db = self.db;
+        ty.ingot(db).is_some_and(|ingot| !shared_ingot(db, ingot))
+            || ty
+                .decompose_ty_app(db)
+                .1
+                .iter()
+                .any(|arg| self.own_ty(*arg))
     }
 
     /// The Lean projections and the type of each field of struct or tuple
@@ -1316,7 +1479,7 @@ impl<'db> Module<'db> {
                 }
                 lean.push((name, tys));
             }
-            return Ok(self.enum_ty(lean_ident(pretty), &lean));
+            return Ok(self.enum_ty(lean_ident(pretty), self.own_ty(ty), &lean));
         }
         if let Some(len) = ty.array_len(self.db) {
             let (_, args) = ty.decompose_ty_app(self.db);
@@ -1342,7 +1505,7 @@ impl<'db> Module<'db> {
         for (name, ty) in tys {
             writeln!(lines, "  {} : {ty}", name[0]).unwrap();
         }
-        Ok(self.layout(lean_ident(pretty), |name| {
+        Ok(self.layout(lean_ident(pretty), self.own_ty(ty), |name| {
             format!("structure {name} where\n{lines}deriving Inhabited")
         }))
     }
@@ -1352,7 +1515,7 @@ impl<'db> Module<'db> {
     /// for each field of each variant the projection that reads it and the
     /// function that replaces it. Both leave a value of another variant
     /// alone.
-    fn enum_ty(&mut self, name: String, variants: &[(String, Vec<String>)]) -> String {
+    fn enum_ty(&mut self, name: String, own: bool, variants: &[(String, Vec<String>)]) -> String {
         let mut ctors = String::new();
         let mut tags = String::new();
         let mut parts = String::new();
@@ -1387,7 +1550,7 @@ impl<'db> Module<'db> {
                 .unwrap();
             }
         }
-        self.layout(name, |name| {
+        self.layout(name, own, |name| {
             format!(
                 "inductive {name} where\n{ctors}deriving Inhabited\n\n\
                  def {name}.tag : {name} → UInt256\n{tags}{}",
@@ -1550,6 +1713,7 @@ impl<'db> Module<'db> {
         }
         let loader = self.layout(
             format!("load_{}", lean_ident(ty.pretty_print(db))),
+            self.own_ty(ty),
             |loader| {
                 format!(
                     "def {loader} (p : Place) : FeM {name} := do\n{}",
@@ -1613,6 +1777,7 @@ impl<'db> Module<'db> {
         writeln!(body, "  return {}", self.aggregate(ty, &parts)?).unwrap();
         let loader = self.layout(
             format!("{space}load_{}", lean_ident(ty.pretty_print(db))),
+            self.own_ty(ty),
             |loader| {
                 format!(
                     "def {loader} (p : UInt256) : FeM {name} := do\n{}",
@@ -1665,6 +1830,7 @@ impl<'db> Module<'db> {
         }
         let storer = self.layout(
             format!("mstore_{}", lean_ident(ty.pretty_print(db))),
+            self.own_ty(ty),
             |storer| {
                 format!(
                     "def {storer} (p : UInt256) (v : {name}) : FeM Unit := do\n{}",
@@ -1819,6 +1985,7 @@ impl<'db> Module<'db> {
         }
         let storer = self.layout(
             format!("store_{}", lean_ident(ty.pretty_print(db))),
+            self.own_ty(ty),
             |storer| {
                 format!(
                     "def {storer} (p : Place) (v : {name}) : FeM Unit := do\n{}",
@@ -1839,14 +2006,16 @@ impl<'db> Module<'db> {
             .iter()
             .map(|placement| placement.slot.to_string())
             .collect();
-        Ok(
-            self.layout(format!("Layout.{}", lean_ident(pretty)), |name| {
+        Ok(self.layout(
+            format!("Layout.{}", lean_ident(pretty)),
+            self.own_ty(ty),
+            |name| {
                 format!(
                     "def {name} : Layout :=\n  {{ storage := [{}] }}",
                     slots.join(", ")
                 )
-            }),
-        )
+            },
+        ))
     }
 }
 
@@ -4600,7 +4769,7 @@ impl<'db> BodyExporter<'_, 'db> {
             codec: None,
         });
         let slot = layout.slot_offset;
-        let place = self.module.layout(format!("Field.{name}"), |name| {
+        let place = self.module.layout(format!("Field.{name}"), true, |name| {
             format!("def {name} : Place :=\n  .storage (UInt256.ofNat {slot})")
         });
         Ok((place, lane))
@@ -4704,6 +4873,25 @@ fn granted_in_memory<'db>(
             "grant in memory at some yields only".to_string(),
         )),
     }
+}
+
+/// Whether `ingot` is core or std, whose definitions exports share.
+fn shared_ingot(db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> bool {
+    matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std)
+}
+
+/// The names in `text`, each with the namespaces it is written with.
+fn tokens(text: &str) -> impl Iterator<Item = &str> {
+    let part = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '\'' | '«' | '»');
+    text.split(move |c| !part(c))
+}
+
+/// Whether `text` names one of `names`, or something in its namespace.
+fn names_any(text: &str, names: &FxHashSet<String>) -> bool {
+    tokens(text).any(|token| {
+        let spaces = token.match_indices('.').map(|(at, _)| &token[..at]);
+        names.contains(token) || spaces.into_iter().any(|space| names.contains(space))
+    })
 }
 
 /// The lines of `texts`, each a step further in.

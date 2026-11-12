@@ -11,7 +11,7 @@ use codegen::{
 use common::InputDb;
 use cranelift_entity::EntityRef;
 use driver::{DriverDataBase, init_ingot};
-use fe_lean_export::{Unsupported, export_contract_with_entries};
+use fe_lean_export::{Library, Unsupported, export_contract_with_entries};
 use hir::{
     analysis::{
         semantic::{
@@ -92,13 +92,14 @@ fn export_corpus() {
             None => vec![db.top_mod(db.workspace().get(db, &url).unwrap())],
         };
         let mut text = String::new();
+        let mut library = Library::default();
         let mut models = Vec::new();
         let contracts = modules.iter().flat_map(|module| module.all_contracts(db));
         for (index, &contract) in contracts.enumerate() {
             total += 1;
             let id = format!("{name}_{index}");
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                export_contract_with_entries(db, contract)
+                export_contract_with_entries(db, contract, &mut library)
             }))
             .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
             match result {
@@ -106,8 +107,10 @@ fn export_corpus() {
                     exported += 1;
                     write!(
                         text,
-                        "\nnamespace Corpus.{id}\nsection\n\
-                         set_option linter.unusedVariables false\n\n{lean}\nend\nend Corpus.{id}\n"
+                        "\nnamespace Corpus.{id}\nsection\n{}\
+                         set_option linter.unusedVariables false\n\n{}\nend\nend Corpus.{id}\n",
+                        lean.uses_command("Corpus.Lib"),
+                        lean.text
                     )
                     .unwrap();
                     let name = contract.name(db).unwrap().data(db).to_string();
@@ -225,7 +228,12 @@ fn export_corpus() {
         } else {
             uncompiled.push(name);
         }
-        let header = format!("{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n");
+        // The file's contracts share the definitions of core and std.
+        let header = format!(
+            "{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n\nnamespace Corpus.Lib\nsection\n\
+             set_option linter.unusedVariables false\n\n{}\nend\nend Corpus.Lib\n",
+            library.text()
+        );
         fs::write(format!("{out}/{name}.lean"), header + &text).unwrap();
     }
     println!(
