@@ -270,6 +270,28 @@ enum Target<'db> {
     Calldata(String),
 }
 
+/// An instance whose export is under way.
+#[derive(Clone)]
+struct Open<'db> {
+    instance: (SemanticInstanceKey<'db>, Carriers),
+    /// The outermost instance under way that the body calls, or that a
+    /// body on a recursion through it calls: its place among them.
+    low: usize,
+    /// The number of `members` when the export began.
+    members: usize,
+}
+
+/// A definition on a recursion through an instance under way: its
+/// instance, that instance's place among those under way, its Lean name
+/// and its text after the name.
+#[derive(Clone)]
+struct Member<'db> {
+    instance: (SemanticInstanceKey<'db>, Carriers),
+    low: usize,
+    name: String,
+    body: String,
+}
+
 /// The Lean definitions of `contract`: its storage layout, the functions
 /// and constants its entries reach, then its `init` and `recv` arms.
 pub fn export_contract<'db>(
@@ -325,6 +347,7 @@ fn export<'db>(
         lenses: FxHashMap::default(),
         lens: None,
         open: Vec::new(),
+        members: Vec::new(),
         layouts: Vec::new(),
         bodies: FxHashMap::default(),
         defs: String::new(),
@@ -366,8 +389,11 @@ struct Module<'db> {
     /// The Lean type of the slide of the body exported last, if it is such
     /// a projection.
     lens: Option<String>,
-    /// The instances whose export is under way.
-    open: Vec<(SemanticInstanceKey<'db>, Carriers)>,
+    /// The instances whose export is under way, outermost first.
+    open: Vec<Open<'db>>,
+    /// The definitions that wait for an instance under way: each is on a
+    /// recursion through it, and is defined with it.
+    members: Vec<Member<'db>>,
     /// The layout definitions the bodies name, by Lean name.
     layouts: Vec<(String, String)>,
     /// The name of each exported function or constant, by its base name and
@@ -734,7 +760,20 @@ impl<'db> Module<'db> {
         key: SemanticInstanceKey<'db>,
         carriers: Carriers,
     ) -> Result<String, Unsupported> {
-        if let Some(name) = self.names.get(&(key, carriers.clone())) {
+        // A call of an instance whose export is under way, or of one that
+        // waits for such an instance, puts the caller on their recursion.
+        let instance = (key, carriers.clone());
+        let under_way = self.open.iter().position(|open| open.instance == instance);
+        let waiting = self
+            .members
+            .iter()
+            .find(|member| member.instance == instance);
+        if let Some(low) = under_way.or(waiting.map(|member| member.low))
+            && let Some(caller) = self.open.last_mut()
+        {
+            caller.low = caller.low.min(low);
+        }
+        if let Some(name) = self.names.get(&instance) {
             return Ok(name.clone());
         }
         let db = self.db;
@@ -788,33 +827,61 @@ impl<'db> Module<'db> {
         let base = args.fold(base, |name, arg| {
             format!("{name}_{}", lean_ident(arg.pretty_print(db)))
         });
-        // A function that calls itself is named before its body is done.
-        let instance = (key, carriers.clone());
-        if self.open.last() == Some(&instance) {
+        // A function called while its export is under way is named before
+        // its body is done.
+        if under_way.is_some() {
             let name = self.fresh(&base);
             self.names.insert(instance, name.clone());
             return Ok(name);
         }
-        if self.open.iter().any(|(open, _)| *open == key) {
+        if self.open.iter().any(|open| open.instance.0 == key) {
             return Err(Unsupported(format!("recursion through `{base}`")));
         }
-        self.open.push(instance.clone());
-        let (body, never) = self.body(&base, key, &carriers)?;
+        self.open.push(Open {
+            instance: instance.clone(),
+            low: self.open.len(),
+            members: self.members.len(),
+        });
+        let exported = self.body(&base, key, &carriers);
+        let open = self.open.pop().unwrap();
+        let (body, never) = exported?;
         let lens = std::mem::take(&mut self.lens);
-        self.open.pop();
-        let name = match (
-            self.names.get(&instance),
-            self.bodies.get(&(base.clone(), body.clone())),
-        ) {
-            // The body called itself by this name: it is the least fixed
-            // point of its definition, which diverges where the calls do
-            // not end.
-            (Some(_), _) if body.contains(CUT) => {
-                return Err(Unsupported(format!("recursion through long `{base}`")));
+        let called = self.names.get(&instance).cloned();
+        let recursive = called.is_some() || open.low < self.open.len();
+        if recursive && body.contains(CUT) {
+            return Err(Unsupported(format!("recursion through long `{base}`")));
+        }
+        let name = match (called, self.bodies.get(&(base.clone(), body.clone()))) {
+            // The body is on a recursion through an instance still under
+            // way, and is defined with it.
+            (called, _) if open.low < self.open.len() => {
+                let caller = self.open.last_mut().unwrap();
+                caller.low = caller.low.min(open.low);
+                let name = called.unwrap_or_else(|| self.fresh(&base));
+                self.members.push(Member {
+                    instance: instance.clone(),
+                    low: open.low,
+                    name: name.clone(),
+                    body,
+                });
+                name
             }
+            // The body was called by this name before it was done, by
+            // itself or by the bodies that waited for it. They are the least
+            // fixed point of their definitions, which diverges where the
+            // calls do not end.
             (Some(name), _) => {
-                let name = name.clone();
+                let members = self.members.split_off(open.members);
+                if !members.is_empty() {
+                    self.defs.push_str("mutual\n");
+                }
                 self.define(&name, &format!("{body}partial_fixpoint\n"));
+                for member in &members {
+                    self.define(&member.name, &format!("{}partial_fixpoint\n", member.body));
+                }
+                if !members.is_empty() {
+                    self.defs.push_str("end\n\n");
+                }
                 name
             }
             // Instances with one definition share it.

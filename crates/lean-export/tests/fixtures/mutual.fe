@@ -1,0 +1,42 @@
+use std::abi::sol
+
+// `left`, `step` and `right` call one another: one recursion, defined
+// together. `right` calls `step`, which waits for `left`.
+fn left(_ n: u256) -> u256 {
+    if n == 0 {
+        0
+    } else if n % 2 == 1 {
+        step(n - 1)
+    } else {
+        right(n - 1)
+    }
+}
+
+fn step(_ n: u256) -> u256 {
+    if n == 0 {
+        1
+    } else {
+        left(n - 1)
+    }
+}
+
+fn right(_ n: u256) -> u256 {
+    if n == 0 {
+        2
+    } else {
+        step(n - 1)
+    }
+}
+
+msg MutualMsg {
+    #[selector = sol("walk(uint256)")]
+    Walk { n: u256 } -> u256,
+}
+
+pub contract Mutual {
+    recv MutualMsg {
+        Walk { n } -> u256 {
+            left(n)
+        }
+    }
+}

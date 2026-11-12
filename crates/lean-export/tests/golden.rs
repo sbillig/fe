@@ -149,3 +149,8 @@ fn products() {
 fn drops() {
     check("drops");
 }
+
+#[test]
+fn mutual() {
+    check("mutual");
+}
