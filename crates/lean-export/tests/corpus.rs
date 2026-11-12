@@ -204,8 +204,11 @@ fn dump_ir() {
         }
         seen.push(key);
         let name = match key.owner(db) {
+            // A method of an impl has no path, only its name.
             BodyOwner::Func(func, mode) => {
-                format!("{:?} mode={mode:?}", func.scope().pretty_path(db))
+                let path = func.scope().pretty_path(db);
+                let name = func.name(db).to_opt().map(|name| name.data(db).clone());
+                format!("{} mode={mode:?}", path.or(name).unwrap_or_default())
             }
             other => format!("{other:?}"),
         };
