@@ -11,9 +11,7 @@
 
 use std::fmt::Write;
 
-use common::{
-    compilation::Target as CompilationTarget, ingot::IngotKind, layout::StorageFieldPlacement,
-};
+use common::{compilation::Target as CompilationTarget, layout::StorageFieldPlacement};
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
@@ -4415,20 +4413,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         None,
                     )
                 }
-                NDataProjection::Entry(key) => {
-                    let map = ty.adt_def(db).is_some_and(|adt| {
-                        adt.adt_ref(db)
-                            .name(db)
-                            .is_some_and(|name| name.data(db) == "StorageMap")
-                    }) && ty
-                        .ingot(db)
-                        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std);
-                    if map && self.lean_ty(self.ty(*key))? == "UInt256" {
-                        (format!("({lean}.entry {})", value_name(*key)), None)
-                    } else {
-                        self.entry(ty, &lean, *key)?
-                    }
-                }
+                NDataProjection::Entry(key) => self.entry(ty, &lean, *key)?,
             };
             lean = self.module.pinned(part, lean);
         }

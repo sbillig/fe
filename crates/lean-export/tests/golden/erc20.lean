@@ -4,10 +4,9 @@ def Field.store : Place :=
 def Layout.TokenStore : Layout :=
   { storage := [0, 1, 2] }
 
-structure Transfer where
-  «from» : UInt256
-  «to» : UInt256
-  value : UInt256
+structure Location where
+  slot : UInt256
+  offset : UInt256
 deriving Inhabited
 
 structure MemBuffer where
@@ -16,12 +15,18 @@ structure MemBuffer where
   capacity : UInt256
 deriving Inhabited
 
-structure AbiFrame where
+structure MemSlice_u8 where
   ptr : UInt256
   len : UInt256
 deriving Inhabited
 
-structure MemSlice_u8 where
+structure Transfer where
+  «from» : UInt256
+  «to» : UInt256
+  value : UInt256
+deriving Inhabited
+
+structure AbiFrame where
   ptr : UInt256
   len : UInt256
 deriving Inhabited
@@ -82,96 +87,13 @@ def caller_1 : FeM UInt256 := do
   let v2 := v1
   return v2
 
-def zero : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
-  let v1 := v0
+def encoded_len (v0 : UInt256) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 32)
   return v1
-
-def IS_DYNAMIC : FeM Bool := do
-  let v0 := false
-  return v0
-
-def HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 32)
-  return v0
-
-def abi_field_head_size_u256 : FeM UInt256 := do
-  let v0 ← IS_DYNAMIC
-  if v0 then
-    let v1 := (UInt256.ofNat 32)
-    return v1
-  else
-    let v2 := ()
-    let v3 := v2
-    let v4 ← HEAD_SIZE
-    return v4
-
-def HEAD_SIZE_u256 : FeM UInt256 := do
-  let v0 ← abi_field_head_size_u256
-  return v0
-
-def payload_size_u256 (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← HEAD_SIZE
-  return v1
-
-def dynamic_payload_size_u256 (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← IS_DYNAMIC
-  if v1 then
-    let v2 ← payload_size_u256 v0
-    return v2
-  else
-    let v3 := ()
-    let v4 := v3
-    let v5 := (UInt256.ofNat 0)
-    return v5
-
-def payload_size_u256_1 (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← HEAD_SIZE_u256
-  let v2 := v0
-  let v3 ← dynamic_payload_size_u256 v2
-  let v4 := v1 + v3
-  return v4
-
-def abi_payload_size_u256 (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← payload_size_u256_1 v0
-  return v1
-
-def max : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
-  let v1 := ~~~v0
-  return v1
-
-def PANIC_OUT_OF_MEMORY : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 65)
-  return v0
-
-def word_to_usize (v0 : UInt256) : FeM UInt256 := do
-  let v1 := v0
-  return v1
-
-def allocation_len (v0 : UInt256) : FeM UInt256 := do
-  let v1 := v0
-  let v2 ← max
-  let v3 := v2
-  let v4 := decide (v3.toNat < v1.toNat)
-  if v4 then
-    let v5 ← PANIC_OUT_OF_MEMORY
-    let v6 ← panicCode v5
-    nomatch v6
-  else
-    let v7 := ()
-    let v8 := v7
-    let v9 ← word_to_usize v0
-    return v9
-
-def max_1 : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 18446744073709551615)
-  return v0
 
 def to_word (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
-  let v2 := v1
-  return v2
+  return v1
 
 def IS_SIGNED : FeM Bool := do
   let v0 := false
@@ -221,7 +143,7 @@ def sign_extend (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
     let v17 := v7
     b3 v17
 
-def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
+def downcast_saturate_u256_usize (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : UInt256 := default
   let v8 ← to_word v0
   let v9 := v8
@@ -351,10 +273,153 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
           let v74 := v73
           b25 r0 v74
 
+def max : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 18446744073709551615)
+  return v0
+
+def to_word_1 (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 := v1
+  return v2
+
+def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
+  let mut r0 : UInt256 := default
+  let v8 ← to_word_1 v0
+  let v9 := v8
+  let v10 ← IS_SIGNED
+  let v11 := !v10
+  let b3 : UInt256 → UInt256 → FeM UInt256 := fun r0 v1 => do
+    let mut r0 := r0
+    return v1
+  if v11 then
+    let v12 := v9
+    r0 := v12
+    let v13 ← IS_SIGNED
+    let b6 : UInt256 → FeM UInt256 := fun r0 => do
+      let mut r0 := r0
+      let v24 := r0
+      let v25 := v24
+      let v26 ← MASK
+      let v27 := decide (v26.toNat < v25.toNat)
+      let b10 : UInt256 → UInt256 → FeM UInt256 := fun r0 v2 => do
+        let mut r0 := r0
+        let v35 := v2
+        b3 r0 v35
+      if v27 then
+        let v28 ← MASK
+        let v29 ← from_word v28
+        let v30 := v29
+        b10 r0 v30
+      else
+        let v31 := r0
+        let v32 := v31
+        let v33 ← from_word v32
+        let v34 := v33
+        b10 r0 v34
+    let b5 : UInt256 → FeM UInt256 := fun r0 => do
+      let mut r0 := r0
+      let v22 := ()
+      let v23 := v22
+      b6 r0
+    if v13 then
+      let v14 ← I256_SIGN_BIT
+      let v15 := v9 &&& v14
+      let v16 := (UInt256.ofNat 0)
+      let v17 := decide (v15 ≠ v16)
+      if v17 then
+        let v18 := (UInt256.ofNat 0)
+        let v19 := v18
+        r0 := v19
+        let v20 := ()
+        let v21 := v20
+        b6 r0
+      else
+        b5 r0
+    else
+      b5 r0
+  else
+    let v36 ← SIGN_BIT
+    let v37 ← MASK
+    let v38 ← SIGN_BIT
+    let v39 ← sign_extend v36 v37 v38
+    let v40 := v39
+    let v41 ← SIGN_BIT
+    let v42 := (UInt256.ofNat 1)
+    let v43 ← checkedSub v41 v42
+    let v44 := v43
+    let v45 := v40
+    let v46 := v45
+    let v47 := v44
+    let v48 := v47
+    let v49 ← IS_SIGNED
+    let b13 : UInt256 → UInt256 → FeM UInt256 := fun r0 v3 => do
+      let mut r0 := r0
+      let v77 := v3
+      b3 r0 v77
+    if v49 then
+      let v50 := v9
+      let v51 := v50
+      let v52 := UInt256.sltBool v51 v46
+      let b16 : UInt256 → UInt256 → FeM UInt256 := fun r0 v4 => do
+        let mut r0 := r0
+        let v61 := v4
+        b13 r0 v61
+      if v52 then
+        let v53 ← from_word v40
+        let v54 := v53
+        b16 r0 v54
+      else
+        let v55 := UInt256.sgtBool v51 v48
+        let b19 : UInt256 → UInt256 → FeM UInt256 := fun r0 v5 => do
+          let mut r0 := r0
+          let v60 := v5
+          b16 r0 v60
+        if v55 then
+          let v56 ← from_word v44
+          let v57 := v56
+          b19 r0 v57
+        else
+          let v58 ← from_word v9
+          let v59 := v58
+          b19 r0 v59
+    else
+      let v62 ← I256_SIGN_BIT
+      let v63 := v9 &&& v62
+      let v64 := (UInt256.ofNat 0)
+      let v65 := decide (v63 ≠ v64)
+      let b22 : UInt256 → UInt256 → FeM UInt256 := fun r0 v6 => do
+        let mut r0 := r0
+        let v76 := v6
+        b13 r0 v76
+      if v65 then
+        let v66 ← from_word v44
+        let v67 := v66
+        b22 r0 v67
+      else
+        let v68 := v9
+        let v69 := v68
+        let v70 := UInt256.sgtBool v69 v48
+        let b25 : UInt256 → UInt256 → FeM UInt256 := fun r0 v7 => do
+          let mut r0 := r0
+          let v75 := v7
+          b22 r0 v75
+        if v70 then
+          let v71 ← from_word v44
+          let v72 := v71
+          b25 r0 v72
+        else
+          let v73 ← from_word v9
+          let v74 := v73
+          b25 r0 v74
+
 def MAX_ALLOCATION : FeM UInt256 := do
-  let v0 ← max_1
+  let v0 ← max
   let v1 ← downcast_saturate_u64_usize v0
   return v1
+
+def PANIC_OUT_OF_MEMORY : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 65)
+  return v0
 
 def alloc_bytes (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
@@ -377,6 +442,170 @@ def new_uninit (v0 : UInt256) : FeM MemBuffer := do
   let v4 := (MemBuffer.mk v1 v2 v3)
   return v4
 
+def ptr (v0 : MemBuffer) : FeM UInt256 := do
+  let v1 := v0.ptr
+  return v1
+
+def write_key (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
+  let v2 ← mstore v0 v1
+  return ()
+
+def write_key_1 (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
+  let v2 := v1
+  let v3 ← write_key v0 v2
+  return ()
+
+def downcast_unchecked_u256_usize (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← to_word v0
+  let v2 := v1
+  let v3 ← from_word v2
+  return v3
+
+def from_raw_parts_ref_u8 (v0 : UInt256) (v1 : UInt256) : FeM MemSlice_u8 := do
+  let mut r0 : MemSlice_u8 := default
+  let v2 := (MemSlice_u8.mk v0 v1)
+  let v3 := v2
+  r0 := v3
+  return r0
+
+def ptr_u8 (v0 : MemSlice_u8) : FeM UInt256 := do
+  let v1 := v0.ptr
+  return v1
+
+def len_u8 (v0 : MemSlice_u8) : FeM UInt256 := do
+  let v1 := v0.len
+  return v1
+
+def keccak256_1 (v0 : MemSlice_u8) : FeM UInt256 := do
+  let v1 ← ptr_u8 v0
+  let v2 ← len_u8 v0
+  let v3 := v2
+  let v4 ← keccak256 v1 v3
+  return v4
+
+def cast_u8_u8 (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 := v1
+  return v2
+
+def dealloc_u8 (v0 : UInt256) : FeM Unit := do
+  let v1 ← cast_u8_u8 v0
+  let v2 := ()
+  return ()
+
+def drop (v0 : MemBuffer) : FeM Unit := do
+  let v1 := v0.ptr
+  let v2 ← dealloc_u8 v1
+  return ()
+
+def mapping_slot_Address (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let mut r0 : MemBuffer := default
+  let v2 ← encoded_len v1
+  let v3 := v2
+  let v4 := (UInt256.ofNat 32)
+  let v5 ← checkedAdd v3 v4
+  let v6 ← downcast_saturate_u256_usize v5
+  let v7 ← new_uninit v6
+  let v8 := v7
+  r0 := v8
+  let v10 ← ptr r0
+  let v11 := v10
+  let v12 ← write_key_1 v11 v1
+  let v13 ← downcast_unchecked_u256_usize v3
+  let v14 := v11 + v13
+  let v15 ← mstore v14 v0
+  let v16 := (UInt256.ofNat 32)
+  let v17 ← checkedAdd v3 v16
+  let v18 ← downcast_unchecked_u256_usize v17
+  let v19 ← from_raw_parts_ref_u8 v11 v18
+  let v21 ← keccak256_1 v19
+  let _ ← drop r0
+  return v21
+
+def locate_Address_u256 (v0 : Place) (v1 : UInt256) (v2 : UInt256) : FeM Location := do
+  let v3 ← mapping_slot_Address v1 v2
+  let v4 := (UInt256.ofNat 0)
+  let v5 := (Location.mk v3 v4)
+  return v5
+
+def zero : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 0)
+  let v1 := v0
+  return v1
+
+def IS_DYNAMIC : FeM Bool := do
+  let v0 := false
+  return v0
+
+def HEAD_SIZE : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 32)
+  return v0
+
+def abi_field_head_size_u256 : FeM UInt256 := do
+  let v0 ← IS_DYNAMIC
+  if v0 then
+    let v1 := (UInt256.ofNat 32)
+    return v1
+  else
+    let v2 := ()
+    let v3 := v2
+    let v4 ← HEAD_SIZE
+    return v4
+
+def HEAD_SIZE_u256 : FeM UInt256 := do
+  let v0 ← abi_field_head_size_u256
+  return v0
+
+def payload_size_u256 (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← HEAD_SIZE
+  return v1
+
+def dynamic_payload_size_u256 (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← IS_DYNAMIC
+  if v1 then
+    let v2 ← payload_size_u256 v0
+    return v2
+  else
+    let v3 := ()
+    let v4 := v3
+    let v5 := (UInt256.ofNat 0)
+    return v5
+
+def payload_size_u256_1 (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← HEAD_SIZE_u256
+  let v2 := v0
+  let v3 ← dynamic_payload_size_u256 v2
+  let v4 := v1 + v3
+  return v4
+
+def abi_payload_size_u256 (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← payload_size_u256_1 v0
+  return v1
+
+def max_1 : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 0)
+  let v1 := ~~~v0
+  return v1
+
+def word_to_usize (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  return v1
+
+def allocation_len (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 ← max_1
+  let v3 := v2
+  let v4 := decide (v3.toNat < v1.toNat)
+  if v4 then
+    let v5 ← PANIC_OUT_OF_MEMORY
+    let v6 ← panicCode v5
+    nomatch v6
+  else
+    let v7 := ()
+    let v8 := v7
+    let v9 ← word_to_usize v0
+    return v9
+
 def zero_bytes (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
   let v2 ← zeroMem v0 v1
   return ()
@@ -387,10 +616,6 @@ def new (v0 : UInt256) : FeM MemBuffer := do
   let v3 := v2.ptr
   let v4 ← zero_bytes v3 v0
   return v2
-
-def ptr (v0 : MemBuffer) : FeM UInt256 := do
-  let v1 := v0.ptr
-  return v1
 
 def from_raw_parts (v0 : UInt256) (v1 : UInt256) : FeM AbiFrame := do
   let v2 := v0
@@ -542,13 +767,6 @@ def encode_abi_payload_u256 (v0 : UInt256) : FeM MemBuffer := do
   let v1 ← encode_alloc_Sol_u256 v0
   return v1
 
-def from_raw_parts_ref_u8 (v0 : UInt256) (v1 : UInt256) : FeM MemSlice_u8 := do
-  let mut r0 : MemSlice_u8 := default
-  let v2 := (MemSlice_u8.mk v0 v1)
-  let v3 := v2
-  r0 := v3
-  return r0
-
 def span_ref (v0 : MemBuffer) : FeM MemSlice_u8 := do
   let v1 := v0.ptr
   let v2 := v0.len
@@ -559,34 +777,11 @@ def as_topic (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
   return v1
 
-def ptr_u8 (v0 : MemSlice_u8) : FeM UInt256 := do
-  let v1 := v0.ptr
-  return v1
-
-def len_u8 (v0 : MemSlice_u8) : FeM UInt256 := do
-  let v1 := v0.len
-  return v1
-
 def log3 (v1 : MemSlice_u8) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) : FeM Unit := do
   let v5 ← ptr_u8 v1
   let v6 ← len_u8 v1
   let v7 := v6
   let v8 ← logData v5 v7 #[v2, v3, v4]
-  return ()
-
-def cast_u8_u8 (v0 : UInt256) : FeM UInt256 := do
-  let v1 := v0
-  let v2 := v1
-  return v2
-
-def dealloc_u8 (v0 : UInt256) : FeM Unit := do
-  let v1 ← cast_u8_u8 v0
-  let v2 := ()
-  return ()
-
-def drop (v0 : MemBuffer) : FeM Unit := do
-  let v1 := v0.ptr
-  let v2 ← dealloc_u8 v1
   return ()
 
 def emit_Evm (v0 : Transfer) : FeM Unit := do
@@ -620,7 +815,8 @@ def init (v0 : UInt256) : FeM Unit := do
   let v2 ← caller_1
   let v3 := v2
   let v4 := v0
-  store ((Field.store.field Layout.TokenStore 0).entry v3) v4
+  let l0 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v3
+  store (Place.mk .storage l0.slot) v4
   let v5 := ()
   let v6 := v0
   store (Field.store.field Layout.TokenStore 2) v6
@@ -634,17 +830,22 @@ def init (v0 : UInt256) : FeM Unit := do
 def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   let v3 ← caller_1
   let v4 := v3
-  let v5 ← load ((Field.store.field Layout.TokenStore 0).entry v4)
+  let l0 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v4
+  let v5 ← load (Place.mk .storage l0.slot)
   let v6 := decide (v1.toNat ≤ v5.toNat)
   if v6 then
     let v7 := ()
-    let v8 ← load ((Field.store.field Layout.TokenStore 0).entry v4)
+    let l1 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v4
+    let v8 ← load (Place.mk .storage l1.slot)
     let v9 ← checkedSub v8 v1
-    store ((Field.store.field Layout.TokenStore 0).entry v4) v9
+    let l2 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v4
+    store (Place.mk .storage l2.slot) v9
     let v10 := ()
-    let v11 ← load ((Field.store.field Layout.TokenStore 0).entry v0)
+    let l3 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v0
+    let v11 ← load (Place.mk .storage l3.slot)
     let v12 ← checkedAdd v11 v1
-    store ((Field.store.field Layout.TokenStore 0).entry v0) v12
+    let l4 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v0
+    store (Place.mk .storage l4.slot) v12
     let v13 := ()
     let v14 := (Transfer.mk v4 v0 v1)
     let v16 ← emit_Evm_Transfer v14
@@ -652,6 +853,12 @@ def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
     return v17
   else
     M.revert (assertData "ERC20: insufficient balance")
+
+def locate_Address_StorageMap_Address_u256 (v0 : Place) (v1 : UInt256) (v2 : UInt256) : FeM Location := do
+  let v3 ← mapping_slot_Address v1 v2
+  let v4 := (UInt256.ofNat 0)
+  let v5 := (Location.mk v3 v4)
+  return v5
 
 def emit_Evm_1 (v0 : Approval) : FeM Unit := do
   let mut r0 : MemBuffer := default
@@ -683,7 +890,9 @@ def emit_Evm_Approval (v1 : Approval) : FeM Unit := do
 def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   let v3 ← caller_1
   let v4 := v3
-  store (((Field.store.field Layout.TokenStore 1).entry v4).entry v0) v1
+  let l0 ← locate_Address_StorageMap_Address_u256 (Field.store.field Layout.TokenStore 1) (Field.store.field Layout.TokenStore 1).slot v4
+  let l1 ← locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot v0
+  store (Place.mk .storage l1.slot) v1
   let v5 := ()
   let v6 := (Approval.mk v4 v0 v1)
   let v8 ← emit_Evm_Approval v6
@@ -693,25 +902,34 @@ def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
 def recv0_arm2 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Bool := do
   let v4 ← caller_1
   let v5 := v4
-  let v6 ← load (((Field.store.field Layout.TokenStore 1).entry v0).entry v5)
+  let l0 ← locate_Address_StorageMap_Address_u256 (Field.store.field Layout.TokenStore 1) (Field.store.field Layout.TokenStore 1).slot v0
+  let l1 ← locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot v5
+  let v6 ← load (Place.mk .storage l1.slot)
   let v7 := v6
   let v8 := decide (v2.toNat ≤ v7.toNat)
   if v8 then
     let v9 := ()
-    let v10 ← load ((Field.store.field Layout.TokenStore 0).entry v0)
+    let l2 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v0
+    let v10 ← load (Place.mk .storage l2.slot)
     let v11 := decide (v2.toNat ≤ v10.toNat)
     if v11 then
       let v12 := ()
       let v13 ← checkedSub v7 v2
-      store (((Field.store.field Layout.TokenStore 1).entry v0).entry v5) v13
+      let l3 ← locate_Address_StorageMap_Address_u256 (Field.store.field Layout.TokenStore 1) (Field.store.field Layout.TokenStore 1).slot v0
+      let l4 ← locate_Address_u256 (Place.mk .storage l3.slot) (Place.mk .storage l3.slot).slot v5
+      store (Place.mk .storage l4.slot) v13
       let v14 := ()
-      let v15 ← load ((Field.store.field Layout.TokenStore 0).entry v0)
+      let l5 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v0
+      let v15 ← load (Place.mk .storage l5.slot)
       let v16 ← checkedSub v15 v2
-      store ((Field.store.field Layout.TokenStore 0).entry v0) v16
+      let l6 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v0
+      store (Place.mk .storage l6.slot) v16
       let v17 := ()
-      let v18 ← load ((Field.store.field Layout.TokenStore 0).entry v1)
+      let l7 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v1
+      let v18 ← load (Place.mk .storage l7.slot)
       let v19 ← checkedAdd v18 v2
-      store ((Field.store.field Layout.TokenStore 0).entry v1) v19
+      let l8 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v1
+      store (Place.mk .storage l8.slot) v19
       let v20 := ()
       let v21 := (Transfer.mk v0 v1 v2)
       let v23 ← emit_Evm_Transfer v21
@@ -723,11 +941,14 @@ def recv0_arm2 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Bool := do
     M.revert (assertData "ERC20: insufficient allowance")
 
 def recv0_arm3 (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← load ((Field.store.field Layout.TokenStore 0).entry v0)
+  let l0 ← locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot v0
+  let v1 ← load (Place.mk .storage l0.slot)
   return v1
 
 def recv0_arm4 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
-  let v2 ← load (((Field.store.field Layout.TokenStore 1).entry v0).entry v1)
+  let l0 ← locate_Address_StorageMap_Address_u256 (Field.store.field Layout.TokenStore 1) (Field.store.field Layout.TokenStore 1).slot v0
+  let l1 ← locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot v1
+  let v2 ← load (Place.mk .storage l1.slot)
   return v2
 
 def recv0_arm5 : FeM UInt256 := do
@@ -747,10 +968,6 @@ def SELECTOR_SIZE : FeM UInt256 := do
   let v0 := (UInt256.ofNat 4)
   return v0
 
-def to_word_1 (v0 : UInt256) : FeM UInt256 := do
-  let v1 := v0
-  return v1
-
 def U64_MASK : FeM UInt256 := do
   let v0 := (UInt256.ofNat 18446744073709551615)
   return v0
@@ -764,7 +981,7 @@ def from_word_1 (v0 : UInt256) : FeM UInt256 := do
   return v1
 
 def downcast_truncate_u256_u64 (v0 : UInt256) : FeM UInt256 := do
-  let v2 ← to_word_1 v0
+  let v2 ← to_word v0
   let v3 := v2
   let v4 ← IS_SIGNED
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
@@ -1076,12 +1293,6 @@ def encode_Sol_1 (v0 : Bool) (v1 : AbiFrame) : FeM Unit := do
   let v4 := Bool.toUInt256 v3
   let v5 ← store_word_1 v1 v2 v4
   return ()
-
-def downcast_unchecked_u256_usize (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← to_word_1 v0
-  let v2 := v1
-  let v3 ← from_word v2
-  return v3
 
 def return_data (v1 : MemSlice_u8) : FeM Empty := do
   let v2 ← ptr_u8 v1
@@ -1702,7 +1913,7 @@ def decoder_new : FeM SolDecoder := do
   return v1
 
 def downcast_truncate_usize_u64 (v0 : UInt256) : FeM UInt256 := do
-  let v2 ← to_word v0
+  let v2 ← to_word_1 v0
   let v3 := v2
   let v4 ← IS_SIGNED
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
