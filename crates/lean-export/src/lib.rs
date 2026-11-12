@@ -3121,6 +3121,16 @@ impl<'db> BodyExporter<'_, 'db> {
                     let target = self.carrier_value(place.value)?;
                     format!("{}\nlet {name} := ()", self.write(&target, "default")?)
                 }
+        // EVM memory is never reclaimed, so a resize is a fresh allocation
+        // and a copy of the bytes in use.
+        if matches!(kind, Kind::Realloc | Kind::TryRealloc)
+            && evm
+            && let [ptr, used, size] = operands.as_slice()
+        {
+            return Ok(format!(
+                "let {name} ← alloc {size}\nmcopy {name} {ptr} {used}"
+            ));
+        }
                 Carrier::Erased => format!("let {name} := ()"),
             });
         }
