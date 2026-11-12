@@ -1,0 +1,32 @@
+use core::ptr
+use std::abi::sol
+
+msg MemoryMsg {
+    #[selector = sol("bump(uint256)")]
+    Bump { by: u256 } -> u256,
+}
+
+struct Cell {
+    small: u8,
+    word: u256,
+}
+
+fn add(_ x: mut u256, by: u256) {
+    x += by
+}
+
+fn word_of(_ pointer: *Cell) -> mut u256 {
+    unsafe { mut (*pointer).word }
+}
+
+pub contract Memory {
+    recv MemoryMsg {
+        Bump { by } -> u256 {
+            let pointer = ptr::alloc<Cell>()
+            let word = mut word_of(pointer)
+            word = 1
+            add(mut word, by)
+            word
+        }
+    }
+}

@@ -171,6 +171,9 @@ enum Carrier {
     Place,
     /// As the value there. The body returns the value a `mut` access leaves.
     Value,
+    /// As the address of the value in memory, which the body reads and
+    /// writes: an access through a pointer into memory.
+    Memory,
     /// Not at all: the target's root object holds no data.
     Erased,
 }
@@ -1797,6 +1800,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     }
                     self.module.value_ty(inner)?
                 }
+                (Some(_), Some(Carrier::Memory)) => "UInt256".to_string(),
                 _ => self.lean_ty(value.ty)?,
             };
             params.push((param, format!("v{index}"), ty));
@@ -1873,6 +1877,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 && SemanticInstance::new(db, callee.key).is_projection(db)
                 && let Some((CapabilityKind::Mut, inner)) = self.ty(*result).as_capability(db)
                 && !self.granted_in_state(*result, &NDataPath::empty())
+                && self.carrier(*result).ok() != Some(Carrier::Memory)
             {
                 let ty = self.module.value_ty(inner)?;
                 writeln!(state, "  let mut {} : {ty} := default", value_name(*result)).unwrap();
@@ -1937,7 +1942,8 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut direct = returned.is_empty();
         for (value, resume) in &yields {
             let ty = self.ty(*value);
-            let place = self.is_access(ty) && self.carrier(*value)? == Carrier::Place;
+            let place = self.is_access(ty)
+                && matches!(self.carrier(*value)?, Carrier::Place | Carrier::Memory);
             let read_only = !matches!(ty.as_capability(db), Some((CapabilityKind::Mut, _)));
             direct &= (read_only || place) && self.slide_is_empty(*resume);
         }
@@ -2020,8 +2026,12 @@ impl<'db> BodyExporter<'_, 'db> {
             });
         if let Some(yielded) = yielded {
             let ty = self.ty(yielded);
-            if self.is_access(ty) && self.carrier(yielded)? == Carrier::Place {
-                return Ok("Place".to_string());
+            if self.is_access(ty) {
+                match self.carrier(yielded)? {
+                    Carrier::Place => return Ok("Place".to_string()),
+                    Carrier::Memory => return Ok("UInt256".to_string()),
+                    _ => {}
+                }
             }
             let inner = ty.as_capability(self.module.db).map_or(ty, |(_, ty)| ty);
             return self.module.value_ty(inner);
@@ -2344,7 +2354,8 @@ impl<'db> BodyExporter<'_, 'db> {
             NTerminatorKind::Yield { value, resume } => {
                 let db = self.module.db;
                 let ty = self.ty(value.value);
-                let place = self.is_access(ty) && self.carrier(value.value)? == Carrier::Place;
+                let place = self.is_access(ty)
+                    && matches!(self.carrier(value.value)?, Carrier::Place | Carrier::Memory);
                 let target = (self.is_access(ty) && !place)
                     .then(|| self.carrier_value(value.value))
                     .transpose()?;
@@ -2468,7 +2479,10 @@ impl<'db> BodyExporter<'_, 'db> {
                     // object reaches no data.
                     NExpr::Forward { .. } | NExpr::MakeView { .. } | NExpr::Borrow { .. }
                         if self.is_access(self.ty(*result))
-                            && self.carrier(*result)? != Carrier::Place =>
+                            && !matches!(
+                                self.carrier(*result)?,
+                                Carrier::Place | Carrier::Memory
+                            ) =>
                     {
                         None
                     }
@@ -2593,9 +2607,16 @@ impl<'db> BodyExporter<'_, 'db> {
                         Some(
                             match (self.target(place)?, self.is_access(self.ty(*result))) {
                                 (Target::Place(lean, _), true) => format!("let {name} := {lean}"),
+                                (Target::Memory(address), true) => {
+                                    format!("let {name} := {address}")
+                                }
                                 // A view of a snapshot type is the value now there.
                                 (Target::Place(lean, lane), false) => {
                                     let load = self.load(place.ty, &lean, lane)?;
+                                    format!("let {name} ← {load}")
+                                }
+                                (Target::Memory(address), false) => {
+                                    let load = self.module.mload('m', place.ty, &address)?;
                                     format!("let {name} ← {load}")
                                 }
                                 // A view of a snapshot type is the value now there.
@@ -3147,6 +3168,11 @@ impl<'db> BodyExporter<'_, 'db> {
                     let target = self.carrier_value(place.value)?;
                     format!("{}\nlet {name} := ()", self.write(&target, "default")?)
                 }
+                Carrier::Memory => format!(
+                    "let {name} ← zeroMem {} (UInt256.ofNat {})",
+                    value_name(place.value),
+                    self.module.size(inner)?
+                ),
                 Carrier::Erased => format!("let {name} := ()"),
             });
         }
@@ -3298,6 +3324,13 @@ impl<'db> BodyExporter<'_, 'db> {
                 let load = self.load(inner, &value_name(operand.value), None)?;
                 Ok((Some(format!("let {name} ← {load}")), name))
             }
+            // An enum has no layout in memory here.
+            Carrier::Memory => {
+                let (_, inner) = ty.as_capability(self.module.db).unwrap();
+                let name = format!("{}_e", value_name(operand.value));
+                let load = self.module.mload('m', inner, &value_name(operand.value))?;
+                Ok((Some(format!("let {name} ← {load}")), name))
+            }
             Carrier::Erased => Err(Unsupported("enum in the root object".to_string())),
         }
     }
@@ -3356,6 +3389,16 @@ impl<'db> BodyExporter<'_, 'db> {
                 carrier
                     .or(entry.then_some(Carrier::Value))
                     .ok_or_else(|| Unsupported("access parameter without a carrier".to_string()))
+            }
+            // An access through a pointer into memory, or what a projection
+            // grants of one, is the address there.
+            CarrierBase::Grant { .. } | CarrierBase::Raw { .. }
+                if in_memory(self.module.db, self.body, value, 16, &|param| {
+                    self.carriers.params.get(param as usize).copied().flatten()
+                        == Some(Carrier::Memory)
+                })? =>
+            {
+                Ok(Carrier::Memory)
             }
             // A grant into contract state is the place the projection
             // returned.
@@ -3563,24 +3606,40 @@ impl<'db> BodyExporter<'_, 'db> {
         })
     }
 
+    /// The value that is the address `place` lies below in memory, if it
+    /// does: a pointer into memory, or an access held as an address.
+    fn memory_base(&self, place: &NPlace<'db>) -> Result<Option<NValueId>, Unsupported> {
+        let db = self.module.db;
+        Ok(match place.base {
+            NPlaceBase::Deref { pointer }
+                if matches!(self.ty(pointer).as_ptr(db), Some((_, AddressSpace::Memory))) =>
+            {
+                Some(pointer)
+            }
+            NPlaceBase::CapabilityTarget { carrier }
+                if self.is_access(self.ty(carrier))
+                    && self.carrier(carrier)? == Carrier::Memory =>
+            {
+                Some(carrier)
+            }
+            _ => None,
+        })
+    }
+
     /// Whether `place` lies in contract state.
     fn in_state(&self, place: &NPlace<'db>) -> Result<bool, Unsupported> {
-        let memory = matches!(place.base, NPlaceBase::Deref { pointer }
-            if matches!(self.ty(pointer).as_ptr(self.module.db), Some((_, AddressSpace::Memory))));
-        Ok(!memory && self.local(place)?.is_none())
+        Ok(self.memory_base(place)?.is_none() && self.local(place)?.is_none())
     }
 
     /// What `place` is in the model: a `Place` in contract state, a value
     /// below a local's variable, or a word in memory.
     fn target(&mut self, place: &NPlace<'db>) -> Result<Target<'db>, Unsupported> {
         let db = self.module.db;
-        if let NPlaceBase::Deref { pointer } = place.base
-            && let Some((_, AddressSpace::Memory)) = self.ty(pointer).as_ptr(db)
-        {
+        if let Some(base) = self.memory_base(place)? {
             // The parts of a value in memory follow one another, so a part
             // lies the sizes of those before it after the value's address.
             let untyped = || Unsupported("untyped place".to_string());
-            let mut address = value_name(pointer);
+            let mut address = value_name(base);
             let mut offset = 0;
             for (len, projection) in place.path.iter().enumerate() {
                 let ty = self
@@ -4012,6 +4071,69 @@ impl<'db> BodyExporter<'_, 'db> {
             format!("def {name} : Place :=\n  .storage (UInt256.ofNat {slot})")
         });
         Ok((place, lane))
+    }
+}
+
+/// Whether the access `value` of `body` reaches memory through a pointer, so
+/// that the model holds it as an address: one below a pointer into memory,
+/// an access parameter held so (`params`), or what a projection grants of
+/// either. `depth` bounds the projections followed.
+fn in_memory<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedBody<'db>,
+    value: NValueId,
+    depth: usize,
+    params: &dyn Fn(u32) -> bool,
+) -> Result<bool, Unsupported> {
+    let Some(target) = body.carrier_target(db, value) else {
+        return Ok(false);
+    };
+    match target.base {
+        CarrierBase::Raw { pointer } => Ok(matches!(
+            body.values[pointer.index()].ty.as_ptr(db),
+            Some((_, AddressSpace::Memory))
+        )),
+        CarrierBase::Param { param } => Ok(params(param)),
+        CarrierBase::Grant { session, component } if component.is_empty() && depth > 0 => {
+            let NValueDefinition::Statement { block, statement } =
+                body.values[session.index()].definition
+            else {
+                return Ok(false);
+            };
+            let NStatementKind::Define {
+                expr: NExpr::Call { callee, args, .. },
+                ..
+            } = &body.blocks[block.index()].statements[statement as usize].kind
+            else {
+                return Ok(false);
+            };
+            let Ok(callee) = normalize_semantic_body(db, SemanticInstance::new(db, callee.key))
+            else {
+                return Ok(false);
+            };
+            let given = |param: u32| {
+                args.get(param as usize).is_some_and(|arg| {
+                    in_memory(db, body, arg.value, depth - 1, params).unwrap_or(false)
+                })
+            };
+            let mut sites = (0, 0);
+            for block in &callee.body.blocks {
+                if let NTerminatorKind::Yield { value, .. } = &block.terminator.kind {
+                    sites.0 += 1;
+                    if in_memory(db, &callee.body, value.value, depth - 1, &given)? {
+                        sites.1 += 1;
+                    }
+                }
+            }
+            match sites {
+                (_, 0) => Ok(false),
+                (all, memory) if all == memory => Ok(true),
+                _ => Err(Unsupported(
+                    "grant in memory at some yields only".to_string(),
+                )),
+            }
+        }
+        _ => Ok(false),
     }
 }
 

@@ -126,6 +126,11 @@ fn immutables() {
 }
 
 #[test]
+fn memory_access() {
+    check("memory_access");
+}
+
+#[test]
 fn projections() {
     check("projections");
 }
