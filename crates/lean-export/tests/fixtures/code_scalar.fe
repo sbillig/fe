@@ -1,0 +1,20 @@
+use std::abi::sol
+
+msg FeCodeScalarMsg {
+    #[selector = sol("get()")]
+    Get -> u256,
+}
+
+pub contract FeCodeScalar {
+    value: u256
+
+    init(initial: u256) uses (mut value) {
+        value = initial
+    }
+
+    recv FeCodeScalarMsg {
+        Get -> u256 uses (value) {
+            value
+        }
+    }
+}
