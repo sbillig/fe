@@ -131,6 +131,7 @@ const PRELUDE: &[&str] = &[
     "truncate",
     "tstore",
     "zeroMem",
+    "stringLiteral",
 ];
 
 /// The types exported code names from Lean and the prelude, which no exported
@@ -2482,8 +2483,30 @@ impl<'db> BodyExporter<'_, 'db> {
                         )
                     }
                     NExpr::Const(SConst::Value(value)) => {
-                        let value = value.value().value(self.module.db);
-                        Some(format!("let {name} := {}", self.module.const_value(value)?))
+                        let db = self.module.db;
+                        Some(match value.value().value(db) {
+                            // A string literal longer than a word is fresh
+                            // memory: its length word, then its bytes padded
+                            // to whole words.
+                            SemConstValue::Scalar {
+                                ty,
+                                value: SemConstScalar::Bytes(bytes),
+                            } if ty.is_core_dyn_string(db) => {
+                                let size = 32 + bytes.len().next_multiple_of(32);
+                                let parts = [
+                                    format!("{name}_p"),
+                                    format!("(UInt256.ofNat {})", bytes.len()),
+                                    format!("(UInt256.ofNat {size})"),
+                                ];
+                                let bytes: Vec<_> = bytes.iter().map(u8::to_string).collect();
+                                format!(
+                                    "let {name}_p ← stringLiteral ⟨#[{}]⟩\nlet {name} := {}",
+                                    bytes.join(", "),
+                                    self.module.aggregate(*ty, &parts)?
+                                )
+                            }
+                            value => format!("let {name} := {}", self.module.const_value(value)?),
+                        })
                     }
                     NExpr::Load { place, .. } => Some(match self.target(place)? {
                         Target::Place(lean, lane) => {
