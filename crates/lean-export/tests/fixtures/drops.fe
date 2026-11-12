@@ -1,0 +1,61 @@
+use core::ops::Drop
+use std::abi::sol
+
+struct Guard {
+    n: u256,
+}
+
+impl Drop for Guard {
+    fn drop(own self) {}
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn take(_ guard: own Guard) -> u256 {
+    guard.n
+}
+
+msg DropsMsg {
+    #[selector = sol("moved(bool)")]
+    Moved { keep: bool } -> u256,
+    #[selector = sol("payload(bool)")]
+    Payload { some: bool } -> u256,
+    #[selector = sol("stored(uint256)")]
+    Stored { n: u256 } -> u256,
+}
+
+pub contract Drops {
+    mut pair: Pair,
+
+    recv DropsMsg {
+        // One path moves the guard: a flag says whether the other destroys
+        // it.
+        Moved { keep } -> u256 {
+            let guard = Guard { n: 1 }
+            if keep {
+                0
+            } else {
+                take(guard)
+            }
+        }
+
+        // A variant's payload is destroyed in a value that is the variant.
+        Payload { some } -> u256 {
+            let guard = if some {
+                Option::Some(Guard { n: 2 })
+            } else {
+                Option::None
+            }
+            guard.is_some() as u256
+        }
+
+        // Nothing destroys the pair a store replaces in contract state.
+        Stored { n } -> u256 uses (mut pair) {
+            pair = Pair { a: n, b: n }
+            pair.a
+        }
+    }
+}

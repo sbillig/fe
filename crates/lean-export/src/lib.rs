@@ -19,9 +19,9 @@ use hir::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BinaryOp, CarrierBase, DropStep, EvalOutcome, FailReason, FieldIndex, NBlockId,
-            NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr, NIndex,
-            NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
+            BinaryOp, CarrierBase, DropFlagPoint, DropStep, EvalOutcome, FailReason, FieldIndex,
+            NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr,
+            NIndex, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
             NSuccessor, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow,
             SConst, SemConstId, SemConstScalar, SemConstValue, SemanticInstance,
             SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key, drop_elaboration,
@@ -412,6 +412,7 @@ impl<'db> Module<'db> {
             never: None,
             yielding: false,
             codecs: Vec::new(),
+            flags: Vec::new(),
             located: Vec::new(),
             entries: 0,
         }
@@ -1842,6 +1843,10 @@ struct BodyExporter<'a, 'db> {
     /// bit offset, the collection codec's `get` and `set`, the entry's type,
     /// and the steps from the entry to the part of it the place names.
     codecs: Vec<(String, String, String, TyId<'db>, Vec<Step>)>,
+    /// The drop flags of values the body destroys: each a mutable variable
+    /// `fN` that says whether the value it tracks is initialized, for one
+    /// that only some paths through the body move.
+    flags: Vec<u32>,
     /// The lines that locate the entries the statement being printed names,
     /// which go before it.
     located: Vec<String>,
@@ -1956,6 +1961,31 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         for out in &self.outs {
             writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
+        }
+        // A value only some paths through the body move is destroyed where
+        // its flag holds, which starts as the body's check has it.
+        if let Some(drops) = drop_elaboration(db, self.body.owner) {
+            for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
+                let ty = match &statement.kind {
+                    NStatementKind::Drop {
+                        target: NDropTarget::Value(value),
+                    } => self.ty(*value),
+                    NStatementKind::Drop {
+                        target: NDropTarget::Place(place),
+                    } => place.ty,
+                    _ => continue,
+                };
+                if ty_has_drop_glue(db, ty) {
+                    let parts = drops.parts(statement.id);
+                    self.flags.extend(parts.iter().flat_map(|part| &part.flags));
+                }
+            }
+            self.flags.sort_unstable();
+            self.flags.dedup();
+            for flag in &self.flags {
+                let initialized = drops.flags[*flag as usize];
+                writeln!(state, "  let mut f{flag} := {initialized}").unwrap();
+            }
         }
         // A call of a projection that grants `mut` access to a local holds
         // what it granted in a mutable variable.
@@ -2101,6 +2131,17 @@ impl<'db> BodyExporter<'_, 'db> {
             )
             .chain(self.sessions.iter().copied().map(value_name))
             .chain(helds)
+            .chain(self.flags.iter().map(|flag| format!("f{flag}")))
+            .collect()
+    }
+
+    /// The lines that set the drop flags that change at `point`.
+    fn flag_updates(&self, point: DropFlagPoint) -> Vec<String> {
+        let drops = drop_elaboration(self.module.db, self.body.owner);
+        let updates = drops.iter().flat_map(|drops| &drops.flag_updates);
+        updates
+            .filter(|update| update.at == point && self.flags.contains(&update.flag))
+            .map(|update| format!("f{} := {}", update.flag, update.initialized))
             .collect()
     }
 
@@ -2214,11 +2255,21 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut printed = Vec::new();
         self.never = None;
         self.yielding = matches!(data.terminator.kind, NTerminatorKind::Yield { .. });
+        let flags = |lines: Vec<String>| -> String {
+            lines.iter().map(|line| format!("{pad}{line}\n")).collect()
+        };
+        let start = flags(self.flag_updates(DropFlagPoint::BlockStart(block)));
+        if !start.is_empty() {
+            printed.push((start, None));
+        }
         for statement in &data.statements {
             let text = self.statement(statement)?;
             let located = std::mem::take(&mut self.located);
             let lines = located.iter().chain(&text).flat_map(|text| text.lines());
-            let text: String = lines.map(|line| format!("{pad}{line}\n")).collect();
+            let mut text: String = lines.map(|line| format!("{pad}{line}\n")).collect();
+            text.push_str(&flags(
+                self.flag_updates(DropFlagPoint::After(statement.id)),
+            ));
             let defined = match statement.kind {
                 NStatementKind::Define { result, .. } => Some(result),
                 _ => None,
@@ -2226,6 +2277,10 @@ impl<'db> BodyExporter<'_, 'db> {
             if !text.is_empty() {
                 printed.push((text, defined));
             }
+        }
+        let end = flags(self.flag_updates(DropFlagPoint::BeforeTerminator(block)));
+        if !end.is_empty() {
+            printed.push((end, None));
         }
         // Nothing is granted after a call that never returns: the yield that
         // follows one names what the path that returns grants elsewhere.
@@ -2317,6 +2372,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 tys.push(self.module.value_ty(place.ty)?);
             }
         }
+        tys.extend(self.flags.iter().map(|_| "Bool".to_string()));
         Ok(tys)
     }
 
@@ -2908,7 +2964,9 @@ impl<'db> BodyExporter<'_, 'db> {
                 let parts = drop_elaboration(db, self.body.owner)
                     .ok_or_else(|| Unsupported("drop in an unchecked body".to_string()))?
                     .parts(statement.id);
-                // The target as a value: a local's, or the value itself.
+                // The target as a value: a local's, the value itself, or the
+                // value read from its place in contract state or in memory.
+                let mut read = None;
                 let whole = match target {
                     NDropTarget::Value(value) => ValueTarget {
                         var: value_name(*value),
@@ -2917,7 +2975,14 @@ impl<'db> BodyExporter<'_, 'db> {
                     },
                     NDropTarget::Place(place) => match self.target(place)? {
                         Target::Value(target) => target,
-                        _ => return Err(Unsupported("drop of contract state".to_string())),
+                        target => {
+                            read = Some((place.ty, target));
+                            ValueTarget {
+                                var: format!("d{}", statement.id.index()),
+                                ty: place.ty,
+                                path: Vec::new(),
+                            }
+                        }
                     },
                 };
                 // Inside `Drop::drop`, destroying `self` whole destroys its
@@ -2943,24 +3008,73 @@ impl<'db> BodyExporter<'_, 'db> {
                     let mut target = ValueTarget {
                         var: whole.var.clone(),
                         ty: whole.ty,
-                        path: whole.path.clone(),
+                        path: Vec::new(),
                     };
-                    for step in &part.path {
-                        let DropStep::Field(field) = step else {
-                            return Err(Unsupported(format!("drop of {step:?}")));
-                        };
-                        target.path.push(Step::Field(usize::from(*field)));
-                    }
-                    if !part.flags.is_empty() {
-                        return Err(Unsupported("drop under a flag".to_string()));
-                    }
                     let mut ty = target.ty;
-                    for &step in &target.path {
+                    // The enum values on the way to the part, and the
+                    // variant each must be for the part to be there.
+                    let mut variants = Vec::new();
+                    let below = part.path.iter().map(|step| match *step {
+                        DropStep::Field(field) => Ok(Step::Field(usize::from(field))),
+                        DropStep::Variant { variant, field } => Ok(Step::Variant {
+                            variant: usize::from(variant),
+                            field: usize::from(field),
+                        }),
+                        DropStep::Index(_) => Err(Unsupported(format!("drop of {step:?}"))),
+                    });
+                    for step in whole.path.iter().copied().map(Ok).chain(below) {
+                        let step = step?;
+                        if let Step::Variant { variant, .. } = step
+                            && target.path.len() >= whole.path.len()
+                        {
+                            variants.push((self.read(&target)?, ty, variant));
+                        }
                         ty = self.module.part(ty, step)?.1;
+                        target.path.push(step);
                     }
                     let value = self.read(&target)?;
                     let field_wise = own_self && in_drop && part.path.is_empty();
-                    self.destroy(&value, ty, field_wise, &mut lines)?;
+                    let mut destroyed = Vec::new();
+                    self.destroy(&value, ty, field_wise, &mut destroyed)?;
+                    // A variant's field is destroyed in a value that is the
+                    // variant.
+                    for (value, ty, variant) in variants.into_iter().rev() {
+                        let all = self.module.variants(ty).unwrap_or_default();
+                        if destroyed.is_empty() || all.len() < 2 {
+                            continue;
+                        }
+                        let (name, fields) = &all[variant];
+                        let rest = if fields.is_empty() { "" } else { " .." };
+                        let value = if self.loops.is_empty() {
+                            value
+                        } else {
+                            format!("(← pure {value})")
+                        };
+                        let lines = indented(&destroyed);
+                        destroyed = vec![format!(
+                            "match {value} with\n| .{name}{rest} =>\n{lines}  pure ()\n| _ => pure ()"
+                        )];
+                    }
+                    // A part some paths moved is destroyed where it was not.
+                    if !part.flags.is_empty() && !destroyed.is_empty() {
+                        let flags: Vec<_> =
+                            part.flags.iter().map(|flag| format!("f{flag}")).collect();
+                        let lines = indented(&destroyed);
+                        destroyed =
+                            vec![format!("if {} then\n{lines}  pure ()", flags.join(" && "))];
+                    }
+                    lines.extend(destroyed);
+                }
+                // A value that needs destroying where it lies is read first.
+                if let Some((ty, place)) = read
+                    && !lines.is_empty()
+                {
+                    let load = match place {
+                        Target::Place(lean, lane) => self.load(ty, &lean, lane)?,
+                        Target::Memory(address) => self.module.mload("m", ty, &address)?,
+                        _ => return Err(Unsupported("drop in calldata".to_string())),
+                    };
+                    lines.insert(0, format!("let {} ← {load}", whole.var));
                 }
                 (!lines.is_empty()).then(|| lines.join("\n"))
             }
@@ -2996,6 +3110,34 @@ impl<'db> BodyExporter<'_, 'db> {
             .map_err(|error| Unsupported(format!("drop: generated call: {error:?}")))?;
             let drop = self.module.instance(key, vec![None].into())?;
             lines.push(format!("let _ ← {drop} {value}"));
+            return Ok(());
+        }
+        // An enum value destroys the fields of the variant it is.
+        if let Some(variants) = self.module.variants(ty) {
+            let mut arms = String::new();
+            let mut others = false;
+            for (variant, fields) in &variants {
+                let mut destroyed = Vec::new();
+                for (field, ty) in fields.iter().enumerate() {
+                    let field = format!("{value}.{variant}_{field}");
+                    self.destroy(&field, *ty, false, &mut destroyed)?;
+                }
+                if destroyed.is_empty() {
+                    others = true;
+                } else {
+                    let destroyed = indented(&destroyed);
+                    write!(arms, "\n| .{variant} .. =>\n{destroyed}  pure ()").unwrap();
+                }
+            }
+            if others {
+                arms.push_str("\n| _ => pure ()");
+            }
+            let value = if self.loops.is_empty() {
+                value.to_string()
+            } else {
+                format!("(← pure {value})")
+            };
+            lines.push(format!("match {value} with{arms}"));
             return Ok(());
         }
         if !matches!(adt, Some(AdtRef::Struct(_))) && !ty.is_tuple(db) {
@@ -4501,6 +4643,12 @@ fn granted_in_memory<'db>(
             "grant in memory at some yields only".to_string(),
         )),
     }
+}
+
+/// The lines of `texts`, each a step further in.
+fn indented(texts: &[String]) -> String {
+    let lines = texts.iter().flat_map(|text| text.lines());
+    lines.map(|line| format!("  {line}\n")).collect()
 }
 
 /// `text` with each run of characters a Lean identifier cannot hold as `_`.

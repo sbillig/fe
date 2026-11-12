@@ -144,3 +144,8 @@ fn projections() {
 fn products() {
     check("products");
 }
+
+#[test]
+fn drops() {
+    check("drops");
+}
