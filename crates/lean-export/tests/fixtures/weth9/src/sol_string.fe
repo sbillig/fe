@@ -1,0 +1,217 @@
+//! A Solidity `string` state variable, as a storage field type.
+//!
+//! A string of fewer than 32 bytes lives in the high bytes of its slot, with
+//! twice its length in the low byte. A longer one stores `2 * len + 1` in the
+//! slot and its bytes in the words from `keccak256(slot)` on, the last one
+//! zero-padded. Like Solidity 0.8, reads and writes revert with `Panic(0x22)`
+//! when the slot's length contradicts its short/long flag, and a write zeroes
+//! the words a previous, longer value left behind.
+//!
+//! ```fe
+//! pub contract Token {
+//!     mut name: SolString,   // `string name;` at slot 0
+//!
+//!     init() uses (mut name) {
+//!         name.store("Wrapped Ether")
+//!     }
+//! }
+//! ```
+//!
+//! Meant to move into std as `std::evm::SolString`, replacing
+//! `SolSlot::read_string`/`write_string`.
+use core::abi::{DynString, store_word}
+use core::marker::{Pinned, Storage}
+use core::num::IntDowncast
+use core::ops::{Location, StateIndex, WrappingAdd}
+use core::ptr::{self, MemSpan}
+use std::evm::{Evm, PANIC_STORAGE_ENCODING, Panic, RawStorage, array_data_slot, revert_error, storage_at}
+
+pub struct SolString {
+    payload: Payload,
+}
+
+/// The words of a long string, from `keccak256(slot)` on; the slot itself
+/// holds the head.
+struct Payload {
+    head: u256,
+}
+
+impl Pinned for Payload {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for Payload {
+    type Key = u256
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ word: u256) -> Location {
+        Location { slot: array_data_slot(root).wrapping_add(word), offset: 0 }
+    }
+}
+
+impl SolString {
+    /// The string whose head is at `slot`, for a layout the compiler does
+    /// not allocate, such as another contract's.
+    ///
+    /// The caller must ensure that nothing the compiler allocates, such as a
+    /// contract field, uses `slot` or the slots its bytes derive.
+    #[raw_place]
+    pub unsafe fn at(_ slot: u256) -> mut? Self uses (storage: mut? RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The length in bytes.
+    pub fn len(self) -> u256 {
+        stored_len(self.payload.head)
+    }
+
+    /// A copy of the string in memory.
+    pub fn load(self) -> DynString {
+        let head = self.payload.head
+        let len = stored_len(head)
+        let size = 32 + word_count(len) * 32
+        let data = ptr::alloc_bytes(size.downcast_saturate())
+        unsafe {
+            store_word(ptr: data, value: len)
+            // Only the `len` data bytes are kept, so the ABI padding is zero.
+            if head & 1 == 0 {
+                if len != 0 {
+                    store_word(ptr: ptr::offset_bytes(data, 32), value: leading_bytes(head, count: len))
+                }
+            } else {
+                var i: u256 = 0
+                while i < word_count(len) {
+                    let word = leading_bytes(self.payload[i], count: len - i * 32)
+                    store_word(ptr: ptr::offset_bytes(data, (32 + i * 32).downcast_unchecked()), value: word)
+                    i += 1
+                }
+            }
+            DynString::from_abi_tail(data, len: len.downcast_unchecked(), size)
+        }
+    }
+
+    /// Replaces the string, zeroing the words a previous, longer value left
+    /// behind.
+    pub fn store(mut self, _ value: DynString) {
+        let payload = value.span()
+        let old = self.payload.head
+        let old_len = stored_len(old)
+        let old_words = if old & 1 == 0 { 0 } else { word_count(old_len) }
+        let len = payload.len() as u256
+        var words: u256 = 0
+        if len < 32 {
+            self.payload.head = payload_word(payload, 0) | (len * 2)
+        } else {
+            self.payload.head = len * 2 + 1
+            words = word_count(len)
+            var i: u256 = 0
+            while i < words {
+                self.payload[i] = payload_word(payload, i * 32)
+                i += 1
+            }
+        }
+        var i = words
+        while i < old_words {
+            self.payload[i] = 0
+            i += 1
+        }
+    }
+
+    /// Empties the string and zeroes its words, like Solidity's `delete`.
+    pub fn clear(mut self) {
+        self.store(DynString::empty())
+    }
+}
+
+// The length a head encodes. Panics like Solidity (0x22) when it contradicts
+// the head's short/long flag.
+fn stored_len(_ head: u256) -> u256 {
+    let long = head & 1 == 1
+    let len = if long { head / 2 } else { (head & 0xff) / 2 }
+    if long == (len < 32) {
+        revert_error(Panic::from(PANIC_STORAGE_ENCODING))
+    }
+    len
+}
+
+fn word_count(_ len: u256) -> u256 {
+    (len + 31) / 32
+}
+
+// The payload word at `offset`, with bytes past the end of `payload` zeroed.
+fn payload_word(_ payload: MemSpan, _ offset: u256) -> u256 {
+    let len = payload.len() as u256
+    if offset >= len {
+        return 0
+    }
+    leading_bytes(payload.word_at(offset), count: len - offset)
+}
+
+// The first `count` bytes of `word`, with the rest zeroed.
+fn leading_bytes(_ word: u256, count: u256) -> u256 {
+    if count >= 32 { word } else { word & !(u256::max() >> (count * 8)) }
+}
+
+// Slot contents as Solidity 0.8 leaves them for `string s;` at slot 0 after
+// `s = "Wrapped Ether"`, a 33-byte string, and so on.
+const WRAPPED_ETHER: u256 = 0x577261707065642045746865720000000000000000000000000000000000001a
+const LONG_TEXT: DynString = "abcdefghijklmnopqrstuvwxyz0123456"
+const LONG_WORD_0: u256 = 0x6162636465666768696a6b6c6d6e6f707172737475767778797a303132333435
+const LONG_WORD_1: u256 = 0x3600000000000000000000000000000000000000000000000000000000000000
+
+fn sload(_ slot: u256) -> u256 uses (storage: RawStorage) {
+    unsafe { storage.sload(slot) }
+}
+
+#[test]
+fn short_string_layout() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        unsafe { SolString::at(0) }.store("Wrapped Ether")
+        assert!(sload(0) == WRAPPED_ETHER)
+        assert!(unsafe { SolString::at(0) }.len() == 13)
+        assert!(unsafe { SolString::at(0) }.load() == "Wrapped Ether")
+    }
+}
+
+#[test]
+fn long_string_layout_and_shrink() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        unsafe { SolString::at(0) }.store(LONG_TEXT)
+        assert!(sload(0) == 33 * 2 + 1)
+        assert!(sload(array_data_slot(0)) == LONG_WORD_0)
+        assert!(sload(array_data_slot(0) + 1) == LONG_WORD_1)
+        assert!(unsafe { SolString::at(0) }.load() == LONG_TEXT)
+
+        // Shrinking to a short string zeroes both data words.
+        unsafe { SolString::at(0) }.store("WETH")
+        assert!(sload(0) == 0x5745544800000000000000000000000000000000000000000000000000000008)
+        assert!(sload(array_data_slot(0)) == 0)
+        assert!(sload(array_data_slot(0) + 1) == 0)
+        assert!(unsafe { SolString::at(0) }.load() == "WETH")
+
+        unsafe { SolString::at(0) }.store(LONG_TEXT)
+        unsafe { SolString::at(0) }.clear()
+        assert!(sload(0) == 0)
+        assert!(sload(array_data_slot(0)) == 0)
+        assert!(unsafe { SolString::at(0) }.len() == 0)
+    }
+}
+
+#[test]
+fn exactly_32_bytes_is_long() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        unsafe { SolString::at(0) }.store("abcdefghijklmnopqrstuvwxyz012345")
+        assert!(sload(0) == 65)
+        assert!(sload(array_data_slot(0)) == LONG_WORD_0)
+        assert!(unsafe { SolString::at(0) }.len() == 32)
+    }
+}
+
+// A short head whose length is 32: Solidity reverts with `Panic(0x22)`.
+#[test(should_revert)]
+fn malformed_head_reverts() uses (evm: mut Evm) {
+    unsafe { evm.sstore(slot: 0, value: 64) }
+    with (RawStorage = evm) {
+        let _ = unsafe { SolString::at(0) }.load()
+    }
+}

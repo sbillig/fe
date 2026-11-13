@@ -1,0 +1,170 @@
+// Canonical WETH9 (`gnosis/canonical-weth`, `contracts/WETH9.sol`) written in Fe, with the same
+// storage layout: `name` and `symbol` (Solidity strings) at slots 0 and 1, `decimals` at slot 2,
+// `balanceOf` at slot 3 and `allowance` (a map of maps, so a Solidity nested mapping) at slot 4.
+// Arithmetic is unchecked (`fe.toml`), as in Solidity 0.5.
+use std::abi::{DynString, sol}
+use std::evm::{Call, Ctx, Log, SolSlot, wei}
+use ingot::sol_string::SolString
+
+msg Weth9Msg {
+    #[selector = sol("name()")]
+    Name -> DynString,
+    #[selector = sol("approve(address,uint256)")]
+    Approve { guy: Address, wad: u256 } -> bool,
+    #[selector = sol("totalSupply()")]
+    TotalSupply -> u256,
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { src: Address, dst: Address, wad: u256 } -> bool,
+    #[selector = sol("withdraw(uint256)")]
+    Withdraw { wad: u256 },
+    #[selector = sol("decimals()")]
+    Decimals -> u8,
+    #[selector = sol("balanceOf(address)")]
+    BalanceOf { owner: Address } -> u256,
+    #[selector = sol("symbol()")]
+    Symbol -> DynString,
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { dst: Address, wad: u256 } -> bool,
+    #[selector = sol("deposit()")]
+    Deposit,
+    #[selector = sol("allowance(address,address)")]
+    Allowance { owner: Address, guy: Address } -> u256,
+}
+
+#[event]
+struct Approval {
+    #[indexed]
+    src: Address,
+    #[indexed]
+    guy: Address,
+    wad: u256,
+}
+
+#[event]
+struct Transfer {
+    #[indexed]
+    src: Address,
+    #[indexed]
+    dst: Address,
+    wad: u256,
+}
+
+#[event]
+struct Deposit {
+    #[indexed]
+    dst: Address,
+    wad: u256,
+}
+
+#[event]
+struct Withdrawal {
+    #[indexed]
+    src: Address,
+    wad: u256,
+}
+
+struct Weth9Store {
+    name: SolString,
+    symbol: SolString,
+    // `uint8 decimals;`: written in place, keeping the slot's other bytes, as Solidity does.
+    decimals: SolSlot,
+    balance_of: StorageMap<Address, u256>,
+    allowance: StorageMap<Address, StorageMap<Address, u256>>,
+}
+
+pub contract WETH9 uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    mut store: Weth9Store
+
+    init() uses (mut store) {
+        store.name.store("Wrapped Ether")
+        store.symbol.store("WETH")
+        store.decimals.write(offset: 0, value: 18 as u8)
+    }
+
+    recv Weth9Msg {
+        Name -> DynString uses (store) {
+            store.name.load()
+        }
+
+        Approve { guy, wad } -> bool uses (mut store, ctx, mut log) {
+            let src = ctx.caller()
+            store.allowance[src][guy] = wad
+            log.emit(Approval { src, guy, wad })
+            true
+        }
+
+        TotalSupply -> u256 uses (ctx) {
+            ctx.selfbalance().as_wei()
+        }
+
+        TransferFrom { src, dst, wad } -> bool uses (mut store, ctx, mut log) {
+            transfer_from(src, dst, wad)
+        }
+
+        Withdraw { wad } uses (mut store, ctx, mut call, mut log) {
+            let src = ctx.caller()
+            assert!(store.balance_of[src] >= wad)
+            store.balance_of[src] -= wad
+            // `msg.sender.transfer(wad)`: the callee gets the 2300-gas stipend, and a failed
+            // transfer reverts.
+            let gas: u256 = if wad == 0 { 2300 } else { 0 }
+            assert!(call.send_value(addr: src, gas, value: wei(wad)).success())
+            log.emit(Withdrawal { src, wad })
+        }
+
+        Decimals -> u8 uses (store) {
+            store.decimals.read<u8>(offset: 0)
+        }
+
+        BalanceOf { owner } -> u256 uses (store) {
+            store.balance_of[owner]
+        }
+
+        Symbol -> DynString uses (store) {
+            store.symbol.load()
+        }
+
+        Transfer { dst, wad } -> bool uses (mut store, ctx, mut log) {
+            transfer_from(src: ctx.caller(), dst, wad)
+        }
+
+        #[payable]
+        Deposit uses (mut store, ctx, mut log) {
+            deposit()
+        }
+
+        Allowance { owner, guy } -> u256 uses (store) {
+            store.allowance[owner][guy]
+        }
+    }
+
+    // `function() external payable { deposit(); }`
+    recv {
+        #[payable]
+        _ uses (mut store, ctx, mut log) {
+            deposit()
+        }
+    }
+}
+
+fn deposit() uses (store: mut Weth9Store, ctx: Ctx, log: mut Log) {
+    let dst = ctx.caller()
+    let wad = ctx.value().as_wei()
+    store.balance_of[dst] += wad
+    log.emit(Deposit { dst, wad })
+}
+
+fn transfer_from(src: Address, dst: Address, wad: u256) -> bool
+    uses (store: mut Weth9Store, ctx: Ctx, log: mut Log)
+{
+    assert!(store.balance_of[src] >= wad)
+    let sender = ctx.caller()
+    if src != sender && store.allowance[src][sender] != u256::max() {
+        assert!(store.allowance[src][sender] >= wad)
+        store.allowance[src][sender] -= wad
+    }
+    store.balance_of[src] -= wad
+    store.balance_of[dst] += wad
+    log.emit(Transfer { src, dst, wad })
+    true
+}

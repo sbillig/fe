@@ -1,0 +1,5 @@
+[ingot]
+name = "weth9"
+version = "0.1.0"
+# Solidity 0.5 arithmetic: `+` and `-` wrap.
+arithmetic = "unchecked"

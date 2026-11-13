@@ -1,0 +1,133 @@
+use core::abi::store_word
+use core::ptr
+use std::abi::DynString
+use std::evm::{Address, Call, Ctx, Evm, wei}
+use ingot::{WETH9, Weth9Msg}
+
+const GAS: u256 = 1000000
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+msg HolderMsg {
+    #[selector = 0x01]
+    Cycle { weth: Address, wad: u256 } -> u256,
+}
+
+// Deposits `wad` and withdraws it again; its payable fallback takes the ether back.
+pub contract Holder uses (ctx: Ctx, call: mut Call) {
+    #[payable]
+    init() {}
+
+    recv HolderMsg {
+        Cycle { weth, wad } -> u256 uses (ctx, mut call) {
+            call.call(addr: weth, gas: GAS, value: wei(wad), message: Weth9Msg::Deposit {})
+            call.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Withdraw { wad })
+            ctx.selfbalance().as_wei()
+        }
+    }
+
+    recv {
+        #[payable]
+        _ {}
+    }
+}
+
+fn deploy() -> Address uses (evm: mut Evm) {
+    evm.create2<WETH9>(value: Wei::zero(), args: (), salt: 0)
+}
+
+fn balance_of(_ weth: Address, _ owner: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::BalanceOf { owner })
+}
+
+#[test]
+fn metadata() uses (evm: mut Evm) {
+    let weth = deploy()
+    let name: DynString = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Name {})
+    let symbol: DynString = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Symbol {})
+    let decimals: u8 = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Decimals {})
+    assert!(name == "Wrapped Ether")
+    assert!(symbol == "WETH")
+    assert!(decimals == 18)
+}
+
+#[test(balance = 1000)]
+fn deposit_and_fallback_credit_the_caller() uses (evm: mut Evm) {
+    let weth = deploy()
+    let me = evm.address()
+    evm.call(addr: weth, gas: GAS, value: wei(300), message: Weth9Msg::Deposit {})
+    assert!(balance_of(weth, me) == 300)
+
+    // Empty calldata and an unknown selector both reach the payable fallback.
+    assert!(evm.send_value(addr: weth, gas: GAS, value: wei(200)).success())
+    let unknown = ptr::alloc_bytes(4)
+    unsafe { store_word(ptr: unknown, value: 0xdeadbeef << 224) }
+    let args = unsafe { ptr::MemSpan::from_raw_parts(ptr: unknown, len: 4) }
+    assert!(evm.try_call_raw(addr: weth, gas: GAS, value: wei(100), args).success())
+
+    assert!(balance_of(weth, me) == 600)
+    let supply: u256 = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::TotalSupply {})
+    assert!(supply == 600)
+}
+
+#[test(balance = 1000)]
+fn withdraw_returns_the_ether() uses (evm: mut Evm) {
+    let weth = deploy()
+    let holder = evm.create2<Holder>(value: wei(500), args: (), salt: 0)
+    let held: u256 = evm.call(addr: holder, gas: GAS, value: Wei::zero(), message: HolderMsg::Cycle { weth, wad: 300 })
+    assert!(held == 500)
+    assert!(balance_of(weth, holder) == 0)
+    assert!(evm.balance(weth).as_wei() == 0)
+}
+
+// The test contract takes no ether, so the transfer fails and `withdraw` reverts.
+#[test(should_revert, balance = 1000)]
+fn withdraw_to_a_refusing_caller_reverts() uses (evm: mut Evm) {
+    let weth = deploy()
+    evm.call(addr: weth, gas: GAS, value: wei(500), message: Weth9Msg::Deposit {})
+    evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Withdraw { wad: 200 })
+}
+
+#[test(should_revert, balance = 1000)]
+fn withdraw_more_than_the_balance_reverts() uses (evm: mut Evm) {
+    let weth = deploy()
+    evm.call(addr: weth, gas: GAS, value: wei(500), message: Weth9Msg::Deposit {})
+    evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Withdraw { wad: 501 })
+}
+
+#[test(should_revert, balance = 1000)]
+fn non_payable_entry_rejects_value() uses (evm: mut Evm) {
+    let weth = deploy()
+    evm.call(addr: weth, gas: GAS, value: wei(1), message: Weth9Msg::TotalSupply {})
+}
+
+#[test(balance = 1000)]
+fn transfer_and_allowances() uses (evm: mut Evm) {
+    let weth = deploy()
+    let me = evm.address()
+    let other = Address::new(0xbeef)
+    evm.call(addr: weth, gas: GAS, value: wei(500), message: Weth9Msg::Deposit {})
+
+    let ok: bool = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Transfer { dst: other, wad: 100 })
+    assert!(ok)
+    assert!(balance_of(weth, me) == 400)
+    assert!(balance_of(weth, other) == 100)
+
+    // Moving one's own tokens needs no allowance.
+    let ok: bool = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::TransferFrom { src: me, dst: other, wad: 50 })
+    assert!(ok)
+    assert!(balance_of(weth, other) == 150)
+
+    let ok: bool = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Approve { guy: other, wad: MAX })
+    assert!(ok)
+    let allowance: u256 = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Allowance { owner: me, guy: other })
+    assert!(allowance == MAX)
+}
+
+#[test(should_revert, balance = 1000)]
+fn transfer_from_without_allowance_reverts() uses (evm: mut Evm) {
+    let weth = deploy()
+    let other = Address::new(0xbeef)
+    evm.call(addr: weth, gas: GAS, value: wei(500), message: Weth9Msg::Deposit {})
+    let _: bool = evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::Transfer { dst: other, wad: 100 })
+    evm.call(addr: weth, gas: GAS, value: Wei::zero(), message: Weth9Msg::TransferFrom { src: other, dst: evm.address(), wad: 1 })
+}
