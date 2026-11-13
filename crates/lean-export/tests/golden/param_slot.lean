@@ -12,13 +12,13 @@ def make (v0 : UInt256) : FeM Cursor := do
   let v3 := (Cursor.mk v1 v2)
   return v3
 
-def «end» (v0 : Cursor) : FeM UInt256 := do
+def Cursor_end (v0 : Cursor) : FeM UInt256 := do
   let v1 := v0.pos
   let v2 := v0.base
   let v3 ← checkedAdd v1 v2
   return v3
 
-def advance (v0 : Cursor) (v1 : UInt256) : FeM (UInt256 × Cursor) := do
+def Cursor_advance (v0 : Cursor) (v1 : UInt256) : FeM (UInt256 × Cursor) := do
   let mut v0 := v0
   let v2 := v0.pos
   let v3 := v2
@@ -29,13 +29,13 @@ def advance (v0 : Cursor) (v1 : UInt256) : FeM (UInt256 × Cursor) := do
   return (v3, v0)
 
 def c_end (v0 : Cursor) : FeM UInt256 := do
-  let v1 ← «end» v0
+  let v1 ← Cursor_end v0
   return v1
 
 def consume (r0 : Cursor) (v0 : UInt256) : FeM UInt256 := do
   let mut r0 := r0
   let mut r1 : Cursor := default
-  let (v2, v2_0) ← advance r0 v0
+  let (v2, v2_0) ← Cursor_advance r0 v0
   r0 := v2_0
   let v3 ← make v0
   r1 := v3
@@ -58,7 +58,7 @@ def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : Cursor := default
   let v1 ← make v0
   r0 := v1
-  let v3 ← «end» r0
+  let v3 ← Cursor_end r0
   let v4 := (UInt256.ofNat 1)
   let v5 ← make v4
   let v6 ← consume v5 v0

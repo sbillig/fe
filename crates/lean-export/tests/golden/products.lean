@@ -70,7 +70,7 @@ def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
   let v8 := r1
   return v8
 
-def «at» (v0 : Place) : FeM (UInt256 × Place) := do
+def Pair_at (v0 : Place) : FeM (UInt256 × Place) := do
   let v1 ← load (v0.field Layout.Pair 0)
   let v2 := (v0.field Layout.Pair 1)
   let v3 := (v1, v2)
@@ -88,7 +88,7 @@ def bump (v0 : UInt256) (v1 : Place) : FeM UInt256 := do
   let v9 ← load v5
   return v9
 
-def at_1 (v0 : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256) → FeM Pair)) := do
+def Pair_at_1 (v0 : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256) → FeM Pair)) := do
   let mut v0 := v0
   let v1 := v0.a
   let v3 := (v1, v0.b)
@@ -113,7 +113,7 @@ def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
   let mut r1 : Pair := default
   let mut v12 : (UInt256 × UInt256) := default
   let v1 := Field.pair
-  let v2 ← «at» v1
+  let v2 ← Pair_at v1
   let v3 := v2.fst
   let v4 := v2.snd
   let v5 := v4
@@ -123,7 +123,7 @@ def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
   let v9 := (Pair.mk v0 v8)
   let v10 := v9
   r1 := v10
-  let (v12_g, v12_k) ← at_1 r1
+  let (v12_g, v12_k) ← Pair_at_1 r1
   v12 := v12_g
   let v13 := v12.fst
   let (v16, v16_0) ← bump_1 v13 v12.snd
@@ -133,7 +133,7 @@ def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
   let v17 ← checkedAdd v7 v16
   return v17
 
-def maybe (v0 : Place) (v1 : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 → FeM Unit)) := do
+def Small_maybe (v0 : Place) (v1 : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 → FeM Unit)) := do
   let mut h2 : UInt256 := default
   if v1 then
     h2 := (← loadIntAt (.u 8) (v0.field Layout.Small 1) ⟨1, 1, true⟩)
@@ -154,7 +154,7 @@ def maybe (v0 : Place) (v1 : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 → Fe
 def recv0_arm2 (v0 : Bool) : FeM UInt256 := do
   let mut v2 : Option_mut_u8 := default
   let v1 := Field.small
-  let (v2_g, v2_k) ← maybe v1 v0
+  let (v2_g, v2_k) ← Small_maybe v1 v0
   v2 := v2_g
   let v3 := v2
   let b3 : Option_mut_u8 → FeM UInt256 := fun v2 => do

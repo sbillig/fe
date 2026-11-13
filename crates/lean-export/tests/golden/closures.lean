@@ -1,25 +1,25 @@
-def start_u256_2 (v0 : (Vector UInt256 2)) : FeM UInt256 := do
+def array_start_u256_2 (v0 : (Vector UInt256 2)) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 0)
   return v1
 
-def has_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM Bool := do
+def array_has_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM Bool := do
   let v2 := v1
   let v3 := (UInt256.ofNat 2)
   let v4 := decide (v2.toNat < v3.toNat)
   return v4
 
-def at_ref_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
+def array_at_ref_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
   checkIndex v1 2
   return v0[v1.toNat]!
 
-def wrapping_add (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def usize_wrapping_add (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v2 := v0 + v1
   return v2
 
-def next_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
+def array_next_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
   let v2 := (UInt256.ofNat 1)
   let v3 := v1
-  let v4 ← wrapping_add v3 v2
+  let v4 ← usize_wrapping_add v3 v2
   return v4
 
 def Field.store : Place :=
@@ -47,19 +47,19 @@ def closure (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt2
   let v6 ← checkedAdd v1 v5
   return (v6, v0)
 
-def fold_u256_2___u256_own_u256_u256_u256 (v0 : (Vector UInt256 2)) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
+def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (v0 : (Vector UInt256 2)) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
   let mut r0 : UInt256 := default
   let mut v2 := v2
   let v4 := v1
   r0 := v4
-  let v5 ← start_u256_2 v0
+  let v5 ← array_start_u256_2 v0
   let v6 := v5
   let rec b1 (r0 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM (UInt256 × UInt256) := do
     let mut r0 := r0
     let mut v2 := v2
-    let v7 ← has_u256_2 v0 v3
+    let v7 ← array_has_u256_2 v0 v3
     if v7 then
-      let v8 ← at_ref_u256_2 v0 v3
+      let v8 ← array_at_ref_u256_2 v0 v3
       let v10 := r0
       let v11 := v10
       let v12 := v8
@@ -68,7 +68,7 @@ def fold_u256_2___u256_own_u256_u256_u256 (v0 : (Vector UInt256 2)) (v1 : UInt25
       let v14 := v13
       r0 := v14
       let v15 := ()
-      let v16 ← next_u256_2 v0 v3
+      let v16 ← array_next_u256_2 v0 v3
       let v17 := v16
       b1 r0 v2 v17
     else
@@ -87,7 +87,7 @@ def recv0_arm0 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
   let v6 := v2
   let v7 := v6
   r1 := v7
-  let (v10, v10_0) ← fold_u256_2___u256_own_u256_u256_u256 r0 v5 r1
+  let (v10, v10_0) ← fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 r0 v5 r1
   r1 := v10_0
   return v10
 
@@ -106,19 +106,19 @@ def closure_1 (v0 : Unit) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × Unit) 
   let v5 ← checkedAdd v1 v4
   return (v5, v0)
 
-def fold_u256_2___u256_own_u256_u256_u256_1 (v0 : (Vector UInt256 2)) (v1 : UInt256) (v2 : Unit) : FeM (UInt256 × Unit) := do
+def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (v0 : (Vector UInt256 2)) (v1 : UInt256) (v2 : Unit) : FeM (UInt256 × Unit) := do
   let mut r1 : UInt256 := default
   let mut v2 := v2
   let v4 := v1
   r1 := v4
-  let v5 ← start_u256_2 v0
+  let v5 ← array_start_u256_2 v0
   let v6 := v5
   let rec b1 (r1 : UInt256) (v2 : Unit) (v3 : UInt256) : FeM (UInt256 × Unit) := do
     let mut r1 := r1
     let mut v2 := v2
-    let v7 ← has_u256_2 v0 v3
+    let v7 ← array_has_u256_2 v0 v3
     if v7 then
-      let v8 ← at_ref_u256_2 v0 v3
+      let v8 ← array_at_ref_u256_2 v0 v3
       let v10 := r1
       let v11 := v10
       let v12 := v8
@@ -128,7 +128,7 @@ def fold_u256_2___u256_own_u256_u256_u256_1 (v0 : (Vector UInt256 2)) (v1 : UInt
       let v15 := v14
       r1 := v15
       let v16 := ()
-      let v17 ← next_u256_2 v0 v3
+      let v17 ← array_next_u256_2 v0 v3
       let v18 := v17
       b1 r1 v2 v18
     else
@@ -147,7 +147,7 @@ def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v5 := ()
   let v6 := v5
   r2 := v6
-  let (v9, v9_0) ← fold_u256_2___u256_own_u256_u256_u256_1 r1 v4 r2
+  let (v9, v9_0) ← fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 r1 v4 r2
   r2 := v9_0
   return v9
 

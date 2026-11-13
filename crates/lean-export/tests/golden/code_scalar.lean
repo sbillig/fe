@@ -1,4 +1,4 @@
-export Lib (CallData MemSlice_u8.mk SELECTOR_SIZE decode_payload_Sol_u256_SolDecoder_MemSlice_u8 decoder_new input len_CallData return_value_Sol_u256 size tail validate_runtime_head)
+export Lib (CallData Evm_input Evm_return_value_Sol_u256 MemSlice_u8.mk Sol_SELECTOR_SIZE Sol_decoder_new Sol_validate_runtime_head len_CallData tuple_decode_payload_Sol_u256_SolDecoder_MemSlice_u8)
 
 structure Get where
 deriving Inhabited
@@ -15,30 +15,30 @@ def recv0_arm0 : FeM UInt256 := do
   let v0 := e0
   return v0
 
-def HEAD_SIZE : FeM UInt256 := do
+def Get_HEAD_SIZE : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   return v0
 
-def decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
+def Get_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
   let v2 := (Get.mk)
   return v2
 
 def decode_from_prechecked_head_Get_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Get := do
-  let v3 ← decode_from_CallData v0 v1
+  let v3 ← Get_decode_from_CallData v0 v1
   return v3
 
 def decode_runtime_args_Evm_Sol_Get : FeM Get := do
   let mut r0 : CallData := default
-  let v2 ← input
+  let v2 ← Evm_input
   let v3 := v2
   r0 := v3
-  let v4 ← SELECTOR_SIZE
+  let v4 ← Sol_SELECTOR_SIZE
   let v5 := v4
   let v6 := r0
   let v7 ← len_CallData v6
   let v8 := v7
-  let v9 ← HEAD_SIZE
-  let v10 ← validate_runtime_head v8 v5 v9
+  let v9 ← Get_HEAD_SIZE
+  let v10 ← Sol_validate_runtime_head v8 v5 v9
   let v11 := r0
   let v12 ← decode_from_prechecked_head_Get_Sol_CallData v11 v5 v8
   return v12
@@ -47,7 +47,7 @@ def recv0_arm0_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Get
   let result ← recv0_arm0
-  return_value_Sol_u256 result
+  Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
   let size ← calldatasize
@@ -65,8 +65,8 @@ def init_entry (args : ByteArray) : FeM ByteArray := do
   let size := UInt256.ofNat args.size
   let tail ← alloc size
   mstoreBytes tail args
-  let decoder ← decoder_new
-  let (decoded, _) ← decode_payload_Sol_u256_SolDecoder_MemSlice_u8 decoder (MemSlice_u8.mk tail size)
+  let decoder ← Sol_decoder_new
+  let (decoded, _) ← tuple_decode_payload_Sol_u256_SolDecoder_MemSlice_u8 decoder (MemSlice_u8.mk tail size)
   let words ← alloc (UInt256.ofNat 32)
   let (_, e0) ← init decoded default
   mstore (words + UInt256.ofNat (0 * 32)) e0

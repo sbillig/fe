@@ -2,11 +2,11 @@ structure Wei where
   amount : UInt256
 deriving Inhabited
 
-def to_word (v0 : UInt256) : FeM UInt256 := do
+def i256_to_word (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
   return v1
 
-def IS_SIGNED : FeM Bool := do
+def i8_IS_SIGNED : FeM Bool := do
   let v0 := true
   return v0
 
@@ -14,7 +14,7 @@ def U8_MASK : FeM UInt256 := do
   let v0 := (UInt256.ofNat 255)
   return v0
 
-def MASK : FeM UInt256 := do
+def i8_MASK : FeM UInt256 := do
   let v0 ← U8_MASK
   return v0
 
@@ -22,7 +22,7 @@ def I8_SIGN_BIT : FeM UInt256 := do
   let v0 := (UInt256.ofNat 128)
   return v0
 
-def SIGN_BIT : FeM UInt256 := do
+def i8_SIGN_BIT : FeM UInt256 := do
   let v0 ← I8_SIGN_BIT
   return v0
 
@@ -52,46 +52,50 @@ def sign_extend (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
     let v17 := v7
     b3 v17
 
-def from_word (v0 : UInt256) : FeM UInt256 := do
+def i8_from_word (v0 : UInt256) : FeM UInt256 := do
   let v1 := IntTy.cast (.u 256) (.i 8) v0
   return v1
 
 def downcast_truncate_i256_i8 (v0 : UInt256) : FeM UInt256 := do
-  let v2 ← to_word v0
+  let v2 ← i256_to_word v0
   let v3 := v2
-  let v4 ← IS_SIGNED
+  let v4 ← i8_IS_SIGNED
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
-    let v5 ← MASK
-    let v6 ← SIGN_BIT
+    let v5 ← i8_MASK
+    let v6 ← i8_SIGN_BIT
     let v7 ← sign_extend v3 v5 v6
-    let v8 ← from_word v7
+    let v8 ← i8_from_word v7
     let v9 := v8
     b3 v9
   else
-    let v10 ← MASK
+    let v10 ← i8_MASK
     let v11 := v3 &&& v10
-    let v12 ← from_word v11
+    let v12 ← i8_from_word v11
     let v13 := v12
     b3 v13
 
-def from_word_1 (v0 : UInt256) : FeM UInt256 := do
+def u256_to_word (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  return v1
+
+def i256_from_word (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
   return v1
 
 def downcast_unchecked_u256_i256 (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← to_word v0
+  let v1 ← u256_to_word v0
   let v2 := v1
-  let v3 ← from_word_1 v2
+  let v3 ← i256_from_word v2
   return v3
 
-def address : FeM UInt256 := do
+def Evm_address : FeM UInt256 := do
   let v1 ← selfAddress
   let v2 := v1
   return v2
 
-def word (v0 : UInt256) : FeM UInt256 := do
+def Address_word (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
   return v1
 
@@ -100,21 +104,21 @@ def wei (v0 : UInt256) : FeM Wei := do
   let v2 := (Wei.mk v1)
   return v2
 
-def value : FeM Wei := do
+def Evm_value : FeM Wei := do
   let v1 ← callvalue
   let v2 ← wei v1
   return v2
 
-def as_wei (v0 : Wei) : FeM UInt256 := do
+def Wei_as_wei (v0 : Wei) : FeM UInt256 := do
   let v1 := v0.amount
   return v1
 
-def origin_1 : FeM UInt256 := do
+def Evm_origin : FeM UInt256 := do
   let v1 ← origin
   let v2 := v1
   return v2
 
-def block_number : FeM UInt256 := do
+def Evm_block_number : FeM UInt256 := do
   let v1 ← blockNumber
   return v1
 
@@ -184,21 +188,21 @@ def recv0_arm3 : FeM UInt256 := do
   let mut r1 : UInt256 := default
   let mut r2 : Wei := default
   let mut r3 : UInt256 := default
-  let v1 ← address
+  let v1 ← Evm_address
   r1 := v1
   let v2 := r1
-  let v3 ← word v2
-  let v5 ← value
+  let v3 ← Address_word v2
+  let v5 ← Evm_value
   r2 := v5
   let v6 := r2
-  let v7 ← as_wei v6
+  let v7 ← Wei_as_wei v6
   let v8 := v3 ^^^ v7
-  let v10 ← origin_1
+  let v10 ← Evm_origin
   r3 := v10
   let v11 := r3
-  let v12 ← word v11
+  let v12 ← Address_word v11
   let v13 := v8 ^^^ v12
-  let v15 ← block_number
+  let v15 ← Evm_block_number
   let v16 := v13 ^^^ v15
   return v16
 

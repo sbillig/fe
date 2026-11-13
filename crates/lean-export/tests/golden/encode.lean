@@ -9,22 +9,22 @@ structure AbiFrame where
   len : UInt256
 deriving Inhabited
 
-def HEAD_SIZE : FeM UInt256 := do
+def u256_HEAD_SIZE : FeM UInt256 := do
   let v0 := (UInt256.ofNat 32)
   return v0
 
 def payload_size_u256 (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← HEAD_SIZE
+  let v1 ← u256_HEAD_SIZE
   return v1
 
-def IS_DYNAMIC : FeM Bool := do
+def u256_IS_DYNAMIC : FeM Bool := do
   let v0 := false
   return v0
 
 def abi_field_size_u256 (v0 : UInt256) : FeM UInt256 := do
   let v1 ← payload_size_u256 v0
   let v2 := v1
-  let v3 ← IS_DYNAMIC
+  let v3 ← u256_IS_DYNAMIC
   if v3 then
     let v4 := (UInt256.ofNat 32)
     let v5 ← checkedAdd v4 v2
@@ -38,7 +38,7 @@ def abi_single_root_size_u256 (v0 : UInt256) : FeM UInt256 := do
   let v1 ← abi_field_size_u256 v0
   return v1
 
-def max : FeM UInt256 := do
+def usize_max : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   let v1 := ~~~v0
   return v1
@@ -53,7 +53,7 @@ def word_to_usize (v0 : UInt256) : FeM UInt256 := do
 
 def allocation_len (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
-  let v2 ← max
+  let v2 ← usize_max
   let v3 := v2
   let v4 := decide (v3.toNat < v1.toNat)
   if v4 then
@@ -66,26 +66,30 @@ def allocation_len (v0 : UInt256) : FeM UInt256 := do
     let v9 ← word_to_usize v0
     return v9
 
-def max_1 : FeM UInt256 := do
+def u64_max : FeM UInt256 := do
   let v0 := (UInt256.ofNat 18446744073709551615)
   return v0
 
-def to_word (v0 : UInt256) : FeM UInt256 := do
+def u64_to_word (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
   let v2 := v1
   return v2
 
-def IS_SIGNED : FeM Bool := do
+def usize_IS_SIGNED : FeM Bool := do
   let v0 := false
   return v0
 
-def MASK : FeM UInt256 := do
+def u64_IS_SIGNED : FeM Bool := do
+  let v0 := false
+  return v0
+
+def usize_MASK : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   let v1 := ~~~v0
   let v2 := v1
   return v2
 
-def from_word (v0 : UInt256) : FeM UInt256 := do
+def usize_from_word (v0 : UInt256) : FeM UInt256 := do
   let v1 := v0
   return v1
 
@@ -93,7 +97,7 @@ def I256_SIGN_BIT : FeM UInt256 := do
   let v0 := (UInt256.ofNat 57896044618658097711785492504343953926634992332820282019728792003956564819968)
   return v0
 
-def SIGN_BIT : FeM UInt256 := do
+def usize_SIGN_BIT : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   return v0
 
@@ -125,9 +129,9 @@ def sign_extend (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
 
 def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : UInt256 := default
-  let v8 ← to_word v0
+  let v8 ← u64_to_word v0
   let v9 := v8
-  let v10 ← IS_SIGNED
+  let v10 ← usize_IS_SIGNED
   let v11 := !v10
   let b3 : UInt256 → UInt256 → FeM UInt256 := fun r0 v1 => do
     let mut r0 := r0
@@ -135,26 +139,26 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
   if v11 then
     let v12 := v9
     r0 := v12
-    let v13 ← IS_SIGNED
+    let v13 ← u64_IS_SIGNED
     let b6 : UInt256 → FeM UInt256 := fun r0 => do
       let mut r0 := r0
       let v24 := r0
       let v25 := v24
-      let v26 ← MASK
+      let v26 ← usize_MASK
       let v27 := decide (v26.toNat < v25.toNat)
       let b10 : UInt256 → UInt256 → FeM UInt256 := fun r0 v2 => do
         let mut r0 := r0
         let v35 := v2
         b3 r0 v35
       if v27 then
-        let v28 ← MASK
-        let v29 ← from_word v28
+        let v28 ← usize_MASK
+        let v29 ← usize_from_word v28
         let v30 := v29
         b10 r0 v30
       else
         let v31 := r0
         let v32 := v31
-        let v33 ← from_word v32
+        let v33 ← usize_from_word v32
         let v34 := v33
         b10 r0 v34
     let b5 : UInt256 → FeM UInt256 := fun r0 => do
@@ -179,12 +183,12 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
     else
       b5 r0
   else
-    let v36 ← SIGN_BIT
-    let v37 ← MASK
-    let v38 ← SIGN_BIT
+    let v36 ← usize_SIGN_BIT
+    let v37 ← usize_MASK
+    let v38 ← usize_SIGN_BIT
     let v39 ← sign_extend v36 v37 v38
     let v40 := v39
-    let v41 ← SIGN_BIT
+    let v41 ← usize_SIGN_BIT
     let v42 := (UInt256.ofNat 1)
     let v43 ← checkedSub v41 v42
     let v44 := v43
@@ -192,7 +196,7 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
     let v46 := v45
     let v47 := v44
     let v48 := v47
-    let v49 ← IS_SIGNED
+    let v49 ← u64_IS_SIGNED
     let b13 : UInt256 → UInt256 → FeM UInt256 := fun r0 v3 => do
       let mut r0 := r0
       let v77 := v3
@@ -206,7 +210,7 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
         let v61 := v4
         b13 r0 v61
       if v52 then
-        let v53 ← from_word v40
+        let v53 ← usize_from_word v40
         let v54 := v53
         b16 r0 v54
       else
@@ -216,11 +220,11 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
           let v60 := v5
           b16 r0 v60
         if v55 then
-          let v56 ← from_word v44
+          let v56 ← usize_from_word v44
           let v57 := v56
           b19 r0 v57
         else
-          let v58 ← from_word v9
+          let v58 ← usize_from_word v9
           let v59 := v58
           b19 r0 v59
     else
@@ -233,7 +237,7 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
         let v76 := v6
         b13 r0 v76
       if v65 then
-        let v66 ← from_word v44
+        let v66 ← usize_from_word v44
         let v67 := v66
         b22 r0 v67
       else
@@ -245,16 +249,16 @@ def downcast_saturate_u64_usize (v0 : UInt256) : FeM UInt256 := do
           let v75 := v7
           b22 r0 v75
         if v70 then
-          let v71 ← from_word v44
+          let v71 ← usize_from_word v44
           let v72 := v71
           b25 r0 v72
         else
-          let v73 ← from_word v9
+          let v73 ← usize_from_word v9
           let v74 := v73
           b25 r0 v74
 
 def MAX_ALLOCATION : FeM UInt256 := do
-  let v0 ← max_1
+  let v0 ← u64_max
   let v1 ← downcast_saturate_u64_usize v0
   return v1
 
@@ -272,7 +276,7 @@ def alloc_bytes (v0 : UInt256) : FeM UInt256 := do
     let v8 ← alloc v0
     return v8
 
-def new_uninit (v0 : UInt256) : FeM MemBuffer := do
+def MemBuffer_new_uninit (v0 : UInt256) : FeM MemBuffer := do
   let v1 ← alloc_bytes v0
   let v2 := v0
   let v3 := v0
@@ -283,32 +287,32 @@ def zero_bytes (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
   let v2 ← zeroMem v0 v1
   return ()
 
-def new (v0 : UInt256) : FeM MemBuffer := do
-  let v1 ← new_uninit v0
+def MemBuffer_new (v0 : UInt256) : FeM MemBuffer := do
+  let v1 ← MemBuffer_new_uninit v0
   let v2 := v1
   let v3 := v2.ptr
   let v4 ← zero_bytes v3 v0
   return v2
 
-def ptr (v0 : MemBuffer) : FeM UInt256 := do
+def MemBuffer_ptr (v0 : MemBuffer) : FeM UInt256 := do
   let v1 := v0.ptr
   return v1
 
-def from_raw_parts (v0 : UInt256) (v1 : UInt256) : FeM AbiFrame := do
+def AbiFrame_from_raw_parts (v0 : UInt256) (v1 : UInt256) : FeM AbiFrame := do
   let v2 := v0
   let v3 := v1
   let v4 := (AbiFrame.mk v2 v3)
   return v4
 
 def abi_field_head_size_u256 : FeM UInt256 := do
-  let v0 ← IS_DYNAMIC
+  let v0 ← u256_IS_DYNAMIC
   if v0 then
     let v1 := (UInt256.ofNat 32)
     return v1
   else
     let v2 := ()
     let v3 := v2
-    let v4 ← HEAD_SIZE
+    let v4 ← u256_HEAD_SIZE
     return v4
 
 def abi_single_root_head_size_u256 : FeM UInt256 := do
@@ -329,7 +333,7 @@ def ptr_offset (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v3 := v0 + v2
   return v3
 
-def tail (v0 : AbiFrame) (v1 : UInt256) : FeM AbiFrame := do
+def AbiFrame_tail (v0 : AbiFrame) (v1 : UInt256) : FeM AbiFrame := do
   let v2 := v1
   let v3 := v0.len
   let v4 := decide (v3.toNat < v2.toNat)
@@ -347,11 +351,11 @@ def tail (v0 : AbiFrame) (v1 : UInt256) : FeM AbiFrame := do
     let v13 := (AbiFrame.mk v9 v12)
     return v13
 
-def len (v0 : AbiFrame) : FeM UInt256 := do
+def AbiFrame_len (v0 : AbiFrame) : FeM UInt256 := do
   let v1 := v0.len
   return v1
 
-def slice (v0 : AbiFrame) (v1 : UInt256) (v2 : UInt256) : FeM AbiFrame := do
+def AbiFrame_slice (v0 : AbiFrame) (v1 : UInt256) (v2 : UInt256) : FeM AbiFrame := do
   let v3 := v1
   let v4 := v0.len
   let v5 := decide (v4.toNat < v3.toNat)
@@ -389,44 +393,44 @@ def store_word (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
   let v4 := ()
   return ()
 
-def store_word_1 (v0 : AbiFrame) (v1 : UInt256) (v2 : UInt256) : FeM Unit := do
+def AbiFrame_store_word (v0 : AbiFrame) (v1 : UInt256) (v2 : UInt256) : FeM Unit := do
   let v3 := (UInt256.ofNat 32)
-  let v4 ← slice v0 v1 v3
+  let v4 ← AbiFrame_slice v0 v1 v3
   let v5 := v4
   let v6 := v5.ptr
   let v7 ← store_word v6 v2
   return ()
 
-def encode_Sol (v0 : UInt256) (v1 : AbiFrame) : FeM Unit := do
+def u256_encode_Sol (v0 : UInt256) (v1 : AbiFrame) : FeM Unit := do
   let v2 := (UInt256.ofNat 0)
-  let v3 ← store_word_1 v1 v2 v0
+  let v3 ← AbiFrame_store_word v1 v2 v0
   return ()
 
 def encode_field_Sol_u256 (v0 : UInt256) (v1 : AbiFrame) (v2 : UInt256) (r0 : AbiFrame) : FeM AbiFrame := do
   let mut r0 := r0
   let mut r1 : AbiFrame := default
   let mut r2 : AbiFrame := default
-  let v3 ← IS_DYNAMIC
+  let v3 ← u256_IS_DYNAMIC
   if v3 then
     let v4 ← payload_size_u256 v0
     let v5 := v4
-    let v6 ← len v1
-    let v8 ← len r0
+    let v6 ← AbiFrame_len v1
+    let v8 ← AbiFrame_len r0
     let v9 := v6 - v8
-    let v10 ← store_word_1 v1 v2 v9
+    let v10 ← AbiFrame_store_word v1 v2 v9
     let v11 := (UInt256.ofNat 0)
-    let v13 ← slice r0 v11 v5
+    let v13 ← AbiFrame_slice r0 v11 v5
     r1 := v13
-    let v15 ← encode_Sol v0 r1
-    let v17 ← tail r0 v5
+    let v15 ← u256_encode_Sol v0 r1
+    let v17 ← AbiFrame_tail r0 v5
     return v17
   else
     let v18 := ()
     let v19 := v18
-    let v20 ← HEAD_SIZE
-    let v21 ← slice v1 v2 v20
+    let v20 ← u256_HEAD_SIZE
+    let v21 ← AbiFrame_slice v1 v2 v20
     r2 := v21
-    let v23 ← encode_Sol v0 r2
+    let v23 ← u256_encode_Sol v0 r2
     let v24 := r0
     return v24
 
@@ -436,21 +440,21 @@ def encode_single_root_alloc_Sol_u256 (v0 : UInt256) : FeM MemBuffer := do
   let v1 ← abi_single_root_size_u256 v0
   let v2 := v1
   let v3 ← allocation_len v2
-  let v4 ← new v3
+  let v4 ← MemBuffer_new v3
   let v5 := v4
   r0 := v5
-  let v7 ← ptr r0
-  let v8 ← from_raw_parts v7 v2
+  let v7 ← MemBuffer_ptr r0
+  let v8 ← AbiFrame_from_raw_parts v7 v2
   let v9 := v8
   r1 := v9
   let v10 := (UInt256.ofNat 0)
   let v11 ← abi_single_root_head_size_u256
-  let v13 ← tail r1 v11
+  let v13 ← AbiFrame_tail r1 v11
   let v15 ← encode_field_Sol_u256 v0 r1 v10 v13
   let v16 := r0
   return v16
 
-def len_1 (v0 : MemBuffer) : FeM UInt256 := do
+def MemBuffer_len (v0 : MemBuffer) : FeM UInt256 := do
   let v1 := v0.len
   return v1
 
@@ -459,8 +463,8 @@ def revert_u256 (v0 : UInt256) : FeM Empty := do
   let v1 ← encode_single_root_alloc_Sol_u256 v0
   let v2 := v1
   r0 := v2
-  let v4 ← ptr r0
-  let v6 ← len_1 r0
+  let v4 ← MemBuffer_ptr r0
+  let v6 ← MemBuffer_len r0
   let v7 := v6
   let v8 ← revertData v4 v7
   nomatch v8

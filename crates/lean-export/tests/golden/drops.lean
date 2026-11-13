@@ -38,13 +38,13 @@ def Layout.Pair : Layout :=
 def init : FeM Unit := do
   return ()
 
-def drop (v0 : Guard) : FeM Unit := do
+def Guard_drop (v0 : Guard) : FeM Unit := do
   let v1 := ()
   return ()
 
 def take (v0 : Guard) : FeM UInt256 := do
   let v1 := v0.n
-  let _ ← drop v0
+  let _ ← Guard_drop v0
   return v1
 
 def recv0_arm0 (v0 : Bool) : FeM UInt256 := do
@@ -55,7 +55,7 @@ def recv0_arm0 (v0 : Bool) : FeM UInt256 := do
   let b3 : Bool → UInt256 → FeM UInt256 := fun f0 v1 => do
     let mut f0 := f0
     if f0 then
-      let _ ← drop v4
+      let _ ← Guard_drop v4
       pure ()
     f0 := false
     return v1
@@ -70,7 +70,7 @@ def recv0_arm0 (v0 : Bool) : FeM UInt256 := do
     let v9 := v8
     b3 f0 v9
 
-def is_some_Guard (v0 : Option_Guard) : FeM Bool := do
+def Option_is_some_Guard (v0 : Option_Guard) : FeM Bool := do
   let v2 := v0
   let b1 : Bool → FeM Bool := fun v1 => do
     return v1
@@ -90,11 +90,11 @@ def recv0_arm1 (v0 : Bool) : FeM UInt256 := do
     let mut r0 := r0
     let v8 := v1
     r0 := v8
-    let v10 ← is_some_Guard r0
+    let v10 ← Option_is_some_Guard r0
     let v11 := Bool.toUInt256 v10
     match r0 with
     | .Some .. =>
-      let _ ← drop r0.Some_0
+      let _ ← Guard_drop r0.Some_0
       pure ()
     | _ => pure ()
     return v11

@@ -956,6 +956,28 @@ impl<'db> Module<'db> {
             BodyOwner::Closure { .. } => "closure".to_string(),
             owner => return Err(Unsupported(format!("call to {owner:?}"))),
         };
+        // A method or an associated constant is named after the type its
+        // impl is for: the whole type if it has none of the impl's
+        // parameters, whose values the name ends with, or else what it
+        // applies to them. A parameter alone names nothing.
+        let item = match key.owner(db) {
+            BodyOwner::Func(func, _) => func.scope().parent_item(db),
+            BodyOwner::AnonConstBody { body, .. } => body.scope().parent_item(db),
+            _ => None,
+        };
+        let implementor = match item {
+            Some(ItemKind::Impl(item)) => Some(item.ty(db)),
+            Some(ItemKind::ImplTrait(item)) => Some(item.ty(db)),
+            _ => None,
+        };
+        let implementor = implementor.map(|ty| match ty.has_param(db) {
+            true => ty.base_ty(db),
+            false => ty,
+        });
+        let base = match implementor {
+            Some(ty) if !ty.has_param(db) => format!("{}_{base}", lean_ident(ty.pretty_print(db))),
+            _ => base,
+        };
         let args = key.subst(db).generic_args(db);
         let own = !shared_ingot(db, key.owner(db).scope().ingot(db))
             || args.iter().any(|arg| self.own_ty(*arg));
@@ -4900,9 +4922,13 @@ fn indented(texts: &[String]) -> String {
     lines.map(|line| format!("  {line}\n")).collect()
 }
 
-/// `text` with each run of characters a Lean identifier cannot hold as `_`.
+/// `text`, a type as the compiler prints it, as part of a Lean identifier:
+/// `tuple` or `array` where a tuple or an array opens, and `_` for each
+/// other run of characters an identifier cannot hold.
 fn lean_ident(text: impl AsRef<str>) -> String {
     text.as_ref()
+        .replace('(', " tuple ")
+        .replace('[', " array ")
         .split(|c: char| !c.is_alphanumeric())
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
