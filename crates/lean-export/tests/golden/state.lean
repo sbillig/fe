@@ -1,5 +1,4 @@
-def Layout.TSlot_bool : Layout :=
-  { storage := [0] }
+export Lib (Layout.TSlot_bool)
 
 def Field.packed : Place :=
   .storage (UInt256.ofNat 0)

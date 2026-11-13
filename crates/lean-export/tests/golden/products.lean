@@ -1,20 +1,4 @@
-inductive Option_mut_u8 where
-  | None
-  | Some (f0 : UInt256)
-deriving Inhabited
-
-def Option_mut_u8.tag : Option_mut_u8 → UInt256
-  | .None => UInt256.ofNat 0
-  | .Some .. => UInt256.ofNat 1
-
-def Option_mut_u8.Some_0 : Option_mut_u8 → UInt256
-  | .Some f0 => f0
-  | _ => default
-
-def Option_mut_u8.set_Some_0 (x : Option_mut_u8) (v : UInt256) : Option_mut_u8 :=
-  match x with
-  | .Some f0 => .Some v
-  | x => x
+export Lib (Option_mut_u8 Option_mut_u8.None Option_mut_u8.Some)
 
 def Field.pair : Place :=
   .storage (UInt256.ofNat 0)

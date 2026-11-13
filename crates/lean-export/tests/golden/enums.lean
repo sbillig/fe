@@ -1,20 +1,4 @@
-inductive Option_u256 where
-  | None
-  | Some (f0 : UInt256)
-deriving Inhabited
-
-def Option_u256.tag : Option_u256 → UInt256
-  | .None => UInt256.ofNat 0
-  | .Some .. => UInt256.ofNat 1
-
-def Option_u256.Some_0 : Option_u256 → UInt256
-  | .Some f0 => f0
-  | _ => default
-
-def Option_u256.set_Some_0 (x : Option_u256) (v : UInt256) : Option_u256 :=
-  match x with
-  | .Some f0 => .Some v
-  | x => x
+export Lib (Option_u256 Option_u256.None Option_u256.Some)
 
 inductive Shape where
   | Empty

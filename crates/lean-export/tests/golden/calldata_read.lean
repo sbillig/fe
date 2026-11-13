@@ -1,7 +1,4 @@
-def calldata_ptr_Evm_array_u256_2 (v1 : UInt256) : FeM UInt256 := do
-  let v2 := v1
-  let v3 := v2
-  return v3
+export Lib (calldata_ptr_Evm_array_u256_2)
 
 def init : FeM Unit := do
   return ()

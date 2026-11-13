@@ -1700,3 +1700,324 @@ def Evm_return_value_Sol_bool (v1 : Bool) : FeM Empty := do
     let v63 ← Evm_return_bytes v60
     nomatch v63
 
+def tuple_HEAD_SIZE_u256_u256 : FeM UInt256 := do
+  let v0 ← abi_field_head_size_u256
+  let v1 ← abi_field_head_size_u256
+  let v2 ← checkedAdd v0 v1
+  return v2
+
+def tuple_decode_from_prechecked_head_Sol_u256_u256_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
+  let mut r0 : UInt256 := default
+  let v3 := v1
+  let v4 := v3
+  r0 := v4
+  let v5 := r0
+  let v6 := v5
+  let v7 ← decode_field_from_prechecked_head_Sol_u256_CallData v0 v1 v6 v2
+  let v8 := v7
+  let v9 ← abi_field_head_size_u256
+  let v10 := r0
+  let v11 ← checkedAdd v10 v9
+  let v12 := v11
+  r0 := v12
+  let v13 := ()
+  let v14 := r0
+  let v15 := v14
+  let v16 ← decode_field_from_prechecked_head_Sol_u256_CallData v0 v1 v15 v2
+  let v17 := v16
+  let v18 := (v8, v17)
+  return v18
+
+def decode_frame_from_Sol_tuple_u256_u256_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
+  let v3 ← tuple_HEAD_SIZE_u256_u256
+  let v4 ← checked_frame_end_Sol v1 v3 v2
+  let v5 ← tuple_decode_from_prechecked_head_Sol_u256_u256_CallData v0 v1 v2
+  return v5
+
+def decode_input_at_tuple_u256_u256_CallData (v0 : CallData) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
+  let v2 ← len_CallData v0
+  let v3 := v2
+  let v4 ← decode_frame_from_Sol_tuple_u256_u256_CallData v0 v1 v3
+  return v4
+
+def Evm_decode_args_tuple_u256_u256 : FeM (UInt256 × UInt256) := do
+  let mut r0 : CallData := default
+  let v1 ← Evm_input
+  r0 := v1
+  let v2 := (UInt256.ofNat 4)
+  let v3 := v2
+  let v4 := r0
+  let v5 ← decode_input_at_tuple_u256_u256_CallData v4 v3
+  return v5
+
+def MemBuffer_len (v0 : MemBuffer) : FeM UInt256 := do
+  let v1 := v0.len
+  return v1
+
+def revert_u256 (v0 : UInt256) : FeM Empty := do
+  let mut r0 : MemBuffer := default
+  let v1 ← encode_single_root_alloc_Sol_u256 v0
+  let v2 := v1
+  r0 := v2
+  let v4 ← MemBuffer_ptr r0
+  let v6 ← MemBuffer_len r0
+  let v7 := v6
+  let v8 ← revertData v4 v7
+  nomatch v8
+
+structure Wei where
+  amount : UInt256
+deriving Inhabited
+
+def i256_to_word (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  return v1
+
+def i8_IS_SIGNED : FeM Bool := do
+  let v0 := true
+  return v0
+
+def U8_MASK : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 255)
+  return v0
+
+def i8_MASK : FeM UInt256 := do
+  let v0 ← U8_MASK
+  return v0
+
+def I8_SIGN_BIT : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 128)
+  return v0
+
+def i8_SIGN_BIT : FeM UInt256 := do
+  let v0 ← I8_SIGN_BIT
+  return v0
+
+def i8_from_word (v0 : UInt256) : FeM UInt256 := do
+  let v1 := IntTy.cast (.u 256) (.i 8) v0
+  return v1
+
+def downcast_truncate_i256_i8 (v0 : UInt256) : FeM UInt256 := do
+  let v2 ← i256_to_word v0
+  let v3 := v2
+  let v4 ← i8_IS_SIGNED
+  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+    return v1
+  if v4 then
+    let v5 ← i8_MASK
+    let v6 ← i8_SIGN_BIT
+    let v7 ← sign_extend v3 v5 v6
+    let v8 ← i8_from_word v7
+    let v9 := v8
+    b3 v9
+  else
+    let v10 ← i8_MASK
+    let v11 := v3 &&& v10
+    let v12 ← i8_from_word v11
+    let v13 := v12
+    b3 v13
+
+def downcast_unchecked_u256_i256 (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← u256_to_word v0
+  let v2 := v1
+  let v3 ← i256_from_word v2
+  return v3
+
+def Evm_address : FeM UInt256 := do
+  let v1 ← selfAddress
+  let v2 := v1
+  return v2
+
+def Address_word (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  return v1
+
+def wei (v0 : UInt256) : FeM Wei := do
+  let v1 := v0
+  let v2 := (Wei.mk v1)
+  return v2
+
+def Evm_value : FeM Wei := do
+  let v1 ← callvalue
+  let v2 ← wei v1
+  return v2
+
+def Wei_as_wei (v0 : Wei) : FeM UInt256 := do
+  let v1 := v0.amount
+  return v1
+
+def Evm_origin : FeM UInt256 := do
+  let v1 ← origin
+  let v2 := v1
+  return v2
+
+def Evm_block_number : FeM UInt256 := do
+  let v1 ← blockNumber
+  return v1
+
+inductive Option_u256 where
+  | None
+  | Some (f0 : UInt256)
+deriving Inhabited
+
+def Option_u256.tag : Option_u256 → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_u256.Some_0 : Option_u256 → UInt256
+  | .Some f0 => f0
+  | _ => default
+
+def Option_u256.set_Some_0 (x : Option_u256) (v : UInt256) : Option_u256 :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
+def Layout.TSlot_bool : Layout :=
+  { storage := [0] }
+
+def tuple_encoded_len_u256_u256 (v0 : (UInt256 × UInt256)) : FeM UInt256 := do
+  let v1 := v0.fst
+  let v2 ← u256_encoded_len v1
+  let v3 := v0.snd
+  let v4 ← u256_encoded_len v3
+  let v5 ← checkedAdd v2 v4
+  return v5
+
+def tuple_write_key_u256_u256 (v0 : UInt256) (v1 : (UInt256 × UInt256)) : FeM Unit := do
+  let v2 := v1.fst
+  let v3 ← u256_encoded_len v2
+  let v4 := v3
+  let v5 := v1.fst
+  let v6 ← u256_write_key v0 v5
+  let v7 ← downcast_unchecked_u256_usize v4
+  let v8 := v0 + v7
+  let v9 := v1.snd
+  let v10 ← u256_write_key v8 v9
+  return ()
+
+def mapping_slot_tuple_u256_u256 (v0 : UInt256) (v1 : (UInt256 × UInt256)) : FeM UInt256 := do
+  let mut r0 : MemBuffer := default
+  let v2 ← tuple_encoded_len_u256_u256 v1
+  let v3 := v2
+  let v4 := (UInt256.ofNat 32)
+  let v5 ← checkedAdd v3 v4
+  let v6 ← downcast_saturate_u256_usize v5
+  let v7 ← MemBuffer_new_uninit v6
+  let v8 := v7
+  r0 := v8
+  let v10 ← MemBuffer_ptr r0
+  let v11 := v10
+  let v12 ← tuple_write_key_u256_u256 v11 v1
+  let v13 ← downcast_unchecked_u256_usize v3
+  let v14 := v11 + v13
+  let v15 ← mstore v14 v0
+  let v16 := (UInt256.ofNat 32)
+  let v17 ← checkedAdd v3 v16
+  let v18 ← downcast_unchecked_u256_usize v17
+  let v19 ← MemSlice_from_raw_parts_ref_u8 v11 v18
+  let v21 ← keccak256_1 v19
+  let _ ← MemBuffer_drop r0
+  return v21
+
+def StorageMap_locate_tuple_u256_u256_bool (v0 : Place) (v1 : UInt256) (v2 : (UInt256 × UInt256)) : FeM Location := do
+  let v3 ← mapping_slot_tuple_u256_u256 v1 v2
+  let v4 := (UInt256.ofNat 0)
+  let v5 := (Location.mk v3 v4)
+  return v5
+
+def bool_encoded_len (v0 : Bool) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 32)
+  return v1
+
+def bool_write_key (v0 : UInt256) (v1 : Bool) : FeM Unit := do
+  let v3 := v1
+  let b3 : UInt256 → FeM Unit := fun v2 => do
+    let v8 ← u256_write_key v0 v2
+    return ()
+  if v3 then
+    let v4 := (UInt256.ofNat 1)
+    let v5 := v4
+    b3 v5
+  else
+    let v6 := (UInt256.ofNat 0)
+    let v7 := v6
+    b3 v7
+
+def mapping_slot_bool (v0 : UInt256) (v1 : Bool) : FeM UInt256 := do
+  let mut r0 : MemBuffer := default
+  let v2 ← bool_encoded_len v1
+  let v3 := v2
+  let v4 := (UInt256.ofNat 32)
+  let v5 ← checkedAdd v3 v4
+  let v6 ← downcast_saturate_u256_usize v5
+  let v7 ← MemBuffer_new_uninit v6
+  let v8 := v7
+  r0 := v8
+  let v10 ← MemBuffer_ptr r0
+  let v11 := v10
+  let v12 ← bool_write_key v11 v1
+  let v13 ← downcast_unchecked_u256_usize v3
+  let v14 := v11 + v13
+  let v15 ← mstore v14 v0
+  let v16 := (UInt256.ofNat 32)
+  let v17 ← checkedAdd v3 v16
+  let v18 ← downcast_unchecked_u256_usize v17
+  let v19 ← MemSlice_from_raw_parts_ref_u8 v11 v18
+  let v21 ← keccak256_1 v19
+  let _ ← MemBuffer_drop r0
+  return v21
+
+def StorageMap_locate_bool_u256 (v0 : Place) (v1 : UInt256) (v2 : Bool) : FeM Location := do
+  let v3 ← mapping_slot_bool v1 v2
+  let v4 := (UInt256.ofNat 0)
+  let v5 := (Location.mk v3 v4)
+  return v5
+
+def calldata_ptr_Evm_array_u256_2 (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v1
+  let v3 := v2
+  return v3
+
+inductive Option_mut_u8 where
+  | None
+  | Some (f0 : UInt256)
+deriving Inhabited
+
+def Option_mut_u8.tag : Option_mut_u8 → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_mut_u8.Some_0 : Option_mut_u8 → UInt256
+  | .Some f0 => f0
+  | _ => default
+
+def Option_mut_u8.set_Some_0 (x : Option_mut_u8) (v : UInt256) : Option_mut_u8 :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
+def array_start_u256_2 (v0 : (Vector UInt256 2)) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def array_has_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM Bool := do
+  let v2 := v1
+  let v3 := (UInt256.ofNat 2)
+  let v4 := decide (v2.toNat < v3.toNat)
+  return v4
+
+def array_at_ref_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
+  checkIndex v1 2
+  return v0[v1.toNat]!
+
+def usize_wrapping_add (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v0 + v1
+  return v2
+
+def array_next_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+

@@ -1,26 +1,4 @@
-def array_start_u256_2 (v0 : (Vector UInt256 2)) : FeM UInt256 := do
-  let v1 := (UInt256.ofNat 0)
-  return v1
-
-def array_has_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM Bool := do
-  let v2 := v1
-  let v3 := (UInt256.ofNat 2)
-  let v4 := decide (v2.toNat < v3.toNat)
-  return v4
-
-def array_at_ref_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
-  checkIndex v1 2
-  return v0[v1.toNat]!
-
-def usize_wrapping_add (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
-  let v2 := v0 + v1
-  return v2
-
-def array_next_u256_2 (v0 : (Vector UInt256 2)) (v1 : UInt256) : FeM UInt256 := do
-  let v2 := (UInt256.ofNat 1)
-  let v3 := v1
-  let v4 ← usize_wrapping_add v3 v2
-  return v4
+export Lib (array_at_ref_u256_2 array_has_u256_2 array_next_u256_2 array_start_u256_2)
 
 def Field.store : Place :=
   .storage (UInt256.ofNat 0)
