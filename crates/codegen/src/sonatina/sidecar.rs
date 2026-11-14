@@ -17,7 +17,8 @@ use serde::Serialize;
 use sonatina_codegen::object::{
     ObjectArtifact, SymbolId,
     lowering::{
-        CodeLabel, MallocLowering, SectionLowering, SpillLocation, StableLowering, StackSlot,
+        CodeLabel, DynSpInitLowering, MallocLowering, SectionLowering, SpillLocation,
+        StableLowering, StackSlot,
     },
 };
 use sonatina_ir::{
@@ -34,7 +35,7 @@ use super::{
 use crate::{OptLevel, runtime_package::ensure_runtime_package_has_roots};
 
 /// The version of the sidecar format, raised with each change to it.
-pub const SIDECAR_VERSION: u32 = 2;
+pub const SIDECAR_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SonatinaSidecar {
@@ -119,6 +120,12 @@ pub struct SidecarFrame {
     pub stable: SidecarStable,
     pub scratch_words: u32,
     pub stable_words: u32,
+    pub lazy_frame: bool,
+    /// `always` or `checked` when the function's entry initializes the dynamic stack pointer.
+    pub dyn_sp_entry_init: Option<String>,
+    pub dyn_sp_init_calls: u32,
+    /// The calls, as block and position in it, around which scratch objects are saved.
+    pub call_preserves: Vec<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -230,6 +237,21 @@ impl From<&SectionLowering> for SidecarLowering {
                     },
                     scratch_words: func.frame.scratch_words,
                     stable_words: func.frame.stable_words,
+                    lazy_frame: func.frame.lazy_frame,
+                    dyn_sp_entry_init: func.frame.dyn_sp_entry_init.map(|kind| {
+                        match kind {
+                            DynSpInitLowering::Always => "always",
+                            DynSpInitLowering::Checked => "checked",
+                        }
+                        .to_string()
+                    }),
+                    dyn_sp_init_calls: func.frame.dyn_sp_init_calls,
+                    call_preserves: func
+                        .frame
+                        .call_preserves
+                        .iter()
+                        .map(|(block, position)| (block.as_u32(), *position))
+                        .collect(),
                 },
                 mallocs: func
                     .mallocs
