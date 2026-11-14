@@ -193,6 +193,15 @@ fn sidecar_holds_compiled_ir_and_sections(fixture: Fixture<&str>) {
                         whole.map(|symbol| (symbol.offset, 2 * symbol.size as usize)),
                         Some((0, section.bytecode.len()))
                     );
+                    let lowering = section.lowering.as_ref().expect("a lowering record");
+                    assert!(lowering.machine_ir.contains("func "));
+                    for func in &lowering.funcs {
+                        let symbol = section
+                            .symbols
+                            .iter()
+                            .find(|symbol| symbol.symbol == format!("%{}", func.name));
+                        assert_eq!(func.offset, symbol.map(|symbol| symbol.offset));
+                    }
                 }
             }
         }

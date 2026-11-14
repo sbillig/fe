@@ -324,7 +324,8 @@ fn compile_runtime_objects_with_postopt_trace(
     postopt_trace_owner: Option<&str>,
     capture_ir: bool,
 ) -> Result<CompiledModule, LowerError> {
-    let mut compile = evm_compile(module, opt_level, emit_observability);
+    let mut compile =
+        evm_compile(module, opt_level, emit_observability).with_lowering_record(capture_ir);
     debug_ensure_module_sonatina_ir_valid(compile.optimize())?;
     if emit_observability && let Some(owner) = postopt_trace_owner {
         stamp_postopt_instruction_provenance(owner, &mut compile);
@@ -2472,6 +2473,7 @@ pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
             bytes: Vec::new(),
             symtab: Default::default(),
             observability: Some(test_embed_observability(0, &[])),
+            lowering: None,
         };
         let symbol_id = SymbolId::Embed(EmbedSymbol::from("embedded".to_string()));
         let err = required_embed_symbol(&section_artifact, &symbol_id, &embed_key, "embedded")
@@ -2518,6 +2520,7 @@ pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
             bytes: vec![0; 12],
             symtab,
             observability: Some(test_embed_observability(4, &[])),
+            lowering: None,
         };
         let err = required_embed_symbol_at(
             &artifact,
