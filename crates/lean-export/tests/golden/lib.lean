@@ -3884,3 +3884,285 @@ def Evm_return_value_Sol_tuple_bool_u256_u256 (r0 : (Bool × UInt256 × UInt256)
     let v66 ← Evm_return_bytes v63
     nomatch v66
 
+inductive Option_array_u256_2 where
+  | None
+  | Some (f0 : (Vector UInt256 2))
+deriving Inhabited
+
+def Option_array_u256_2.tag : Option_array_u256_2 → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_array_u256_2.Some_0 : Option_array_u256_2 → (Vector UInt256 2)
+  | .Some f0 => f0
+  | _ => default
+
+def Option_array_u256_2.set_Some_0 (x : Option_array_u256_2) (v : (Vector UInt256 2)) : Option_array_u256_2 :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
+structure Range_Unknown_Unknown where
+  start : UInt256
+  «end» : UInt256
+deriving Inhabited
+
+def Evm_calldatasize : FeM UInt256 := do
+  let v1 ← calldatasize
+  return v1
+
+def prepare_copy_destination (v0 : MemBuffer) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × MemBuffer) := do
+  let mut v0 := v0
+  let v3 := v1
+  let v5 ← MemBuffer_capacity v0
+  let v6 := v5
+  let v7 := decide (v6.toNat < v3.toNat)
+  let b1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+    let mut v0 := v0
+    let v44 ← trap
+    nomatch v44
+  if v7 then
+    b1 v0
+  else
+    let v8 := v2
+    let v10 ← MemBuffer_capacity v0
+    let v11 := v10
+    let v12 := v1
+    let v13 ← checkedSub v11 v12
+    let v14 := decide (v13.toNat < v8.toNat)
+    if v14 then
+      b1 v0
+    else
+      let v15 := ()
+      let v16 := v15
+      let v17 := v2
+      let v18 := (UInt256.ofNat 0)
+      let v19 := decide (v17 ≠ v18)
+      let b7 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+        let mut v0 := v0
+        let v41 ← MemBuffer_ptr v0
+        let v42 ← downcast_unchecked_u256_usize v1
+        let v43 := v41 + v42
+        return (v43, v0)
+      let b6 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+        let mut v0 := v0
+        let v38 := ()
+        let v39 := v38
+        b7 v0
+      if v19 then
+        let v20 := v1
+        let v22 ← MemBuffer_len v0
+        let v23 := v22
+        let v24 := decide (v23.toNat < v20.toNat)
+        if v24 then
+          let v26 ← MemBuffer_ptr v0
+          let v28 ← MemBuffer_len v0
+          let v29 := v26 + v28
+          let v30 := v1
+          let v32 ← MemBuffer_len v0
+          let v33 := v32
+          let v34 ← checkedSub v30 v33
+          let v35 ← downcast_unchecked_u256_usize v34
+          let v36 ← zero_bytes v29 v35
+          let v37 := v36
+          b7 v0
+        else
+          b6 v0
+      else
+        b6 v0
+
+def Evm_calldatacopy (v1 : MemBuffer) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) : FeM (Unit × MemBuffer) := do
+  let mut v1 := v1
+  let (v6, v6_0) ← prepare_copy_destination v1 v2 v4
+  v1 := v6_0
+  let v7 := v6
+  let v8 := v4
+  let v9 := (UInt256.ofNat 0)
+  let v10 := decide (v8 = v9)
+  if v10 then
+    return ((), v1)
+  else
+    let v11 := ()
+    let v12 := v11
+    let v13 ← calldatacopy v7 v3 v4
+    let v14 := v2
+    let v15 := v4
+    let v16 ← checkedAdd v14 v15
+    let v17 ← downcast_unchecked_u256_usize v16
+    let v18 := v17
+    let v20 ← MemBuffer_len v1
+    let v21 := decide (v20.toNat < v18.toNat)
+    let b6 : MemBuffer → FeM (Unit × MemBuffer) := fun v1 => do
+      let mut v1 := v1
+      return ((), v1)
+    if v21 then
+      let (v22, v22_0) ← MemBuffer_set_len v1 v18
+      v1 := v22_0
+      let v23 := v22
+      b6 v1
+    else
+      let v24 := ()
+      let v25 := v24
+      b6 v1
+
+def MemSlice_u8_value_ptr_u64 (v0 : MemSlice_u8) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v1
+  let v3 := v0.len
+  let v4 := decide (v3.toNat < v2.toNat)
+  let b1 : FeM UInt256 := do
+    let v14 ← index_out_of_bounds
+    nomatch v14
+  if v4 then
+    b1
+  else
+    let v5 := (UInt256.ofNat 8)
+    let v6 := v0.len
+    let v7 := v1
+    let v8 ← checkedSub v6 v7
+    let v9 := decide (v8.toNat < v5.toNat)
+    if v9 then
+      b1
+    else
+      let v10 := ()
+      let v11 := v10
+      let v12 := v0.ptr
+      let v13 := v12 + v1
+      return v13
+
+def cast_u8_u64 (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 := v1
+  return v2
+
+def MemSlice_u8_read_le_u64 (v0 : MemSlice_u8) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← MemSlice_u8_value_ptr_u64 v0 v1
+  let v3 ← cast_u8_u64 v2
+  let v4 ← mloadInt (.u 64) v3
+  let v5 := IntTy.swapBytes (.u 64) v4
+  return v5
+
+def MemBuffer_read_le_u64 (v0 : MemBuffer) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← MemBuffer_span_ref v0
+  let v4 ← MemSlice_u8_read_le_u64 v2 v1
+  return v4
+
+def Range_Unknown_Unknown_start (v0 : Range_Unknown_Unknown) : FeM UInt256 := do
+  let v1 := v0.start
+  return v1
+
+def Range_Unknown_Unknown_has (v0 : Range_Unknown_Unknown) (v1 : UInt256) : FeM Bool := do
+  let v2 := v0.start
+  let v3 := v0.«end»
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_Unknown_Unknown_at (v0 : Range_Unknown_Unknown) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_Unknown_Unknown_next (v0 : Range_Unknown_Unknown) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def MemBuffer_index_ref (v0 : MemBuffer) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v0.len
+  let v3 := decide (v2.toNat ≤ v1.toNat)
+  if v3 then
+    let v4 ← index_out_of_bounds
+    nomatch v4
+  else
+    let v5 := ()
+    let v6 := v5
+    let v7 := v0.ptr
+    let v8 := v7 + v1
+    let v9 := v8
+    return v9
+
+def MemBuffer_extend_over_u256 (v0 : MemBuffer) (v1 : UInt256) : FeM (UInt256 × MemBuffer) := do
+  let mut v0 := v0
+  let v2 := (UInt256.ofNat 32)
+  let v3 := v2
+  let v4 := v1
+  let v5 := v0.capacity
+  let v6 := decide (v5.toNat < v4.toNat)
+  let b1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+    let mut v0 := v0
+    let v38 ← index_out_of_bounds
+    nomatch v38
+  if v6 then
+    b1 v0
+  else
+    let v7 := v0.capacity
+    let v8 := v1
+    let v9 := v7 - v8
+    let v10 := decide (v9.toNat < v3.toNat)
+    if v10 then
+      b1 v0
+    else
+      let v11 := ()
+      let v12 := v11
+      let v13 := v1
+      let v14 := v0.len
+      let v15 := decide (v14.toNat < v13.toNat)
+      let b7 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+        let mut v0 := v0
+        let v26 := v1
+        let v27 := v26 + v3
+        let v28 := v0.len
+        let v29 := decide (v28.toNat < v27.toNat)
+        let b10 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+          let mut v0 := v0
+          let v36 := v0.ptr
+          let v37 := v36 + v1
+          return (v37, v0)
+        if v29 then
+          let v30 := v1
+          let v31 := v30 + v3
+          v0 := { v0 with len := v31 }
+          let v32 := ()
+          let v33 := v32
+          b10 v0
+        else
+          let v34 := ()
+          let v35 := v34
+          b10 v0
+      if v15 then
+        let v16 := v0.ptr
+        let v17 := v0.len
+        let v18 := v16 + v17
+        let v19 := v1
+        let v20 := v0.len
+        let v21 := v19 - v20
+        let v22 ← zero_bytes v18 v21
+        let v23 := v22
+        b7 v0
+      else
+        let v24 := ()
+        let v25 := v24
+        b7 v0
+
+def MemBuffer_write_be_u256 (v0 : MemBuffer) (v1 : UInt256) (v2 : UInt256) : FeM (Unit × MemBuffer) := do
+  let mut v0 := v0
+  let v3 := v2
+  let (v4, v4_0) ← MemBuffer_extend_over_u256 v0 v1
+  v0 := v4_0
+  let v5 ← cast_u8_u256 v4
+  mstore v5 v3
+  let v6 := ()
+  return ((), v0)
+
+def MemBuffer_write_word (v0 : MemBuffer) (v1 : UInt256) (v2 : UInt256) : FeM (Unit × MemBuffer) := do
+  let mut v0 := v0
+  let (v3, v3_0) ← MemBuffer_write_be_u256 v0 v1 v2
+  v0 := v3_0
+  return ((), v0)
+
+def Evm_revert (v1 : MemSlice_u8) : FeM Empty := do
+  let v2 ← MemSlice_ptr_u8 v1
+  let v3 ← MemSlice_len_u8 v1
+  let v4 := v3
+  let v5 ← revertData v2 v4
+  nomatch v5
+

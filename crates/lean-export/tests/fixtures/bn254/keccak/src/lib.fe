@@ -1,0 +1,209 @@
+use core::{MemBuffer, MemSpan}
+use core::num::swap_bytes
+use ingot::permutation::permute
+
+/// Read-only bytes. Implementations must accept every index below `len()`.
+/// Hashing borrows its source and never allocates or retains a reference to it.
+pub trait ByteSource {
+    fn len(self) -> usize
+    fn byte_at(self, _ index: usize) -> u8
+
+    /// The 8 bytes from `index` on as a little-endian integer, for every
+    /// `index` with `index + 8 <= len()`.
+    fn lane_at(self, _ index: usize) -> u64 {
+        var lane: u64 = 0
+        for byte in 0..8 { lane |= (self.byte_at(index + byte) as u64) << (byte * 8).downcast_unchecked() }
+        lane
+    }
+}
+
+impl<const N: usize> ByteSource for [u8; N] {
+    fn len(self) -> usize { N }
+    fn byte_at(self, _ index: usize) -> u8 { self[index] }
+}
+
+impl ByteSource for MemBuffer {
+    fn len(self) -> usize { MemBuffer::len(self) }
+    fn byte_at(self, _ index: usize) -> u8 { self[index] }
+    fn lane_at(self, _ index: usize) -> u64 { self.read_le<u64>(index) }
+}
+
+impl ByteSource for MemSpan {
+    fn len(self) -> usize { MemSpan::len(self) }
+    fn byte_at(self, _ index: usize) -> u8 { self[index] }
+    fn lane_at(self, _ index: usize) -> u64 { self.read_le<u64>(index) }
+}
+
+/// Ethereum's Keccak-256: 136-byte rate, 512-bit capacity, suffix 0x01.
+/// This is distinct from the SHA3-256 variant, whose suffix is 0x06.
+pub struct Keccak256 { lanes: [u64; 25], position: usize }
+
+impl Keccak256 {
+    pub fn new() -> Self { Self { lanes: [0; 25], position: 0 } }
+
+    /// Absorb a source range. Empty updates do not change the hash state.
+    pub fn update<T: ByteSource>(mut self, _ input: T, offset: usize, len: usize) {
+        core::assert(offset <= input.len() && len <= input.len() - offset)
+        // Bytes up to a lane boundary, then whole lanes, then the rest.
+        var index: usize = 0
+        while index < len && self.position % 8 != 0 {
+            self.absorb_byte(input.byte_at(offset + index))
+            index += 1
+        }
+        // Whole lanes. `index + remaining` stays `len`, and `offset + len`
+        // fits the input, so the additions cannot wrap.
+        var remaining = len - index
+        // Whole blocks from a block boundary: each lane of the rate at a
+        // fixed index, then one permutation, with no position to carry.
+        while self.position == 0 && remaining >= 136 {
+            let at = offset.wrapping_add(index)
+            self.lanes[0] ^= input.lane_at(at.wrapping_add(0))
+            self.lanes[1] ^= input.lane_at(at.wrapping_add(8))
+            self.lanes[2] ^= input.lane_at(at.wrapping_add(16))
+            self.lanes[3] ^= input.lane_at(at.wrapping_add(24))
+            self.lanes[4] ^= input.lane_at(at.wrapping_add(32))
+            self.lanes[5] ^= input.lane_at(at.wrapping_add(40))
+            self.lanes[6] ^= input.lane_at(at.wrapping_add(48))
+            self.lanes[7] ^= input.lane_at(at.wrapping_add(56))
+            self.lanes[8] ^= input.lane_at(at.wrapping_add(64))
+            self.lanes[9] ^= input.lane_at(at.wrapping_add(72))
+            self.lanes[10] ^= input.lane_at(at.wrapping_add(80))
+            self.lanes[11] ^= input.lane_at(at.wrapping_add(88))
+            self.lanes[12] ^= input.lane_at(at.wrapping_add(96))
+            self.lanes[13] ^= input.lane_at(at.wrapping_add(104))
+            self.lanes[14] ^= input.lane_at(at.wrapping_add(112))
+            self.lanes[15] ^= input.lane_at(at.wrapping_add(120))
+            self.lanes[16] ^= input.lane_at(at.wrapping_add(128))
+            permute(mut self.lanes)
+            index = index.wrapping_add(136)
+            remaining -= 136
+        }
+        while remaining >= 8 {
+            self.lanes[self.position / 8] ^= input.lane_at(offset.wrapping_add(index))
+            self.advance(8)
+            index = index.wrapping_add(8)
+            remaining -= 8
+        }
+        while index < len {
+            self.absorb_byte(input.byte_at(offset + index))
+            index += 1
+        }
+    }
+
+    /// Absorb the last `len` (at most 32) bytes of `value`'s big-endian
+    /// encoding: 32 for a word, 20 for an address, 1 for a byte. Each step
+    /// absorbs the bytes up to the next lane boundary with one XOR.
+    pub fn update_word(mut self, _ value: u256, len: usize) {
+        core::assert(len <= 32)
+        if len != 0 && self.position + len <= 136 {
+            // Within the block: the bytes moved to the front of the word, as
+            // lanes holding bytes 8i to 8i + 7 low first, shifted to the
+            // position. The zero bytes past them change nothing they reach,
+            // which stays below lane 21.
+            let leading = value << ((32 - len) * 8) as u256
+            let w0 = swap_bytes((leading >> 192).downcast_truncate())
+            let w1 = swap_bytes((leading >> 128).downcast_truncate())
+            let w2 = swap_bytes((leading >> 64).downcast_truncate())
+            let w3 = swap_bytes(leading.downcast_truncate())
+            let lane = self.position / 8
+            let shift: u64 = ((self.position % 8) * 8).downcast_unchecked()
+            if shift == 0 {
+                self.lanes[lane] ^= w0
+                self.lanes[lane + 1] ^= w1
+                self.lanes[lane + 2] ^= w2
+                self.lanes[lane + 3] ^= w3
+            } else {
+                let back = 64 - shift
+                self.lanes[lane] ^= w0 << shift
+                self.lanes[lane + 1] ^= (w1 << shift) | (w0 >> back)
+                self.lanes[lane + 2] ^= (w2 << shift) | (w1 >> back)
+                self.lanes[lane + 3] ^= (w3 << shift) | (w2 >> back)
+                self.lanes[lane + 4] ^= w3 >> back
+            }
+            self.position += len
+            if self.position == 136 {
+                permute(mut self.lanes)
+                self.position = 0
+            }
+            return
+        }
+        // The big-endian bytes as lanes, lane i holding bytes 8i to 8i + 7 low
+        // first, and a zero lane past them for the funnel below.
+        let words: [u64; 5] = [
+            swap_bytes((value >> 192).downcast_truncate()),
+            swap_bytes((value >> 128).downcast_truncate()),
+            swap_bytes((value >> 64).downcast_truncate()),
+            swap_bytes(value.downcast_truncate()),
+            0,
+        ]
+        var start = 32 - len
+        var remaining = len
+        while remaining > 0 {
+            let offset = self.position % 8
+            let take = if remaining < 8 - offset { remaining } else { 8 - offset }
+            // The `take` bytes from `start`, low first.
+            let shift: u64 = ((start % 8) * 8).downcast_unchecked()
+            let low = words[start / 8] >> shift
+            let high = if shift == 0 { 0 } else { words[start / 8 + 1] << (64 - shift) }
+            let all: u64 = 0xffffffffffffffff
+            let mask = if take == 8 { all } else { all >> (64 - take * 8).downcast_unchecked() }
+            self.lanes[self.position / 8] ^= ((low | high) & mask) << (offset * 8).downcast_unchecked()
+            start += take
+            remaining -= take
+            self.advance(take)
+        }
+    }
+
+    fn absorb_byte(mut self, _ byte: u8) {
+        self.lanes[self.position / 8] ^= (byte as u64) << ((self.position % 8) * 8).downcast_unchecked()
+        self.advance(1)
+    }
+
+    /// Count `bytes` more absorbed bytes, permuting at the end of a block.
+    fn advance(mut self, _ bytes: usize) {
+        self.position += bytes
+        if self.position == 136 {
+            permute(mut self.lanes)
+            self.position = 0
+        }
+    }
+
+    fn pad(mut self) {
+        self.lanes[self.position / 8] ^= 1 << ((self.position % 8) * 8).downcast_unchecked()
+        self.lanes[16] ^= 0x8000000000000000
+        permute(mut self.lanes)
+    }
+
+    /// Apply Keccak padding and return the digest as a big-endian word, as
+    /// the EVM's `KECCAK256` does, consuming the state.
+    pub fn finish_word(var own self) -> u256 {
+        self.pad()
+        ((swap_bytes(self.lanes[0]) as u256) << 192)
+            | ((swap_bytes(self.lanes[1]) as u256) << 128)
+            | ((swap_bytes(self.lanes[2]) as u256) << 64)
+            | (swap_bytes(self.lanes[3]) as u256)
+    }
+
+    /// Apply Keccak padding, return the digest, and consume the state.
+    pub fn finish(var own self) -> [u8; 32] {
+        self.pad()
+        var digest: [u8; 32] = [0; 32]
+        for index in 0..32 {
+            digest[index] = (self.lanes[index / 8] >> ((index % 8) * 8).downcast_unchecked()).downcast_truncate()
+        }
+        digest
+    }
+}
+
+pub fn keccak256<T: ByteSource>(_ input: T) -> [u8; 32] {
+    var state = Keccak256::new()
+    state.update(input, offset: 0, len: input.len())
+    state.finish()
+}
+
+/// The digest of `input` as a big-endian word; see `Keccak256::finish_word`.
+pub fn keccak256_word<T: ByteSource>(_ input: T) -> u256 {
+    var state = Keccak256::new()
+    state.update(input, offset: 0, len: input.len())
+    state.finish_word()
+}

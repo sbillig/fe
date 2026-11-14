@@ -1,0 +1,219 @@
+use core::ops::{WrappingMul, WrappingSub}
+use ingot::inversion::invert_256
+
+// Values and operations used generically by the curve arithmetic.
+pub trait Field {
+    fn zero() -> Self
+    fn one() -> Self
+    fn add(self, _ other: Self) -> Self
+    fn sub(self, _ other: Self) -> Self
+    fn mul(self, _ other: Self) -> Self
+    fn square(self) -> Self
+    fn double(self) -> Self
+    fn neg(self) -> Self
+    fn inverse(self) -> Self
+    fn is_zero(self) -> bool
+    fn equals(self, _ other: Self) -> bool
+}
+
+/// An odd prime p < 2^256 as little-endian 64-bit limbs, with -p^-1 mod 2^64
+/// for Montgomery reduction and R^2 mod p (R = 2^256) for entering the form.
+pub trait Modulus {
+    const VALUE: u256
+    const P0: u64
+    const P1: u64
+    const P2: u64
+    const P3: u64
+    const INV: u64
+    const R2: u256
+    /// p as signed 62-bit limbs, p^-1 mod 2^62, and R^3 mod p, for inversion.
+    const SIGNED_62: [i64; 5]
+    const INV62: u64
+    const R3: u256
+}
+
+/// An element of Z/pZ in Montgomery form (x * 2^256 mod p), little-endian limbs.
+pub struct Mont<M> { l0: u64, l1: u64, l2: u64, l3: u64 }
+
+impl<M> Copy for Mont<M> {}
+
+// a * b + c + carry, as (low, high) words.
+#[inline(always)]
+pub fn mac(_ a: u64, _ b: u64, _ c: u64, _ carry: u64) -> (u64, u64) {
+    let t = (a as u128) * (b as u128) + (c as u128) + (carry as u128)
+    (t.downcast_truncate(), (t >> 64).downcast_truncate())
+}
+
+// a * b, as (low, high) words.
+#[inline(always)]
+pub fn mul_wide(_ a: u64, _ b: u64) -> (u64, u64) {
+    let t = (a as u128) * (b as u128)
+    (t.downcast_truncate(), (t >> 64).downcast_truncate())
+}
+
+// a + b + carry, as (sum, carry out).
+#[inline(always)]
+pub fn adc(_ a: u64, _ b: u64, _ carry: u64) -> (u64, u64) {
+    let t = (a as u128) + (b as u128) + (carry as u128)
+    (t.downcast_truncate(), (t >> 64).downcast_truncate())
+}
+
+// a - b - borrow, as (difference, borrow out).
+#[inline(always)]
+pub fn sbb(_ a: u64, _ b: u64, _ borrow: u64) -> (u64, u64) {
+    let t = (a as u128).wrapping_sub(b as u128).wrapping_sub(borrow as u128)
+    (t.downcast_truncate(), (t >> 127).downcast_truncate())
+}
+
+fn raw<M>(_ value: u256) -> Mont<M> {
+    Mont {
+        l0: value.downcast_truncate(),
+        l1: (value >> 64).downcast_truncate(),
+        l2: (value >> 128).downcast_truncate(),
+        l3: (value >> 192).downcast_truncate(),
+    }
+}
+
+impl<M: Modulus> Mont<M> {
+    /// The element of a canonical integer `value < p`.
+    pub fn new(_ value: u256) -> Self {
+        core::assert(value < M::VALUE)
+        raw<M>(value).mul(raw<M>(M::R2))
+    }
+
+    /// The canonical integer of an element.
+    pub fn value(self) -> u256 {
+        let value = self.mul(raw<M>(1))
+        value.l0 as u256 | (value.l1 as u256) << 64 | (value.l2 as u256) << 128 | (value.l3 as u256) << 192
+    }
+
+    // The first CIOS row: self * b, then reduced.
+    #[inline(always)]
+    fn first_row(self, _ b: u64) -> (Self, u64) {
+        let (s0, h0) = mul_wide(b, self.l0)
+        let (l1, h1) = mul_wide(b, self.l1)
+        let (s1, c) = adc(h0, l1, 0)
+        let (l2, h2) = mul_wide(b, self.l2)
+        let (s2, c) = adc(h1, l2, c)
+        let (l3, h3) = mul_wide(b, self.l3)
+        let (s3, c) = adc(h2, l3, c)
+        let (s4, _) = adc(h3, 0, c)
+        Self::shift_reduced(s0, s1, s2, s3, s4, 0)
+    }
+
+    // One later CIOS row: t + self * b, then reduced. Each product adds its
+    // low words in one carry chain (`ca`) and its high words, a word up, in
+    // another (`cb`): with ADX the two interleave, one through CF and one
+    // through OF. The words above the chains are carry ops too, which stay
+    // in place: a plain addition would move to its use, inside the next
+    // chains, and clobber their flags.
+    #[inline(always)]
+    fn row(self, _ b: u64, _ t: Self, _ top: u64) -> (Self, u64) {
+        let (l0, h0) = mul_wide(b, self.l0)
+        let (s0, ca) = adc(t.l0, l0, 0)
+        let (s1, cb) = adc(t.l1, h0, 0)
+        let (l1, h1) = mul_wide(b, self.l1)
+        let (s1, ca) = adc(s1, l1, ca)
+        let (s2, cb) = adc(t.l2, h1, cb)
+        let (l2, h2) = mul_wide(b, self.l2)
+        let (s2, ca) = adc(s2, l2, ca)
+        let (s3, cb) = adc(t.l3, h2, cb)
+        let (l3, h3) = mul_wide(b, self.l3)
+        let (s3, ca) = adc(s3, l3, ca)
+        let (s4, cb) = adc(top, h3, cb)
+        let (s4, ca) = adc(s4, 0, ca)
+        let (s5, _) = adc(cb, 0, ca)
+        Self::shift_reduced(s0, s1, s2, s3, s4, s5)
+    }
+
+    // s plus the multiple of p that clears its low word, shifted down one
+    // word, with s5 the word above s. Two carry chains as in `row`.
+    #[inline(always)]
+    fn shift_reduced(_ s0: u64, _ s1: u64, _ s2: u64, _ s3: u64, _ s4: u64, _ s5: u64) -> (Self, u64) {
+        let m = s0.wrapping_mul(M::INV)
+        let (k0, j0) = mul_wide(m, M::P0)
+        let (_, ca) = adc(s0, k0, 0)
+        let (u1, cb) = adc(s1, j0, 0)
+        let (k1, j1) = mul_wide(m, M::P1)
+        let (u1, ca) = adc(u1, k1, ca)
+        let (u2, cb) = adc(s2, j1, cb)
+        let (k2, j2) = mul_wide(m, M::P2)
+        let (u2, ca) = adc(u2, k2, ca)
+        let (u3, cb) = adc(s3, j2, cb)
+        let (k3, j3) = mul_wide(m, M::P3)
+        let (u3, ca) = adc(u3, k3, ca)
+        let (u4, cb) = adc(s4, j3, cb)
+        let (u4, ca) = adc(u4, 0, ca)
+        let (u5, _) = adc(s5, cb, ca)
+        (Mont { l0: u1, l1: u2, l2: u3, l3: u4 }, u5)
+    }
+
+    // Subtract p when the value, with `top` above the four limbs, is at least p.
+    #[inline(always)]
+    fn reduce(self, _ top: u64) -> Self {
+        let (d0, b) = sbb(self.l0, M::P0, 0)
+        let (d1, b) = sbb(self.l1, M::P1, b)
+        let (d2, b) = sbb(self.l2, M::P2, b)
+        let (d3, b) = sbb(self.l3, M::P3, b)
+        let (_, b) = sbb(top, 0, b)
+        if b == 1 { self } else { Mont { l0: d0, l1: d1, l2: d2, l3: d3 } }
+    }
+
+    // Square-and-multiply over the bits of `exponent`, most significant first.
+    pub fn pow(self, _ exponent: u256) -> Self {
+        var result = Self::one()
+        var bit: u64 = 256
+        while bit > 0 {
+            bit -= 1
+            result = result.square()
+            if (exponent >> bit as u256) & 1 == 1 { result = result.mul(self) }
+        }
+        result
+    }
+}
+
+impl<M: Modulus> Field for Mont<M> {
+    fn zero() -> Self { Mont { l0: 0, l1: 0, l2: 0, l3: 0 } }
+    fn one() -> Self { Self::new(1) }
+    fn add(self, _ other: Self) -> Self {
+        // Both operands are below p, so the sum is below 2p: at most one carry.
+        let (s0, c) = adc(self.l0, other.l0, 0)
+        let (s1, c) = adc(self.l1, other.l1, c)
+        let (s2, c) = adc(self.l2, other.l2, c)
+        let (s3, c) = adc(self.l3, other.l3, c)
+        Mont { l0: s0, l1: s1, l2: s2, l3: s3 }.reduce(c)
+    }
+    fn sub(self, _ other: Self) -> Self {
+        let (d0, b) = sbb(self.l0, other.l0, 0)
+        let (d1, b) = sbb(self.l1, other.l1, b)
+        let (d2, b) = sbb(self.l2, other.l2, b)
+        let (d3, b) = sbb(self.l3, other.l3, b)
+        // Adds p back and chooses with a select rather than a branch, which
+        // mispredicts.
+        let (s0, c) = adc(d0, M::P0, 0)
+        let (s1, c) = adc(d1, M::P1, c)
+        let (s2, c) = adc(d2, M::P2, c)
+        let (s3, _) = adc(d3, M::P3, c)
+        if b == 1 { Mont { l0: s0, l1: s1, l2: s2, l3: s3 } } else { Mont { l0: d0, l1: d1, l2: d2, l3: d3 } }
+    }
+    fn mul(self, _ other: Self) -> Self {
+        let (t, top) = self.first_row(other.l0)
+        let (t, top) = self.row(other.l1, t, top)
+        let (t, top) = self.row(other.l2, t, top)
+        let (t, top) = self.row(other.l3, t, top)
+        t.reduce(top)
+    }
+    fn square(self) -> Self { self.mul(self) }
+    fn double(self) -> Self { self.add(self) }
+    fn neg(self) -> Self { Self::zero().sub(self) }
+    // The inverse of x R is x^-1 R^-1; multiplying by R^3 makes it x^-1 R.
+    // Zero maps to zero.
+    fn inverse(self) -> Self {
+        let limbs = invert_256([self.l0, self.l1, self.l2, self.l3], M::SIGNED_62, M::INV62)
+        Mont { l0: limbs[0], l1: limbs[1], l2: limbs[2], l3: limbs[3] }.mul(raw<M>(M::R3))
+    }
+    fn is_zero(self) -> bool { self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0 }
+    fn equals(self, _ other: Self) -> bool {
+        self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
+    }
+}

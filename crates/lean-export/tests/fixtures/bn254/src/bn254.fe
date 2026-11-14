@@ -1,0 +1,167 @@
+use core::Option
+use keccak::ByteSource
+use ingot::word_at
+use ingot::bn254_curve::{Point, on_curve}
+use ingot::bn254_field::{Field, Fp, Fp2, Fp12, MODULUS, fp, fp_value}
+use ingot::bn254_pairing::{CHUNK, Pair, final_exponentiation, frobenius, miller_loop, twist_b}
+
+// 6x^2 = p - 1 mod r, the eigenvalue of the Frobenius on G2.
+const SIX_X_SQUARED: u256 = 0x6f4d8248eeb859fbf83e9682e87cfd46
+
+// EIP-196 G1 encoding: (x, y) below p and on y^2 = x^3 + 3; (0, 0) is infinity.
+fn g1_point<T: ByteSource>(_ input: T, offset: usize) -> Option<Point<Fp>> {
+    let x = word_at(input, offset)
+    let y = word_at(input, offset: offset + 32)
+    if x >= MODULUS || y >= MODULUS { return Option::None }
+    if x == 0 && y == 0 { return Option::Some(Point::infinity()) }
+    let point = Point::affine(x: fp(x), y: fp(y))
+    if !on_curve(x: point.x, y: point.y, b: fp(3)) { return Option::None }
+    Option::Some(point)
+}
+
+// EIP-197 G2 encoding: x = x0 * u + x1 and y = y0 * u + y1, each word below p,
+// on the twist; all zeros is infinity. Subgroup membership is checked separately.
+fn g2_point<T: ByteSource>(_ input: T, offset: usize) -> Option<Point<Fp2>> {
+    let x_im = word_at(input, offset)
+    let x_re = word_at(input, offset: offset + 32)
+    let y_im = word_at(input, offset: offset + 64)
+    let y_re = word_at(input, offset: offset + 96)
+    if x_im >= MODULUS || x_re >= MODULUS || y_im >= MODULUS || y_re >= MODULUS { return Option::None }
+    if x_im == 0 && x_re == 0 && y_im == 0 && y_re == 0 { return Option::Some(Point::infinity()) }
+    let point = Point::affine(x: Fp2 { c0: fp(x_re), c1: fp(x_im) }, y: Fp2 { c0: fp(y_re), c1: fp(y_im) })
+    if !on_curve(x: point.x, y: point.y, b: twist_b()) { return Option::None }
+    Option::Some(point)
+}
+
+// EIP-196 G1 output: the affine coordinates, (0, 0) for infinity.
+fn encode(_ point: Point<Fp>) -> [u256; 2] {
+    if point.is_infinity() { return [0, 0] }
+    let (x, y) = point.to_affine()
+    [fp_value(x), fp_value(y)]
+}
+
+/// ECADD (0x06): the encoded sum of two G1 points, or None for invalid input.
+pub fn add<T: ByteSource>(_ input: T) -> Option<[u256; 2]> {
+    match (g1_point(input, offset: 0), g1_point(input, offset: 64)) {
+        (Option::Some(a), Option::Some(b)) => Option::Some(encode(a.add(b))),
+        _ => Option::None,
+    }
+}
+
+// The order r of G1.
+const ORDER: u256 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+// The cube root of unity beta in Fp for which (beta x, y) = [lambda] (x, y)
+// on G1, lambda = 0xb3c4d79d41a917585bfc41088d8daaa78b17ea66b99c90dd.
+const BETA: u256 = 0x59e26bcea0d48bacd4f263f1acdb5c4f5763473177fffffe
+// A reduced basis (a1, -b1), (a2, b2) of the vectors (u, v) with
+// u + v lambda = 0 mod r, and floor(b2 2^256 / r), floor(b1 2^256 / r).
+const GLV_A1: u256 = 0x89d3256894d213e3
+const GLV_B1: u256 = 0x6f4d8248eeb859fc8211bbeb7d4f1128
+const GLV_A2: u256 = 0x6f4d8248eeb859fd0be4e1541221250b
+const GLV_B2: u256 = 0x89d3256894d213e3
+const GLV_G1: u256 = 0x2d91d232ec7e0b3d7
+const GLV_G2: u256 = 0x24ccef014a773d2cf7a7bd9d4391eb18d
+
+// The magnitude of a 256-bit two's complement word, and whether it is negative.
+fn magnitude(_ word: u256) -> (u256, bool) {
+    let zero: u256 = 0
+    if word >> 255 == 1 { (zero.wrapping_sub(word), true) } else { (word, false) }
+}
+
+// [scalar] point for an affine G1 point, by the GLV method: scalar = k1 +
+// k2 lambda mod r with |k1|, |k2| below 2^130, from the lattice basis and
+// the top half of the scalar (the quotients are off by at most a few, which
+// the bound allows). One double-and-add over both halves adds point,
+// (beta x, y) or their precomputed affine sum, each negated with its half.
+pub(ingot) fn multiply_g1(_ point: Point<Fp>, _ scalar: u256) -> Point<Fp> {
+    let k = scalar % ORDER
+    let high = k >> 128
+    let c1 = (high * GLV_G1) >> 128
+    let c2 = (high * GLV_G2) >> 128
+    let (k1, negative1) = magnitude(k.wrapping_sub(c1 * GLV_A1).wrapping_sub(c2 * GLV_A2))
+    let (k2, negative2) = magnitude((c1 * GLV_B1).wrapping_sub(c2 * GLV_B2))
+    let x1 = point.x
+    let y1 = if negative1 { point.y.neg() } else { point.y }
+    let x2 = point.x.mul(fp(BETA))
+    let y2 = if negative2 { point.y.neg() } else { point.y }
+    let (x3, y3) = Point::affine(x: x1, y: y1).add_affine(x2, y2).to_affine()
+    var result = Point::infinity()
+    var bit: u64 = (256 - core::num::leading_zeros(k1 | k2)).downcast_truncate()
+    while bit > 0 {
+        bit -= 1
+        result = result.double()
+        let in1 = (k1 >> bit as u256) & 1 == 1
+        let in2 = (k2 >> bit as u256) & 1 == 1
+        if in1 && in2 { result = result.add_affine(x2: x3, y2: y3) }
+        else if in1 { result = result.add_affine(x2: x1, y2: y1) }
+        else if in2 { result = result.add_affine(x2, y2) }
+    }
+    result
+}
+
+/// ECMUL (0x07): the encoded product of a G1 point and a 256-bit scalar.
+pub fn mul<T: ByteSource>(_ input: T) -> Option<[u256; 2]> {
+    match g1_point(input, offset: 0) {
+        Option::Some(point) => {
+            let scalar = word_at(input, offset: 64)
+            if point.is_infinity() || scalar == 0 { return Option::Some([0, 0]) }
+            Option::Some(encode(multiply_g1(point, scalar)))
+        },
+        Option::None => Option::None,
+    }
+}
+
+// Whether a twist point is in G2: pi(Q) = [6x^2] Q (https://eprint.iacr.org/2022/352
+// section 4.3). Frobenius satisfies pi^2 - t pi + p = 0 with t = 6x^2 + 1, so a
+// passing point has [p - t + 1] Q = [r] Q = O.
+fn in_g2(_ q: Point<Fp2>) -> bool {
+    if q.is_infinity() { return true }
+    let (x, y) = frobenius(q.x, q.y)
+    q.multiply(SIX_X_SQUARED).equals(Point::affine(x, y))
+}
+
+/// ECPAIRING (0x08): whether the product of the pairings of 192-byte (G1, G2)
+/// pairs is one, or None for invalid input. G1 has cofactor one, so on-curve
+/// points are in the subgroup; G2 points must have order r.
+pub fn pairing<T: ByteSource>(_ input: T) -> Option<bool> {
+    let len = input.len()
+    if len % 192 != 0 { return Option::None }
+    // Check every pair before the Miller loops, which an invalid pair voids:
+    // encodings and curves first, then the costlier G2 subgroups.
+    var offset: usize = 0
+    while offset < len {
+        if g1_point(input, offset).is_none() || g2_point(input, offset: offset + 64).is_none() { return Option::None }
+        offset += 192
+    }
+    offset = 0
+    while offset < len {
+        if !in_g2(g2_point(input, offset: offset + 64).unwrap()) { return Option::None }
+        offset += 192
+    }
+    // Pairs with the identity contribute one; with none left, so does the product.
+    var product = Fp12::one()
+    var used = false
+    var chunk = [Pair { px: Fp::zero(), py: Fp::zero(), qx: Fp2::zero(), qy: Fp2::zero() }; 4]
+    var count: usize = 0
+    offset = 0
+    while offset < len {
+        let p = g1_point(input, offset).unwrap()
+        let q = g2_point(input, offset: offset + 64).unwrap()
+        if !p.is_infinity() && !q.is_infinity() {
+            chunk[count] = Pair { px: p.x, py: p.y, qx: q.x, qy: q.y }
+            count += 1
+            if count == CHUNK {
+                product = product.mul(miller_loop(chunk, count))
+                used = true
+                count = 0
+            }
+        }
+        offset += 192
+    }
+    if count > 0 {
+        product = product.mul(miller_loop(chunk, count))
+        used = true
+    }
+    if !used { return Option::Some(true) }
+    Option::Some(final_exponentiation(product).equals(Fp12::one()))
+}

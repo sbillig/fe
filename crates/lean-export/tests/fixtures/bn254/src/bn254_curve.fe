@@ -1,0 +1,99 @@
+use ingot::bn254_field::Field
+
+/// Jacobian coordinates (x/z^2, y/z^3) on y^2 = x^3 + b; z = 0 is infinity.
+/// The formulas use a = 0 and hold for any b, so G1 and its twist share them.
+pub struct Point<F> { pub x: F, pub y: F, pub z: F }
+
+impl<F> Copy for Point<F> where F: Copy {}
+
+impl<F> Point<F> where F: Field + Copy {
+    pub fn infinity() -> Self { Point { x: F::one(), y: F::one(), z: F::zero() } }
+    pub fn affine(x: F, y: F) -> Self { Point { x, y, z: F::one() } }
+    pub fn is_infinity(self) -> bool { self.z.is_zero() }
+
+    // dbl-2009-l
+    pub fn double(self) -> Self {
+        if self.is_infinity() || self.y.is_zero() { return Self::infinity() }
+        let a = self.x.square()
+        let b = self.y.square()
+        let c = b.square()
+        let d = self.x.add(b).square().sub(a).sub(c).double()
+        let e = a.double().add(a)
+        let x = e.square().sub(d.double())
+        let y = e.mul(d.sub(x)).sub(c.double().double().double())
+        Point { x, y, z: self.y.mul(self.z).double() }
+    }
+
+    // add-2007-bl, falling back to doubling for equal points.
+    pub fn add(self, _ other: Self) -> Self {
+        if self.is_infinity() { return other }
+        if other.is_infinity() { return self }
+        let z1z1 = self.z.square()
+        let z2z2 = other.z.square()
+        let u1 = self.x.mul(z2z2)
+        let u2 = other.x.mul(z1z1)
+        let s1 = self.y.mul(other.z).mul(z2z2)
+        let s2 = other.y.mul(self.z).mul(z1z1)
+        let h = u2.sub(u1)
+        let r = s2.sub(s1).double()
+        if h.is_zero() { return if r.is_zero() { self.double() } else { Self::infinity() } }
+        let i = h.double().square()
+        let j = h.mul(i)
+        let v = u1.mul(i)
+        let x = r.square().sub(j).sub(v.double())
+        let y = r.mul(v.sub(x)).sub(s1.mul(j).double())
+        Point { x, y, z: self.z.add(other.z).square().sub(z1z1).sub(z2z2).mul(h) }
+    }
+
+    pub fn neg(self) -> Self { Point { x: self.x, y: self.y.neg(), z: self.z } }
+
+    // madd-2007-bl: the sum with an affine point (x2, y2).
+    pub fn add_affine(self, x2: F, y2: F) -> Self {
+        if self.is_infinity() { return Point::affine(x: x2, y: y2) }
+        let z1z1 = self.z.square()
+        let u2 = x2.mul(z1z1)
+        let s2 = y2.mul(self.z).mul(z1z1)
+        let h = u2.sub(self.x)
+        let r = s2.sub(self.y).double()
+        if h.is_zero() { return if r.is_zero() { self.double() } else { Self::infinity() } }
+        let hh = h.square()
+        let i = hh.double().double()
+        let j = h.mul(i)
+        let v = self.x.mul(i)
+        let x = r.square().sub(j).sub(v.double())
+        let y = r.mul(v.sub(x)).sub(self.y.mul(j).double())
+        Point { x, y, z: self.z.add(h).square().sub(z1z1).sub(hh) }
+    }
+
+    /// Whether two points are equal: x1 z2^2 = x2 z1^2 and y1 z2^3 = y2 z1^3.
+    pub fn equals(self, _ other: Self) -> bool {
+        if self.is_infinity() || other.is_infinity() { return self.is_infinity() && other.is_infinity() }
+        let z1z1 = self.z.square()
+        let z2z2 = other.z.square()
+        self.x.mul(z2z2).equals(other.x.mul(z1z1)) && self.y.mul(z2z2.mul(other.z)).equals(other.y.mul(z1z1.mul(self.z)))
+    }
+
+    // Double-and-add over the scalar's bits, most significant first.
+    pub fn multiply(self, _ scalar: u256) -> Self {
+        var result = Self::infinity()
+        var bit: u64 = (256 - core::num::leading_zeros(scalar)).downcast_truncate()
+        while bit > 0 {
+            bit -= 1
+            result = result.double()
+            if (scalar >> bit as u256) & 1 == 1 { result = result.add(self) }
+        }
+        result
+    }
+
+    /// The affine coordinates of a finite point, with one inversion.
+    pub fn to_affine(self) -> (F, F) {
+        let z_inv = self.z.inverse()
+        let z_inv2 = z_inv.square()
+        (self.x.mul(z_inv2), self.y.mul(z_inv2.mul(z_inv)))
+    }
+}
+
+/// Whether affine (x, y) satisfies y^2 = x^3 + b.
+pub fn on_curve<F: Field + Copy>(x: F, y: F, b: F) -> bool {
+    y.square().equals(x.square().mul(x).add(b))
+}

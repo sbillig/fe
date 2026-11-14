@@ -1,0 +1,6 @@
+[ingot]
+name = "bn254"
+version = "0.1.0"
+
+[dependencies]
+keccak = { path = "keccak" }

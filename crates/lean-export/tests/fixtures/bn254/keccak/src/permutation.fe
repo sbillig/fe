@@ -1,0 +1,110 @@
+// Keccak-f[1600], indexed x + 5*y. Small counters use u64 because Fe usize
+// has 256-bit arithmetic, including on native targets. Constants and round definition:
+// https://keccak.team/keccak_specs_summary.html
+const ROUND_CONSTANTS: [u64; 24] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
+    0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a,
+    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+]
+
+#[inline(always)]
+fn rotate(_ value: u64, by: u64) -> u64 {
+    (value << by) | (value >> (64 - by))
+}
+
+// The fixed 5x5 round exposes constant lane indices and rotation amounts. A
+// round reads one state and writes the other, a row at a time, so the other
+// state's lanes stay in memory while it runs: each lane is read for theta's
+// column parities and again for rho/pi, and only the deltas and one row are
+// live. Rounds alternate between `state` and a scratch state, so each runs in
+// its own block and the scratch state stays in memory.
+pub fn permute(_ state: mut [u64; 25]) {
+    var other: [u64; 25] = [0; 25]
+    var round: usize = 0
+    while round < 24 {
+        if round % 2 == 0 {
+            keccak_round(state, mut other, ROUND_CONSTANTS[round])
+        } else {
+            keccak_round(other, mut state, ROUND_CONSTANTS[round])
+        }
+        round += 1
+    }
+}
+
+#[inline(always)]
+fn keccak_round(_ a: [u64; 25], _ e: mut [u64; 25], _ constant: u64) {
+    // Theta: column parities and their neighboring deltas.
+    let c0 = a[0] ^ a[5] ^ a[10] ^ a[15] ^ a[20]
+    let c1 = a[1] ^ a[6] ^ a[11] ^ a[16] ^ a[21]
+    let c2 = a[2] ^ a[7] ^ a[12] ^ a[17] ^ a[22]
+    let c3 = a[3] ^ a[8] ^ a[13] ^ a[18] ^ a[23]
+    let c4 = a[4] ^ a[9] ^ a[14] ^ a[19] ^ a[24]
+    let d0 = c4 ^ rotate(c1, by: 1)
+    let d1 = c0 ^ rotate(c2, by: 1)
+    let d2 = c1 ^ rotate(c3, by: 1)
+    let d3 = c2 ^ rotate(c4, by: 1)
+    let d4 = c3 ^ rotate(c0, by: 1)
+
+    // Rho/Pi then Chi for row 0, with Iota on lane 0.
+    let b0 = a[0] ^ d0
+    let b1 = rotate(a[6] ^ d1, by: 44)
+    let b2 = rotate(a[12] ^ d2, by: 43)
+    let b3 = rotate(a[18] ^ d3, by: 21)
+    let b4 = rotate(a[24] ^ d4, by: 14)
+    e[0] = b0 ^ (!b1 & b2) ^ constant
+    e[1] = b1 ^ (!b2 & b3)
+    e[2] = b2 ^ (!b3 & b4)
+    e[3] = b3 ^ (!b4 & b0)
+    e[4] = b4 ^ (!b0 & b1)
+
+    // Rho/Pi then Chi for row 1.
+    let b5 = rotate(a[3] ^ d3, by: 28)
+    let b6 = rotate(a[9] ^ d4, by: 20)
+    let b7 = rotate(a[10] ^ d0, by: 3)
+    let b8 = rotate(a[16] ^ d1, by: 45)
+    let b9 = rotate(a[22] ^ d2, by: 61)
+    e[5] = b5 ^ (!b6 & b7)
+    e[6] = b6 ^ (!b7 & b8)
+    e[7] = b7 ^ (!b8 & b9)
+    e[8] = b8 ^ (!b9 & b5)
+    e[9] = b9 ^ (!b5 & b6)
+
+    // Rho/Pi then Chi for row 2.
+    let b10 = rotate(a[1] ^ d1, by: 1)
+    let b11 = rotate(a[7] ^ d2, by: 6)
+    let b12 = rotate(a[13] ^ d3, by: 25)
+    let b13 = rotate(a[19] ^ d4, by: 8)
+    let b14 = rotate(a[20] ^ d0, by: 18)
+    e[10] = b10 ^ (!b11 & b12)
+    e[11] = b11 ^ (!b12 & b13)
+    e[12] = b12 ^ (!b13 & b14)
+    e[13] = b13 ^ (!b14 & b10)
+    e[14] = b14 ^ (!b10 & b11)
+
+    // Rho/Pi then Chi for row 3.
+    let b15 = rotate(a[4] ^ d4, by: 27)
+    let b16 = rotate(a[5] ^ d0, by: 36)
+    let b17 = rotate(a[11] ^ d1, by: 10)
+    let b18 = rotate(a[17] ^ d2, by: 15)
+    let b19 = rotate(a[23] ^ d3, by: 56)
+    e[15] = b15 ^ (!b16 & b17)
+    e[16] = b16 ^ (!b17 & b18)
+    e[17] = b17 ^ (!b18 & b19)
+    e[18] = b18 ^ (!b19 & b15)
+    e[19] = b19 ^ (!b15 & b16)
+
+    // Rho/Pi then Chi for row 4.
+    let b20 = rotate(a[2] ^ d2, by: 62)
+    let b21 = rotate(a[8] ^ d3, by: 55)
+    let b22 = rotate(a[14] ^ d4, by: 39)
+    let b23 = rotate(a[15] ^ d0, by: 41)
+    let b24 = rotate(a[21] ^ d1, by: 2)
+    e[20] = b20 ^ (!b21 & b22)
+    e[21] = b21 ^ (!b22 & b23)
+    e[22] = b22 ^ (!b23 & b24)
+    e[23] = b23 ^ (!b24 & b20)
+    e[24] = b24 ^ (!b20 & b21)
+}

@@ -1,0 +1,253 @@
+// Modular inversion by Bernstein-Yang divsteps in variable time: libsecp256k1's
+// `modinv64_var` (src/modinv64_impl.h, explained in its
+// doc/safegcd_implementation.md), for an odd modulus of any size. Numbers are
+// `L` signed 62-bit limbs, least significant first; every limb but the top one
+// is in [0, 2^62), and the top one carries the sign.
+
+use core::num::trailing_zeros
+
+const M62: u64 = 0x3fffffffffffffff
+const M62_SIGNED: i64 = 0x3fffffffffffffff
+
+// The transition matrix [u v; q r] of 62 divsteps, scaled by 2^62.
+struct Transition { u: i64, v: i64, q: i64, r: i64 }
+
+impl Copy for Transition {}
+
+// 62 divsteps from eta (minus delta) and the low words of f and g: the new eta
+// and the transition matrix. Runs of zeros in g go at once, and each odd step
+// also cancels up to six (eta < 0) or four (otherwise) of g's low bits.
+#[arithmetic(unchecked)]
+fn divsteps(_ eta: i64, _ f0: u64, _ g0: u64) -> (i64, Transition) {
+    var u: u64 = 1
+    var v: u64 = 0
+    var q: u64 = 0
+    var r: u64 = 1
+    var f = f0
+    var g = g0
+    var eta = eta
+    var left: u64 = 62
+    while true {
+        // A sentinel bit counts zeros only up to `left`.
+        let zeros = trailing_zeros(g | (0xffffffffffffffff << left))
+        g = g >> zeros
+        u = u << zeros
+        v = v << zeros
+        eta -= zeros.downcast_truncate()
+        left -= zeros
+        if left == 0 { break }
+        var bits: u64 = 15
+        if eta < 0 {
+            // Negate eta and replace (f, g) with (g, -f).
+            eta = 0 - eta
+            let f_old = f
+            f = g
+            g = 0 - f_old
+            let u_old = u
+            u = q
+            q = 0 - u_old
+            let v_old = v
+            v = r
+            r = 0 - v_old
+            bits = 63
+        }
+        // Cancel no more than `left` bits, nor more than eta + 1, after which
+        // eta's sign flips again.
+        let room: u64 = (eta + 1).downcast_truncate()
+        let limit = if room < left { room } else { left }
+        let mask = (0xffffffffffffffff >> (64 - limit)) & bits
+        // The multiple of f that clears g's low bits under the mask: f's inverse
+        // modulo 2^6 (from f * (f * f - 2)), or modulo 2^4.
+        let w = if bits == 63 {
+            (f * g * (f * f - 2)) & mask
+        } else {
+            ((0 - (f + (((f + 1) & 4) << 1))) * g) & mask
+        }
+        g += f * w
+        q += u * w
+        r += v * w
+    }
+    (eta, Transition { u: u.downcast_truncate(), v: v.downcast_truncate(), q: q.downcast_truncate(), r: r.downcast_truncate() })
+}
+
+// t * [d, e] / 2^62 mod m, adding the multiples of m that clear the low 62
+// bits; d and e stay in (-2m, m).
+#[arithmetic(unchecked)]
+fn update_de<const L: usize>(_ d: [i64; L], _ e: [i64; L], _ t: Transition, _ modulus: [i64; L], _ inv62: u64) -> ([i64; L], [i64; L]) {
+    let sd = d[L - 1] >> 63
+    let se = e[L - 1] >> 63
+    var md = (t.u & sd) + (t.v & se)
+    var me = (t.q & sd) + (t.r & se)
+    var cd = (t.u as i128) * (d[0] as i128) + (t.v as i128) * (e[0] as i128)
+    var ce = (t.q as i128) * (d[0] as i128) + (t.r as i128) * (e[0] as i128)
+    let low_d: u64 = cd.downcast_truncate()
+    let low_e: u64 = ce.downcast_truncate()
+    let md_bits: u64 = md.downcast_truncate()
+    let me_bits: u64 = me.downcast_truncate()
+    let correction_d: i64 = ((inv62 * low_d + md_bits) & M62).downcast_truncate()
+    let correction_e: i64 = ((inv62 * low_e + me_bits) & M62).downcast_truncate()
+    md -= correction_d
+    me -= correction_e
+    cd += (modulus[0] as i128) * (md as i128)
+    ce += (modulus[0] as i128) * (me as i128)
+    cd = cd >> 62
+    ce = ce >> 62
+    var next_d: [i64; L] = [0; L]
+    var next_e: [i64; L] = [0; L]
+    var i: usize = 1
+    while i < L {
+        cd += (t.u as i128) * (d[i] as i128) + (t.v as i128) * (e[i] as i128) + (modulus[i] as i128) * (md as i128)
+        ce += (t.q as i128) * (d[i] as i128) + (t.r as i128) * (e[i] as i128) + (modulus[i] as i128) * (me as i128)
+        let limb_d: i64 = cd.downcast_truncate()
+        let limb_e: i64 = ce.downcast_truncate()
+        next_d[i - 1] = limb_d & M62_SIGNED
+        next_e[i - 1] = limb_e & M62_SIGNED
+        cd = cd >> 62
+        ce = ce >> 62
+        i += 1
+    }
+    next_d[L - 1] = cd.downcast_truncate()
+    next_e[L - 1] = ce.downcast_truncate()
+    (next_d, next_e)
+}
+
+// t * [f, g] / 2^62, which is exact.
+#[arithmetic(unchecked)]
+fn update_fg<const L: usize>(_ f: [i64; L], _ g: [i64; L], _ t: Transition) -> ([i64; L], [i64; L]) {
+    var cf = (t.u as i128) * (f[0] as i128) + (t.v as i128) * (g[0] as i128)
+    var cg = (t.q as i128) * (f[0] as i128) + (t.r as i128) * (g[0] as i128)
+    cf = cf >> 62
+    cg = cg >> 62
+    var next_f: [i64; L] = [0; L]
+    var next_g: [i64; L] = [0; L]
+    var i: usize = 1
+    while i < L {
+        cf += (t.u as i128) * (f[i] as i128) + (t.v as i128) * (g[i] as i128)
+        cg += (t.q as i128) * (f[i] as i128) + (t.r as i128) * (g[i] as i128)
+        let limb_f: i64 = cf.downcast_truncate()
+        let limb_g: i64 = cg.downcast_truncate()
+        next_f[i - 1] = limb_f & M62_SIGNED
+        next_g[i - 1] = limb_g & M62_SIGNED
+        cf = cf >> 62
+        cg = cg >> 62
+        i += 1
+    }
+    next_f[L - 1] = cf.downcast_truncate()
+    next_g[L - 1] = cg.downcast_truncate()
+    (next_f, next_g)
+}
+
+// Add m to r where r is negative.
+#[arithmetic(unchecked)]
+fn add_if_negative<const L: usize>(_ r: [i64; L], _ modulus: [i64; L]) -> [i64; L] {
+    var r = r
+    let negative = r[L - 1] >> 63
+    var i: usize = 0
+    while i < L {
+        r[i] += modulus[i] & negative
+        i += 1
+    }
+    r
+}
+
+// Bring every limb but the top one back into [0, 2^62).
+#[arithmetic(unchecked)]
+fn carry<const L: usize>(_ r: [i64; L]) -> [i64; L] {
+    var r = r
+    var i: usize = 0
+    while i + 1 < L {
+        r[i + 1] += r[i] >> 62
+        r[i] &= M62_SIGNED
+        i += 1
+    }
+    r
+}
+
+// sign * r mod m in [0, m), for r in (-2m, m) and sign the sign of +-1.
+#[arithmetic(unchecked)]
+fn normalize<const L: usize>(_ r: [i64; L], _ sign: i64, _ modulus: [i64; L]) -> [i64; L] {
+    var r = add_if_negative(r, modulus)
+    let negate = sign >> 63
+    var i: usize = 0
+    while i < L {
+        r[i] = (r[i] ^ negate) - negate
+        i += 1
+    }
+    carry(add_if_negative(carry(r), modulus))
+}
+
+fn is_zero<const L: usize>(_ r: [i64; L]) -> bool {
+    var i: usize = 0
+    while i < L {
+        if r[i] != 0 { return false }
+        i += 1
+    }
+    true
+}
+
+/// x^-1 mod m for x in [0, m), zero for zero, given m and m^-1 mod 2^62.
+#[arithmetic(unchecked)]
+pub fn invert<const L: usize>(_ x: [i64; L], _ modulus: [i64; L], _ inv62: u64) -> [i64; L] {
+    // f = m, g = x, d = 0, e = 1, and eta = -delta with delta = 1; d x = f
+    // and e x = g mod m throughout.
+    var d: [i64; L] = [0; L]
+    var e: [i64; L] = [0; L]
+    e[0] = 1
+    var f = modulus
+    var g = x
+    var eta: i64 = -1
+    while !is_zero(g) {
+        let (next, t) = divsteps(eta, f[0].downcast_truncate(), g[0].downcast_truncate())
+        eta = next
+        let (next_d, next_e) = update_de(d, e, t, modulus, inv62)
+        d = next_d
+        e = next_e
+        let (next_f, next_g) = update_fg(f, g, t)
+        f = next_f
+        g = next_g
+    }
+    // Now f = +-gcd = +-1, and d = +-x^-1.
+    normalize(d, f[L - 1], modulus)
+}
+
+/// x^-1 mod m for a 256-bit modulus, with integers as four 64-bit limbs.
+pub fn invert_256(_ x: [u64; 4], _ modulus: [i64; 5], _ inv62: u64) -> [u64; 4] {
+    let s = invert(
+        [
+            (x[0] & M62).downcast_truncate(),
+            (((x[0] >> 62) | (x[1] << 2)) & M62).downcast_truncate(),
+            (((x[1] >> 60) | (x[2] << 4)) & M62).downcast_truncate(),
+            (((x[2] >> 58) | (x[3] << 6)) & M62).downcast_truncate(),
+            (x[3] >> 56).downcast_truncate(),
+        ],
+        modulus,
+        inv62,
+    )
+    let w: [u64; 5] = [s[0].downcast_truncate(), s[1].downcast_truncate(), s[2].downcast_truncate(), s[3].downcast_truncate(), s[4].downcast_truncate()]
+    [w[0] | (w[1] << 62), (w[1] >> 2) | (w[2] << 60), (w[2] >> 4) | (w[3] << 58), (w[3] >> 6) | (w[4] << 56)]
+}
+
+/// x^-1 mod m for a 384-bit modulus, with integers as six 64-bit limbs.
+pub fn invert_384(_ x: [u64; 6], _ modulus: [i64; 7], _ inv62: u64) -> [u64; 6] {
+    let s = invert(
+        [
+            (x[0] & M62).downcast_truncate(),
+            (((x[0] >> 62) | (x[1] << 2)) & M62).downcast_truncate(),
+            (((x[1] >> 60) | (x[2] << 4)) & M62).downcast_truncate(),
+            (((x[2] >> 58) | (x[3] << 6)) & M62).downcast_truncate(),
+            (((x[3] >> 56) | (x[4] << 8)) & M62).downcast_truncate(),
+            (((x[4] >> 54) | (x[5] << 10)) & M62).downcast_truncate(),
+            (x[5] >> 52).downcast_truncate(),
+        ],
+        modulus,
+        inv62,
+    )
+    let w: [u64; 7] = [
+        s[0].downcast_truncate(), s[1].downcast_truncate(), s[2].downcast_truncate(), s[3].downcast_truncate(),
+        s[4].downcast_truncate(), s[5].downcast_truncate(), s[6].downcast_truncate(),
+    ]
+    [
+        w[0] | (w[1] << 62), (w[1] >> 2) | (w[2] << 60), (w[2] >> 4) | (w[3] << 58), (w[3] >> 6) | (w[4] << 56),
+        (w[4] >> 8) | (w[5] << 54), (w[5] >> 10) | (w[6] << 52),
+    ]
+}

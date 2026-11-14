@@ -42,6 +42,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("weth9", true),
     ("trust", true),
     ("ecrecover", true),
+    ("bn254", true),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it

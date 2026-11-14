@@ -1,0 +1,47 @@
+// fevm's ECADD (0x06), BN254 point addition, as a contract. `bn254.fe`, `bn254_curve.fe`,
+// `bn254_field.fe`, `bn254_pairing.fe`, `montgomery.fe` and `inversion.fe` are copied verbatim
+// from `ingots/precompiles/src` of fe-lang/fevm at commit
+// a631a777b7d1761bccfc8af4e7471643905b9354, and `word_at` below from its `lib.fe`. `keccak/` is
+// fe-lang/keccak at commit 345d5088de986fe54b23a6aaa3a33e1c349d0960, the dependency fevm's
+// `fe.toml` pins, for its `ByteSource`. The rest of this file is not fevm's.
+use core::{MemBuffer, MemSpan, Option}
+use core::num::swap_bytes
+use keccak::ByteSource
+use std::evm::RawOps
+
+/// The big-endian word at `offset`, zero-padded past the input as buffer_read:
+/// four big-endian lanes when the input holds it.
+pub fn word_at<T: ByteSource>(_ input: T, offset: usize) -> u256 {
+    if offset + 32 <= input.len() {
+        return (swap_bytes(input.lane_at(offset)) as u256) << 192
+            | (swap_bytes(input.lane_at(offset + 8)) as u256) << 128
+            | (swap_bytes(input.lane_at(offset + 16)) as u256) << 64
+            | swap_bytes(input.lane_at(offset + 24)) as u256
+    }
+    var value: u256 = 0
+    for index in offset..offset + 32 {
+        value = (value << 8) | if index < input.len() { input.byte_at(index) as u256 } else { 0 }
+    }
+    value
+}
+
+/// Every call is an ECADD of its call data, as `bn254::add` reads it: the call returns the 64
+/// bytes of the sum, or reverts without data where the precompile fails.
+pub contract Bn254Add {
+    recv {
+        _ uses (raw: mut RawOps) {
+            let len = raw.calldatasize()
+            var input = MemBuffer::new(len.downcast_unchecked())
+            raw.calldatacopy(dest: mut input, dest_offset: 0, src_offset: 0, len)
+            match bn254::add(input) {
+                Option::Some(sum) => {
+                    var output = MemBuffer::new(64)
+                    output.write_word(offset: 0, value: sum[0])
+                    output.write_word(offset: 32, value: sum[1])
+                    raw.return_data(data: output.span())
+                }
+                Option::None => raw.revert(data: MemSpan::empty()),
+            }
+        }
+    }
+}

@@ -1,0 +1,152 @@
+use ingot::bn254_field::{Field, Fp, Fp2, Fp6, Fp12, fp}
+
+// The NAF of the optimal ate loop count 6x + 2 below its leading 1, most
+// significant digit first, for the BN parameter x = 4965661367192848881.
+const ATE_NAF: [i8; 65] = [
+    0, -1, 0, 1, 0, 0, 0, -1, 0, -1, 0, 0, 0, -1, 0, 1, 0, -1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1, 0, 0, -1, 0,
+    0, 0, 0, -1, 0, 1, 0, 0, 0, -1, 0, -1, 0, 0, 1, 0, 0, 0, -1, 0, 0, -1, 0, 1, 0, 1, 0, 0, 0,
+]
+// x, for the final exponentiation.
+const BN_X: u64 = 0x44e992b44a6909f1
+
+/// b / (9 + u), the D-type twist coefficient of y^2 = x^3 + b on G2.
+pub fn twist_b() -> Fp2 {
+    Fp2 {
+        c0: fp(19485874751759354771024239261021720505790618469301721065564631296452457478373),
+        c1: fp(266929791119991161246907387137283842545076965332900288569378510910307636690),
+    }
+}
+
+// Homogeneous projective (x/z, y/z) on the twist.
+struct Projective { x: Fp2, y: Fp2, z: Fp2 }
+impl Copy for Projective {}
+
+// A line through points of the twist, evaluated at P as c0*py + c1*px w + c2 v w.
+struct Line { c0: Fp2, c1: Fp2, c2: Fp2 }
+impl Copy for Line {}
+
+// Costello-Lange-Naehrig doubling with its tangent line (eprint 2013/722, eq. 3).
+fn double_step(_ r: Projective, two_inv: Fp, b: Fp2) -> (Projective, Line) {
+    let a = r.x.mul(r.y).scale(two_inv)
+    let yy = r.y.square()
+    let zz = r.z.square()
+    let e = b.mul(zz.double().add(zz))
+    let f = e.double().add(e)
+    let g = yy.add(f).scale(two_inv)
+    let h = r.y.add(r.z).square().sub(yy.add(zz))
+    let i = e.sub(yy)
+    let j = r.x.square()
+    let ee = e.square()
+    let doubled = Projective { x: a.mul(yy.sub(f)), y: g.square().sub(ee.double().add(ee)), z: yy.mul(h) }
+    (doubled, Line { c0: h.neg(), c1: j.double().add(j), c2: i })
+}
+
+// Mixed addition of affine Q with its chord line (eprint 2013/722, eq. 4).
+fn add_step(_ r: Projective, qx: Fp2, qy: Fp2) -> (Projective, Line) {
+    let theta = r.y.sub(qy.mul(r.z))
+    let lambda = r.x.sub(qx.mul(r.z))
+    let c = theta.square()
+    let d = lambda.square()
+    let e = lambda.mul(d)
+    let f = r.z.mul(c)
+    let g = r.x.mul(d)
+    let h = e.add(f).sub(g.double())
+    let sum = Projective { x: lambda.mul(h), y: theta.mul(g.sub(h)).sub(e.mul(r.y)), z: r.z.mul(e) }
+    (sum, Line { c0: lambda, c1: theta.neg(), c2: theta.mul(qx).sub(lambda.mul(qy)) })
+}
+
+/// The p-power Frobenius of a twist point: (conj(x) xi^((p - 1)/3), conj(y) xi^((p - 1)/2)),
+/// which is psi, [p] = [6x^2] on G2.
+pub fn frobenius(_ qx: Fp2, _ qy: Fp2) -> (Fp2, Fp2) {
+    let gamma_x = Fp2 {
+        c0: fp(0x2fb347984f7911f74c0bec3cf559b143b78cc310c2c3330c99e39557176f553d),
+        c1: fp(0x16c9e55061ebae204ba4cc8bd75a079432ae2a1d0b7c9dce1665d51c640fcba2),
+    }
+    let gamma_y = Fp2 {
+        c0: fp(0x063cf305489af5dcdc5ec698b6e2f9b9dbaae0eda9c95998dc54014671a0135a),
+        c1: fp(0x07c03cbcac41049a0704b5a7ec796f2b21807dc98fa25bd282d37f632623b0e3),
+    }
+    (qx.conjugate().mul(gamma_x), qy.conjugate().mul(gamma_y))
+}
+
+/// A G1 point and a twist point whose pairing enters the product.
+pub struct Pair { pub px: Fp, pub py: Fp, pub qx: Fp2, pub qy: Fp2 }
+
+impl Copy for Pair {}
+
+fn ell(_ f: Fp12, _ line: Line, _ pair: Pair) -> Fp12 { f.mul_by_line(a: line.c0.scale(pair.py), b: line.c1.scale(pair.px), c: line.c2) }
+
+/// The most pairs one Miller loop takes.
+pub const CHUNK: usize = 4
+
+/// The product over the first `count` pairs of the optimal ate Miller
+/// functions f_{6x+2,Q}(P) with the lines through pi(Q) and -pi^2(Q), sharing
+/// the squarings of f. Line factors in proper subfields stay in, since the
+/// final exponentiation removes them.
+pub fn miller_loop(_ pairs: [Pair; 4], count: usize) -> Fp12 {
+    let two_inv = fp(2).inverse()
+    let b = twist_b()
+    var points = [Projective { x: Fp2::zero(), y: Fp2::zero(), z: Fp2::zero() }; 4]
+    for i in 0..count { points[i] = Projective { x: pairs[i].qx, y: pairs[i].qy, z: Fp2::one() } }
+    var f = Fp12::one()
+    for digit in ATE_NAF {
+        f = f.square()
+        for i in 0..count {
+            let pair = pairs[i]
+            let (doubled, tangent) = double_step(points[i], two_inv, b)
+            f = ell(f, tangent, pair)
+            if digit == 0 {
+                points[i] = doubled
+            } else {
+                let qy = if digit == 1 { pair.qy } else { pair.qy.neg() }
+                let (sum, chord) = add_step(doubled, qx: pair.qx, qy)
+                points[i] = sum
+                f = ell(f, chord, pair)
+            }
+        }
+    }
+    for i in 0..count {
+        let pair = pairs[i]
+        let (q1x, q1y) = frobenius(pair.qx, pair.qy)
+        let (q2x, q2y) = frobenius(q1x, q1y)
+        let (sum, chord) = add_step(points[i], qx: q1x, qy: q1y)
+        f = ell(f, chord, pair)
+        let (_, last) = add_step(sum, qx: q2x, qy: q2y.neg())
+        f = ell(f, last, pair)
+    }
+    f
+}
+
+// f^x for f in the cyclotomic subgroup.
+fn cyclotomic_exp(_ f: Fp12) -> Fp12 {
+    var result = f
+    var bit: u64 = 62
+    while bit > 0 {
+        bit -= 1
+        result = result.cyclotomic_square()
+        if (BN_X >> bit) & 1 == 1 { result = result.mul(f) }
+    }
+    result
+}
+
+/// f^(m (p^12 - 1)/r) for m = 2x (6x^2 + 3x + 1), coprime to r, which is one
+/// exactly when the pairing product is: the easy part f^((p^6 - 1)(p^2 + 1)),
+/// then Fuentes-Castaneda et al.'s hard part as in arkworks' BN final
+/// exponentiation. Zero, which no Miller loop gives, maps to zero.
+pub fn final_exponentiation(_ f: Fp12) -> Fp12 {
+    let easy = f.conjugate().mul(f.inverse())
+    let r = easy.frobenius(2).mul(easy)
+    // A conjugate is a power by -1: the hard part takes powers by -x.
+    let y0 = cyclotomic_exp(r).conjugate()
+    let y1 = y0.cyclotomic_square()
+    let y2 = y1.cyclotomic_square()
+    let y3 = y2.mul(y1)
+    let y4 = cyclotomic_exp(y3).conjugate()
+    let y5 = y4.cyclotomic_square()
+    let y6 = cyclotomic_exp(y5)
+    let y8 = y6.mul(y4).mul(y3.conjugate())
+    let y9 = y8.mul(y1)
+    let y11 = y8.mul(y4).mul(r)
+    let y14 = y8.frobenius(2).mul(y9.frobenius(1).mul(y11))
+    r.conjugate().mul(y9).frobenius(3).mul(y14)
+}
