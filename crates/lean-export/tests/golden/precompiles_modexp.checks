@@ -1,0 +1,6 @@
+set_option maxRecDepth 10000 in
+example : MAX_LENGTH = pure (UInt256.ofNat 1024) := rfl
+set_option maxRecDepth 10000 in
+example : FAILURE = pure (UInt256.ofNat 1) := rfl
+set_option maxRecDepth 10000 in
+example : LIMB_BASE = pure (UInt256.ofNat 18446744073709551616) := rfl

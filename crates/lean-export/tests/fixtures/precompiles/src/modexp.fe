@@ -1,0 +1,671 @@
+use core::{MemArray, MemBuffer, MemSlice, Option}
+use core::num::{leading_zeros, swap_bytes, trailing_zeros}
+use core::ptr::{cast, offset_bytes}
+use keccak::ByteSource
+use ingot::{FAILURE, Output, SUCCESS, host_allocation}
+use ingot::bignum::{Modulus, Montgomery, limb}
+use ingot::montgomery::{adc, mac, sbb}
+
+// Input bytes beyond the calldata read as zero (EIP-198 right padding).
+fn input_byte<T: ByteSource>(_ input: T, _ index: usize) -> u8 {
+    if index < input.len() { input.byte_at(index) } else { 0 }
+}
+
+// A big-endian integer of `len` (at most 32) bytes starting at `offset`.
+#[arithmetic(unchecked)]
+fn input_word<T: ByteSource>(_ input: T, offset: usize, len: usize) -> u256 {
+    // Only the bytes within the input can be nonzero.
+    let end = input.len()
+    let present = if offset >= end { 0 } else if end - offset < len { end - offset } else { len }
+    if present == 0 { return 0 }
+    // Whole lanes, then the remaining bytes.
+    var value: u256 = 0
+    var i: usize = 0
+    while i + 8 <= present {
+        value = (value << 64) | swap_bytes(input.lane_at(offset + i)) as u256
+        i += 8
+    }
+    while i < present {
+        value = (value << 8) | input.byte_at(offset + i) as u256
+        i += 1
+    }
+    value << ((len - present) * 8) as u256
+}
+
+// Limb `index` (limb 0 least significant) of the big-endian number of `len`
+// bytes at `offset`.
+#[arithmetic(unchecked)]
+fn input_limb<T: ByteSource>(_ input: T, offset: usize, len: usize, _ index: usize) -> u64 {
+    // Eight bytes within the number and the input are one lane, byte-swapped.
+    let end = offset + len - index * 8
+    if index * 8 + 8 <= len && end <= input.len() { return swap_bytes(input.lane_at(end - 8)) }
+    var value: u64 = 0
+    var byte: usize = 8
+    while byte > 0 {
+        byte -= 1
+        let position = index * 8 + byte
+        value = value << 8
+        if position < len { value |= input_byte(input, offset + len - 1 - position) as u64 }
+    }
+    value
+}
+
+// The `len` big-endian bytes at `offset` as `count` limbs, least significant first.
+fn input_limbs<T: ByteSource>(_ input: T, offset: usize, len: usize, count: usize) -> Option<MemArray<u64>> {
+    var limbs = MemArray<u64>::try_new_zeroed(count)?
+    let present = (len + 7) / 8
+    let read = if present < count { present } else { count }
+    for i in 0..read { limbs[i] = input_limb(input, offset, len, i) }
+    Option::Some(limbs)
+}
+
+fn bit_length(_ value: u256) -> u64 {
+    (256 - leading_zeros(value)).downcast_truncate()
+}
+
+// EIP-7823 bounds each of the three lengths.
+const MAX_LENGTH: u256 = 1024
+
+// EIP-7883 gas for lengths within the EIP-7823 bounds, which keep it below 2^30.
+fn gas_cost<T: ByteSource>(_ input: T, base: usize, exponent: usize, modulus: usize) -> u64 {
+    let longest: u64 = (if base > modulus { base } else { modulus }).downcast_truncate()
+    let words = (longest + 7) / 8
+    let complexity = if longest > 32 { 2 * words * words } else { 16 }
+    let head = input_word(input, offset: 96 + base, len: if exponent < 32 { exponent } else { 32 })
+    let head_bits = bit_length(head)
+    let top_bits = if head_bits > 0 { head_bits - 1 } else { 0 }
+    let extra: u64 = if exponent > 32 { (exponent - 32).downcast_truncate() } else { 0 }
+    let count = 16 * extra + top_bits
+    let cost = complexity * if count == 0 { 1 } else { count }
+    if cost < 500 { 500 } else { cost }
+}
+
+// The sliding window width for an exponent of `bits` bits: 2^(w - 1) table
+// products against about bits / (w + 1) window products.
+fn window_width(_ bits: usize) -> usize {
+    var best: usize = 1
+    var best_cost = bits / 2
+    var w: usize = 2
+    while w <= 7 {
+        let cost = (1 << (w - 1)) + bits / (w + 1)
+        if cost < best_cost {
+            best = w
+            best_cost = cost
+        }
+        w += 1
+    }
+    best
+}
+
+/// MODEXP (EIP-198, with EIP-7883 gas and EIP-7823 bounds): `base ** exponent
+/// % modulus`, as exactly modulus-length big-endian bytes. A length above
+/// 1,024 bytes is an exceptional failure.
+pub fn run<T: ByteSource>(_ input: T, gas: u64) -> Output {
+    let base_word = input_word(input, offset: 0, len: 32)
+    let exponent_word = input_word(input, offset: 32, len: 32)
+    let modulus_word = input_word(input, offset: 64, len: 32)
+    if base_word > MAX_LENGTH || exponent_word > MAX_LENGTH || modulus_word > MAX_LENGTH {
+        return Output { status: FAILURE, gas_used: gas, output: MemBuffer::empty() }
+    }
+    let base_len: usize = base_word.downcast_unchecked()
+    let exponent_len: usize = exponent_word.downcast_unchecked()
+    let modulus_len: usize = modulus_word.downcast_unchecked()
+    let gas_used = gas_cost(input, base: base_len, exponent: exponent_len, modulus: modulus_len)
+    if gas_used > gas { return Output { status: FAILURE, gas_used: gas, output: MemBuffer::empty() } }
+    if modulus_len == 0 { return Output { status: SUCCESS, gas_used, output: MemBuffer::empty() } }
+    let Option::Some(output) = MemBuffer::try_new(modulus_len) else { return host_allocation(gas_used) }
+    let Option::Some(result) = power(input, base_len, exponent_len, modulus_len) else {
+        return host_allocation(gas_used)
+    }
+    Output { status: SUCCESS, gas_used, output: encoded(result, output) }
+}
+
+// base^e mod m as limbs, least significant first, for lengths within the
+// bounds; none if allocation fails.
+fn power<T: ByteSource>(_ input: T, base_len: usize, exponent_len: usize, modulus_len: usize) -> Option<MemArray<u64>> {
+    let exponent_start = 96 + base_len
+    let modulus_start = exponent_start + exponent_len
+    let value = input_limbs(input, offset: modulus_start, len: modulus_len, count: (modulus_len + 7) / 8)?
+    var n = value.len()
+    while n > 0 && value[n - 1] == 0 { n -= 1 }
+    // Everything is 0 mod 0 (by definition) and mod 1.
+    if n == 0 || (n == 1 && value[0] == 1) { return MemArray<u64>::try_new_zeroed(1) }
+    let exponent = Exponent::try_read(input, start: exponent_start, len: exponent_len)?
+    if exponent.top == exponent.total {
+        // x^0 = 1 for m > 1.
+        var one = MemArray<u64>::try_new_zeroed(1)?
+        one[0] = 1
+        return Option::Some(one)
+    }
+    // The base, with room for one limb more than it and the modulus.
+    let base_limbs = (base_len + 7) / 8
+    var base = input_limbs(input, offset: 96, len: base_len, count: (if base_limbs > n { base_limbs } else { n }) + 1)?
+    var base_size = base_limbs
+    while base_size > 0 && base[base_size - 1] == 0 { base_size -= 1 }
+    // 0^e = 0 for e > 0.
+    if base_size == 0 { return MemArray<u64>::try_new_zeroed(1) }
+    if value[0] & 1 == 1 { return odd_power(exponent, mut base, base_size, value, n) }
+    even_power(exponent, mut base, base_size, value, n)
+}
+
+// The exponent's limbs, least significant first, with its first set bit
+// `top` (`total` if it is zero) of its `total` bits, from the most significant.
+struct Exponent { limbs: MemArray<u64>, top: usize, total: usize }
+
+// A step of a left-to-right sliding-window walk: up to bit `end`, square
+// once per bit, then, for a window ending in a set bit, multiply by the odd
+// power at `entry` of the table of odd powers.
+struct Window { end: usize, entry: usize, odd: bool }
+
+impl Exponent {
+    // The `len` big-endian bytes at `start`; none if allocation fails.
+    fn try_read<T: ByteSource>(_ input: T, start: usize, len: usize) -> Option<Self> {
+        let total = len * 8
+        let limbs = input_limbs(input, offset: start, len, count: (len + 7) / 8)?
+        var count = limbs.len()
+        while count > 0 && limbs[count - 1] == 0 { count -= 1 }
+        let top = if count == 0 { total } else {
+            let highest: usize = (255 - leading_zeros(limbs[count - 1] as u256)).downcast_truncate()
+            total - 1 - ((count - 1) * 64 + highest)
+        }
+        Option::Some(Self { limbs, top, total })
+    }
+    // Bit `index` from the most significant, which the exponent has.
+    #[inline(always)]
+    #[arithmetic(unchecked)]
+    fn bit(self, _ index: usize) -> usize {
+        let position = self.total - 1 - index
+        let shift: u64 = (position & 63).downcast_truncate()
+        ((unsafe { *limb(self.limbs.ptr(), position >> 6) } >> shift) & 1).downcast_truncate()
+    }
+    // The step from bit `index`: a zero bit, or a window of at most `width` bits.
+    #[arithmetic(unchecked)]
+    fn window(self, _ index: usize, _ width: usize) -> Window {
+        if self.bit(index) == 0 { return Window { end: index + 1, entry: 0, odd: false } }
+        var end = if self.total - index < width { self.total } else { index + width }
+        while self.bit(end - 1) == 0 { end -= 1 }
+        var digit: usize = 0
+        for bit in index..end { digit = (digit << 1) | self.bit(bit) }
+        Window { end, entry: (digit - 1) / 2, odd: true }
+    }
+}
+
+// base^e mod an odd m > 1 of `n` limbs (those of `value`), for e > 0 and a
+// base of `base_size` limbs, with room in `base` for one more.
+fn odd_power(_ exponent: Exponent, _ base: mut MemArray<u64>, _ base_size: usize, _ value: MemArray<u64>,
+             _ n: usize) -> Option<MemArray<u64>> {
+    if n <= 4 && base_size <= n { return small_power_of(exponent, base, value, n) }
+    let modulus = Modulus::try_new(value, len: n.downcast_truncate())?
+    // Below 2^(64 n) is enough for either power; a longer base is reduced.
+    if base_size > n { modulus.reduce(mut base, len: base_size.downcast_truncate()) }
+    if n <= 4 { return small_power_of(exponent, base, value, n) }
+    var limbs = MemArray<u64>::try_new_zeroed(n)?
+    for i in 0..n { limbs[i] = value[i] }
+    large_power(exponent, base, modulus, limbs, n)
+}
+
+// `small_power` for a modulus of `n` limbs, at most four.
+fn small_power_of(_ exponent: Exponent, _ base: MemArray<u64>, _ value: MemArray<u64>,
+                  _ n: usize) -> Option<MemArray<u64>> {
+    if n == 1 { small_power<1>(exponent, base, value) } else if n == 2 { small_power<2>(exponent, base, value) }
+    else if n == 3 { small_power<3>(exponent, base, value) } else { small_power<4>(exponent, base, value) }
+}
+
+// base^e mod an odd m of `n` limbs, at least five, for a base below
+// 2^(64 n) and e > 0, by Montgomery multiplication over sliding windows;
+// `modulus` is m normalized and `value` m itself.
+fn large_power(_ exponent: Exponent, _ base: MemArray<u64>, _ modulus: Modulus,
+               _ value: own MemArray<u64>, _ size: usize) -> Option<MemArray<u64>> {
+    let total = exponent.total
+    var result = MemArray<u64>::try_new_zeroed(size)?
+    // A product of two reduced values, and a limb more for normalizing it.
+    var work = MemArray<u64>::try_new_zeroed(2 * size + 1)?
+    // A single squaring does not pay for converting to and from Montgomery form.
+    if total - exponent.top == 2 && exponent.bit(total - 1) == 0 {
+        modulus.mul_mod(base, base, mut work)
+        result.as_slice().copy_from(work.as_slice().head(size))
+        return Option::Some(result)
+    }
+    let montgomery = Montgomery::new(value, len: size.downcast_truncate())
+    let n: u64 = size.downcast_truncate()
+    let width = window_width(total - exponent.top)
+    let entries: usize = (1 << (width - 1)).downcast_truncate()
+    var table = MemArray<u64>::try_new_zeroed(entries * size)?
+    // The base in Montgomery form, base R mod m, then its odd powers.
+    for i in 0..size {
+        work[i] = 0
+        work[size + i] = base[i]
+    }
+    modulus.reduce(mut work, len: 2 * n)
+    table.as_slice().head(size).copy_from(work.as_slice().head(size))
+    var squared = MemArray<u64>::try_new_zeroed(size)?
+    if entries > 1 {
+        montgomery.mul(table.as_slice().head(size), table.as_slice().head(size), mut work)
+        squared.as_slice().copy_from(work.as_slice().head(size))
+    }
+    for k in 1..entries {
+        montgomery.mul(table.as_slice().slice(offset: (k - 1) * size, len: size), squared.as_slice(), mut work)
+        table.as_slice().slice(offset: k * size, len: size).copy_from(work.as_slice().head(size))
+    }
+    // Left to right; the first window starts at the top bit.
+    var index = exponent.top
+    var started = false
+    while index < total {
+        let window = exponent.window(index, width)
+        if started {
+            for _ in index..window.end {
+                montgomery.mul(result.as_slice(), result.as_slice(), mut work)
+                result.as_slice().copy_from(work.as_slice().head(size))
+            }
+        }
+        if window.odd {
+            let entry = table.as_slice().slice(offset: window.entry * size, len: size)
+            if started {
+                montgomery.mul(result.as_slice(), entry, mut work)
+                result.as_slice().copy_from(work.as_slice().head(size))
+            } else {
+                result.as_slice().copy_from(entry)
+                started = true
+            }
+        }
+        index = window.end
+    }
+    // Out of Montgomery form: result * 1 / R.
+    squared.zero()
+    squared[0] = 1
+    montgomery.mul(result.as_slice(), squared.as_slice(), mut work)
+    result.as_slice().copy_from(work.as_slice().head(size))
+    Option::Some(result)
+}
+
+// Four limbs, least significant first.
+struct Wide { l0: u64, l1: u64, l2: u64, l3: u64 }
+
+impl Copy for Wide {}
+
+impl Wide {
+    // The first `n` (at most four) limbs of `limbs`.
+    fn of(_ limbs: MemArray<u64>, _ n: usize) -> Self {
+        Wide {
+            l0: limbs[0], l1: if n > 1 { limbs[1] } else { 0 }, l2: if n > 2 { limbs[2] } else { 0 },
+            l3: if n > 3 { limbs[3] } else { 0 },
+        }
+    }
+}
+
+// An odd modulus m of L limbs, at most four, for Montgomery multiplication
+// in registers with R = 2^(64 L); limbs from L on are zero.
+struct Small<const L: usize> { m: Wide, inverse: u64 }
+
+impl<const L: usize> Small<L> {
+    // a b / R mod m, for a, b < m, or one of them below R.
+    #[arithmetic(unchecked)]
+    fn mul(self, _ a: Wide, _ b: Wide) -> Wide {
+        let zero = Wide { l0: 0, l1: 0, l2: 0, l3: 0 }
+        if L == 1 {
+            // t + q m clears t's low limb, which therefore carries one exactly when nonzero.
+            let t = a.l0 as u128 * b.l0 as u128
+            let low: u64 = t.downcast_truncate()
+            let q = low * self.inverse
+            let product = q as u128 * self.m.l0 as u128
+            let sum = (t >> 64) + (product >> 64) + if low != 0 { 1 } else { 0 }
+            let reduced = if sum >= self.m.l0 as u128 { sum - self.m.l0 as u128 } else { sum }
+            return Wide { l0: reduced.downcast_truncate(), l1: 0, l2: 0, l3: 0 }
+        }
+        // Each result is below 2m, with `top` its limb L: subtract m once if it is at least m.
+        if L == 2 {
+            let (t, top) = self.row2(a, b.l0, zero, 0)
+            let (t, top) = self.row2(a, b.l1, t, top)
+            let (d0, borrow) = sbb(t.l0, self.m.l0, 0)
+            let (d1, borrow) = sbb(t.l1, self.m.l1, borrow)
+            let (_, borrow) = sbb(top, 0, borrow)
+            return if borrow == 1 { t } else { Wide { l0: d0, l1: d1, l2: 0, l3: 0 } }
+        }
+        if L == 3 {
+            let (t, top) = self.row3(a, b.l0, zero, 0)
+            let (t, top) = self.row3(a, b.l1, t, top)
+            let (t, top) = self.row3(a, b.l2, t, top)
+            let (d0, borrow) = sbb(t.l0, self.m.l0, 0)
+            let (d1, borrow) = sbb(t.l1, self.m.l1, borrow)
+            let (d2, borrow) = sbb(t.l2, self.m.l2, borrow)
+            let (_, borrow) = sbb(top, 0, borrow)
+            return if borrow == 1 { t } else { Wide { l0: d0, l1: d1, l2: d2, l3: 0 } }
+        }
+        let (t, top) = self.row4(a, b.l0, zero, 0)
+        let (t, top) = self.row4(a, b.l1, t, top)
+        let (t, top) = self.row4(a, b.l2, t, top)
+        let (t, top) = self.row4(a, b.l3, t, top)
+        let (d0, borrow) = sbb(t.l0, self.m.l0, 0)
+        let (d1, borrow) = sbb(t.l1, self.m.l1, borrow)
+        let (d2, borrow) = sbb(t.l2, self.m.l2, borrow)
+        let (d3, borrow) = sbb(t.l3, self.m.l3, borrow)
+        let (_, borrow) = sbb(top, 0, borrow)
+        if borrow == 1 { t } else { Wide { l0: d0, l1: d1, l2: d2, l3: d3 } }
+    }
+
+    // One CIOS row of two limbs: add a b, then the multiple of m that clears
+    // the low limb, and shift down a limb.
+    #[inline(always)]
+    #[arithmetic(unchecked)]
+    fn row2(self, _ a: Wide, _ b: u64, _ t: Wide, _ top: u64) -> (Wide, u64) {
+        let (t0, c) = mac(a.l0, b, t.l0, 0)
+        let (t1, c) = mac(a.l1, b, t.l1, c)
+        let (t2, t3) = adc(top, c, 0)
+        let m = t0 * self.inverse
+        let (_, c) = mac(m, self.m.l0, t0, 0)
+        let (r0, c) = mac(m, self.m.l1, t1, c)
+        let (r1, c) = adc(t2, 0, c)
+        (Wide { l0: r0, l1: r1, l2: 0, l3: 0 }, t3 + c)
+    }
+
+    // `row2` for three limbs.
+    #[inline(always)]
+    #[arithmetic(unchecked)]
+    fn row3(self, _ a: Wide, _ b: u64, _ t: Wide, _ top: u64) -> (Wide, u64) {
+        let (t0, c) = mac(a.l0, b, t.l0, 0)
+        let (t1, c) = mac(a.l1, b, t.l1, c)
+        let (t2, c) = mac(a.l2, b, t.l2, c)
+        let (t3, t4) = adc(top, c, 0)
+        let m = t0 * self.inverse
+        let (_, c) = mac(m, self.m.l0, t0, 0)
+        let (r0, c) = mac(m, self.m.l1, t1, c)
+        let (r1, c) = mac(m, self.m.l2, t2, c)
+        let (r2, c) = adc(t3, 0, c)
+        (Wide { l0: r0, l1: r1, l2: r2, l3: 0 }, t4 + c)
+    }
+
+    // `row2` for four limbs.
+    #[inline(always)]
+    #[arithmetic(unchecked)]
+    fn row4(self, _ a: Wide, _ b: u64, _ t: Wide, _ top: u64) -> (Wide, u64) {
+        let (t0, c) = mac(a.l0, b, t.l0, 0)
+        let (t1, c) = mac(a.l1, b, t.l1, c)
+        let (t2, c) = mac(a.l2, b, t.l2, c)
+        let (t3, c) = mac(a.l3, b, t.l3, c)
+        let (t4, t5) = adc(top, c, 0)
+        let m = t0 * self.inverse
+        let (_, c) = mac(m, self.m.l0, t0, 0)
+        let (r0, c) = mac(m, self.m.l1, t1, c)
+        let (r1, c) = mac(m, self.m.l2, t2, c)
+        let (r2, c) = mac(m, self.m.l3, t3, c)
+        let (r3, c) = adc(t4, 0, c)
+        (Wide { l0: r0, l1: r1, l2: r2, l3: r3 }, t5 + c)
+    }
+
+    // 2x mod m, for x < m.
+    #[arithmetic(unchecked)]
+    fn double(self, _ x: Wide) -> Wide {
+        // 2x < 2m, with limbs above L zero in both: subtract m once if 2x is at least m.
+        let s0 = x.l0 << 1
+        let s1 = (x.l1 << 1) | (x.l0 >> 63)
+        let s2 = (x.l2 << 1) | (x.l1 >> 63)
+        let s3 = (x.l3 << 1) | (x.l2 >> 63)
+        let (d0, borrow) = sbb(s0, self.m.l0, 0)
+        let (d1, borrow) = sbb(s1, self.m.l1, borrow)
+        let (d2, borrow) = sbb(s2, self.m.l2, borrow)
+        let (d3, borrow) = sbb(s3, self.m.l3, borrow)
+        let (_, borrow) = sbb(x.l3 >> 63, 0, borrow)
+        if borrow == 1 { Wide { l0: s0, l1: s1, l2: s2, l3: s3 } } else { Wide { l0: d0, l1: d1, l2: d2, l3: d3 } }
+    }
+
+    // R^2 mod m: m's top bit doubled up to R mod m, L more doublings to
+    // 2^L R mod m, and six Montgomery squarings to 2^(64 L) R mod m.
+    #[arithmetic(unchecked)]
+    fn r2(self) -> Wide {
+        let top = if L == 1 { self.m.l0 } else if L == 2 { self.m.l1 } else if L == 3 { self.m.l2 } else { self.m.l3 }
+        let shift: u64 = (255 - leading_zeros(top as u256)).downcast_truncate()
+        let bit: u64 = 1 << shift
+        // 2^(64 (L - 1) + shift), below the odd m > 1.
+        var x = Wide {
+            l0: if L == 1 { bit } else { 0 }, l1: if L == 2 { bit } else { 0 }, l2: if L == 3 { bit } else { 0 },
+            l3: if L == 4 { bit } else { 0 },
+        }
+        let doublings: usize = (64 - shift).downcast_truncate()
+        for _ in 0..doublings + L { x = self.double(x) }
+        for _ in 0..6 { x = self.mul(x, x) }
+        x
+    }
+}
+
+// base^e mod an odd m > 1 of L limbs (those of `value`), at most four, for
+// a base below 2^(64 L) and e > 0: `large_power` in registers.
+#[arithmetic(unchecked)]
+fn small_power<const L: usize>(_ exponent: Exponent, _ base: MemArray<u64>, _ value: MemArray<u64>) -> Option<MemArray<u64>> {
+    let low = value[0]
+    // -m^-1 mod 2^64 by Newton's iteration, as in `Montgomery::new`.
+    var inverse = low
+    for _ in 0..5 { inverse = inverse * (2 - low * inverse) }
+    let small = Small<L> { m: Wide::of(value, L), inverse: 0 - inverse }
+    let width = window_width(exponent.total - exponent.top)
+    let entries: usize = (1 << (width - 1)).downcast_truncate()
+    // The base in Montgomery form, then its odd powers.
+    var table: [Wide; 64] = [Wide { l0: 0, l1: 0, l2: 0, l3: 0 }; 64]
+    table[0] = small.mul(Wide::of(base, L), small.r2())
+    if entries > 1 {
+        let squared = small.mul(table[0], table[0])
+        for k in 1..entries { table[k] = small.mul(table[k - 1], squared) }
+    }
+    // Left to right; the first window starts at the top bit.
+    var power = table[0]
+    var index = exponent.top
+    var started = false
+    while index < exponent.total {
+        let window = exponent.window(index, width)
+        if started {
+            for _ in index..window.end { power = small.mul(power, power) }
+        }
+        if window.odd {
+            power = if started { small.mul(power, table[window.entry]) } else { table[window.entry] }
+            started = true
+        }
+        index = window.end
+    }
+    // Out of Montgomery form: power * 1 / R.
+    let out = small.mul(power, Wide { l0: 1, l1: 0, l2: 0, l3: 0 })
+    var result = MemArray<u64>::try_new_zeroed(L)?
+    result[0] = out.l0
+    if L > 1 { result[1] = out.l1 }
+    if L > 2 { result[2] = out.l2 }
+    if L > 3 { result[3] = out.l3 }
+    Option::Some(result)
+}
+
+// base^e mod an even m of `n` limbs, for e > 0 and a base of `base_size`
+// limbs with room in `base` for one more. With m = 2^k q and q odd,
+// x = base^e mod q and y = base^e mod 2^k combine by the Chinese remainder
+// theorem as x + q ((y - x) q^-1 mod 2^k), which is below m.
+#[arithmetic(unchecked)]
+fn even_power(_ exponent: Exponent, _ base: mut MemArray<u64>, _ base_size: usize, _ value: MemArray<u64>,
+              _ size: usize) -> Option<MemArray<u64>> {
+    var zero_limbs: usize = 0
+    while value[zero_limbs] == 0 { zero_limbs += 1 }
+    let k = zero_limbs * 64 + trailing_zeros(value[zero_limbs]).downcast_truncate()
+    let low = (k + 63) / 64
+    let bits: u64 = (k % 64).downcast_truncate()
+    let mask: u64 = if bits == 0 { 0xffffffffffffffff } else { (1 << bits) - 1 }
+    var result = MemArray<u64>::try_new_zeroed(size)?
+    let y = low_power(exponent, base, k)?
+    // q = m >> k, of `q_len` significant limbs.
+    var q = MemArray<u64>::try_new_zeroed(size)?
+    for i in 0..size - k / 64 {
+        let next = if i + k / 64 + 1 < size { value[i + k / 64 + 1] } else { 0 }
+        q[i] = if bits == 0 { value[i + k / 64] } else { (value[i + k / 64] >> bits) | (next << (64 - bits)) }
+    }
+    var q_len = size
+    while q[q_len - 1] == 0 { q_len -= 1 }
+    if q_len == 1 && q[0] == 1 {
+        for i in 0..low { result[i] = y[i] }
+        return Option::Some(result)
+    }
+    // x = base^e mod q; the base has room for as many limbs as m, one more than q.
+    let x = odd_power(exponent, mut base, base_size, q, q_len)?
+    // t = (y - x) mod 2^k.
+    var t = MemArray<u64>::try_new_zeroed(low)?
+    var borrow: u64 = 0
+    for i in 0..low {
+        let x_limb = if i < q_len { x[i] } else { 0 }
+        let difference = y[i] as u128 - x_limb as u128 - borrow as u128
+        t[i] = difference.downcast_truncate()
+        borrow = (difference >> 127).downcast_truncate()
+    }
+    t[low - 1] &= mask
+    // q^-1 mod 2^k by Newton's iteration, which doubles the correct bits.
+    var inverse = MemArray<u64>::try_new_zeroed(low)?
+    var guess = q[0]
+    for _ in 0..5 { guess = guess * (2 - q[0] * guess) }
+    inverse[0] = guess
+    var scratch = MemArray<u64>::try_new_zeroed(low)?
+    var correction = MemArray<u64>::try_new_zeroed(low)?
+    var correct: usize = 1
+    while correct < low {
+        // inverse (2 - q inverse), at the precision this step makes correct.
+        let next = if 2 * correct < low { 2 * correct } else { low }
+        low_product(q.as_slice(), inverse.as_slice(), mut scratch.as_slice().head(next))
+        var carry: u64 = 1
+        for i in 0..next {
+            let negated = (~scratch[i]) as u128 + carry as u128
+            correction[i] = negated.downcast_truncate()
+            carry = (negated >> 64).downcast_truncate()
+        }
+        // 2 - q inverse = (-(q inverse)) + 2.
+        var add: u64 = 2
+        for i in 0..next {
+            let sum = correction[i] as u128 + add as u128
+            correction[i] = sum.downcast_truncate()
+            add = (sum >> 64).downcast_truncate()
+        }
+        low_product(inverse.as_slice(), correction.as_slice(), mut scratch.as_slice().head(next))
+        inverse.as_slice().head(next).copy_from(scratch.as_slice().head(next))
+        correct = next
+    }
+    // h = t q^-1 mod 2^k, then x + q h.
+    var h = MemArray<u64>::try_new_zeroed(low)?
+    low_product(t.as_slice(), inverse.as_slice(), mut h.as_slice())
+    h[low - 1] &= mask
+    var work = MemArray<u64>::try_new_zeroed(q_len + low + 1)?
+    for i in 0..q_len { work[i] = x[i] }
+    for i in 0..q_len {
+        var carry: u64 = 0
+        for j in 0..low {
+            let sum = work[i + j] as u128 + q[i] as u128 * h[j] as u128 + carry as u128
+            work[i + j] = sum.downcast_truncate()
+            carry = (sum >> 64).downcast_truncate()
+        }
+        var at = i + low
+        while carry != 0 {
+            let sum = work[at] as u128 + carry as u128
+            work[at] = sum.downcast_truncate()
+            carry = (sum >> 64).downcast_truncate()
+            at += 1
+        }
+    }
+    for i in 0..size { result[i] = work[i] }
+    Option::Some(result)
+}
+
+// base^e mod 2^k, k > 0, as (k + 63) / 64 limbs, for e > 0: products keep
+// only their low limbs.
+#[arithmetic(unchecked)]
+fn low_power(_ exponent: Exponent, _ base: MemArray<u64>, _ k: usize) -> Option<MemArray<u64>> {
+    let low = (k + 63) / 64
+    let bits: u64 = (k % 64).downcast_truncate()
+    let mask: u64 = if bits == 0 { 0xffffffffffffffff } else { (1 << bits) - 1 }
+    var result = MemArray<u64>::try_new_zeroed(low)?
+    // An odd base's order mod 2^k divides 2^k, so only the exponent's low k
+    // bits count. An even base's power reaches zero and stays there.
+    let start = if base[0] & 1 == 1 && exponent.total - exponent.top > k { exponent.total - k } else { exponent.top }
+    if low <= 2 {
+        // Up to two limbs: wrapping u128 products, masked.
+        let wide_mask: u128 = if low == 1 { mask as u128 } else { ((mask as u128) << 64) | 0xffffffffffffffff }
+        let factor = (base[0] as u128 | ((base[1] as u128) << 64)) & wide_mask
+        var power: u128 = 1
+        var index = start
+        while index < exponent.total && power != 0 {
+            power = power * power
+            if exponent.bit(index) == 1 { power = power * factor }
+            power &= wide_mask
+            index += 1
+        }
+        result[0] = power.downcast_truncate()
+        if low == 2 { result[1] = (power >> 64).downcast_truncate() }
+        return Option::Some(result)
+    }
+    var factor = MemArray<u64>::try_new_zeroed(low)?
+    var work = MemArray<u64>::try_new_zeroed(low)?
+    for i in 0..low { factor[i] = base[i] }
+    factor[low - 1] &= mask
+    result[0] = 1
+    var index = start
+    while index < exponent.total {
+        low_product(result.as_slice(), result.as_slice(), mut work.as_slice())
+        if exponent.bit(index) == 1 {
+            low_product(work.as_slice(), factor.as_slice(), mut result.as_slice())
+        } else {
+            result.as_slice().copy_from(work.as_slice())
+        }
+        result[low - 1] &= mask
+        var zero = true
+        for i in 0..low { zero = zero && result[i] == 0 }
+        if zero { break }
+        index += 1
+    }
+    Option::Some(result)
+}
+
+// The low `out.len()` limbs of a b, for a and b of at least that many limbs.
+#[arithmetic(unchecked)]
+fn low_product(_ a: MemSlice<u64>, _ b: MemSlice<u64>, _ out: mut MemSlice<u64>) {
+    let len = out.len()
+    // With every length checked here, the loops read and write unchecked.
+    core::assert(a.len() >= len && b.len() >= len)
+    let ap = a.ptr()
+    let bp = b.ptr()
+    let op = out.ptr()
+    for j in 0..len { unsafe { *limb(op, j) = 0 } }
+    // Zero high limbs add nothing.
+    var a_len = len
+    while a_len > 0 && unsafe { *limb(ap, a_len - 1) } == 0 { a_len -= 1 }
+    var b_len = len
+    while b_len > 0 && unsafe { *limb(bp, b_len - 1) } == 0 { b_len -= 1 }
+    for i in 0..a_len {
+        let factor = unsafe { *limb(ap, i) } as u128
+        var carry: u64 = 0
+        let end = if len - i < b_len { len - i } else { b_len }
+        for j in 0..end {
+            let sum = unsafe { *limb(op, i + j) } as u128 + factor * unsafe { *limb(bp, j) } as u128 + carry as u128
+            unsafe { *limb(op, i + j) = sum.downcast_truncate() }
+            carry = (sum >> 64).downcast_truncate()
+        }
+        // The row's carry, within the limbs kept.
+        var at = i + end
+        while carry != 0 && at < len {
+            let sum = unsafe { *limb(op, at) } as u128 + carry as u128
+            unsafe { *limb(op, at) = sum.downcast_truncate() }
+            carry = (sum >> 64).downcast_truncate()
+            at += 1
+        }
+    }
+}
+
+// `result` as the big-endian bytes of `output`, which it fits.
+#[arithmetic(unchecked)]
+fn encoded(_ result: MemArray<u64>, _ output: own MemBuffer) -> MemBuffer {
+    let len = output.len()
+    let bytes = output.ptr()
+    for i in 0..result.len() {
+        let value = result[i]
+        if 8 * i + 8 <= len {
+            // A whole limb is one big-endian lane.
+            unsafe { *cast<u8, u64>(offset_bytes(bytes, len - 8 * i - 8)) = swap_bytes(value) }
+        } else {
+            for byte in 0..8 {
+                let position = 8 * i + byte
+                if position < len {
+                    let shift: u64 = (8 * byte).downcast_truncate()
+                    unsafe { *offset_bytes(bytes, len - 1 - position) = (value >> shift).downcast_truncate() }
+                }
+            }
+        }
+    }
+    output
+}

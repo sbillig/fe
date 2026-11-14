@@ -1,0 +1,143 @@
+own Exponent_bit unsafe-block 1 of 1
+own Exponent_bit raw-memory load of u64 through *u64
+own Exponent_try_read_MemBuffer extern core::num::leading_zeros<u256>
+own Modulus_mul_mod unsafe-block 1 of 6
+own Modulus_mul_mod unsafe-block 2 of 6
+own Modulus_mul_mod unsafe-block 3 of 6
+own Modulus_mul_mod unsafe-block 4 of 6
+own Modulus_mul_mod unsafe-block 5 of 6
+own Modulus_mul_mod unsafe-block 6 of 6
+own Modulus_mul_mod raw-memory load of u64 through *u64
+own Modulus_mul_mod raw-memory store of u64 through *u64
+own Modulus_reduce unsafe-block 1 of 24
+own Modulus_reduce unsafe-block 10 of 24
+own Modulus_reduce unsafe-block 11 of 24
+own Modulus_reduce unsafe-block 12 of 24
+own Modulus_reduce unsafe-block 13 of 24
+own Modulus_reduce unsafe-block 14 of 24
+own Modulus_reduce unsafe-block 15 of 24
+own Modulus_reduce unsafe-block 16 of 24
+own Modulus_reduce unsafe-block 17 of 24
+own Modulus_reduce unsafe-block 18 of 24
+own Modulus_reduce unsafe-block 19 of 24
+own Modulus_reduce unsafe-block 2 of 24
+own Modulus_reduce unsafe-block 20 of 24
+own Modulus_reduce unsafe-block 21 of 24
+own Modulus_reduce unsafe-block 22 of 24
+own Modulus_reduce unsafe-block 23 of 24
+own Modulus_reduce unsafe-block 24 of 24
+own Modulus_reduce unsafe-block 3 of 24
+own Modulus_reduce unsafe-block 4 of 24
+own Modulus_reduce unsafe-block 5 of 24
+own Modulus_reduce unsafe-block 6 of 24
+own Modulus_reduce unsafe-block 7 of 24
+own Modulus_reduce unsafe-block 8 of 24
+own Modulus_reduce unsafe-block 9 of 24
+own Modulus_reduce raw-memory load of u64 through *u64
+own Modulus_reduce raw-memory store of u64 through *u64
+own Modulus_try_new extern core::num::leading_zeros<u256>
+own Montgomery_mul unsafe-block 1 of 11
+own Montgomery_mul unsafe-block 10 of 11
+own Montgomery_mul unsafe-block 11 of 11
+own Montgomery_mul unsafe-block 2 of 11
+own Montgomery_mul unsafe-block 3 of 11
+own Montgomery_mul unsafe-block 4 of 11
+own Montgomery_mul unsafe-block 5 of 11
+own Montgomery_mul unsafe-block 6 of 11
+own Montgomery_mul unsafe-block 7 of 11
+own Montgomery_mul unsafe-block 8 of 11
+own Montgomery_mul unsafe-block 9 of 11
+own Montgomery_mul raw-memory load of u64 through *u64
+own Montgomery_mul raw-memory store of u64 through *u64
+own Small_r2_1 extern core::num::leading_zeros<u256>
+own Small_r2_2 extern core::num::leading_zeros<u256>
+own Small_r2_3 extern core::num::leading_zeros<u256>
+own Small_r2_4 extern core::num::leading_zeros<u256>
+own bit_length extern core::num::leading_zeros<u256>
+own encoded unsafe-block 1 of 2
+own encoded unsafe-block 2 of 2
+own encoded raw-memory store of u64 through *u64
+own encoded raw-memory store of u8 through *u8
+own encoded extern core::num::swap_bytes<u64>
+own encoded extern core::ptr::offset_bytes<u8>
+own even_power extern core::num::trailing_zeros<u64>
+own input_limb_MemBuffer extern core::num::swap_bytes<u64>
+own input_word_MemBuffer extern core::num::swap_bytes<u64>
+own limb extern core::ptr::offset_bytes<u64>
+own low_product unsafe-block 1 of 9
+own low_product unsafe-block 2 of 9
+own low_product unsafe-block 3 of 9
+own low_product unsafe-block 4 of 9
+own low_product unsafe-block 5 of 9
+own low_product unsafe-block 6 of 9
+own low_product unsafe-block 7 of 9
+own low_product unsafe-block 8 of 9
+own low_product unsafe-block 9 of 9
+own low_product raw-memory load of u64 through *u64
+own low_product raw-memory store of u64 through *u64
+core MemArray_as_slice_mut_u64 unsafe-block 1 of 1
+core MemArray_as_slice_ref_u64 unsafe-block 1 of 1
+core MemArray_drop_u64 unsafe-block 1 of 1
+core MemArray_index_mut_u64 unsafe-block 1 of 1
+core MemArray_index_mut_u64 raw-memory mut borrow of u64 through *u64
+core MemArray_index_ref_u64 unsafe-block 1 of 1
+core MemArray_index_ref_u64 raw-memory borrow of u64 through *u64
+core MemArray_try_new_uninit_u64 unsafe-fn the whole body
+core MemArray_try_new_zeroed_u64 unsafe-block 1 of 2
+core MemArray_try_new_zeroed_u64 unsafe-block 2 of 2
+core MemBuffer_drop unsafe-block 1 of 1
+core MemBuffer_new unsafe-block 1 of 2
+core MemBuffer_new unsafe-block 2 of 2
+core MemBuffer_new_uninit unsafe-fn the whole body
+core MemBuffer_set_len unsafe-fn the whole body
+core MemBuffer_span_ref unsafe-block 1 of 1
+core MemBuffer_try_new unsafe-block 1 of 2
+core MemBuffer_try_new unsafe-block 2 of 2
+core MemBuffer_with_capacity unsafe-block 1 of 1
+core MemSlice_as_bytes_u64 unsafe-block 1 of 1
+core MemSlice_copy_from_u64 unsafe-block 1 of 1
+core MemSlice_empty_u8 unsafe-block 1 of 1
+core MemSlice_from_raw_parts_mut_u64 unsafe-fn the whole body
+core MemSlice_from_raw_parts_ref_u64 unsafe-fn the whole body
+core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
+core MemSlice_slice_mut_u64 unsafe-block 1 of 1
+core MemSlice_slice_ref_u64 unsafe-block 1 of 1
+core MemSlice_zero_u64 unsafe-block 1 of 1
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core assert extern core::panic
+core copy unsafe-fn the whole body
+core copy_raw unsafe-fn the whole body
+core copy_raw raw-memory core::ptr::copy_mem
+core dealloc_u64 unsafe-fn the whole body
+core dealloc_u64 extern core::ptr::dealloc_raw
+core dealloc_u8 unsafe-fn the whole body
+core dealloc_u8 extern core::ptr::dealloc_raw
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core drop_in_place_n_u64 unsafe-fn the whole body
+core drop_in_place_u64 unsafe-fn the whole body
+core drop_in_place_u64 raw-memory load of u64 through *u64
+core drop_range_u64 unsafe-fn the whole body
+core drop_range_u64 extern core::mem::needs_drop<u64>
+core elem_u64 extern core::ptr::offset_bytes<u64>
+core index_out_of_bounds extern core::panic_code
+core try_alloc_bytes extern core::ptr::try_alloc_raw
+core u64_from_word extern core::num::__bitcast<u256, u64>
+core u8_from_word extern core::num::__bitcast<u256, u8>
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+core usize_wrapping_add extern core::num::__add_usize
+core usize_wrapping_mul extern core::num::__mul_usize
+core zero_bytes unsafe-fn the whole body
+core zero_bytes raw-memory core::ptr::zero_mem
+std Evm_calldatacopy unsafe-block 1 of 2
+std Evm_calldatacopy unsafe-block 2 of 2
+std Evm_calldatacopy raw-memory std::evm::ops::calldatacopy
+std Evm_calldatasize extern std::evm::ops::calldatasize
+std Evm_return_data unsafe-block 1 of 1
+std Evm_return_data extern std::evm::ops::return_data
+std Evm_revert unsafe-block 1 of 1
+std Evm_revert extern std::evm::ops::revert
+std prepare_copy_destination unsafe-block 1 of 1
+std prepare_copy_destination extern core::panic
+std prepare_copy_destination extern core::ptr::offset_bytes<u8>

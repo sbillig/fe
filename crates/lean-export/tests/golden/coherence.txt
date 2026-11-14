@@ -1,9 +1,13 @@
-instances compared: 434
+instances compared: 518
 
-expected: drops opaque in the generic body: 13
+expected: drops opaque in the generic body: 17
   Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there
+  MemArray<T>::try_new_uninit<u64>: drop of MemArray<u64> runs its type's code
+  MemArray<T>::try_new_zeroed<u64>: drop of MemArray<u64> runs its type's code
+  MemArray<T>::try_new_zeroed<u64>: drop of Option<MemArray<u64>> runs its type's code
   core::abi::encode_alloc<Sol, ()>: drop of (), which destroys nothing, is not there
   core::abi::encode_alloc<Sol, (u256)>: drop of (u256), which destroys nothing, is not there
+  core::mem::drop<u64>: drop of u64, which destroys nothing, is not there
   std::evm::effects::Call::call<Evm, Get>: drop of Get, which destroys nothing, is not there
   std::evm::effects::Call::try_call<Evm, Get>: drop of Get, which destroys nothing, is not there
   std::evm::effects::Log::emit<Evm, Approval>: drop of Approval, which destroys nothing, is not there
@@ -21,7 +25,7 @@ places of parameters in another space: 4
   immutables::capped<Config>: root 0 in code where the generic body has memory
   lib::bump<Store>: root 0 in storage where the generic body has memory
 
-unexpected: the first other difference: 78
+unexpected: the first other difference: 80
   (T0)::encode<Sol, u256>: v6 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 4 }, Some("Load"))
   (T0)::payload_size<u256>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Load"))
   (T0, T1)::decode_from_prechecked_head<Sol, u256, u256, CallData>: v18 (Statement { block: NBlockId(0), statement: 17 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 17 }, Some("AggregateMake"))
@@ -53,6 +57,7 @@ unexpected: the first other difference: 78
   S::downcast_truncate<u64, u8>: v0: type View u64 where the instance has u64
   S::downcast_truncate<u64, usize>: v0: type View u64 where the instance has u64
   S::downcast_truncate<usize, u64>: v0: type View usize where the instance has usize
+  S::downcast_truncate<usize, usize>: v0: type View usize where the instance has usize
   S::downcast_unchecked<u256, i256>: v0: type View u256 where the instance has u256
   S::downcast_unchecked<u256, usize>: v0: type View u256 where the instance has u256
   S::downcast_unchecked<usize, u64>: v0: type View usize where the instance has usize
@@ -90,6 +95,7 @@ unexpected: the first other difference: 78
   core::num::to_le<u64>: v0: type View u64 where the instance has u64
   core::num::trailing_zeros<u64>: v0: type View u64 where the instance has u64
   core::ptr::cast<u8, u8>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("PointerCast")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Forward"))
+  core::ptr::drop_in_place<u64>: block 0 statement 1: read mode Move where the instance has Copy
   std::abi::sol::decode_input_at<(u256, u256), CallData>: block 0: terminator Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Copy }))
   std::abi::sol::decode_output<u256, MemSlice<u8>>: block 0: terminator Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Copy }))
   std::abi::sol::decode_output_at<u256, MemSlice<u8>>: block 1: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Copy }))

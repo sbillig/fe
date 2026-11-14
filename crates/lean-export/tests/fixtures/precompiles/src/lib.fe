@@ -205,3 +205,16 @@ pub contract Identity {
         }
     }
 }
+
+/// MODEXP (0x05): every call returns what fevm's `modexp::run` outputs for its call data, given
+/// all the gas a `u64` holds, so that its price never stops it, or reverts without data where
+/// the precompile fails.
+pub contract Modexp {
+    recv {
+        _ uses (raw: mut RawOps) {
+            let result = modexp::run(input(), gas: 0xffffffffffffffff)
+            if result.status != SUCCESS { raw.revert(data: MemSpan::empty()) }
+            raw.return_data(data: result.output.span())
+        }
+    }
+}

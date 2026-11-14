@@ -4509,3 +4509,515 @@ def MemBuffer_index_mut (v0 : MemBuffer) (v1 : UInt256) : FeM (UInt256 × (UInt2
       return v0
     return (v9, slide)
 
+structure MemArray_u64 where
+  ptr : UInt256
+  len : UInt256
+deriving Inhabited
+
+inductive Option_MemArray_u64 where
+  | None
+  | Some (f0 : MemArray_u64)
+deriving Inhabited
+
+def Option_MemArray_u64.tag : Option_MemArray_u64 → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_MemArray_u64.Some_0 : Option_MemArray_u64 → MemArray_u64
+  | .Some f0 => f0
+  | _ => default
+
+def Option_MemArray_u64.set_Some_0 (x : Option_MemArray_u64) (v : MemArray_u64) : Option_MemArray_u64 :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
+inductive Option_u64 where
+  | None
+  | Some (f0 : UInt256)
+deriving Inhabited
+
+def Option_u64.tag : Option_u64 → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_u64.Some_0 : Option_u64 → UInt256
+  | .Some f0 => f0
+  | _ => default
+
+def Option_u64.set_Some_0 (x : Option_u64) (v : UInt256) : Option_u64 :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
+structure Range_Known_0_Known_5 where
+  start : Unit
+  «end» : Unit
+deriving Inhabited
+
+structure Range_Known_1_Unknown where
+  start : Unit
+  «end» : UInt256
+deriving Inhabited
+
+structure Range_Known_0_Known_6 where
+  start : Unit
+  «end» : Unit
+deriving Inhabited
+
+structure MemSlice_u64 where
+  ptr : UInt256
+  len : UInt256
+deriving Inhabited
+
+def try_alloc_elems_u64 (v0 : UInt256) : FeM Option_u64 := do
+  let v1 := (UInt256.ofNat 8)
+  let v2 := v1
+  let v3 := (UInt256.ofNat 0)
+  let v4 := decide (v2 ≠ v3)
+  let b2 : FeM Option_u64 := do
+    let v10 := ()
+    let v11 := v10
+    let v12 := v0
+    let v13 ← checkedMul v12 v2
+    let v14 ← try_alloc_bytes v13
+    let v15 := match v14 with | .Some .. => true | _ => false
+    if v15 then
+      let v16 := v14.Some_0
+      let v17 ← cast_u8_u64 v16
+      let v18 := Option_u64.Some v17
+      return v18
+    else
+      let v19 := Option_u64.None
+      return v19
+  if v4 then
+    let v5 := v0
+    let v6 ← MAX_ALLOCATION
+    let v7 ← checkedDiv v6 v2
+    let v8 := decide (v7.toNat < v5.toNat)
+    if v8 then
+      let v9 := Option_u64.None
+      return v9
+    else
+      b2
+  else
+    b2
+
+def MemArray_try_new_uninit_u64 (v0 : UInt256) : FeM Option_MemArray_u64 := do
+  let v1 ← try_alloc_elems_u64 v0
+  let v2 := match v1 with | .Some .. => true | _ => false
+  if v2 then
+    let v3 := v1.Some_0
+    let v4 := v0
+    let v5 := (MemArray_u64.mk v3 v4)
+    let v6 := Option_MemArray_u64.Some v5
+    return v6
+  else
+    let v7 := Option_MemArray_u64.None
+    return v7
+
+def cast_u64_u8 (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 := v1
+  return v2
+
+def MemArray_byte_len_u64 (v0 : MemArray_u64) : FeM UInt256 := do
+  let v1 := v0.len
+  let v2 := (UInt256.ofNat 8)
+  let v3 ← checkedMul v1 v2
+  return v3
+
+def usize_wrapping_mul (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v0 * v1
+  return v2
+
+def elem_u64 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 8)
+  let v3 := v1
+  let v4 ← usize_wrapping_mul v3 v2
+  let v5 := v0 + v4
+  return v5
+
+def drop_u64 (v0 : UInt256) : FeM Unit := do
+  let v1 := ()
+  return ()
+
+def drop_in_place_u64 (v0 : UInt256) : FeM Unit := do
+  let v1 := v0
+  let v2 ← mloadInt (.u 64) v1
+  let v3 ← drop_u64 v2
+  return ()
+
+def drop_range_u64 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Unit := do
+  let mut r0 : Range_Unknown_Unknown := default
+  let v4 := false
+  let b3 : Range_Unknown_Unknown → FeM Unit := fun r0 => do
+    let mut r0 := r0
+    return ()
+  if v4 then
+    let v5 := v1
+    let v6 := v2
+    let v7 := ()
+    let v8 := (Range_Unknown_Unknown.mk v5 v6)
+    r0 := v8
+    let v10 ← Range_Unknown_Unknown_start r0
+    let v11 := v10
+    let rec b4 (r0 : Range_Unknown_Unknown) (v3 : UInt256) : FeM Unit := do
+      let mut r0 := r0
+      let v13 ← Range_Unknown_Unknown_has r0 v3
+      if v13 then
+        let v15 ← Range_Unknown_Unknown_at r0 v3
+        let v16 := v15
+        let v17 ← elem_u64 v0 v16
+        let v18 ← drop_in_place_u64 v17
+        let v20 ← Range_Unknown_Unknown_next r0 v3
+        let v21 := v20
+        b4 r0 v21
+      else
+        let v22 := ()
+        let v23 := v22
+        b3 r0
+    partial_fixpoint
+    b4 r0 v11
+  else
+    let v24 := ()
+    let v25 := v24
+    b3 r0
+
+def drop_in_place_n_u64 (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 ← drop_range_u64 v0 v2 v1
+  return ()
+
+def dealloc_u64 (v0 : UInt256) : FeM Unit := do
+  let v1 ← cast_u64_u8 v0
+  let v2 := ()
+  return ()
+
+def MemArray_drop_u64 (v0 : MemArray_u64) : FeM Unit := do
+  let v1 := v0.ptr
+  let v2 := v0.len
+  let v3 ← drop_in_place_n_u64 v1 v2
+  let v4 := v0.ptr
+  let v5 ← dealloc_u64 v4
+  return ()
+
+def MemArray_try_new_zeroed_u64 (v0 : UInt256) : FeM Option_MemArray_u64 := do
+  let mut r0 : MemArray_u64 := default
+  let v1 ← MemArray_try_new_uninit_u64 v0
+  let v2 := match v1 with | .Some .. => true | _ => false
+  if v2 then
+    let v3 := v1.Some_0
+    let v4 := v3
+    r0 := v4
+    let v5 := r0.ptr
+    let v6 ← cast_u64_u8 v5
+    let v8 ← MemArray_byte_len_u64 r0
+    let v9 ← zero_bytes v6 v8
+    let v10 := r0
+    let v11 := v10
+    let v12 := Option_MemArray_u64.Some v11
+    return v12
+  else
+    let v13 := Option_MemArray_u64.None
+    match v1 with
+    | .Some .. =>
+      let _ ← MemArray_drop_u64 v1.Some_0
+      pure ()
+    | _ => pure ()
+    return v13
+
+def mem_array_elem_u64 (v0 : MemArray_u64) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v1
+  let v3 := v0.len
+  let v4 := decide (v3.toNat ≤ v2.toNat)
+  if v4 then
+    let v5 ← index_out_of_bounds
+    nomatch v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 := v0.ptr
+    let v9 ← elem_u64 v8 v1
+    return v9
+
+def MemArray_index_mut_u64 (v0 : MemArray_u64) (v1 : UInt256) : FeM (UInt256 × (UInt256 → FeM MemArray_u64)) := do
+  let mut v0 := v0
+  let v4 ← mem_array_elem_u64 v0 v1
+  let v5 := v4
+  let slide : UInt256 → FeM MemArray_u64 := fun g => do
+    let mut v0 := v0
+    return v0
+  return (v5, slide)
+
+def MemArray_len_u64 (v0 : MemArray_u64) : FeM UInt256 := do
+  let v1 := v0.len
+  return v1
+
+def MemArray_index_ref_u64 (v0 : MemArray_u64) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← mem_array_elem_u64 v0 v1
+  let v3 := v2
+  return v3
+
+def Range_start_0_5 (v0 : Range_Known_0_Known_5) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def Range_has_0_5 (v0 : Range_Known_0_Known_5) (v1 : UInt256) : FeM Bool := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 := (UInt256.ofNat 5)
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_at_0_5 (v0 : Range_Known_0_Known_5) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_next_0_5 (v0 : Range_Known_0_Known_5) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def downcast_truncate_usize_usize (v0 : UInt256) : FeM UInt256 := do
+  let v2 ← usize_to_word v0
+  let v3 := v2
+  let v4 ← usize_IS_SIGNED
+  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+    return v1
+  if v4 then
+    let v5 ← usize_MASK
+    let v6 ← usize_SIGN_BIT
+    let v7 ← sign_extend v3 v5 v6
+    let v8 ← usize_from_word v7
+    let v9 := v8
+    b3 v9
+  else
+    let v10 ← usize_MASK
+    let v11 := v3 &&& v10
+    let v12 ← usize_from_word v11
+    let v13 := v12
+    b3 v13
+
+def Range_start_0_6 (v0 : Range_Known_0_Known_6) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def Range_has_0_6 (v0 : Range_Known_0_Known_6) (v1 : UInt256) : FeM Bool := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 := (UInt256.ofNat 6)
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_at_0_6 (v0 : Range_Known_0_Known_6) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_next_0_6 (v0 : Range_Known_0_Known_6) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def MemArray_ptr_u64 (v0 : MemArray_u64) : FeM UInt256 := do
+  let v1 := v0.ptr
+  return v1
+
+def Range_start_1 (v0 : Range_Known_1_Unknown) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 1)
+  return v1
+
+def Range_has_1 (v0 : Range_Known_1_Unknown) (v1 : UInt256) : FeM Bool := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v0.«end»
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_at_1 (v0 : Range_Known_1_Unknown) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_next_1 (v0 : Range_Known_1_Unknown) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def MemSlice_from_raw_parts_ref_u64 (v0 : UInt256) (v1 : UInt256) : FeM MemSlice_u64 := do
+  let mut r0 : MemSlice_u64 := default
+  let v2 := (MemSlice_u64.mk v0 v1)
+  let v3 := v2
+  r0 := v3
+  return r0
+
+def MemArray_as_slice_ref_u64 (v0 : MemArray_u64) : FeM MemSlice_u64 := do
+  let v1 := v0.ptr
+  let v2 := v0.len
+  let v3 ← MemSlice_from_raw_parts_ref_u64 v1 v2
+  return v3
+
+def MemSlice_slice_ref_u64 (v0 : MemSlice_u64) (v1 : UInt256) (v2 : UInt256) : FeM MemSlice_u64 := do
+  let v3 := v0.len
+  let v4 := decide (v3.toNat < v1.toNat)
+  let b1 : FeM MemSlice_u64 := do
+    let v13 ← index_out_of_bounds
+    nomatch v13
+  if v4 then
+    b1
+  else
+    let v5 := v0.len
+    let v6 ← checkedSub v5 v1
+    let v7 := decide (v6.toNat < v2.toNat)
+    if v7 then
+      b1
+    else
+      let v8 := ()
+      let v9 := v8
+      let v10 := v0.ptr
+      let v11 ← elem_u64 v10 v1
+      let v12 ← MemSlice_from_raw_parts_ref_u64 v11 v2
+      return v12
+
+def MemSlice_head_ref_u64 (v0 : MemSlice_u64) (v1 : UInt256) : FeM MemSlice_u64 := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 ← MemSlice_slice_ref_u64 v0 v2 v1
+  return v3
+
+def MemSlice_from_raw_parts_mut_u64 (v0 : UInt256) (v1 : UInt256) : FeM (MemSlice_u64 × (MemSlice_u64 → FeM Unit)) := do
+  let mut r0 : MemSlice_u64 := default
+  let v2 := (MemSlice_u64.mk v0 v1)
+  let v3 := v2
+  r0 := v3
+  let slide : MemSlice_u64 → FeM Unit := fun g => do
+    let mut r0 := r0
+    r0 := g
+    return ()
+  return (r0, slide)
+
+def MemArray_as_slice_mut_u64 (v0 : MemArray_u64) : FeM (MemSlice_u64 × (MemSlice_u64 → FeM MemArray_u64)) := do
+  let mut v0 := v0
+  let mut v3 : MemSlice_u64 := default
+  let v1 := v0.ptr
+  let v2 := v0.len
+  let (v3_g, v3_k) ← MemSlice_from_raw_parts_mut_u64 v1 v2
+  v3 := v3_g
+  let slide : MemSlice_u64 → FeM MemArray_u64 := fun g => do
+    let mut v0 := v0
+    let mut v3 := v3
+    v3 := g
+    let _ ← v3_k v3
+    return v0
+  return (v3, slide)
+
+def MemSlice_slice_mut_u64 (v0 : MemSlice_u64) (v1 : UInt256) (v2 : UInt256) : FeM (MemSlice_u64 × (MemSlice_u64 → FeM MemSlice_u64)) := do
+  let mut v0 := v0
+  let mut v12 : MemSlice_u64 := default
+  let v3 := v0.len
+  let v4 := decide (v3.toNat < v1.toNat)
+  let b1 : MemSlice_u64 → MemSlice_u64 → FeM (MemSlice_u64 × (MemSlice_u64 → FeM MemSlice_u64)) := fun v0 v12 => do
+    let mut v0 := v0
+    let mut v12 := v12
+    let v13 ← index_out_of_bounds
+    nomatch v13
+  if v4 then
+    b1 v0 v12
+  else
+    let v5 := v0.len
+    let v6 ← checkedSub v5 v1
+    let v7 := decide (v6.toNat < v2.toNat)
+    if v7 then
+      b1 v0 v12
+    else
+      let v8 := ()
+      let v9 := v8
+      let v10 := v0.ptr
+      let v11 ← elem_u64 v10 v1
+      let (v12_g, v12_k) ← MemSlice_from_raw_parts_mut_u64 v11 v2
+      v12 := v12_g
+      let slide : MemSlice_u64 → FeM MemSlice_u64 := fun g => do
+        let mut v0 := v0
+        let mut v12 := v12
+        v12 := g
+        let _ ← v12_k v12
+        return v0
+      return (v12, slide)
+
+def MemSlice_head_mut_u64 (v0 : MemSlice_u64) (v1 : UInt256) : FeM (MemSlice_u64 × (MemSlice_u64 → FeM MemSlice_u64)) := do
+  let mut v0 := v0
+  let mut v3 : MemSlice_u64 := default
+  let v2 := (UInt256.ofNat 0)
+  let (v3_g, v3_k) ← MemSlice_slice_mut_u64 v0 v2 v1
+  v3 := v3_g
+  let slide : MemSlice_u64 → FeM MemSlice_u64 := fun g => do
+    let mut v0 := v0
+    let mut v3 := v3
+    v3 := g
+    let v3_0 ← v3_k v3
+    v0 := v3_0
+    return v0
+  return (v3, slide)
+
+def byte_ptr_u64 (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← cast_u64_u8 v0
+  return v1
+
+def MemSlice_byte_len_u64 (v0 : MemSlice_u64) : FeM UInt256 := do
+  let v1 := v0.len
+  let v2 := (UInt256.ofNat 8)
+  let v3 ← checkedMul v1 v2
+  return v3
+
+def MemSlice_as_bytes_u64 (v0 : MemSlice_u64) : FeM MemSlice_u8 := do
+  let v1 := v0.ptr
+  let v2 ← cast_u64_u8 v1
+  let v3 ← MemSlice_byte_len_u64 v0
+  let v4 ← MemSlice_from_raw_parts_ref_u8 v2 v3
+  return v4
+
+def MemSlice_copy_from_u64 (v0 : MemSlice_u64) (v1 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
+  let mut v0 := v0
+  let v2 := v1.len
+  let v3 := v0.len
+  let v4 := decide (v2 ≠ v3)
+  if v4 then
+    let v5 ← index_out_of_bounds
+    nomatch v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 := v0.ptr
+    let v9 ← byte_ptr_u64 v8
+    let v10 ← MemSlice_as_bytes_u64 v1
+    let v12 ← copy v9 v10
+    return ((), v0)
+
+def MemSlice_len_u64 (v0 : MemSlice_u64) : FeM UInt256 := do
+  let v1 := v0.len
+  return v1
+
+def MemSlice_ptr_u64 (v0 : MemSlice_u64) : FeM UInt256 := do
+  let v1 := v0.ptr
+  return v1
+
+def MemSlice_zero_u64 (v0 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
+  let mut v0 := v0
+  let v1 := v0.ptr
+  let v2 := v0.len
+  let v3 ← drop_in_place_n_u64 v1 v2
+  let v4 := v0.ptr
+  let v5 ← byte_ptr_u64 v4
+  let v7 ← MemSlice_byte_len_u64 v0
+  let v8 ← zero_bytes v5 v7
+  return ((), v0)
+
+def MemArray_zero_u64 (v0 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
+  let mut v0 := v0
+  let mut v1 : MemSlice_u64 := default
+  let (v1_g, v1_k) ← MemArray_as_slice_mut_u64 v0
+  v1 := v1_g
+  let (v2, v2_0) ← MemSlice_zero_u64 v1
+  v1 := v2_0
+  let v1_0 ← v1_k v1
+  v0 := v1_0
+  return ((), v0)
+
