@@ -2,12 +2,17 @@ mod lower_runtime;
 #[cfg(feature = "cranelift")]
 mod native_tests;
 pub(crate) mod observability;
+mod sidecar;
 #[cfg(feature = "wasm")]
 mod wasm;
 #[cfg(feature = "wasm")]
 mod wasm_tests;
 #[cfg(feature = "cranelift")]
 pub use native_tests::{NativeTestEntry, NativeTestSuite, emit_test_suite_native};
+pub use sidecar::{
+    SidecarSection, SidecarSymbol, SonatinaSidecar, emit_ingot_sonatina_sidecar,
+    emit_module_sonatina_sidecar,
+};
 #[cfg(feature = "wasm")]
 pub use wasm::{
     WASM_HOST_CONTRACT_VERSION, WASM_REPLY_TYPE, WASM_TEXT_TYPE, WasmArtifacts, WasmExportInfo,
@@ -295,23 +300,30 @@ fn compile_runtime_objects(
     opt_level: OptLevel,
     emit_observability: bool,
 ) -> Result<Vec<sonatina_codegen::object::ObjectArtifact>, LowerError> {
-    let (artifacts, _) =
-        compile_runtime_objects_with_postopt_trace(module, opt_level, emit_observability, None)?;
+    let (artifacts, _, _) = compile_runtime_objects_with_postopt_trace(
+        module,
+        opt_level,
+        emit_observability,
+        None,
+        false,
+    )?;
     Ok(artifacts)
 }
+
+/// A compiled module's objects, the trace facts of its optimized IR, and that IR when asked for.
+type CompiledModule = (
+    Vec<ObjectArtifact>,
+    Vec<trace_facts::TraceFact>,
+    Option<sidecar::PostOptModule>,
+);
 
 fn compile_runtime_objects_with_postopt_trace(
     module: Module,
     opt_level: OptLevel,
     emit_observability: bool,
     postopt_trace_owner: Option<&str>,
-) -> Result<
-    (
-        Vec<sonatina_codegen::object::ObjectArtifact>,
-        Vec<trace_facts::TraceFact>,
-    ),
-    LowerError,
-> {
+    capture_ir: bool,
+) -> Result<CompiledModule, LowerError> {
     let mut compile = evm_compile(module, opt_level, emit_observability);
     debug_ensure_module_sonatina_ir_valid(compile.optimize())?;
     if emit_observability && let Some(owner) = postopt_trace_owner {
@@ -326,10 +338,12 @@ fn compile_runtime_objects_with_postopt_trace(
     } else {
         Vec::new()
     };
+    // The module the backend compiles is the optimized one, unchanged.
+    let post_opt = capture_ir.then(|| sidecar::PostOptModule::new(compile.optimize()));
     let artifacts = compile
         .compile()
         .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
-    Ok((artifacts, postopt_trace_facts))
+    Ok((artifacts, postopt_trace_facts, post_opt))
 }
 
 fn stamp_postopt_instruction_provenance(owner_key: &str, compile: &mut EvmCompile) {
@@ -1434,6 +1448,7 @@ fn emit_runtime_package_sonatina_bytecode_with_options(
         compiled: HashMap::new(),
         trace_owner: None,
         trace_facts: BTreeMap::new(),
+        sidecars: None,
     };
     let roots = package.root_objects(db);
     compiler.precompile(roots);
@@ -1467,6 +1482,8 @@ struct IsolatedObjectCompiler<'db, 'a> {
     compiled: HashMap<String, ObjectArtifact>,
     trace_owner: Option<String>,
     trace_facts: BTreeMap<String, ObjectTrace>,
+    /// The sidecar of each compiled object, when they are asked for.
+    sidecars: Option<HashMap<String, SonatinaSidecar>>,
 }
 
 /// An isolated object's trace owner and facts.
@@ -1547,11 +1564,17 @@ impl<'db> IsolatedObjectCompiler<'db, '_> {
                     .map(|&index| (index, self.lower(&order[index].name)))
                     .collect();
                 let (opt_level, emit_observability) = (self.opt_level, self.emit_observability);
+                let emit_sidecar = self.sidecars.is_some();
                 let compile = |(index, lowered): (usize, Result<LoweredObject, LowerError>)| {
                     (
                         index,
                         lowered.and_then(|lowered| {
-                            compile_lowered_object(lowered, opt_level, emit_observability)
+                            compile_lowered_object(
+                                lowered,
+                                opt_level,
+                                emit_observability,
+                                emit_sidecar,
+                            )
                         }),
                     )
                 };
@@ -1564,9 +1587,12 @@ impl<'db> IsolatedObjectCompiler<'db, '_> {
                 for (index, result) in results {
                     let name = &order[index].name;
                     match result {
-                        Ok((artifact, trace)) => {
+                        Ok((artifact, trace, sidecar)) => {
                             if let Some(trace) = trace {
                                 self.trace_facts.insert(name.clone(), trace);
+                            }
+                            if let (Some(sidecars), Some(sidecar)) = (&mut self.sidecars, sidecar) {
+                                sidecars.insert(name.clone(), sidecar);
                             }
                             self.compiled.insert(name.clone(), artifact);
                         }
@@ -1698,15 +1724,21 @@ fn compile_lowered_object(
     lowered: LoweredObject,
     opt_level: OptLevel,
     emit_observability: bool,
-) -> Result<(ObjectArtifact, Option<ObjectTrace>), LowerError> {
+    emit_sidecar: bool,
+) -> Result<(ObjectArtifact, Option<ObjectTrace>, Option<SonatinaSidecar>), LowerError> {
     let LoweredObject {
         name,
         module,
         mut trace,
     } = lowered;
     let owner = trace.as_ref().map(|(owner, _)| owner.as_str());
-    let (artifacts, postopt) =
-        compile_runtime_objects_with_postopt_trace(module, opt_level, emit_observability, owner)?;
+    let (artifacts, postopt, post_opt) = compile_runtime_objects_with_postopt_trace(
+        module,
+        opt_level,
+        emit_observability,
+        owner,
+        emit_sidecar,
+    )?;
     if let Some((_, facts)) = &mut trace {
         facts.extend(postopt);
     }
@@ -1714,7 +1746,8 @@ fn compile_lowered_object(
         .into_iter()
         .find(|artifact| artifact.object.0.as_str() == name)
         .ok_or_else(|| LowerError::Internal(format!("compiled object `{name}` not found")))?;
-    Ok((artifact, trace))
+    let sidecar = post_opt.map(|post_opt| post_opt.sidecar(&name, &artifact));
+    Ok((artifact, trace, sidecar))
 }
 
 pub(crate) struct TracedContractBytecode {
@@ -1740,6 +1773,7 @@ pub(crate) fn emit_runtime_package_sonatina_bytecode_with_trace(
         compiled: HashMap::new(),
         trace_owner: Some(trace_owner.to_string()),
         trace_facts: BTreeMap::new(),
+        sidecars: None,
     };
     let roots = package.root_objects(db);
     compiler.precompile(roots);
@@ -1788,11 +1822,12 @@ fn emit_runtime_module_sonatina_bytecode_with_options(
     LowerError,
 > {
     ensure_module_sonatina_ir_valid(&module)?;
-    let (artifacts, postopt_trace_facts) = compile_runtime_objects_with_postopt_trace(
+    let (artifacts, postopt_trace_facts, _) = compile_runtime_objects_with_postopt_trace(
         module,
         opt_level,
         emit_observability,
         postopt_trace_owner,
+        false,
     )?;
     let artifacts_by_name = artifacts
         .iter()
@@ -2134,6 +2169,7 @@ pub fn emit_test_suite_sonatina(
         compiled: HashMap::new(),
         trace_owner: None,
         trace_facts: BTreeMap::new(),
+        sidecars: None,
     };
     let object_name = object.name(db);
     compiler.compile(std::slice::from_ref(object_name))?;

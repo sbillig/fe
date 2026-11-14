@@ -58,6 +58,9 @@ pub enum BuildEmit {
     Metadata,
     /// Code bytes of each function in a contract (`<Contract>.sizes.txt`).
     Sizes,
+    /// The Sonatina IR a contract's bytecode is compiled from, with the bytes and symbols of
+    /// each section, from one compilation (`<Contract>.sidecar.json`).
+    Sidecar,
     Executable,
     /// A native object of the `#[unsafe(export)]` functions (`<name>.o`).
     Object,
