@@ -1,0 +1,7 @@
+core i256_from_word extern core::num::__bitcast<u256, i256>
+core i256_to_word extern core::num::__bitcast<i256, u256>
+core i8_from_word extern core::num::__bitcast<u256, i8>
+std Evm_address extern std::evm::ops::address
+std Evm_block_number extern std::evm::ops::number
+std Evm_origin extern std::evm::ops::origin
+std Evm_value extern std::evm::ops::callvalue

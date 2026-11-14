@@ -35,7 +35,7 @@ pub mod assoc_const;
 pub mod binder;
 pub mod canonical;
 pub(crate) mod clearable;
-pub(crate) mod closure;
+pub mod closure;
 pub(crate) mod const_check;
 pub mod const_expr;
 pub mod const_ty;

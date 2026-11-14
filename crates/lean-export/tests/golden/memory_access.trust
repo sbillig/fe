@@ -1,0 +1,7 @@
+own word_of unsafe-block 1 of 1
+own word_of raw-memory mut borrow of u256 through *Cell
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>

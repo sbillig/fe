@@ -1,0 +1,30 @@
+own recv0_arm0 unsafe-impl entry of StorageMap<(u256, u256), bool>
+own recv0_arm1 unsafe-impl entry of StorageMap<bool, u256>
+core MemBuffer_drop unsafe-block 1 of 1
+core MemBuffer_new_uninit unsafe-fn the whole body
+core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core dealloc_u8 unsafe-fn the whole body
+core dealloc_u8 extern core::ptr::dealloc_raw
+core downcast_saturate_u256_usize extern core::num::__bitcast<u256, i256>
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+std StorageMap_locate_bool_u256 unsafe-impl method of unsafe impl StateIndex for StorageMap<K, V>
+std StorageMap_locate_tuple_u256_u256_bool unsafe-impl method of unsafe impl StateIndex for StorageMap<K, V>
+std bool_write_key unsafe-fn the whole body
+std keccak256_1 unsafe-block 1 of 1
+std keccak256_1 extern std::evm::ops::keccak256
+std mapping_slot_bool unsafe-block 1 of 2
+std mapping_slot_bool unsafe-block 2 of 2
+std mapping_slot_bool raw-memory std::evm::ops::mstore
+std mapping_slot_bool extern core::ptr::offset_bytes<u8>
+std mapping_slot_tuple_u256_u256 unsafe-block 1 of 2
+std mapping_slot_tuple_u256_u256 unsafe-block 2 of 2
+std mapping_slot_tuple_u256_u256 raw-memory std::evm::ops::mstore
+std mapping_slot_tuple_u256_u256 extern core::ptr::offset_bytes<u8>
+std tuple_write_key_u256_u256 unsafe-fn the whole body
+std tuple_write_key_u256_u256 extern core::ptr::offset_bytes<u8>
+std u256_write_key unsafe-fn the whole body
+std u256_write_key raw-memory std::evm::ops::mstore

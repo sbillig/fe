@@ -1,0 +1,4 @@
+own recv0_arm0 unsafe-block 1 of 2
+own recv0_arm0 unsafe-block 2 of 2
+own recv0_arm0 raw-calldata effect of [u256; 2] through CalldataPtr<[u256; 2]>
+std calldata_ptr_Evm_array_u256_2 unsafe-fn the whole body

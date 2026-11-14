@@ -2955,3 +2955,387 @@ def Evm_return_value_Sol_u8 (v1 : UInt256) : FeM Empty := do
     let v63 ← Evm_return_bytes v60
     nomatch v63
 
+structure CallOutcome where
+  success : Bool
+  returndata : MemBuffer
+deriving Inhabited
+
+def Wei_zero : FeM Wei := do
+  let v0 := (UInt256.ofNat 0)
+  let v1 := (Wei.mk v0)
+  return v1
+
+def tuple_IS_DYNAMIC : FeM Bool := do
+  let v0 := false
+  return v0
+
+def tuple_HEAD_SIZE : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 0)
+  return v0
+
+def payload_size_tuple (v0 : Unit) : FeM UInt256 := do
+  let v1 ← tuple_HEAD_SIZE
+  return v1
+
+def abi_payload_size_tuple (v0 : Unit) : FeM UInt256 := do
+  let v1 ← payload_size_tuple v0
+  return v1
+
+def tuple_encode_Sol (v0 : Unit) (v1 : AbiFrame) : FeM Unit := do
+  let v2 := ()
+  return ()
+
+def encode_alloc_Sol_tuple (r0 : Unit) : FeM MemBuffer := do
+  let mut r0 := r0
+  let mut r1 : MemBuffer := default
+  let mut r2 : AbiFrame := default
+  let v0 := r0
+  let v1 ← abi_payload_size_tuple v0
+  let v2 := v1
+  let v3 ← allocation_len v2
+  let v4 ← MemBuffer_new v3
+  let v5 := v4
+  r1 := v5
+  let v7 ← MemBuffer_ptr r1
+  let v8 ← AbiFrame_from_raw_parts v7 v2
+  r2 := v8
+  let v9 := r0
+  let v11 ← tuple_encode_Sol v9 r2
+  let v12 := r1
+  return v12
+
+def encode_abi_payload_tuple (v0 : Unit) : FeM MemBuffer := do
+  let v1 ← encode_alloc_Sol_tuple v0
+  return v1
+
+def create2_raw_Evm (v1 : Wei) (v2 : MemSlice_u8) (v3 : UInt256) : FeM UInt256 := do
+  let v4 ← Wei_as_wei v1
+  let v5 ← MemSlice_ptr_u8 v2
+  let v6 ← MemSlice_len_u8 v2
+  let v7 := v6
+  let v8 ← create2 v4 v5 v7 v3
+  let v9 := v8
+  return v9
+
+def copy_returndata : FeM MemBuffer := do
+  let mut r0 : MemBuffer := default
+  let v0 ← returndatasize
+  let v1 := v0
+  let v2 ← downcast_unchecked_u256_usize v1
+  let v3 ← MemBuffer_new_uninit v2
+  let v4 := v3
+  r0 := v4
+  let v6 ← MemBuffer_ptr r0
+  let v7 := (UInt256.ofNat 0)
+  let v8 ← returndatacopy v6 v7 v1
+  let v9 := r0
+  return v9
+
+def bubble_last_revert : FeM Empty := do
+  let mut r0 : MemBuffer := default
+  let v0 ← copy_returndata
+  let v1 := v0
+  r0 := v1
+  let v3 ← MemBuffer_ptr r0
+  let v5 ← MemBuffer_len r0
+  let v6 := v5
+  let v7 ← revertData v3 v6
+  nomatch v7
+
+def copy_call_outcome (v0 : RawCallOutcome) : FeM CallOutcome := do
+  let v1 ← RawCallOutcome_success v0
+  let v2 ← copy_returndata
+  let v3 := (CallOutcome.mk v1 v2)
+  return v3
+
+def u256_decode_from_Sol_MemSlice_u8 (v0 : MemSlice_u8) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← MemSlice_u8_word_at v0 v1
+  return v2
+
+def decode_from_prechecked_head_u256_Sol_MemSlice_u8 (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+  let v3 ← u256_decode_from_Sol_MemSlice_u8 v0 v1
+  return v3
+
+def decode_frame_from_Sol_u256_MemSlice_u8 (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+  let v3 ← u256_HEAD_SIZE
+  let v4 ← checked_frame_end_Sol v1 v3 v2
+  let v5 ← decode_from_prechecked_head_u256_Sol_MemSlice_u8 v0 v1 v2
+  return v5
+
+def decode_from_bounded_u256_Sol_MemSlice_u8 (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+  let v3 ← u256_HEAD_SIZE
+  let v4 ← checked_frame_end_Sol v1 v3 v2
+  let v5 ← u256_decode_from_Sol_MemSlice_u8 v0 v1
+  return v5
+
+def decode_field_from_prechecked_head_Sol_u256_MemSlice_u8 (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM UInt256 := do
+  let v4 ← u256_IS_DYNAMIC
+  if v4 then
+    let v5 ← MemSlice_u8_word_at v0 v2
+    let v6 := v5
+    let v7 ← checked_tail_Sol v1 v6
+    let v8 := v7
+    let v9 ← decode_from_bounded_u256_Sol_MemSlice_u8 v0 v8 v3
+    return v9
+  else
+    let v10 := ()
+    let v11 := v10
+    let v12 ← u256_decode_from_Sol_MemSlice_u8 v0 v2
+    return v12
+
+def decode_output_at_u256_MemSlice_u8 (v0 : MemSlice_u8) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← len_MemSlice_u8 v0
+  let v3 := v2
+  let v4 ← const_u256
+  if v4 then
+    let v5 ← decode_frame_from_Sol_u256_MemSlice_u8 v0 v1 v3
+    return v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 ← abi_single_root_head_size_u256
+    let v9 ← checked_frame_end_Sol v1 v8 v3
+    let v10 ← decode_field_from_prechecked_head_Sol_u256_MemSlice_u8 v0 v1 v1 v3
+    return v10
+
+def decode_output_u256_MemSlice_u8 (v0 : MemSlice_u8) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  let v2 ← decode_output_at_u256_MemSlice_u8 v0 v1
+  return v2
+
+def decode_returndata_u256 (v0 : MemSlice_u8) : FeM UInt256 := do
+  let v1 ← decode_output_u256_MemSlice_u8 v0
+  return v1
+
+def CallOutcome_decode_u256 (v0 : CallOutcome) : FeM UInt256 := do
+  let mut r0 : MemBuffer := default
+  let v1 := v0.success
+  let v2 := v1
+  let v3 := v0.returndata
+  let v4 := v3
+  r0 := v4
+  let v5 := !v2
+  if v5 then
+    let v7 ← MemBuffer_ptr r0
+    let v9 ← MemBuffer_len r0
+    let v10 := v9
+    let v11 ← revertData v7 v10
+    nomatch v11
+  else
+    let v12 := ()
+    let v13 := v12
+    let v15 ← MemBuffer_span_ref r0
+    let v17 ← decode_returndata_u256 v15
+    let _ ← MemBuffer_drop r0
+    return v17
+
+def keccak_words_2 (v0 : (Vector UInt256 2)) : FeM UInt256 := do
+  let v1 := keccakWords v0
+  return v1
+
+def read_transient_word_Evm (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 := v1
+  let v3 ← load (Place.mk .transient v2)
+  return v3
+
+def storage_at_mut_Evm_u256 (v0 : UInt256) : FeM Place := do
+  let v1 := v0
+  let v2 := (Place.mk .storage v1)
+  return v2
+
+def Address_encode_Sol (v0 : UInt256) (v1 : AbiFrame) : FeM Unit := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 := v0
+  let v4 ← AbiFrame_store_word v1 v2 v3
+  return ()
+
+def const_Address : FeM Bool := do
+  let v0 := false
+  return v0
+
+def payload_size_Address (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← Address_HEAD_SIZE
+  return v1
+
+def abi_payload_size_Address (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← payload_size_Address v0
+  return v1
+
+def encode_alloc_Sol_Address (r0 : UInt256) : FeM MemBuffer := do
+  let mut r0 := r0
+  let mut r1 : MemBuffer := default
+  let mut r2 : AbiFrame := default
+  let v0 := r0
+  let v1 ← abi_payload_size_Address v0
+  let v2 := v1
+  let v3 ← allocation_len v2
+  let v4 ← MemBuffer_new v3
+  let v5 := v4
+  r1 := v5
+  let v7 ← MemBuffer_ptr r1
+  let v8 ← AbiFrame_from_raw_parts v7 v2
+  r2 := v8
+  let v9 := r0
+  let v11 ← Address_encode_Sol v9 r2
+  let v12 := r1
+  return v12
+
+def abi_field_size_Address (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← payload_size_Address v0
+  let v2 := v1
+  let v3 ← Address_IS_DYNAMIC
+  if v3 then
+    let v4 := (UInt256.ofNat 32)
+    let v5 ← checkedAdd v4 v2
+    return v5
+  else
+    let v6 := ()
+    let v7 := v6
+    return v2
+
+def abi_single_root_size_Address (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← abi_field_size_Address v0
+  return v1
+
+def abi_single_root_head_size_Address : FeM UInt256 := do
+  let v0 ← abi_field_head_size_Address
+  return v0
+
+def encode_field_Sol_Address (v0 : UInt256) (v1 : AbiFrame) (v2 : UInt256) (r0 : AbiFrame) : FeM AbiFrame := do
+  let mut r0 := r0
+  let mut r1 : AbiFrame := default
+  let mut r2 : AbiFrame := default
+  let v3 ← Address_IS_DYNAMIC
+  if v3 then
+    let v4 ← payload_size_Address v0
+    let v5 := v4
+    let v6 ← AbiFrame_len v1
+    let v8 ← AbiFrame_len r0
+    let v9 := v6 - v8
+    let v10 ← AbiFrame_store_word v1 v2 v9
+    let v11 := (UInt256.ofNat 0)
+    let v13 ← AbiFrame_slice r0 v11 v5
+    r1 := v13
+    let v15 ← Address_encode_Sol v0 r1
+    let v17 ← AbiFrame_tail r0 v5
+    return v17
+  else
+    let v18 := ()
+    let v19 := v18
+    let v20 ← Address_HEAD_SIZE
+    let v21 ← AbiFrame_slice v1 v2 v20
+    r2 := v21
+    let v23 ← Address_encode_Sol v0 r2
+    let v24 := r0
+    return v24
+
+def encode_single_root_alloc_Sol_Address (r0 : UInt256) : FeM MemBuffer := do
+  let mut r0 := r0
+  let mut r1 : MemBuffer := default
+  let mut r2 : AbiFrame := default
+  let v0 := r0
+  let v1 ← abi_single_root_size_Address v0
+  let v2 := v1
+  let v3 ← allocation_len v2
+  let v4 ← MemBuffer_new v3
+  let v5 := v4
+  r1 := v5
+  let v7 ← MemBuffer_ptr r1
+  let v8 ← AbiFrame_from_raw_parts v7 v2
+  let v9 := v8
+  r2 := v9
+  let v10 := (UInt256.ofNat 0)
+  let v11 ← abi_single_root_head_size_Address
+  let v13 ← AbiFrame_tail r2 v11
+  let v14 := r0
+  let v16 ← encode_field_Sol_Address v14 r2 v10 v13
+  let v17 := r1
+  return v17
+
+def encode_return_alloc_Sol_Address (v0 : UInt256) : FeM MemBuffer := do
+  let v1 ← const_Address
+  if v1 then
+    let v2 ← encode_alloc_Sol_Address v0
+    return v2
+  else
+    let v3 := ()
+    let v4 := v3
+    let v5 ← encode_single_root_alloc_Sol_Address v0
+    return v5
+
+def Evm_return_value_Sol_Address (r0 : UInt256) : FeM Empty := do
+  let mut r0 := r0
+  let mut r1 : FixedMemBuffer_32 := default
+  let mut r2 : FixedMemBuffer_64 := default
+  let mut r3 : MemBuffer := default
+  let mut r4 : MemBuffer := default
+  let mut r5 : AbiFrame := default
+  let mut r6 : AbiFrame := default
+  let mut r7 : AbiFrame := default
+  let v1 ← Address_IS_DYNAMIC
+  let v2 := !v1
+  if v2 then
+    let v3 ← Address_HEAD_SIZE
+    let v4 := (UInt256.ofNat 32)
+    let v5 := decide (v3.toNat ≤ v4.toNat)
+    if v5 then
+      let v6 ← FixedMemBuffer_alloc_32
+      let v7 := v6
+      r1 := v7
+      let v9 ← FixedMemBuffer_ptr_32 r1
+      let v10 ← Address_HEAD_SIZE
+      let v11 ← AbiFrame_from_raw_parts v9 v10
+      r5 := v11
+      let v12 := r0
+      let v14 ← Address_encode_Sol v12 r5
+      let v16 ← FixedMemBuffer_ptr_32 r1
+      let v17 ← Address_HEAD_SIZE
+      let v18 ← downcast_unchecked_u256_usize v17
+      let v19 ← MemSlice_from_raw_parts_ref_u8 v16 v18
+      let v22 ← Evm_return_data v19
+      nomatch v22
+    else
+      let v23 ← Address_HEAD_SIZE
+      let v24 := (UInt256.ofNat 64)
+      let v25 := decide (v23.toNat ≤ v24.toNat)
+      if v25 then
+        let v26 ← FixedMemBuffer_alloc_64
+        let v27 := v26
+        r2 := v27
+        let v29 ← FixedMemBuffer_ptr_64 r2
+        let v30 ← Address_HEAD_SIZE
+        let v31 ← AbiFrame_from_raw_parts v29 v30
+        r6 := v31
+        let v32 := r0
+        let v34 ← Address_encode_Sol v32 r6
+        let v36 ← FixedMemBuffer_ptr_64 r2
+        let v37 ← Address_HEAD_SIZE
+        let v38 ← downcast_unchecked_u256_usize v37
+        let v39 ← MemSlice_from_raw_parts_ref_u8 v36 v38
+        let v42 ← Evm_return_data v39
+        nomatch v42
+      else
+        let v43 ← Address_HEAD_SIZE
+        let v44 ← downcast_unchecked_u256_usize v43
+        let v45 ← MemBuffer_new v44
+        let v46 := v45
+        r3 := v46
+        let v48 ← MemBuffer_ptr r3
+        let v49 ← Address_HEAD_SIZE
+        let v50 ← AbiFrame_from_raw_parts v48 v49
+        r7 := v50
+        let v51 := r0
+        let v53 ← Address_encode_Sol v51 r7
+        let v55 ← MemBuffer_span_ref r3
+        let v58 ← Evm_return_data v55
+        nomatch v58
+  else
+    let v59 := r0
+    let v60 ← encode_return_alloc_Sol_Address v59
+    let v61 := v60
+    r4 := v61
+    let v63 ← MemBuffer_span_ref r4
+    let v66 ← Evm_return_bytes v63
+    nomatch v66
+

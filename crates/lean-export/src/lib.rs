@@ -13,8 +13,13 @@
 //! std that name nothing of a contract's own. A contract's text names them
 //! as its own: its embedding gives the ones in [`Export::uses`] those names
 //! in the contract's namespace, as Lean's `export` does.
+//!
+//! An export lists what its definitions take on trust ([`Export::trusted`]):
+//! what the type system and the access checker do not vouch for in the body
+//! of each, and each constant it holds as the value the compiler computes
+//! for it.
 
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use common::{
     compilation::Target as CompilationTarget,
@@ -38,6 +43,7 @@ use hir::{
         ty::{
             AddressSpace,
             adt_def::{AdtField, AdtRef, instantiate_adt_field_shape},
+            closure::closure_regions,
             corelib::{
                 ContractMetadataKind, NumericExternIntrinsic, RuntimeBuiltinFuncKind,
                 SaturatingArithmetic, core_numeric_const_intrinsic, lib_func_matches,
@@ -55,8 +61,10 @@ use hir::{
         },
     },
     hir_def::{
-        Contract, EnumVariant, FieldParent, IdentId, ItemKind, PatId,
+        BlockKind, Body, Contract, EnumVariant, Expr, FieldParent, IdentId, ItemKind, Partial,
+        PatId,
         expr::{ArithBinOp, BinOp, CompBinOp},
+        scope_graph::ScopeId,
     },
     semantic::{
         ContractFieldId, FieldStorageLayout, ProviderSource, storage_field_placements,
@@ -331,9 +339,20 @@ pub struct Export {
     /// structure's constructor.
     pub uses: Vec<String>,
     pub text: String,
+    /// What the definitions, the contract's own and the library's it uses,
+    /// take on trust, sorted.
+    pub trusted: Vec<Trusted>,
 }
 
 impl Export {
+    /// `trusted`, one item a line.
+    pub fn trust_report(&self) -> String {
+        self.trusted
+            .iter()
+            .map(|item| format!("{item}\n"))
+            .collect()
+    }
+
     /// The Lean command that gives `uses` their names in the current
     /// namespace, for a library in the namespace `library`. Empty if the
     /// text names none of the library's.
@@ -342,6 +361,95 @@ impl Export {
             return String::new();
         }
         format!("export {library} ({})\n\n", self.uses.join(" "))
+    }
+}
+
+/// Something an exported definition takes on trust: a part of its body that
+/// the type system and the access checker do not vouch for, or a constant it
+/// holds as the value the compiler computes for it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Trusted {
+    /// Where the body is: the ingot of the function or constant it defines.
+    pub origin: Origin,
+    /// The Lean name of the definition.
+    pub definition: String,
+    pub kind: TrustKind,
+    pub detail: String,
+}
+
+impl fmt::Display for Trusted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            origin,
+            definition,
+            kind,
+            detail,
+        } = self;
+        write!(f, "{origin} {definition} {kind} {detail}")
+    }
+}
+
+/// The code a body is part of: the contract's own, core's or std's. Code of
+/// an ingot the contract depends on is its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Origin {
+    Own,
+    Core,
+    Std,
+}
+
+impl fmt::Display for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Own => "own",
+            Self::Core => "core",
+            Self::Std => "std",
+        })
+    }
+}
+
+/// What kind of thing a definition takes on trust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TrustKind {
+    /// An `unsafe` block, by its place among the body's.
+    UnsafeBlock,
+    /// The body of an `unsafe fn`, all of which may do what only an unsafe
+    /// context may.
+    UnsafeFn,
+    /// What an `unsafe impl` asserts: a method of one, or the entry of a
+    /// collection that its `unsafe impl StateIndex` locates, which the access
+    /// checker takes to be in the collection's region and apart from the
+    /// other keys' entries.
+    UnsafeImpl,
+    /// An access the access checker does not see: to a place behind a raw
+    /// pointer into the space, or a builtin that reads or writes storage or
+    /// memory at the address it is given.
+    Raw(AddressSpace),
+    /// A call of a function without a body, other than the calls and
+    /// creations below: an `extern` function or a compiler intrinsic, which
+    /// the model's prelude defines.
+    Extern,
+    /// A message call to another account.
+    Call,
+    /// The creation of a contract.
+    Create,
+    /// A constant held as the value the compiler computes for it, with the
+    /// construct that stopped the export of its definition.
+    Folded,
+}
+
+impl fmt::Display for TrustKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsafeBlock => f.write_str("unsafe-block"),
+            Self::UnsafeFn => f.write_str("unsafe-fn"),
+            Self::UnsafeImpl => f.write_str("unsafe-impl"),
+            Self::Raw(space) => write!(f, "raw-{}", space.pretty().replace(' ', "-")),
+            Self::Extern => f.write_str("extern"),
+            Self::Call => f.write_str("call"),
+            Self::Create => f.write_str("create"),
+            Self::Folded => f.write_str("folded-constant"),
+        }
     }
 }
 
@@ -419,11 +527,15 @@ fn export<'db>(
         bodies: library.bodies.clone(),
         defs: Vec::new(),
         embedded: FxHashSet::default(),
+        folded: Vec::new(),
     };
+    // The Lean names of each instance whose body is exported.
+    let mut defined = FxHashMap::<_, Vec<String>>::default();
     for (name, owner) in entries {
         let key = identity_semantic_instance_key(db, owner);
         let (body, _) = module.body(&name, key, &Carriers::default())?;
         module.define(&name, &body, true);
+        defined.entry(key).or_default().push(name);
     }
     if with_entries {
         module.runtime(contract)?;
@@ -484,9 +596,45 @@ fn export<'db>(
     library.nevers = module.nevers;
     library.lenses = module.lenses;
     library.bodies = module.bodies;
+    for ((key, _), name) in module.names {
+        defined.entry(key).or_default().push(name);
+    }
+    let origin = |key: SemanticInstanceKey<'db>| match key.owner(db).scope().ingot(db).kind(db) {
+        IngotKind::Core => Origin::Core,
+        IngotKind::Std => Origin::Std,
+        _ => Origin::Own,
+    };
+    let mut trusted = Vec::new();
+    for (key, names) in &defined {
+        for (kind, detail) in trusted_parts(db, *key) {
+            trusted.extend(names.iter().map(|name| Trusted {
+                origin: origin(*key),
+                definition: name.clone(),
+                kind,
+                detail: detail.clone(),
+            }));
+        }
+    }
+    for folded in module.folded {
+        let detail = format!(
+            "{} = {} ({})",
+            const_path(db, folded.constant.owner(db)),
+            folded.value,
+            folded.reason
+        );
+        trusted.extend(defined[&folded.body].iter().map(|name| Trusted {
+            origin: origin(folded.body),
+            definition: name.clone(),
+            kind: TrustKind::Folded,
+            detail: detail.clone(),
+        }));
+    }
+    trusted.sort_unstable();
+    trusted.dedup();
     Ok(Export {
         uses,
         text: exported,
+        trusted,
     })
 }
 
@@ -524,6 +672,19 @@ struct Module<'db> {
     defs: Vec<Item>,
     /// The names the bodies call a deployed contract's creation code by.
     embedded: FxHashSet<String>,
+    /// The uses of constants held as the value the compiler computes.
+    folded: Vec<Folded<'db>>,
+}
+
+/// A use of a constant whose definition has no model, in the body of the
+/// instance `body`: the constant's instance, the value the use stands as and
+/// what stopped the export of the constant.
+#[derive(Clone)]
+struct Folded<'db> {
+    body: SemanticInstanceKey<'db>,
+    constant: SemanticInstanceKey<'db>,
+    value: String,
+    reason: String,
 }
 
 impl<'db> Module<'db> {
@@ -940,18 +1101,8 @@ impl<'db> Module<'db> {
                 .name(db)
                 .to_opt()
                 .map_or("const".to_string(), |name| name.data(db).to_string()),
-            // An associated constant's value is an anonymous body of its impl.
             BodyOwner::AnonConstBody { body, .. } => {
-                let consts = match body.scope().parent_item(db) {
-                    Some(ItemKind::Impl(item)) => item.hir_consts(db),
-                    Some(ItemKind::ImplTrait(item)) => item.hir_consts(db),
-                    _ => &[],
-                };
-                consts
-                    .iter()
-                    .find(|constant| constant.value.to_opt() == Some(body))
-                    .and_then(|constant| constant.name.to_opt())
-                    .map_or("const".to_string(), |name| name.data(db).to_string())
+                assoc_const_name(db, body).unwrap_or("const").to_string()
             }
             BodyOwner::Closure { .. } => "closure".to_string(),
             owner => return Err(Unsupported(format!("call to {owner:?}"))),
@@ -1391,7 +1542,18 @@ impl<'db> Module<'db> {
                 let (variant, _) = &variants[usize::from(variant.0)];
                 Ok(format!("({name}.{variant}{parts})"))
             }
-            other => Err(Unsupported(format!("constant {other:?}"))),
+            SemConstValue::Scalar {
+                ty,
+                value: SemConstScalar::Bytes(bytes),
+            } => Err(Unsupported(format!(
+                "constant of {} bytes of type `{}`",
+                bytes.len(),
+                ty.pretty_print(db)
+            ))),
+            SemConstValue::Description(term) => Err(Unsupported(format!(
+                "constant description of type `{}`",
+                term.ty(db).pretty_print(db)
+            ))),
         }
     }
 
@@ -2950,6 +3112,12 @@ impl<'db> BodyExporter<'_, 'db> {
                                         return Err(unsupported);
                                     };
                                     let value = self.module.const_value(value.value(db))?;
+                                    self.module.folded.push(Folded {
+                                        body: self.body.owner.key(db),
+                                        constant: constant.instance(db),
+                                        value: value.clone(),
+                                        reason: unsupported.0,
+                                    });
                                     format!(
                                         "let {name} := {value} -- a constant, as the compiler evaluates it"
                                     )
@@ -4895,6 +5063,186 @@ fn granted_in_memory<'db>(
             "grant in memory at some yields only".to_string(),
         )),
     }
+}
+
+/// What the body of `key` takes on trust, by kind, but for the constants its
+/// export holds as values, which only the export knows.
+fn trusted_parts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Vec<(TrustKind, String)> {
+    let owner = key.owner(db);
+    let mut parts = Vec::new();
+    if let BodyOwner::Func(func, _) = owner {
+        if func.is_unsafe(db) {
+            parts.push((TrustKind::UnsafeFn, "the whole body".to_string()));
+        }
+        if let Some(ItemKind::ImplTrait(item)) = func.scope().parent_item(db)
+            && item.is_unsafe(db)
+        {
+            let name = item.trait_def(db).and_then(|def| def.name(db).to_opt());
+            parts.push((
+                TrustKind::UnsafeImpl,
+                format!(
+                    "method of unsafe impl {} for {}",
+                    name.map_or("?", |name| name.data(db)),
+                    item.ty(db).pretty_print(db)
+                ),
+            ));
+        }
+    }
+    // A closure's blocks are its own, not the enclosing body's.
+    if let Some(body) = owner.body(db) {
+        let regions = closure_regions(db, body);
+        let blocks = body
+            .exprs(db)
+            .iter()
+            .filter(|(expr, data)| {
+                matches!(data, Partial::Present(Expr::Block(_, BlockKind::Unsafe)))
+                    && regions.expr(*expr) == owner.closure_region()
+            })
+            .count();
+        parts.extend((1..=blocks).map(|n| (TrustKind::UnsafeBlock, format!("{n} of {blocks}"))));
+    }
+    let Ok(normalized) = normalize_semantic_body(db, SemanticInstance::new(db, key)) else {
+        return parts;
+    };
+    let body = &normalized.body;
+    let mut places = Vec::new();
+    let mut callees = Vec::new();
+    for statement in body.blocks.iter().flat_map(|block| &block.statements) {
+        match &statement.kind {
+            NStatementKind::Define { expr, .. } => {
+                let access = match expr {
+                    NExpr::Load { .. } => "load",
+                    NExpr::Borrow {
+                        kind: BorrowKind::Mut,
+                        ..
+                    } => "mut borrow",
+                    NExpr::Borrow { .. } => "borrow",
+                    NExpr::MakeView { .. } => "view",
+                    _ => "effect",
+                };
+                expr.for_each_place_operand(|place| places.push((access, place.clone())));
+                if let NExpr::Call { callee, .. } = expr {
+                    callees.push(callee.key);
+                }
+            }
+            NStatementKind::Store { destination, .. } => {
+                places.push(("store", destination.clone()))
+            }
+            NStatementKind::Drop {
+                target: NDropTarget::Place(place),
+            } => places.push(("drop", place.clone())),
+            _ => {}
+        }
+    }
+    for (access, place) in places {
+        if let NPlaceBase::Deref { pointer } = place.base {
+            let pointer = body.values[pointer.index()].ty;
+            if let Some((_, space)) = pointer.as_ptr(db) {
+                let ty = place.ty.pretty_print(db);
+                let detail = format!("{access} of {ty} through {}", pointer.pretty_print(db));
+                parts.push((TrustKind::Raw(space), detail));
+            }
+        }
+        for (index, projection) in place.path.iter().enumerate() {
+            if let NDataProjection::Entry(_) = projection
+                && let Some(collection) = body.place_prefix_ty(db, &place, index)
+            {
+                let detail = format!("entry of {}", collection.pretty_print(db));
+                parts.push((TrustKind::UnsafeImpl, detail));
+            }
+        }
+    }
+    for callee in callees {
+        use RuntimeBuiltinFuncKind as Kind;
+        let BodyOwner::Func(func, _) = callee.owner(db) else {
+            continue;
+        };
+        if func.body(db).is_some() {
+            continue;
+        }
+        let kind = match runtime_builtin_func_kind(db, func) {
+            Some(
+                Kind::Call | Kind::StaticCall | Kind::StaticCallPrecompile | Kind::DelegateCall,
+            ) => TrustKind::Call,
+            Some(Kind::Create | Kind::Create2) => TrustKind::Create,
+            Some(Kind::Sload | Kind::Sstore | Kind::SloadHashed | Kind::SstoreHashed) => {
+                TrustKind::Raw(AddressSpace::Storage)
+            }
+            Some(
+                Kind::Mload
+                | Kind::Mstore
+                | Kind::Mstore8
+                | Kind::Mcopy
+                | Kind::ZeroMem
+                | Kind::ReadPaddedWord
+                | Kind::CallDataCopy
+                | Kind::ReturnDataCopy
+                | Kind::CodeCopy
+                | Kind::ExtCodeCopy,
+            ) => TrustKind::Raw(AddressSpace::Memory),
+            _ => TrustKind::Extern,
+        };
+        let path = fe_path(db, func.scope());
+        let args: Vec<_> = callee
+            .subst(db)
+            .generic_args(db)
+            .iter()
+            .map(|arg| arg.pretty_print(db).as_str())
+            .collect();
+        let args = if args.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", args.join(", "))
+        };
+        parts.push((kind, format!("{path}{args}")));
+    }
+    parts
+}
+
+/// The constant whose value `owner` is, as Fe names it: its path, or its
+/// impl's type and its name.
+fn const_path(db: &dyn HirAnalysisDb, owner: BodyOwner<'_>) -> String {
+    match owner {
+        BodyOwner::AnonConstBody { body, .. } => {
+            let ty = match body.scope().parent_item(db) {
+                Some(ItemKind::Impl(item)) => item.ty(db).pretty_print(db).as_str(),
+                Some(ItemKind::ImplTrait(item)) => item.ty(db).pretty_print(db).as_str(),
+                _ => "",
+            };
+            format!("{ty}::{}", assoc_const_name(db, body).unwrap_or("?"))
+        }
+        owner => fe_path(db, owner.scope()),
+    }
+}
+
+/// The path of `scope` as Fe code names it: from `core` or `std` for theirs,
+/// whose root module the compiler calls `lib`.
+fn fe_path(db: &dyn HirAnalysisDb, scope: ScopeId<'_>) -> String {
+    let path = scope.pretty_path(db).unwrap_or_default();
+    let root = match scope.ingot(db).kind(db) {
+        IngotKind::Core => "core",
+        IngotKind::Std => "std",
+        _ => return path,
+    };
+    let (_, rest) = path.split_once("::").unwrap_or_default();
+    format!("{root}::{rest}")
+}
+
+/// The name of the associated constant whose value is `body`, an anonymous
+/// body of its impl.
+fn assoc_const_name<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<&'db str> {
+    let consts = match body.scope().parent_item(db) {
+        Some(ItemKind::Impl(item)) => item.hir_consts(db),
+        Some(ItemKind::ImplTrait(item)) => item.hir_consts(db),
+        _ => &[],
+    };
+    let constant = consts
+        .iter()
+        .find(|constant| constant.value.to_opt() == Some(body))?;
+    Some(constant.name.to_opt()?.data(db))
 }
 
 /// Whether `ingot` is core or std, whose definitions exports share.

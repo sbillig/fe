@@ -253,13 +253,13 @@ pub(crate) fn out_ident<'db>(db: &'db dyn HirAnalysisDb) -> IdentId<'db> {
 /// is part of; `None` for the item body itself. A closure expression is part
 /// of the region it appears in.
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
-pub(crate) struct ClosureRegions {
+pub struct ClosureRegions {
     exprs: Vec<Option<ExprId>>,
     stmts: Vec<Option<ExprId>>,
 }
 
 impl ClosureRegions {
-    pub(crate) fn expr(&self, expr: ExprId) -> Option<ExprId> {
+    pub fn expr(&self, expr: ExprId) -> Option<ExprId> {
         self.exprs[expr.index()]
     }
 
@@ -269,7 +269,7 @@ impl ClosureRegions {
 }
 
 #[salsa::tracked]
-pub(crate) fn closure_regions<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> ClosureRegions {
+pub fn closure_regions<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> ClosureRegions {
     let mut walk = RegionWalk {
         db,
         body,

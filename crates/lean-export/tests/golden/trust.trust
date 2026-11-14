@@ -1,0 +1,100 @@
+own Words_locate unsafe-impl method of unsafe impl StateIndex for Words
+own recv0_arm2 unsafe-impl entry of Words
+own spare_Evm unsafe-block 1 of 1
+own word_at_Evm unsafe-block 1 of 1
+own word_at_Evm unsafe-fn the whole body
+core AbiFrame_from_raw_parts unsafe-fn the whole body
+core AbiFrame_slice unsafe-block 1 of 1
+core AbiFrame_store_word unsafe-block 1 of 1
+core AbiFrame_tail unsafe-block 1 of 1
+core FixedMemBuffer_alloc_32 unsafe-block 1 of 2
+core FixedMemBuffer_alloc_32 unsafe-block 2 of 2
+core FixedMemBuffer_alloc_64 unsafe-block 1 of 2
+core FixedMemBuffer_alloc_64 unsafe-block 2 of 2
+core FixedMemBuffer_alloc_uninit_32 unsafe-fn the whole body
+core FixedMemBuffer_alloc_uninit_64 unsafe-fn the whole body
+core MemBuffer_drop unsafe-block 1 of 1
+core MemBuffer_new unsafe-block 1 of 2
+core MemBuffer_new unsafe-block 2 of 2
+core MemBuffer_new_uninit unsafe-fn the whole body
+core MemBuffer_set_len unsafe-fn the whole body
+core MemBuffer_span_ref unsafe-block 1 of 1
+core MemBuffer_with_capacity unsafe-block 1 of 1
+core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
+core MemSlice_u8_word_at unsafe-block 1 of 1
+core MemSlice_u8_word_at raw-memory core::ptr::read_padded_word
+core MemSlice_u8_word_at extern core::ptr::offset_bytes<u8>
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core allocation_len extern core::panic_code
+core copy unsafe-fn the whole body
+core copy_raw unsafe-fn the whole body
+core copy_raw raw-memory core::ptr::copy_mem
+core dealloc_u8 unsafe-fn the whole body
+core dealloc_u8 extern core::ptr::dealloc_raw
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core encode_alloc_Sol_Address unsafe-block 1 of 1
+core encode_alloc_Sol_tuple unsafe-block 1 of 1
+core encode_alloc_Sol_u256 unsafe-block 1 of 1
+core encode_single_root_alloc_Sol_Address unsafe-block 1 of 1
+core encode_single_root_alloc_Sol_u256 unsafe-block 1 of 1
+core i256_from_word extern core::num::__bitcast<u256, i256>
+core index_out_of_bounds extern core::panic_code
+core ptr_offset extern core::ptr::offset_bytes<u8>
+core store_word unsafe-block 1 of 1
+core store_word unsafe-fn the whole body
+core store_word raw-memory store of u256 through *u256
+core store_word extern core::num::to_be<u256>
+core u64_from_word extern core::num::__bitcast<u256, u64>
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+core usize_max extern core::num::__bitnot_usize
+core word_to_usize extern core::num::__bitcast<u256, usize>
+core zero_bytes unsafe-fn the whole body
+core zero_bytes raw-memory core::ptr::zero_mem
+std Address_call_Evm_Get extern std::evm::ops::gas
+std Address_decode_from_Sol_CallData extern std::evm::ops::revert_empty
+std CallData_size extern std::evm::ops::calldatasize
+std CallData_word_at extern std::evm::ops::calldataload
+std CallOutcome_decode_u256 unsafe-block 1 of 1
+std CallOutcome_decode_u256 extern std::evm::ops::revert
+std Evm_return_data unsafe-block 1 of 1
+std Evm_return_data extern std::evm::ops::return_data
+std Evm_return_value_Sol_Address unsafe-block 1 of 3
+std Evm_return_value_Sol_Address unsafe-block 2 of 3
+std Evm_return_value_Sol_Address unsafe-block 3 of 3
+std Evm_return_value_Sol_u256 unsafe-block 1 of 3
+std Evm_return_value_Sol_u256 unsafe-block 2 of 3
+std Evm_return_value_Sol_u256 unsafe-block 3 of 3
+std Sol_decode_error extern std::evm::ops::revert_empty
+std Sol_validate_runtime_head extern std::evm::ops::revert_empty
+std bubble_last_revert unsafe-block 1 of 1
+std bubble_last_revert extern std::evm::ops::revert
+std contract_init_code_Child unsafe-block 1 of 4
+std contract_init_code_Child unsafe-block 2 of 4
+std contract_init_code_Child unsafe-block 3 of 4
+std contract_init_code_Child unsafe-block 4 of 4
+std contract_init_code_Child raw-memory std::evm::ops::codecopy
+std contract_init_code_Child extern core::ptr::offset_bytes<u8>
+std contract_init_code_Child extern std::evm::effects::Contract::init_code_len<Child>
+std contract_init_code_Child extern std::evm::effects::Contract::init_code_offset<Child>
+std copy_returndata unsafe-block 1 of 2
+std copy_returndata unsafe-block 2 of 2
+std copy_returndata raw-memory std::evm::ops::returndatacopy
+std copy_returndata extern std::evm::ops::returndatasize
+std create2_raw_Evm unsafe-block 1 of 1
+std create2_raw_Evm create std::evm::ops::create2
+std encode_calldata_Get unsafe-block 1 of 2
+std encode_calldata_Get unsafe-block 2 of 2
+std encode_calldata_Get raw-memory std::evm::ops::mstore
+std encode_calldata_Get extern core::ptr::offset_bytes<u8>
+std finish_raw_call unsafe-block 1 of 1
+std finish_raw_call extern std::evm::ops::returndatasize
+std keccak_words_2 extern core::intrinsic::__keccak_words<2>
+std raw_call_Evm unsafe-block 1 of 1
+std raw_call_Evm call std::evm::ops::call
+std read_transient_word_Evm unsafe-block 1 of 1
+std read_transient_word_Evm raw-transient-storage load of u256 through TStorPtr<u256>
+std storage_at_mut_Evm_u256 unsafe-block 1 of 1
+std storage_at_mut_Evm_u256 unsafe-fn the whole body
+std storage_at_mut_Evm_u256 raw-storage mut borrow of u256 through StorPtr<u256>

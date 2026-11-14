@@ -1,0 +1,84 @@
+own Approval_emit_Evm folded-constant Approval::TOPIC0 = (UInt256.ofNat 63486140976153616755203102783360879283472101686154884697241723088393386309925) (Approval_TOPIC0: constant of 8 bytes of type `[u8; 8]`)
+own Transfer_emit_Evm folded-constant Transfer::TOPIC0 = (UInt256.ofNat 100389287136786176327247604509743168900146139575972864366142685224231313322991) (Transfer_TOPIC0: constant of 8 bytes of type `[u8; 8]`)
+own init unsafe-impl entry of StorageMap<Address, u256>
+own recv0_arm0 unsafe-impl entry of StorageMap<Address, u256>
+own recv0_arm1 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv0_arm1 unsafe-impl entry of StorageMap<Address, u256>
+own recv0_arm2 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv0_arm2 unsafe-impl entry of StorageMap<Address, u256>
+own recv0_arm3 unsafe-impl entry of StorageMap<Address, u256>
+own recv0_arm4 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv0_arm4 unsafe-impl entry of StorageMap<Address, u256>
+core AbiFrame_from_raw_parts unsafe-fn the whole body
+core AbiFrame_slice unsafe-block 1 of 1
+core AbiFrame_store_word unsafe-block 1 of 1
+core AbiFrame_tail unsafe-block 1 of 1
+core FixedMemBuffer_alloc_32 unsafe-block 1 of 2
+core FixedMemBuffer_alloc_32 unsafe-block 2 of 2
+core FixedMemBuffer_alloc_64 unsafe-block 1 of 2
+core FixedMemBuffer_alloc_64 unsafe-block 2 of 2
+core FixedMemBuffer_alloc_uninit_32 unsafe-fn the whole body
+core FixedMemBuffer_alloc_uninit_64 unsafe-fn the whole body
+core MemBuffer_drop unsafe-block 1 of 1
+core MemBuffer_new unsafe-block 1 of 2
+core MemBuffer_new unsafe-block 2 of 2
+core MemBuffer_new_uninit unsafe-fn the whole body
+core MemBuffer_span_ref unsafe-block 1 of 1
+core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
+core MemSlice_u8_word_at unsafe-block 1 of 1
+core MemSlice_u8_word_at raw-memory core::ptr::read_padded_word
+core MemSlice_u8_word_at extern core::ptr::offset_bytes<u8>
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core allocation_len extern core::panic_code
+core dealloc_u8 unsafe-fn the whole body
+core dealloc_u8 extern core::ptr::dealloc_raw
+core downcast_saturate_u256_usize extern core::num::__bitcast<u256, i256>
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core encode_alloc_Sol_bool unsafe-block 1 of 1
+core encode_alloc_Sol_tuple_u256 unsafe-block 1 of 1
+core encode_alloc_Sol_u256 unsafe-block 1 of 1
+core encode_single_root_alloc_Sol_bool unsafe-block 1 of 1
+core encode_single_root_alloc_Sol_u256 unsafe-block 1 of 1
+core i256_from_word extern core::num::__bitcast<u256, i256>
+core index_out_of_bounds extern core::panic_code
+core ptr_offset extern core::ptr::offset_bytes<u8>
+core store_word unsafe-block 1 of 1
+core store_word unsafe-fn the whole body
+core store_word raw-memory store of u256 through *u256
+core store_word extern core::num::to_be<u256>
+core u64_from_word extern core::num::__bitcast<u256, u64>
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+core usize_max extern core::num::__bitnot_usize
+core word_to_usize extern core::num::__bitcast<u256, usize>
+core zero_bytes unsafe-fn the whole body
+core zero_bytes raw-memory core::ptr::zero_mem
+std Address_decode_from_Sol_CallData extern std::evm::ops::revert_empty
+std Address_write_key unsafe-fn the whole body
+std CallData_size extern std::evm::ops::calldatasize
+std CallData_word_at extern std::evm::ops::calldataload
+std Evm_caller extern std::evm::ops::caller
+std Evm_log3 unsafe-block 1 of 1
+std Evm_log3 extern std::evm::ops::log3
+std Evm_return_data unsafe-block 1 of 1
+std Evm_return_data extern std::evm::ops::return_data
+std Evm_return_value_Sol_bool unsafe-block 1 of 3
+std Evm_return_value_Sol_bool unsafe-block 2 of 3
+std Evm_return_value_Sol_bool unsafe-block 3 of 3
+std Evm_return_value_Sol_u256 unsafe-block 1 of 3
+std Evm_return_value_Sol_u256 unsafe-block 2 of 3
+std Evm_return_value_Sol_u256 unsafe-block 3 of 3
+std SolDecoder_read_word_MemSlice_u8 extern std::evm::ops::revert_empty
+std Sol_decode_error extern std::evm::ops::revert_empty
+std Sol_validate_runtime_head extern std::evm::ops::revert_empty
+std StorageMap_locate_Address_StorageMap_Address_u256 unsafe-impl method of unsafe impl StateIndex for StorageMap<K, V>
+std StorageMap_locate_Address_u256 unsafe-impl method of unsafe impl StateIndex for StorageMap<K, V>
+std keccak256_1 unsafe-block 1 of 1
+std keccak256_1 extern std::evm::ops::keccak256
+std mapping_slot_Address unsafe-block 1 of 2
+std mapping_slot_Address unsafe-block 2 of 2
+std mapping_slot_Address raw-memory std::evm::ops::mstore
+std mapping_slot_Address extern core::ptr::offset_bytes<u8>
+std u256_write_key unsafe-fn the whole body
+std u256_write_key raw-memory std::evm::ops::mstore

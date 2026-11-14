@@ -37,6 +37,10 @@ use url::Url;
 /// an export deploys, and prints the construct each other contract stopped at
 /// as `BLOCK <ids>\t<reason>`.
 ///
+/// Writes what each exported contract takes on trust to
+/// `LEAN_EXPORT_CORPUS_OUT/<file>.trust`, each line after the contract's
+/// namespace.
+///
 /// A file that compiles ends in `Corpus.targets`, the creation and runtime
 /// bytecode, model and interface of each exported contract. A call of
 /// `Fe.EVM.Diff.main` on them and the object the file's tests compile to
@@ -92,6 +96,7 @@ fn export_corpus() {
             None => vec![db.top_mod(db.workspace().get(db, &url).unwrap())],
         };
         let mut text = String::new();
+        let mut trust = String::new();
         let mut library = Library::default();
         let mut models = Vec::new();
         let contracts = modules.iter().flat_map(|module| module.all_contracts(db));
@@ -113,6 +118,9 @@ fn export_corpus() {
                         lean.text
                     )
                     .unwrap();
+                    for item in &lean.trusted {
+                        writeln!(trust, "Corpus.{id} {item}").unwrap();
+                    }
                     let name = contract.name(db).unwrap().data(db).to_string();
                     // The argument types generated calls are made from. An
                     // arm whose types have no ABI form gets arbitrary words.
@@ -235,6 +243,7 @@ fn export_corpus() {
             library.text()
         );
         fs::write(format!("{out}/{name}.lean"), header + &text).unwrap();
+        fs::write(format!("{out}/{name}.trust"), trust).unwrap();
     }
     println!(
         "contracts: {total}, exported: {exported}, files skipped: {skipped:?}, \

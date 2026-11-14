@@ -1,0 +1,26 @@
+core AbiFrame_from_raw_parts unsafe-fn the whole body
+core AbiFrame_slice unsafe-block 1 of 1
+core AbiFrame_store_word unsafe-block 1 of 1
+core AbiFrame_tail unsafe-block 1 of 1
+core MemBuffer_new unsafe-block 1 of 2
+core MemBuffer_new unsafe-block 2 of 2
+core MemBuffer_new_uninit unsafe-fn the whole body
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core allocation_len extern core::panic_code
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core encode_single_root_alloc_Sol_u256 unsafe-block 1 of 1
+core index_out_of_bounds extern core::panic_code
+core ptr_offset extern core::ptr::offset_bytes<u8>
+core store_word unsafe-block 1 of 1
+core store_word unsafe-fn the whole body
+core store_word raw-memory store of u256 through *u256
+core store_word extern core::num::to_be<u256>
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+core usize_max extern core::num::__bitnot_usize
+core word_to_usize extern core::num::__bitcast<u256, usize>
+core zero_bytes unsafe-fn the whole body
+core zero_bytes raw-memory core::ptr::zero_mem
+std revert_u256 unsafe-block 1 of 1
+std revert_u256 extern std::evm::ops::revert

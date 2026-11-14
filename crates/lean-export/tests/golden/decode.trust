@@ -1,0 +1,4 @@
+core u64_from_word extern core::num::__bitcast<u256, u64>
+std CallData_size extern std::evm::ops::calldatasize
+std CallData_word_at extern std::evm::ops::calldataload
+std Sol_decode_error extern std::evm::ops::revert_empty
