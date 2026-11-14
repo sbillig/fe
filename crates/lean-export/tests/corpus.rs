@@ -214,6 +214,7 @@ fn sonatina_corpus() {
     let out = env::var("SONATINA_CORPUS_OUT").unwrap();
     let files = env::var("SONATINA_CORPUS").unwrap();
     let (mut skipped, mut uncompiled) = (Vec::new(), Vec::new());
+    let (mut same_bytes, mut other_bytes) = (0, Vec::new());
     for path in files.split(':') {
         let name = file_name(path);
         let Some((db, url)) = analyze(path) else {
@@ -229,9 +230,15 @@ fn sonatina_corpus() {
             continue;
         }
         let compiled = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            let sidecars = match ingot {
-                Some(ingot) => emit_ingot_sonatina_sidecar(db, ingot, OptLevel::O1, None),
-                None => emit_module_sonatina_sidecar(db, modules[0], OptLevel::O1, None),
+            let (sidecars, code) = match ingot {
+                Some(ingot) => (
+                    emit_ingot_sonatina_sidecar(db, ingot, OptLevel::O1, None),
+                    emit_ingot_sonatina_bytecode(db, ingot, OptLevel::O1, None),
+                ),
+                None => (
+                    emit_module_sonatina_sidecar(db, modules[0], OptLevel::O1, None),
+                    emit_module_sonatina_bytecode(db, modules[0], OptLevel::O1, None),
+                ),
             };
             let suite = emit_test_suite_sonatina(
                 db,
@@ -240,12 +247,30 @@ fn sonatina_corpus() {
                 SonatinaTestOptions::default(),
                 None,
             );
-            Some((sidecars.ok()?, suite.ok()?))
+            Some((sidecars.ok()?, code.ok()?, suite.ok()?))
         }));
-        let Ok(Some((sidecars, suite))) = compiled else {
+        let Ok(Some((sidecars, code, suite))) = compiled else {
             uncompiled.push(name);
             continue;
         };
+        // The sidecar's compile records the lowering; the bytecode's does not.
+        for (contract, sidecar) in &sidecars {
+            let bytes = |section: &str| {
+                sidecar
+                    .sections
+                    .iter()
+                    .find(|s| s.name == section)
+                    .map(|s| s.bytecode.clone())
+            };
+            if code.get(contract).is_some_and(|code| {
+                bytes("init") == Some(hex(&code.deploy))
+                    && bytes("runtime") == Some(hex(&code.runtime))
+            }) {
+                same_bytes += 1;
+            } else {
+                other_bytes.push(format!("{name}::{contract}"));
+            }
+        }
         let mut targets = Vec::new();
         for &contract in modules.iter().flat_map(|module| module.all_contracts(db)) {
             let contract_name = contract.name(db).unwrap().data(db).to_string();
@@ -278,6 +303,9 @@ fn sonatina_corpus() {
         fs::write(format!("{out}/{name}.lean"), text).unwrap();
     }
     println!("files skipped: {skipped:?}, not compiled: {uncompiled:?}");
+    println!(
+        "bytes: {same_bytes} contracts the same with and without the lowering record, other: {other_bytes:?}"
+    );
 }
 
 /// The name of a file or ingot directory, without `.fe`.
