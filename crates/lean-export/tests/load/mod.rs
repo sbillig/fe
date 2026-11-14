@@ -44,6 +44,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("precompiles", true),
     ("shared", true),
     ("case44_bank", true),
+    ("nested_loops", false),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it

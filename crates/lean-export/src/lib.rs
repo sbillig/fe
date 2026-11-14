@@ -1066,7 +1066,7 @@ impl<'db> Module<'db> {
             binders: Vec::new(),
             joins: FxHashMap::default(),
             joined: FxHashSet::default(),
-            loops: FxHashSet::default(),
+            recursive: FxHashSet::default(),
             helds: Vec::new(),
             slide: FxHashSet::default(),
             slide_ty: None,
@@ -2669,9 +2669,10 @@ struct BodyExporter<'a, 'db> {
     /// immediately dominates each, in the order they are defined.
     joins: FxHashMap<NBlockId, Vec<NBlockId>>,
     joined: FxHashSet<NBlockId>,
-    /// The joins an edge from a later block enters: the heads of loops,
-    /// printed as recursive local functions.
-    loops: FxHashSet<NBlockId>,
+    /// The joins printed as recursive local functions: the heads of loops,
+    /// which an edge from a later block enters, and the joins that must be
+    /// part of a loop's recursion (`find_joins`).
+    recursive: FxHashSet<NBlockId>,
     /// The borrows of packed lanes, with the place each borrows and whether
     /// it is `mut`. A lane has no address, so the borrow holds its value in a
     /// mutable variable, which a `mut` borrow writes back where it ends.
@@ -3057,9 +3058,23 @@ impl<'db> BodyExporter<'_, 'db> {
 
     /// Finds the join blocks: those more than one edge enters, and those
     /// that take parameters. Each is printed once, as a local function of
-    /// the block that immediately dominates it. An edge from a later block
-    /// closes a loop: its target is the loop's head, a recursive join, and
-    /// the edge is no part of what dominates a block.
+    /// the block that immediately dominates it, and every other block inline
+    /// in the one that dominates it, so a block's text holds the text of the
+    /// blocks it dominates. An edge from a later block closes a loop: its
+    /// target is the loop's head, a recursive join, and the edge is no part
+    /// of what dominates a block.
+    ///
+    /// Lean lifts each recursive local function out of the definition, with
+    /// the local functions it names from outside its text as arguments, and
+    /// `partial_fixpoint` cannot see a recursive call inside such an
+    /// argument. So a join is recursive too where it would be one: where a
+    /// recursive join that its dominator dominates, other than the
+    /// dominator, holds an edge to it, as the exit of an inner loop that the
+    /// outer loop's body branches around does, and it leads back to the head
+    /// of a loop that dominates it, by an edge from a block it dominates to
+    /// that head or to a join outside it that leads back. A join that leads
+    /// back to no loop around it is an argument without a recursive call,
+    /// and stays a local function of its own.
     fn find_joins(&mut self) {
         let order = self.body.reverse_postorder();
         let position: FxHashMap<_, _> = order.iter().enumerate().map(|(i, b)| (*b, i)).collect();
@@ -3067,7 +3082,7 @@ impl<'db> BodyExporter<'_, 'db> {
         for &block in &order {
             for successor in self.body.blocks[block.index()].terminator.kind.successors() {
                 if position[&successor.block] <= position[&block] {
-                    self.loops.insert(successor.block);
+                    self.recursive.insert(successor.block);
                     self.joined.insert(successor.block);
                 } else {
                     preds.entry(successor.block).or_default().push(block);
@@ -3093,12 +3108,71 @@ impl<'db> BodyExporter<'_, 'db> {
             idom.insert(block, dominator);
             if preds[&block].len() > 1
                 || !self.body.blocks[block.index()].params.is_empty()
-                || self.loops.contains(&block)
+                || self.recursive.contains(&block)
             {
                 self.joined.insert(block);
                 // A later join can be the target of an earlier one, so it is
                 // defined first.
                 self.joins.entry(dominator).or_default().insert(0, block);
+            }
+        }
+        let dominates = |above: NBlockId, mut block: NBlockId| {
+            while above != block {
+                let Some(&up) = idom.get(&block) else {
+                    return false;
+                };
+                block = up;
+            }
+            true
+        };
+        let edges: Vec<_> = order
+            .iter()
+            .flat_map(|&from| {
+                let successors = self.body.blocks[from.index()].terminator.kind.successors();
+                successors
+                    .into_iter()
+                    .map(move |successor| (from, successor.block))
+            })
+            .collect();
+        let joins: Vec<_> = order
+            .iter()
+            .copied()
+            .filter(|block| self.joined.contains(block) && !self.recursive.contains(block))
+            .collect();
+        let mut back = FxHashSet::default();
+        loop {
+            let before = back.len();
+            for &join in &joins {
+                let leads_back = edges.iter().any(|&(from, to)| {
+                    dominates(join, from)
+                        && !dominates(join, to)
+                        && (self.recursive.contains(&to) && dominates(to, join)
+                            || back.contains(&to))
+                });
+                if leads_back {
+                    back.insert(join);
+                }
+            }
+            if back.len() == before {
+                break;
+            }
+        }
+        loop {
+            let before = self.recursive.len();
+            for &join in joins.iter().filter(|join| back.contains(*join)) {
+                let at = idom[&join];
+                let entered = edges.iter().any(|&(from, to)| {
+                    to == join
+                        && self.recursive.iter().any(|&inner| {
+                            inner != at && dominates(at, inner) && dominates(inner, from)
+                        })
+                });
+                if entered {
+                    self.recursive.insert(join);
+                }
+            }
+            if self.recursive.len() == before {
+                break;
             }
         }
     }
@@ -3262,9 +3336,10 @@ impl<'db> BodyExporter<'_, 'db> {
                 Some(outs) if self.slide.contains(&join) => outs.clone(),
                 _ => self.result_ty.clone(),
             };
-            // The head of a loop calls itself: the least fixed point, which
-            // diverges where the loop does.
-            if self.loops.contains(&join) {
+            // A recursive join, the head of a loop or a join on a loop's
+            // recursion, is the least fixed point of its body, which diverges
+            // where the loop does.
+            if self.recursive.contains(&join) {
                 let binders: String = names
                     .zip(&tys)
                     .map(|(name, ty)| format!(" ({name} : {ty})"))
@@ -3284,7 +3359,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 writeln!(out, "{pad}  let mut {var} := {var}").unwrap();
             }
             self.block(join, depth + 1, out)?;
-            if self.loops.contains(&join) {
+            if self.recursive.contains(&join) {
                 writeln!(out, "{pad}partial_fixpoint").unwrap();
             }
         }
@@ -3342,7 +3417,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 if let Some(load) = load {
                     writeln!(out, "{pad}{load}").unwrap();
                 }
-                if self.loops.is_empty() {
+                if self.recursive.is_empty() {
                     writeln!(out, "{pad}match {value} with").unwrap();
                 } else {
                     writeln!(out, "{pad}match (← pure {value}) with").unwrap();
@@ -3921,7 +3996,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         }
                         let (name, fields) = &all[variant];
                         let rest = if fields.is_empty() { "" } else { " .." };
-                        let value = if self.loops.is_empty() {
+                        let value = if self.recursive.is_empty() {
                             value
                         } else {
                             format!("(← pure {value})")
@@ -4008,7 +4083,7 @@ impl<'db> BodyExporter<'_, 'db> {
             if others {
                 arms.push_str("\n| _ => pure ()");
             }
-            let value = if self.loops.is_empty() {
+            let value = if self.recursive.is_empty() {
                 value.to_string()
             } else {
                 format!("(← pure {value})")

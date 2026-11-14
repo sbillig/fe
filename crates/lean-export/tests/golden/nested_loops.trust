@@ -1,0 +1,3 @@
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+core usize_wrapping_add extern core::num::__add_usize

@@ -1,0 +1,118 @@
+use std::abi::sol
+
+msg NestedLoopsMsg {
+    #[selector = sol("windows(uint256,uint256)")]
+    Windows { n: u256, width: u256 } -> u256,
+    #[selector = sol("breakBoth(uint256)")]
+    BreakBoth { n: u256 } -> u256,
+    #[selector = sol("continueOuter(uint256)")]
+    ContinueOuter { n: u256 } -> u256,
+    #[selector = sol("returnInner(uint256)")]
+    ReturnInner { n: u256 } -> u256,
+    #[selector = sol("threeLevels(uint256)")]
+    ThreeLevels { n: u256 } -> u256,
+}
+
+// The shape of `small_power` in fevm's `modexp.fe`: the exit of the inner
+// loop, and the branch that skips it, join, and the join leads back to the
+// outer loop's head.
+fn windows(_ n: usize, _ width: usize) -> u256 {
+    var acc: u256 = 1
+    var index: usize = 0
+    var started = false
+    while index < n {
+        let end = if index + width + 1 < n { index + width + 1 } else { n }
+        if started {
+            for _ in index..end { acc = acc * 2 % 1000003 }
+        }
+        if end % 2 == 1 {
+            acc = acc + end as u256
+            started = true
+        }
+        index = end
+    }
+    acc
+}
+
+// A `break` out of both loops, through a flag the outer loop tests.
+fn break_both(_ n: u256) -> u256 {
+    var i: u256 = 0
+    var found: u256 = 0
+    var done = false
+    while i < n {
+        var j: u256 = 0
+        while j < i {
+            if i * j == 12 {
+                found = i * 100 + j
+                done = true
+                break
+            }
+            j += 1
+        }
+        if done { break }
+        i += 1
+    }
+    found
+}
+
+// A `continue` of the outer loop from the inner one, through a flag.
+fn continue_outer(_ n: u256) -> u256 {
+    var i: u256 = 0
+    var total: u256 = 0
+    while i < n {
+        i += 1
+        var j: u256 = 0
+        var skip = false
+        while j < i {
+            if j == 3 {
+                skip = true
+                break
+            }
+            j += 1
+        }
+        if skip { continue }
+        total += i
+    }
+    total
+}
+
+// A `return` from the inner loop.
+fn return_inner(_ n: u256) -> u256 {
+    var i: u256 = 0
+    while i < n {
+        var j: u256 = 0
+        while j < n {
+            if i + j == 7 { return i * 10 + j }
+            j += 1
+        }
+        i += 1
+    }
+    0
+}
+
+// Three levels, the innermost loop's exit joining a branch that leads back to
+// the middle loop's head.
+fn three_levels(_ n: usize) -> u256 {
+    var total: u256 = 0
+    for i in 0..n {
+        for j in 0..i {
+            var k: usize = 0
+            while k < j {
+                if (i + j + k) % 3 == 0 { total += 1 } else { total += 2 }
+                k += 1
+            }
+            if j % 2 == 0 { total += 10 }
+        }
+    }
+    total
+}
+
+pub contract NestedLoops {
+    recv NestedLoopsMsg {
+        Windows { n, width } -> u256 { windows(n.downcast_truncate(), width.downcast_truncate()) }
+        BreakBoth { n } -> u256 { break_both(n) }
+        ContinueOuter { n } -> u256 { continue_outer(n) }
+        ReturnInner { n } -> u256 { return_inner(n) }
+        ThreeLevels { n } -> u256 { three_levels(n.downcast_truncate()) }
+    }
+}
