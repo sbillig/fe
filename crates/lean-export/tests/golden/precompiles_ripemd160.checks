@@ -1,0 +1,2 @@
+set_option maxRecDepth 10000 in
+example : RIPEMD_IV = pure #v[(UInt256.ofNat 1732584193), (UInt256.ofNat 4023233417), (UInt256.ofNat 2562383102), (UInt256.ofNat 271733878), (UInt256.ofNat 3285377520)] := rfl

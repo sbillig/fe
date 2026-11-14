@@ -1,0 +1,4 @@
+set_option maxRecDepth 10000 in
+example : M62 = pure (UInt256.ofNat 4611686018427387903) := rfl
+set_option maxRecDepth 10000 in
+example : M62_SIGNED = pure (UInt256.ofNat 4611686018427387903) := rfl

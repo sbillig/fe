@@ -1,0 +1,169 @@
+use core::ops::WrappingAdd
+use keccak::ByteSource
+
+// RFC 7693 BLAKE2b compression function F with an explicit round count (EIP-152).
+const IV: [u64; 8] = [
+    0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+    0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
+]
+const SIGMA: [u8; 160] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
+    11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4,
+    7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8,
+    9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13,
+    2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9,
+    12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11,
+    13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10,
+    6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5,
+    10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0,
+]
+
+pub const INPUT_LEN: usize = 213
+
+fn rotate_right(_ value: u64, by: u64) -> u64 {
+    (value >> by) | (value << (64 - by))
+}
+
+#[inline(always)]
+fn mix(_ v: mut [u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64) {
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(x)
+    v[d] = rotate_right(v[d] ^ v[a], by: 32)
+    v[c] = v[c].wrapping_add(v[d])
+    v[b] = rotate_right(v[b] ^ v[c], by: 24)
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(y)
+    v[d] = rotate_right(v[d] ^ v[a], by: 16)
+    v[c] = v[c].wrapping_add(v[d])
+    v[b] = rotate_right(v[b] ^ v[c], by: 63)
+}
+
+// Ten rounds, one pass through the message schedule, with each round's word
+// indices written out (generated from SIGMA).
+#[inline(always)]
+fn ten_rounds(_ v: mut [u64; 16], _ m: [u64; 16]) {
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[0], y: m[1])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[2], y: m[3])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[4], y: m[5])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[6], y: m[7])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[8], y: m[9])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[10], y: m[11])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[12], y: m[13])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[14], y: m[15])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[14], y: m[10])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[4], y: m[8])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[9], y: m[15])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[13], y: m[6])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[1], y: m[12])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[0], y: m[2])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[11], y: m[7])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[5], y: m[3])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[11], y: m[8])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[12], y: m[0])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[5], y: m[2])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[15], y: m[13])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[10], y: m[14])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[3], y: m[6])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[7], y: m[1])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[9], y: m[4])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[7], y: m[9])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[3], y: m[1])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[13], y: m[12])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[11], y: m[14])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[2], y: m[6])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[5], y: m[10])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[4], y: m[0])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[15], y: m[8])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[9], y: m[0])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[5], y: m[7])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[2], y: m[4])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[10], y: m[15])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[14], y: m[1])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[11], y: m[12])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[6], y: m[8])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[3], y: m[13])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[2], y: m[12])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[6], y: m[10])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[0], y: m[11])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[8], y: m[3])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[4], y: m[13])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[7], y: m[5])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[15], y: m[14])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[1], y: m[9])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[12], y: m[5])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[1], y: m[15])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[14], y: m[13])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[4], y: m[10])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[0], y: m[7])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[6], y: m[3])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[9], y: m[2])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[8], y: m[11])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[13], y: m[11])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[7], y: m[14])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[12], y: m[1])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[3], y: m[9])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[5], y: m[0])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[15], y: m[4])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[8], y: m[6])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[2], y: m[10])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[6], y: m[15])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[14], y: m[9])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[11], y: m[3])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[0], y: m[8])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[12], y: m[2])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[13], y: m[7])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[1], y: m[4])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[10], y: m[5])
+    mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[10], y: m[2])
+    mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[8], y: m[4])
+    mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[7], y: m[6])
+    mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[1], y: m[5])
+    mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[15], y: m[11])
+    mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[9], y: m[14])
+    mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[3], y: m[12])
+    mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[13], y: m[0])
+}
+
+/// The big-endian round count of a 213-byte input; the caller charges one gas per round.
+pub fn rounds<T: ByteSource>(_ input: T) -> u64 {
+    core::assert(input.len() == INPUT_LEN)
+    (input.byte_at(0) as u64) << 24 | (input.byte_at(1) as u64) << 16
+        | (input.byte_at(2) as u64) << 8 | input.byte_at(3) as u64
+}
+
+/// Compress a valid 213-byte input whose final-block flag is 0 or 1, giving
+/// the new state words, which the output encodes little-endian.
+pub fn compress<T: ByteSource>(_ input: T) -> [u64; 8] {
+    core::assert(input.len() == INPUT_LEN && input.byte_at(212) <= 1)
+    var h: [u64; 8] = [0; 8]
+    var m: [u64; 16] = [0; 16]
+    for i in 0..8 { h[i] = input.lane_at(4 + i * 8) }
+    for i in 0..16 { m[i] = input.lane_at(68 + i * 8) }
+    var v: [u64; 16] = [0; 16]
+    for i in 0..8 {
+        v[i] = h[i]
+        v[i + 8] = IV[i]
+    }
+    v[12] ^= input.lane_at(196)
+    v[13] ^= input.lane_at(204)
+    if input.byte_at(212) == 1 { v[14] = !v[14] }
+    let total = rounds(input)
+    var round: u64 = 0
+    while total - round >= 10 {
+        ten_rounds(mut v, m)
+        round += 10
+    }
+    while round < total {
+        let s = ((round % 10) * 16).downcast_truncate()
+        mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[SIGMA[s] as usize], y: m[SIGMA[s + 1] as usize])
+        mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[SIGMA[s + 2] as usize], y: m[SIGMA[s + 3] as usize])
+        mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[SIGMA[s + 4] as usize], y: m[SIGMA[s + 5] as usize])
+        mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[SIGMA[s + 6] as usize], y: m[SIGMA[s + 7] as usize])
+        mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[SIGMA[s + 8] as usize], y: m[SIGMA[s + 9] as usize])
+        mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[SIGMA[s + 10] as usize], y: m[SIGMA[s + 11] as usize])
+        mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[SIGMA[s + 12] as usize], y: m[SIGMA[s + 13] as usize])
+        mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[SIGMA[s + 14] as usize], y: m[SIGMA[s + 15] as usize])
+        round += 1
+    }
+    for i in 0..8 { h[i] ^= v[i] ^ v[i + 8] }
+    h
+}

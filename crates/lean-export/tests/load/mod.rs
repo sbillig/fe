@@ -41,8 +41,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("closures", false),
     ("weth9", true),
     ("trust", true),
-    ("ecrecover", true),
-    ("bn254", true),
+    ("precompiles", true),
     ("shared", true),
 ];
 

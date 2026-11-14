@@ -1,0 +1,486 @@
+use core::num::swap_bytes
+use core::ops::WrappingAdd
+use keccak::ByteSource
+use std::native::sha256_compress
+
+// FIPS 180-4 SHA-256 initial state.
+const SHA256_IV: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]
+
+// RIPEMD-160 initial state.
+const RIPEMD_IV: [u32; 5] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0]
+
+fn rotate_left(_ value: u32, by: u32) -> u32 {
+    (value << by) | (value >> (32 - by))
+}
+
+// RIPEMD-160 consumes 64-byte blocks followed by 0x80, zero padding and a
+// little-endian 64-bit bit count, as SHA-256 does with a big-endian count.
+#[arithmetic(unchecked)]
+fn padded_block<T: ByteSource>(_ input: T, offset: usize, len: usize, block_index: usize, blocks: usize) -> [u8; 64] {
+    var block: [u8; 64] = [0; 64]
+    let start = block_index * 64
+    for i in 0..64 {
+        let position = start + i
+        if position < len {
+            block[i] = input.byte_at(offset + position)
+        } else if position == len {
+            block[i] = 0x80
+        }
+    }
+    if block_index == blocks - 1 {
+        // Inputs are bounded by host memory, so the bit count fits 64 bits.
+        let bits: u64 = (len * 8).downcast_unchecked()
+        for i in 0..8 {
+            block[56 + i] = (bits >> (i * 8).downcast_unchecked()).downcast_truncate()
+        }
+    }
+    block
+}
+
+// One length byte (0x80) and eight count bytes follow the message.
+fn padded_blocks(_ len: usize) -> usize { (len + 9 + 63) / 64 }
+
+// Writes to `w` the 16 big-endian words of block `index` of the padded
+// message. A block within the input is eight lanes, byte-swapped; the last
+// one or two hold the input's last bytes, 0x80, zeros and the 64-bit bit
+// count. Offsets within an input bounded by host memory cannot overflow.
+// The caller's array takes the words, so that `sha256_compress` reads them
+// where they are.
+#[arithmetic(unchecked)]
+fn sha256_block<T: ByteSource>(_ input: T, offset: usize, len: usize, index: usize, blocks: usize,
+                               _ w: mut [u32; 16]) {
+    let start = index * 64
+    if start + 64 <= len {
+        for lane in 0..8 {
+            let word = swap_bytes(input.lane_at(offset + start + 8 * lane))
+            w[2 * lane] = (word >> 32).downcast_truncate()
+            w[2 * lane + 1] = word.downcast_truncate()
+        }
+        return
+    }
+    for lane in 0..8 {
+        let position = start + 8 * lane
+        let word: u64 = if position + 8 <= len {
+            swap_bytes(input.lane_at(offset + position))
+        } else if position > len {
+            0
+        } else {
+            // The lane holding the input's last bytes and the 0x80 marker.
+            var word: u64 = 0
+            for at in position..position + 8 {
+                let byte: u64 = if at < len { input.byte_at(offset + at) as u64 }
+                    else if at == len { 0x80 } else { 0 }
+                word = (word << 8) | byte
+            }
+            word
+        }
+        w[2 * lane] = (word >> 32).downcast_truncate()
+        w[2 * lane + 1] = word.downcast_truncate()
+    }
+    if index == blocks - 1 {
+        // Inputs are bounded by host memory, so the bit count fits 64 bits.
+        let bits: u64 = (len * 8).downcast_unchecked()
+        w[14] = (bits >> 32).downcast_truncate()
+        w[15] = bits.downcast_truncate()
+    }
+}
+
+/// The SHA-256 digest of `len` bytes of `input` from `offset`, as a big-endian word.
+pub fn sha256<T: ByteSource>(_ input: T, offset: usize, len: usize) -> u256 {
+    var state = SHA256_IV
+    var block: [u32; 16] = [0; 16]
+    let blocks = padded_blocks(len)
+    for index in 0..blocks {
+        sha256_block(input, offset, len, index, blocks, mut block)
+        state = sha256_compress(state, block)
+    }
+    var digest: u256 = 0
+    for word in state { digest = (digest << 32) | word as u256 }
+    digest
+}
+
+// The boolean functions of the five rounds.
+#[inline(always)]
+fn f0(_ x: u32, _ y: u32, _ z: u32) -> u32 { x ^ y ^ z }
+#[inline(always)]
+fn f1(_ x: u32, _ y: u32, _ z: u32) -> u32 { (x & y) | (!x & z) }
+#[inline(always)]
+fn f2(_ x: u32, _ y: u32, _ z: u32) -> u32 { (x | !y) ^ z }
+#[inline(always)]
+fn f3(_ x: u32, _ y: u32, _ z: u32) -> u32 { (x & z) | (y & !z) }
+#[inline(always)]
+fn f4(_ x: u32, _ y: u32, _ z: u32) -> u32 { x ^ (y | !z) }
+
+// Both lines' 80 steps, unrolled with their word, constant and rotation
+// written out and the working words renamed instead of moved (generated from
+// the RIPEMD-160 specification's tables).
+#[arithmetic(unchecked)]
+fn ripemd_compress(_ state: mut [u32; 5], _ block: [u8; 64]) {
+    let w0 = block[0] as u32 | (block[1] as u32) << 8 | (block[2] as u32) << 16 | (block[3] as u32) << 24
+    let w1 = block[4] as u32 | (block[5] as u32) << 8 | (block[6] as u32) << 16 | (block[7] as u32) << 24
+    let w2 = block[8] as u32 | (block[9] as u32) << 8 | (block[10] as u32) << 16 | (block[11] as u32) << 24
+    let w3 = block[12] as u32 | (block[13] as u32) << 8 | (block[14] as u32) << 16 | (block[15] as u32) << 24
+    let w4 = block[16] as u32 | (block[17] as u32) << 8 | (block[18] as u32) << 16 | (block[19] as u32) << 24
+    let w5 = block[20] as u32 | (block[21] as u32) << 8 | (block[22] as u32) << 16 | (block[23] as u32) << 24
+    let w6 = block[24] as u32 | (block[25] as u32) << 8 | (block[26] as u32) << 16 | (block[27] as u32) << 24
+    let w7 = block[28] as u32 | (block[29] as u32) << 8 | (block[30] as u32) << 16 | (block[31] as u32) << 24
+    let w8 = block[32] as u32 | (block[33] as u32) << 8 | (block[34] as u32) << 16 | (block[35] as u32) << 24
+    let w9 = block[36] as u32 | (block[37] as u32) << 8 | (block[38] as u32) << 16 | (block[39] as u32) << 24
+    let w10 = block[40] as u32 | (block[41] as u32) << 8 | (block[42] as u32) << 16 | (block[43] as u32) << 24
+    let w11 = block[44] as u32 | (block[45] as u32) << 8 | (block[46] as u32) << 16 | (block[47] as u32) << 24
+    let w12 = block[48] as u32 | (block[49] as u32) << 8 | (block[50] as u32) << 16 | (block[51] as u32) << 24
+    let w13 = block[52] as u32 | (block[53] as u32) << 8 | (block[54] as u32) << 16 | (block[55] as u32) << 24
+    let w14 = block[56] as u32 | (block[57] as u32) << 8 | (block[58] as u32) << 16 | (block[59] as u32) << 24
+    let w15 = block[60] as u32 | (block[61] as u32) << 8 | (block[62] as u32) << 16 | (block[63] as u32) << 24
+    let la = state[0]
+    let lb = state[1]
+    let lc = state[2]
+    let ld = state[3]
+    let le = state[4]
+    let ra = la
+    let rb = lb
+    let rc = lc
+    let rd = ld
+    let re = le
+    let l0 = rotate_left(la + f0(lb, lc, ld) + w0, by: 11) + le
+    let lr0 = rotate_left(lc, by: 10)
+    let l1 = rotate_left(le + f0(l0, lb, lr0) + w1, by: 14) + ld
+    let lr1 = rotate_left(lb, by: 10)
+    let l2 = rotate_left(ld + f0(l1, l0, lr1) + w2, by: 15) + lr0
+    let lr2 = rotate_left(l0, by: 10)
+    let l3 = rotate_left(lr0 + f0(l2, l1, lr2) + w3, by: 12) + lr1
+    let lr3 = rotate_left(l1, by: 10)
+    let l4 = rotate_left(lr1 + f0(l3, l2, lr3) + w4, by: 5) + lr2
+    let lr4 = rotate_left(l2, by: 10)
+    let l5 = rotate_left(lr2 + f0(l4, l3, lr4) + w5, by: 8) + lr3
+    let lr5 = rotate_left(l3, by: 10)
+    let l6 = rotate_left(lr3 + f0(l5, l4, lr5) + w6, by: 7) + lr4
+    let lr6 = rotate_left(l4, by: 10)
+    let l7 = rotate_left(lr4 + f0(l6, l5, lr6) + w7, by: 9) + lr5
+    let lr7 = rotate_left(l5, by: 10)
+    let l8 = rotate_left(lr5 + f0(l7, l6, lr7) + w8, by: 11) + lr6
+    let lr8 = rotate_left(l6, by: 10)
+    let l9 = rotate_left(lr6 + f0(l8, l7, lr8) + w9, by: 13) + lr7
+    let lr9 = rotate_left(l7, by: 10)
+    let l10 = rotate_left(lr7 + f0(l9, l8, lr9) + w10, by: 14) + lr8
+    let lr10 = rotate_left(l8, by: 10)
+    let l11 = rotate_left(lr8 + f0(l10, l9, lr10) + w11, by: 15) + lr9
+    let lr11 = rotate_left(l9, by: 10)
+    let l12 = rotate_left(lr9 + f0(l11, l10, lr11) + w12, by: 6) + lr10
+    let lr12 = rotate_left(l10, by: 10)
+    let l13 = rotate_left(lr10 + f0(l12, l11, lr12) + w13, by: 7) + lr11
+    let lr13 = rotate_left(l11, by: 10)
+    let l14 = rotate_left(lr11 + f0(l13, l12, lr13) + w14, by: 9) + lr12
+    let lr14 = rotate_left(l12, by: 10)
+    let l15 = rotate_left(lr12 + f0(l14, l13, lr14) + w15, by: 8) + lr13
+    let lr15 = rotate_left(l13, by: 10)
+    let l16 = rotate_left(lr13 + f1(l15, l14, lr15) + w7 + 0x5a827999, by: 7) + lr14
+    let lr16 = rotate_left(l14, by: 10)
+    let l17 = rotate_left(lr14 + f1(l16, l15, lr16) + w4 + 0x5a827999, by: 6) + lr15
+    let lr17 = rotate_left(l15, by: 10)
+    let l18 = rotate_left(lr15 + f1(l17, l16, lr17) + w13 + 0x5a827999, by: 8) + lr16
+    let lr18 = rotate_left(l16, by: 10)
+    let l19 = rotate_left(lr16 + f1(l18, l17, lr18) + w1 + 0x5a827999, by: 13) + lr17
+    let lr19 = rotate_left(l17, by: 10)
+    let l20 = rotate_left(lr17 + f1(l19, l18, lr19) + w10 + 0x5a827999, by: 11) + lr18
+    let lr20 = rotate_left(l18, by: 10)
+    let l21 = rotate_left(lr18 + f1(l20, l19, lr20) + w6 + 0x5a827999, by: 9) + lr19
+    let lr21 = rotate_left(l19, by: 10)
+    let l22 = rotate_left(lr19 + f1(l21, l20, lr21) + w15 + 0x5a827999, by: 7) + lr20
+    let lr22 = rotate_left(l20, by: 10)
+    let l23 = rotate_left(lr20 + f1(l22, l21, lr22) + w3 + 0x5a827999, by: 15) + lr21
+    let lr23 = rotate_left(l21, by: 10)
+    let l24 = rotate_left(lr21 + f1(l23, l22, lr23) + w12 + 0x5a827999, by: 7) + lr22
+    let lr24 = rotate_left(l22, by: 10)
+    let l25 = rotate_left(lr22 + f1(l24, l23, lr24) + w0 + 0x5a827999, by: 12) + lr23
+    let lr25 = rotate_left(l23, by: 10)
+    let l26 = rotate_left(lr23 + f1(l25, l24, lr25) + w9 + 0x5a827999, by: 15) + lr24
+    let lr26 = rotate_left(l24, by: 10)
+    let l27 = rotate_left(lr24 + f1(l26, l25, lr26) + w5 + 0x5a827999, by: 9) + lr25
+    let lr27 = rotate_left(l25, by: 10)
+    let l28 = rotate_left(lr25 + f1(l27, l26, lr27) + w2 + 0x5a827999, by: 11) + lr26
+    let lr28 = rotate_left(l26, by: 10)
+    let l29 = rotate_left(lr26 + f1(l28, l27, lr28) + w14 + 0x5a827999, by: 7) + lr27
+    let lr29 = rotate_left(l27, by: 10)
+    let l30 = rotate_left(lr27 + f1(l29, l28, lr29) + w11 + 0x5a827999, by: 13) + lr28
+    let lr30 = rotate_left(l28, by: 10)
+    let l31 = rotate_left(lr28 + f1(l30, l29, lr30) + w8 + 0x5a827999, by: 12) + lr29
+    let lr31 = rotate_left(l29, by: 10)
+    let l32 = rotate_left(lr29 + f2(l31, l30, lr31) + w3 + 0x6ed9eba1, by: 11) + lr30
+    let lr32 = rotate_left(l30, by: 10)
+    let l33 = rotate_left(lr30 + f2(l32, l31, lr32) + w10 + 0x6ed9eba1, by: 13) + lr31
+    let lr33 = rotate_left(l31, by: 10)
+    let l34 = rotate_left(lr31 + f2(l33, l32, lr33) + w14 + 0x6ed9eba1, by: 6) + lr32
+    let lr34 = rotate_left(l32, by: 10)
+    let l35 = rotate_left(lr32 + f2(l34, l33, lr34) + w4 + 0x6ed9eba1, by: 7) + lr33
+    let lr35 = rotate_left(l33, by: 10)
+    let l36 = rotate_left(lr33 + f2(l35, l34, lr35) + w9 + 0x6ed9eba1, by: 14) + lr34
+    let lr36 = rotate_left(l34, by: 10)
+    let l37 = rotate_left(lr34 + f2(l36, l35, lr36) + w15 + 0x6ed9eba1, by: 9) + lr35
+    let lr37 = rotate_left(l35, by: 10)
+    let l38 = rotate_left(lr35 + f2(l37, l36, lr37) + w8 + 0x6ed9eba1, by: 13) + lr36
+    let lr38 = rotate_left(l36, by: 10)
+    let l39 = rotate_left(lr36 + f2(l38, l37, lr38) + w1 + 0x6ed9eba1, by: 15) + lr37
+    let lr39 = rotate_left(l37, by: 10)
+    let l40 = rotate_left(lr37 + f2(l39, l38, lr39) + w2 + 0x6ed9eba1, by: 14) + lr38
+    let lr40 = rotate_left(l38, by: 10)
+    let l41 = rotate_left(lr38 + f2(l40, l39, lr40) + w7 + 0x6ed9eba1, by: 8) + lr39
+    let lr41 = rotate_left(l39, by: 10)
+    let l42 = rotate_left(lr39 + f2(l41, l40, lr41) + w0 + 0x6ed9eba1, by: 13) + lr40
+    let lr42 = rotate_left(l40, by: 10)
+    let l43 = rotate_left(lr40 + f2(l42, l41, lr42) + w6 + 0x6ed9eba1, by: 6) + lr41
+    let lr43 = rotate_left(l41, by: 10)
+    let l44 = rotate_left(lr41 + f2(l43, l42, lr43) + w13 + 0x6ed9eba1, by: 5) + lr42
+    let lr44 = rotate_left(l42, by: 10)
+    let l45 = rotate_left(lr42 + f2(l44, l43, lr44) + w11 + 0x6ed9eba1, by: 12) + lr43
+    let lr45 = rotate_left(l43, by: 10)
+    let l46 = rotate_left(lr43 + f2(l45, l44, lr45) + w5 + 0x6ed9eba1, by: 7) + lr44
+    let lr46 = rotate_left(l44, by: 10)
+    let l47 = rotate_left(lr44 + f2(l46, l45, lr46) + w12 + 0x6ed9eba1, by: 5) + lr45
+    let lr47 = rotate_left(l45, by: 10)
+    let l48 = rotate_left(lr45 + f3(l47, l46, lr47) + w1 + 0x8f1bbcdc, by: 11) + lr46
+    let lr48 = rotate_left(l46, by: 10)
+    let l49 = rotate_left(lr46 + f3(l48, l47, lr48) + w9 + 0x8f1bbcdc, by: 12) + lr47
+    let lr49 = rotate_left(l47, by: 10)
+    let l50 = rotate_left(lr47 + f3(l49, l48, lr49) + w11 + 0x8f1bbcdc, by: 14) + lr48
+    let lr50 = rotate_left(l48, by: 10)
+    let l51 = rotate_left(lr48 + f3(l50, l49, lr50) + w10 + 0x8f1bbcdc, by: 15) + lr49
+    let lr51 = rotate_left(l49, by: 10)
+    let l52 = rotate_left(lr49 + f3(l51, l50, lr51) + w0 + 0x8f1bbcdc, by: 14) + lr50
+    let lr52 = rotate_left(l50, by: 10)
+    let l53 = rotate_left(lr50 + f3(l52, l51, lr52) + w8 + 0x8f1bbcdc, by: 15) + lr51
+    let lr53 = rotate_left(l51, by: 10)
+    let l54 = rotate_left(lr51 + f3(l53, l52, lr53) + w12 + 0x8f1bbcdc, by: 9) + lr52
+    let lr54 = rotate_left(l52, by: 10)
+    let l55 = rotate_left(lr52 + f3(l54, l53, lr54) + w4 + 0x8f1bbcdc, by: 8) + lr53
+    let lr55 = rotate_left(l53, by: 10)
+    let l56 = rotate_left(lr53 + f3(l55, l54, lr55) + w13 + 0x8f1bbcdc, by: 9) + lr54
+    let lr56 = rotate_left(l54, by: 10)
+    let l57 = rotate_left(lr54 + f3(l56, l55, lr56) + w3 + 0x8f1bbcdc, by: 14) + lr55
+    let lr57 = rotate_left(l55, by: 10)
+    let l58 = rotate_left(lr55 + f3(l57, l56, lr57) + w7 + 0x8f1bbcdc, by: 5) + lr56
+    let lr58 = rotate_left(l56, by: 10)
+    let l59 = rotate_left(lr56 + f3(l58, l57, lr58) + w15 + 0x8f1bbcdc, by: 6) + lr57
+    let lr59 = rotate_left(l57, by: 10)
+    let l60 = rotate_left(lr57 + f3(l59, l58, lr59) + w14 + 0x8f1bbcdc, by: 8) + lr58
+    let lr60 = rotate_left(l58, by: 10)
+    let l61 = rotate_left(lr58 + f3(l60, l59, lr60) + w5 + 0x8f1bbcdc, by: 6) + lr59
+    let lr61 = rotate_left(l59, by: 10)
+    let l62 = rotate_left(lr59 + f3(l61, l60, lr61) + w6 + 0x8f1bbcdc, by: 5) + lr60
+    let lr62 = rotate_left(l60, by: 10)
+    let l63 = rotate_left(lr60 + f3(l62, l61, lr62) + w2 + 0x8f1bbcdc, by: 12) + lr61
+    let lr63 = rotate_left(l61, by: 10)
+    let l64 = rotate_left(lr61 + f4(l63, l62, lr63) + w4 + 0xa953fd4e, by: 9) + lr62
+    let lr64 = rotate_left(l62, by: 10)
+    let l65 = rotate_left(lr62 + f4(l64, l63, lr64) + w0 + 0xa953fd4e, by: 15) + lr63
+    let lr65 = rotate_left(l63, by: 10)
+    let l66 = rotate_left(lr63 + f4(l65, l64, lr65) + w5 + 0xa953fd4e, by: 5) + lr64
+    let lr66 = rotate_left(l64, by: 10)
+    let l67 = rotate_left(lr64 + f4(l66, l65, lr66) + w9 + 0xa953fd4e, by: 11) + lr65
+    let lr67 = rotate_left(l65, by: 10)
+    let l68 = rotate_left(lr65 + f4(l67, l66, lr67) + w7 + 0xa953fd4e, by: 6) + lr66
+    let lr68 = rotate_left(l66, by: 10)
+    let l69 = rotate_left(lr66 + f4(l68, l67, lr68) + w12 + 0xa953fd4e, by: 8) + lr67
+    let lr69 = rotate_left(l67, by: 10)
+    let l70 = rotate_left(lr67 + f4(l69, l68, lr69) + w2 + 0xa953fd4e, by: 13) + lr68
+    let lr70 = rotate_left(l68, by: 10)
+    let l71 = rotate_left(lr68 + f4(l70, l69, lr70) + w10 + 0xa953fd4e, by: 12) + lr69
+    let lr71 = rotate_left(l69, by: 10)
+    let l72 = rotate_left(lr69 + f4(l71, l70, lr71) + w14 + 0xa953fd4e, by: 5) + lr70
+    let lr72 = rotate_left(l70, by: 10)
+    let l73 = rotate_left(lr70 + f4(l72, l71, lr72) + w1 + 0xa953fd4e, by: 12) + lr71
+    let lr73 = rotate_left(l71, by: 10)
+    let l74 = rotate_left(lr71 + f4(l73, l72, lr73) + w3 + 0xa953fd4e, by: 13) + lr72
+    let lr74 = rotate_left(l72, by: 10)
+    let l75 = rotate_left(lr72 + f4(l74, l73, lr74) + w8 + 0xa953fd4e, by: 14) + lr73
+    let lr75 = rotate_left(l73, by: 10)
+    let l76 = rotate_left(lr73 + f4(l75, l74, lr75) + w11 + 0xa953fd4e, by: 11) + lr74
+    let lr76 = rotate_left(l74, by: 10)
+    let l77 = rotate_left(lr74 + f4(l76, l75, lr76) + w6 + 0xa953fd4e, by: 8) + lr75
+    let lr77 = rotate_left(l75, by: 10)
+    let l78 = rotate_left(lr75 + f4(l77, l76, lr77) + w15 + 0xa953fd4e, by: 5) + lr76
+    let lr78 = rotate_left(l76, by: 10)
+    let l79 = rotate_left(lr76 + f4(l78, l77, lr78) + w13 + 0xa953fd4e, by: 6) + lr77
+    let lr79 = rotate_left(l77, by: 10)
+    let r0 = rotate_left(ra + f4(rb, rc, rd) + w5 + 0x50a28be6, by: 8) + re
+    let rr0 = rotate_left(rc, by: 10)
+    let r1 = rotate_left(re + f4(r0, rb, rr0) + w14 + 0x50a28be6, by: 9) + rd
+    let rr1 = rotate_left(rb, by: 10)
+    let r2 = rotate_left(rd + f4(r1, r0, rr1) + w7 + 0x50a28be6, by: 9) + rr0
+    let rr2 = rotate_left(r0, by: 10)
+    let r3 = rotate_left(rr0 + f4(r2, r1, rr2) + w0 + 0x50a28be6, by: 11) + rr1
+    let rr3 = rotate_left(r1, by: 10)
+    let r4 = rotate_left(rr1 + f4(r3, r2, rr3) + w9 + 0x50a28be6, by: 13) + rr2
+    let rr4 = rotate_left(r2, by: 10)
+    let r5 = rotate_left(rr2 + f4(r4, r3, rr4) + w2 + 0x50a28be6, by: 15) + rr3
+    let rr5 = rotate_left(r3, by: 10)
+    let r6 = rotate_left(rr3 + f4(r5, r4, rr5) + w11 + 0x50a28be6, by: 15) + rr4
+    let rr6 = rotate_left(r4, by: 10)
+    let r7 = rotate_left(rr4 + f4(r6, r5, rr6) + w4 + 0x50a28be6, by: 5) + rr5
+    let rr7 = rotate_left(r5, by: 10)
+    let r8 = rotate_left(rr5 + f4(r7, r6, rr7) + w13 + 0x50a28be6, by: 7) + rr6
+    let rr8 = rotate_left(r6, by: 10)
+    let r9 = rotate_left(rr6 + f4(r8, r7, rr8) + w6 + 0x50a28be6, by: 7) + rr7
+    let rr9 = rotate_left(r7, by: 10)
+    let r10 = rotate_left(rr7 + f4(r9, r8, rr9) + w15 + 0x50a28be6, by: 8) + rr8
+    let rr10 = rotate_left(r8, by: 10)
+    let r11 = rotate_left(rr8 + f4(r10, r9, rr10) + w8 + 0x50a28be6, by: 11) + rr9
+    let rr11 = rotate_left(r9, by: 10)
+    let r12 = rotate_left(rr9 + f4(r11, r10, rr11) + w1 + 0x50a28be6, by: 14) + rr10
+    let rr12 = rotate_left(r10, by: 10)
+    let r13 = rotate_left(rr10 + f4(r12, r11, rr12) + w10 + 0x50a28be6, by: 14) + rr11
+    let rr13 = rotate_left(r11, by: 10)
+    let r14 = rotate_left(rr11 + f4(r13, r12, rr13) + w3 + 0x50a28be6, by: 12) + rr12
+    let rr14 = rotate_left(r12, by: 10)
+    let r15 = rotate_left(rr12 + f4(r14, r13, rr14) + w12 + 0x50a28be6, by: 6) + rr13
+    let rr15 = rotate_left(r13, by: 10)
+    let r16 = rotate_left(rr13 + f3(r15, r14, rr15) + w6 + 0x5c4dd124, by: 9) + rr14
+    let rr16 = rotate_left(r14, by: 10)
+    let r17 = rotate_left(rr14 + f3(r16, r15, rr16) + w11 + 0x5c4dd124, by: 13) + rr15
+    let rr17 = rotate_left(r15, by: 10)
+    let r18 = rotate_left(rr15 + f3(r17, r16, rr17) + w3 + 0x5c4dd124, by: 15) + rr16
+    let rr18 = rotate_left(r16, by: 10)
+    let r19 = rotate_left(rr16 + f3(r18, r17, rr18) + w7 + 0x5c4dd124, by: 7) + rr17
+    let rr19 = rotate_left(r17, by: 10)
+    let r20 = rotate_left(rr17 + f3(r19, r18, rr19) + w0 + 0x5c4dd124, by: 12) + rr18
+    let rr20 = rotate_left(r18, by: 10)
+    let r21 = rotate_left(rr18 + f3(r20, r19, rr20) + w13 + 0x5c4dd124, by: 8) + rr19
+    let rr21 = rotate_left(r19, by: 10)
+    let r22 = rotate_left(rr19 + f3(r21, r20, rr21) + w5 + 0x5c4dd124, by: 9) + rr20
+    let rr22 = rotate_left(r20, by: 10)
+    let r23 = rotate_left(rr20 + f3(r22, r21, rr22) + w10 + 0x5c4dd124, by: 11) + rr21
+    let rr23 = rotate_left(r21, by: 10)
+    let r24 = rotate_left(rr21 + f3(r23, r22, rr23) + w14 + 0x5c4dd124, by: 7) + rr22
+    let rr24 = rotate_left(r22, by: 10)
+    let r25 = rotate_left(rr22 + f3(r24, r23, rr24) + w15 + 0x5c4dd124, by: 7) + rr23
+    let rr25 = rotate_left(r23, by: 10)
+    let r26 = rotate_left(rr23 + f3(r25, r24, rr25) + w8 + 0x5c4dd124, by: 12) + rr24
+    let rr26 = rotate_left(r24, by: 10)
+    let r27 = rotate_left(rr24 + f3(r26, r25, rr26) + w12 + 0x5c4dd124, by: 7) + rr25
+    let rr27 = rotate_left(r25, by: 10)
+    let r28 = rotate_left(rr25 + f3(r27, r26, rr27) + w4 + 0x5c4dd124, by: 6) + rr26
+    let rr28 = rotate_left(r26, by: 10)
+    let r29 = rotate_left(rr26 + f3(r28, r27, rr28) + w9 + 0x5c4dd124, by: 15) + rr27
+    let rr29 = rotate_left(r27, by: 10)
+    let r30 = rotate_left(rr27 + f3(r29, r28, rr29) + w1 + 0x5c4dd124, by: 13) + rr28
+    let rr30 = rotate_left(r28, by: 10)
+    let r31 = rotate_left(rr28 + f3(r30, r29, rr30) + w2 + 0x5c4dd124, by: 11) + rr29
+    let rr31 = rotate_left(r29, by: 10)
+    let r32 = rotate_left(rr29 + f2(r31, r30, rr31) + w15 + 0x6d703ef3, by: 9) + rr30
+    let rr32 = rotate_left(r30, by: 10)
+    let r33 = rotate_left(rr30 + f2(r32, r31, rr32) + w5 + 0x6d703ef3, by: 7) + rr31
+    let rr33 = rotate_left(r31, by: 10)
+    let r34 = rotate_left(rr31 + f2(r33, r32, rr33) + w1 + 0x6d703ef3, by: 15) + rr32
+    let rr34 = rotate_left(r32, by: 10)
+    let r35 = rotate_left(rr32 + f2(r34, r33, rr34) + w3 + 0x6d703ef3, by: 11) + rr33
+    let rr35 = rotate_left(r33, by: 10)
+    let r36 = rotate_left(rr33 + f2(r35, r34, rr35) + w7 + 0x6d703ef3, by: 8) + rr34
+    let rr36 = rotate_left(r34, by: 10)
+    let r37 = rotate_left(rr34 + f2(r36, r35, rr36) + w14 + 0x6d703ef3, by: 6) + rr35
+    let rr37 = rotate_left(r35, by: 10)
+    let r38 = rotate_left(rr35 + f2(r37, r36, rr37) + w6 + 0x6d703ef3, by: 6) + rr36
+    let rr38 = rotate_left(r36, by: 10)
+    let r39 = rotate_left(rr36 + f2(r38, r37, rr38) + w9 + 0x6d703ef3, by: 14) + rr37
+    let rr39 = rotate_left(r37, by: 10)
+    let r40 = rotate_left(rr37 + f2(r39, r38, rr39) + w11 + 0x6d703ef3, by: 12) + rr38
+    let rr40 = rotate_left(r38, by: 10)
+    let r41 = rotate_left(rr38 + f2(r40, r39, rr40) + w8 + 0x6d703ef3, by: 13) + rr39
+    let rr41 = rotate_left(r39, by: 10)
+    let r42 = rotate_left(rr39 + f2(r41, r40, rr41) + w12 + 0x6d703ef3, by: 5) + rr40
+    let rr42 = rotate_left(r40, by: 10)
+    let r43 = rotate_left(rr40 + f2(r42, r41, rr42) + w2 + 0x6d703ef3, by: 14) + rr41
+    let rr43 = rotate_left(r41, by: 10)
+    let r44 = rotate_left(rr41 + f2(r43, r42, rr43) + w10 + 0x6d703ef3, by: 13) + rr42
+    let rr44 = rotate_left(r42, by: 10)
+    let r45 = rotate_left(rr42 + f2(r44, r43, rr44) + w0 + 0x6d703ef3, by: 13) + rr43
+    let rr45 = rotate_left(r43, by: 10)
+    let r46 = rotate_left(rr43 + f2(r45, r44, rr45) + w4 + 0x6d703ef3, by: 7) + rr44
+    let rr46 = rotate_left(r44, by: 10)
+    let r47 = rotate_left(rr44 + f2(r46, r45, rr46) + w13 + 0x6d703ef3, by: 5) + rr45
+    let rr47 = rotate_left(r45, by: 10)
+    let r48 = rotate_left(rr45 + f1(r47, r46, rr47) + w8 + 0x7a6d76e9, by: 15) + rr46
+    let rr48 = rotate_left(r46, by: 10)
+    let r49 = rotate_left(rr46 + f1(r48, r47, rr48) + w6 + 0x7a6d76e9, by: 5) + rr47
+    let rr49 = rotate_left(r47, by: 10)
+    let r50 = rotate_left(rr47 + f1(r49, r48, rr49) + w4 + 0x7a6d76e9, by: 8) + rr48
+    let rr50 = rotate_left(r48, by: 10)
+    let r51 = rotate_left(rr48 + f1(r50, r49, rr50) + w1 + 0x7a6d76e9, by: 11) + rr49
+    let rr51 = rotate_left(r49, by: 10)
+    let r52 = rotate_left(rr49 + f1(r51, r50, rr51) + w3 + 0x7a6d76e9, by: 14) + rr50
+    let rr52 = rotate_left(r50, by: 10)
+    let r53 = rotate_left(rr50 + f1(r52, r51, rr52) + w11 + 0x7a6d76e9, by: 14) + rr51
+    let rr53 = rotate_left(r51, by: 10)
+    let r54 = rotate_left(rr51 + f1(r53, r52, rr53) + w15 + 0x7a6d76e9, by: 6) + rr52
+    let rr54 = rotate_left(r52, by: 10)
+    let r55 = rotate_left(rr52 + f1(r54, r53, rr54) + w0 + 0x7a6d76e9, by: 14) + rr53
+    let rr55 = rotate_left(r53, by: 10)
+    let r56 = rotate_left(rr53 + f1(r55, r54, rr55) + w5 + 0x7a6d76e9, by: 6) + rr54
+    let rr56 = rotate_left(r54, by: 10)
+    let r57 = rotate_left(rr54 + f1(r56, r55, rr56) + w12 + 0x7a6d76e9, by: 9) + rr55
+    let rr57 = rotate_left(r55, by: 10)
+    let r58 = rotate_left(rr55 + f1(r57, r56, rr57) + w2 + 0x7a6d76e9, by: 12) + rr56
+    let rr58 = rotate_left(r56, by: 10)
+    let r59 = rotate_left(rr56 + f1(r58, r57, rr58) + w13 + 0x7a6d76e9, by: 9) + rr57
+    let rr59 = rotate_left(r57, by: 10)
+    let r60 = rotate_left(rr57 + f1(r59, r58, rr59) + w9 + 0x7a6d76e9, by: 12) + rr58
+    let rr60 = rotate_left(r58, by: 10)
+    let r61 = rotate_left(rr58 + f1(r60, r59, rr60) + w7 + 0x7a6d76e9, by: 5) + rr59
+    let rr61 = rotate_left(r59, by: 10)
+    let r62 = rotate_left(rr59 + f1(r61, r60, rr61) + w10 + 0x7a6d76e9, by: 15) + rr60
+    let rr62 = rotate_left(r60, by: 10)
+    let r63 = rotate_left(rr60 + f1(r62, r61, rr62) + w14 + 0x7a6d76e9, by: 8) + rr61
+    let rr63 = rotate_left(r61, by: 10)
+    let r64 = rotate_left(rr61 + f0(r63, r62, rr63) + w12, by: 8) + rr62
+    let rr64 = rotate_left(r62, by: 10)
+    let r65 = rotate_left(rr62 + f0(r64, r63, rr64) + w15, by: 5) + rr63
+    let rr65 = rotate_left(r63, by: 10)
+    let r66 = rotate_left(rr63 + f0(r65, r64, rr65) + w10, by: 12) + rr64
+    let rr66 = rotate_left(r64, by: 10)
+    let r67 = rotate_left(rr64 + f0(r66, r65, rr66) + w4, by: 9) + rr65
+    let rr67 = rotate_left(r65, by: 10)
+    let r68 = rotate_left(rr65 + f0(r67, r66, rr67) + w1, by: 12) + rr66
+    let rr68 = rotate_left(r66, by: 10)
+    let r69 = rotate_left(rr66 + f0(r68, r67, rr68) + w5, by: 5) + rr67
+    let rr69 = rotate_left(r67, by: 10)
+    let r70 = rotate_left(rr67 + f0(r69, r68, rr69) + w8, by: 14) + rr68
+    let rr70 = rotate_left(r68, by: 10)
+    let r71 = rotate_left(rr68 + f0(r70, r69, rr70) + w7, by: 6) + rr69
+    let rr71 = rotate_left(r69, by: 10)
+    let r72 = rotate_left(rr69 + f0(r71, r70, rr71) + w6, by: 8) + rr70
+    let rr72 = rotate_left(r70, by: 10)
+    let r73 = rotate_left(rr70 + f0(r72, r71, rr72) + w2, by: 13) + rr71
+    let rr73 = rotate_left(r71, by: 10)
+    let r74 = rotate_left(rr71 + f0(r73, r72, rr73) + w13, by: 6) + rr72
+    let rr74 = rotate_left(r72, by: 10)
+    let r75 = rotate_left(rr72 + f0(r74, r73, rr74) + w14, by: 5) + rr73
+    let rr75 = rotate_left(r73, by: 10)
+    let r76 = rotate_left(rr73 + f0(r75, r74, rr75) + w0, by: 15) + rr74
+    let rr76 = rotate_left(r74, by: 10)
+    let r77 = rotate_left(rr74 + f0(r76, r75, rr76) + w3, by: 13) + rr75
+    let rr77 = rotate_left(r75, by: 10)
+    let r78 = rotate_left(rr75 + f0(r77, r76, rr77) + w9, by: 11) + rr76
+    let rr78 = rotate_left(r76, by: 10)
+    let r79 = rotate_left(rr76 + f0(r78, r77, rr78) + w11, by: 11) + rr77
+    let rr79 = rotate_left(r77, by: 10)
+    let t = state[1] + l78 + rr79
+    state[1] = state[2] + lr79 + rr78
+    state[2] = state[3] + lr78 + rr77
+    state[3] = state[4] + lr77 + r79
+    state[4] = state[0] + l79 + r78
+    state[0] = t
+}
+
+/// The RIPEMD-160 digest of `input`, as a big-endian 160-bit word.
+pub fn ripemd160<T: ByteSource>(_ input: T) -> u256 {
+    var state = RIPEMD_IV
+    let blocks = padded_blocks(input.len())
+    for index in 0..blocks {
+        ripemd_compress(mut state, padded_block(input, offset: 0, len: input.len(), block_index: index, blocks))
+    }
+    // Each state word holds its four digest bytes little-endian.
+    var digest: u256 = 0
+    for word in state { digest = (digest << 32) | swap_bytes(word) as u256 }
+    digest
+}

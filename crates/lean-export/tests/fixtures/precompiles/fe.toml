@@ -1,5 +1,5 @@
 [ingot]
-name = "bn254"
+name = "precompiles"
 version = "0.1.0"
 
 [dependencies]

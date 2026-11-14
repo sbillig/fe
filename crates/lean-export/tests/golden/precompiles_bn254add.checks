@@ -19,8 +19,4 @@ example : Bn254Base_SIGNED_62 = pure #v[(UInt256.ofNat 4332616871279656263), (UI
 set_option maxRecDepth 10000 in
 example : Bn254Base_INV62 = pure (UInt256.ofNat 4048164856291499127) := rfl
 set_option maxRecDepth 10000 in
-example : M62 = pure (UInt256.ofNat 4611686018427387903) := rfl
-set_option maxRecDepth 10000 in
-example : M62_SIGNED = pure (UInt256.ofNat 4611686018427387903) := rfl
-set_option maxRecDepth 10000 in
 example : Bn254Base_R3 = pure (UInt256.ofNat 14921786541159648185948152738563080959093619838510245177710943249661917737183) := rfl

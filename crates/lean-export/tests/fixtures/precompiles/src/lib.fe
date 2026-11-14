@@ -1,0 +1,102 @@
+// fevm's precompiles as contracts, one for each. The other files of `src` are copied verbatim
+// from `ingots/precompiles/src` of fe-lang/fevm at commit
+// a631a777b7d1761bccfc8af4e7471643905b9354, and `word_at` below from its `lib.fe`. `keccak/` is
+// fe-lang/keccak at commit 345d5088de986fe54b23a6aaa3a33e1c349d0960, the dependency fevm's
+// `fe.toml` pins, for its `ByteSource`. The rest of this file is not fevm's.
+use core::{MemBuffer, MemSpan, Option}
+use core::num::swap_bytes
+use keccak::ByteSource
+use std::abi::sol
+use std::evm::RawOps
+
+/// The big-endian word at `offset`, zero-padded past the input as buffer_read:
+/// four big-endian lanes when the input holds it.
+pub fn word_at<T: ByteSource>(_ input: T, offset: usize) -> u256 {
+    if offset + 32 <= input.len() {
+        return (swap_bytes(input.lane_at(offset)) as u256) << 192
+            | (swap_bytes(input.lane_at(offset + 8)) as u256) << 128
+            | (swap_bytes(input.lane_at(offset + 16)) as u256) << 64
+            | swap_bytes(input.lane_at(offset + 24)) as u256
+    }
+    var value: u256 = 0
+    for index in offset..offset + 32 {
+        value = (value << 8) | if index < input.len() { input.byte_at(index) as u256 } else { 0 }
+    }
+    value
+}
+
+// The call data, in memory.
+fn input() -> MemBuffer uses (raw: mut RawOps) {
+    let len = raw.calldatasize()
+    var input = MemBuffer::new(len.downcast_unchecked())
+    raw.calldatacopy(dest: mut input, dest_offset: 0, src_offset: 0, len)
+    input
+}
+
+msg EcrecoverMsg {
+    #[selector = sol("recover(uint256,uint256,uint256,uint256)")]
+    Recover { hash: u256, recovery_id: u256, r: u256, s: u256 } -> (bool, u256, u256),
+}
+
+/// `recover` returns the public key (x, y) that signed `hash` as (recovery_id, r, s), after
+/// `true`, or `false` and zeros when no key recovers. Its arguments are checked as fevm's
+/// ECRECOVER checks them before it calls `secp256k1::recover`, which requires them.
+pub contract Ecrecover {
+    recv EcrecoverMsg {
+        Recover { hash, recovery_id, r, s } -> (bool, u256, u256) {
+            if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
+                return (false, 0, 0)
+            }
+            match secp256k1::recover(hash, recovery_id, r, s) {
+                Option::Some(key) => (true, key.x, key.y),
+                Option::None => (false, 0, 0),
+            }
+        }
+    }
+}
+
+/// ECADD (0x06): every call adds the points of its call data, as `bn254::add` reads them, and
+/// returns the 64 bytes of the sum, or reverts without data where the precompile fails.
+pub contract Bn254Add {
+    recv {
+        _ uses (raw: mut RawOps) {
+            match bn254::add(input()) {
+                Option::Some(sum) => {
+                    var output = MemBuffer::new(64)
+                    output.write_word(offset: 0, value: sum[0])
+                    output.write_word(offset: 32, value: sum[1])
+                    raw.return_data(data: output.span())
+                }
+                Option::None => raw.revert(data: MemSpan::empty()),
+            }
+        }
+    }
+}
+
+/// BLAKE2 F (0x09): every call compresses its call data as fevm's `run` checks and computes it,
+/// and returns the 64 bytes of the state, or reverts without data where the precompile fails.
+pub contract Blake2F {
+    recv {
+        _ uses (raw: mut RawOps) {
+            let input = input()
+            if input.len() != blake2f::INPUT_LEN || input[212] > 1 {
+                raw.revert(data: MemSpan::empty())
+            }
+            let state = blake2f::compress(input)
+            var output = MemBuffer::new(64)
+            for i in 0..8 { output.write_le<u64>(offset: i * 8, value: state[i]) }
+            raw.return_data(data: output.span())
+        }
+    }
+}
+
+/// RIPEMD-160 (0x03): every call returns the hash of its call data, as a word.
+pub contract Ripemd160 {
+    recv {
+        _ uses (raw: mut RawOps) {
+            var output = MemBuffer::new(32)
+            output.write_word(offset: 0, value: hashes::ripemd160(input()))
+            raw.return_data(data: output.span())
+        }
+    }
+}

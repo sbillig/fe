@@ -35,10 +35,6 @@ example : Order_SIGNED_62 = pure #v[(UInt256.ofNat 4598842128380346689), (UInt25
 set_option maxRecDepth 10000 in
 example : Order_INV62 = pure (UInt256.ofNat 3815112494326173377) := rfl
 set_option maxRecDepth 10000 in
-example : M62 = pure (UInt256.ofNat 4611686018427387903) := rfl
-set_option maxRecDepth 10000 in
-example : M62_SIGNED = pure (UInt256.ofNat 4611686018427387903) := rfl
-set_option maxRecDepth 10000 in
 example : Order_R3 = pure (UInt256.ofNat 38611792656279623856209604949727965891812033543773964974832218758873530450413) := rfl
 set_option maxRecDepth 10000 in
 example : GX = pure (UInt256.ofNat 55066263022277343669578718895168534326250603453777594175500187360389116729240) := rfl

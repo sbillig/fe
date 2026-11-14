@@ -4166,3 +4166,246 @@ def Evm_revert (v1 : MemSlice_u8) : FeM Empty := do
   let v5 ← revertData v2 v4
   nomatch v5
 
+structure Range_Known_0_Known_8 where
+  start : Unit
+  «end» : Unit
+deriving Inhabited
+
+structure Range_Known_0_Known_16 where
+  start : Unit
+  «end» : Unit
+deriving Inhabited
+
+def Range_start_0_8 (v0 : Range_Known_0_Known_8) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def Range_has_0_8 (v0 : Range_Known_0_Known_8) (v1 : UInt256) : FeM Bool := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 := (UInt256.ofNat 8)
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_at_0_8 (v0 : Range_Known_0_Known_8) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_next_0_8 (v0 : Range_Known_0_Known_8) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def Range_start_0_16 (v0 : Range_Known_0_Known_16) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def Range_has_0_16 (v0 : Range_Known_0_Known_16) (v1 : UInt256) : FeM Bool := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 := (UInt256.ofNat 16)
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_at_0_16 (v0 : Range_Known_0_Known_16) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_next_0_16 (v0 : Range_Known_0_Known_16) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def u64_wrapping_add (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := IntTy.addW (.u 64) v0 v1
+  return v2
+
+def downcast_truncate_u64_usize (v0 : UInt256) : FeM UInt256 := do
+  let v2 ← u64_to_word v0
+  let v3 := v2
+  let v4 ← usize_IS_SIGNED
+  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+    return v1
+  if v4 then
+    let v5 ← usize_MASK
+    let v6 ← usize_SIGN_BIT
+    let v7 ← sign_extend v3 v5 v6
+    let v8 ← usize_from_word v7
+    let v9 := v8
+    b3 v9
+  else
+    let v10 ← usize_MASK
+    let v11 := v3 &&& v10
+    let v12 ← usize_from_word v11
+    let v13 := v12
+    b3 v13
+
+def MemBuffer_extend_over_u64 (v0 : MemBuffer) (v1 : UInt256) : FeM (UInt256 × MemBuffer) := do
+  let mut v0 := v0
+  let v2 := (UInt256.ofNat 8)
+  let v3 := v2
+  let v4 := v1
+  let v5 := v0.capacity
+  let v6 := decide (v5.toNat < v4.toNat)
+  let b1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+    let mut v0 := v0
+    let v38 ← index_out_of_bounds
+    nomatch v38
+  if v6 then
+    b1 v0
+  else
+    let v7 := v0.capacity
+    let v8 := v1
+    let v9 := v7 - v8
+    let v10 := decide (v9.toNat < v3.toNat)
+    if v10 then
+      b1 v0
+    else
+      let v11 := ()
+      let v12 := v11
+      let v13 := v1
+      let v14 := v0.len
+      let v15 := decide (v14.toNat < v13.toNat)
+      let b7 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+        let mut v0 := v0
+        let v26 := v1
+        let v27 := v26 + v3
+        let v28 := v0.len
+        let v29 := decide (v28.toNat < v27.toNat)
+        let b10 : MemBuffer → FeM (UInt256 × MemBuffer) := fun v0 => do
+          let mut v0 := v0
+          let v36 := v0.ptr
+          let v37 := v36 + v1
+          return (v37, v0)
+        if v29 then
+          let v30 := v1
+          let v31 := v30 + v3
+          v0 := { v0 with len := v31 }
+          let v32 := ()
+          let v33 := v32
+          b10 v0
+        else
+          let v34 := ()
+          let v35 := v34
+          b10 v0
+      if v15 then
+        let v16 := v0.ptr
+        let v17 := v0.len
+        let v18 := v16 + v17
+        let v19 := v1
+        let v20 := v0.len
+        let v21 := v19 - v20
+        let v22 ← zero_bytes v18 v21
+        let v23 := v22
+        b7 v0
+      else
+        let v24 := ()
+        let v25 := v24
+        b7 v0
+
+def MemBuffer_write_le_u64 (v0 : MemBuffer) (v1 : UInt256) (v2 : UInt256) : FeM (Unit × MemBuffer) := do
+  let mut v0 := v0
+  let v3 := IntTy.swapBytes (.u 64) v2
+  let (v4, v4_0) ← MemBuffer_extend_over_u64 v0 v1
+  v0 := v4_0
+  let v5 ← cast_u8_u64 v4
+  mstoreInt (.u 64) v5 v3
+  let v6 := ()
+  return ((), v0)
+
+structure Range_Known_0_Unknown where
+  start : Unit
+  «end» : UInt256
+deriving Inhabited
+
+structure Range_Known_0_Known_64 where
+  start : Unit
+  «end» : Unit
+deriving Inhabited
+
+def Range_start_0 (v0 : Range_Known_0_Unknown) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def Range_has_0 (v0 : Range_Known_0_Unknown) (v1 : UInt256) : FeM Bool := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 := v0.«end»
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_at_0 (v0 : Range_Known_0_Unknown) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_start_0_64 (v0 : Range_Known_0_Known_64) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def Range_has_0_64 (v0 : Range_Known_0_Known_64) (v1 : UInt256) : FeM Bool := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 := (UInt256.ofNat 64)
+  let v4 ← range_has v1 v2 v3
+  return v4
+
+def Range_at_0_64 (v0 : Range_Known_0_Known_64) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  return r0
+
+def Range_next_0_64 (v0 : Range_Known_0_Known_64) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def downcast_unchecked_usize_u64 (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← usize_to_word v0
+  let v2 := v1
+  let v3 ← u64_from_word v2
+  return v3
+
+def downcast_truncate_u64_u8 (v0 : UInt256) : FeM UInt256 := do
+  let v2 ← u64_to_word v0
+  let v3 := v2
+  let v4 ← u8_IS_SIGNED
+  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+    return v1
+  if v4 then
+    let v5 ← u8_MASK
+    let v6 ← u8_SIGN_BIT
+    let v7 ← sign_extend v3 v5 v6
+    let v8 ← u8_from_word v7
+    let v9 := v8
+    b3 v9
+  else
+    let v10 ← u8_MASK
+    let v11 := v3 &&& v10
+    let v12 ← u8_from_word v11
+    let v13 := v12
+    b3 v13
+
+def Range_next_0 (v0 : Range_Known_0_Unknown) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+
+def array_start_u32_5 (v0 : (Vector UInt256 5)) : FeM UInt256 := do
+  let v1 := (UInt256.ofNat 0)
+  return v1
+
+def array_has_u32_5 (v0 : (Vector UInt256 5)) (v1 : UInt256) : FeM Bool := do
+  let v2 := v1
+  let v3 := (UInt256.ofNat 5)
+  let v4 := decide (v2.toNat < v3.toNat)
+  return v4
+
+def array_at_ref_u32_5 (v0 : (Vector UInt256 5)) (v1 : UInt256) : FeM UInt256 := do
+  checkIndex v1 5
+  return v0[v1.toNat]!
+
+def array_next_u32_5 (v0 : (Vector UInt256 5)) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_add v3 v2
+  return v4
+

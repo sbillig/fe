@@ -1,4 +1,4 @@
-instances compared: 401
+instances compared: 418
 
 expected: drops opaque in the generic body: 13
   Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there
@@ -21,7 +21,7 @@ places of parameters in another space: 4
   immutables::capped<Config>: root 0 in code where the generic body has memory
   lib::bump<Store>: root 0 in storage where the generic body has memory
 
-unexpected: the first other difference: 71
+unexpected: the first other difference: 77
   (T0)::encode<Sol, u256>: v6 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 4 }, Some("Load"))
   (T0)::payload_size<u256>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Load"))
   (T0, T1)::decode_from_prechecked_head<Sol, u256, u256, CallData>: v18 (Statement { block: NBlockId(0), statement: 17 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 17 }, Some("AggregateMake"))
@@ -33,6 +33,7 @@ unexpected: the first other difference: 71
   CallOutcome::decode<u256>: block 3: terminator Return(Some(NOperand { value: NValueId(17), origin: Some(ExprId(20)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(17), origin: Some(ExprId(20)), mode: Copy }))
   Evm::decode_args<(u256, u256)>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Copy }))
   MemBuffer::write_be<u256>: v2: type View u256 where the instance has u256
+  MemBuffer::write_le<u64>: v2: type View u64 where the instance has u64
   MemSlice<u8>::read_le<u64>: v5 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 3 }, Some("Call"))
   PackedBytes<const N: usize>::zero<14>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
   PackedBytes<const N: usize>::zero<24>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
@@ -49,9 +50,12 @@ unexpected: the first other difference: 71
   S::downcast_truncate<u256, u8>: v0: type View u256 where the instance has u256
   S::downcast_truncate<u256, usize>: v0: type View u256 where the instance has u256
   S::downcast_truncate<u64, i64>: v0: type View u64 where the instance has u64
+  S::downcast_truncate<u64, u8>: v0: type View u64 where the instance has u64
+  S::downcast_truncate<u64, usize>: v0: type View u64 where the instance has u64
   S::downcast_truncate<usize, u64>: v0: type View usize where the instance has usize
   S::downcast_unchecked<u256, i256>: v0: type View u256 where the instance has u256
   S::downcast_unchecked<u256, usize>: v0: type View u256 where the instance has u256
+  S::downcast_unchecked<usize, u64>: v0: type View usize where the instance has usize
   SolSlot::read<u8>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(6)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(6)), mode: Copy }))
   SolSlot::write<u8>: v8 (Statement { block: NBlockId(1), statement: 2 }, Some("Forward")) where the instance has (Statement { block: NBlockId(1), statement: 2 }, Some("Call"))
   SolWord::get<u8>: block 0: terminator Return(Some(NOperand { value: NValueId(10), origin: Some(ExprId(14)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(10), origin: Some(ExprId(14)), mode: Copy }))
@@ -79,8 +83,10 @@ unexpected: the first other difference: 71
   core::num::__bitcast<u256, usize>: v0: type View u256 where the instance has u256
   core::num::from_be<u256>: v0: type View u256 where the instance has u256
   core::num::from_le<u64>: v0: type View u64 where the instance has u64
+  core::num::swap_bytes<u32>: v0: type View u32 where the instance has u32
   core::num::swap_bytes<u64>: v0: type View u64 where the instance has u64
   core::num::to_be<u256>: v0: type View u256 where the instance has u256
+  core::num::to_le<u64>: v0: type View u64 where the instance has u64
   core::num::trailing_zeros<u64>: v0: type View u64 where the instance has u64
   core::ptr::cast<u8, u8>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("PointerCast")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Forward"))
   std::abi::sol::decode_input_at<(u256, u256), CallData>: block 0: terminator Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Copy }))

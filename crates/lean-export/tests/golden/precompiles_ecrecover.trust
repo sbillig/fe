@@ -1,4 +1,3 @@
-own divsteps extern core::num::trailing_zeros<u64>
 core AbiFrame_from_raw_parts unsafe-fn the whole body
 core AbiFrame_slice unsafe-block 1 of 1
 core AbiFrame_store_word unsafe-block 1 of 1
@@ -21,17 +20,13 @@ core assert extern core::panic
 core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
 core encode_alloc_Sol_tuple_bool_u256_u256 unsafe-block 1 of 1
 core encode_single_root_alloc_Sol_tuple_bool_u256_u256 unsafe-block 1 of 1
-core i128_to_word extern core::num::__bitcast<i256, u256>
 core i256_from_word extern core::num::__bitcast<u256, i256>
-core i64_from_word extern core::num::__bitcast<u256, i64>
-core i64_to_word extern core::num::__bitcast<i256, u256>
 core index_out_of_bounds extern core::panic_code
 core ptr_offset extern core::ptr::offset_bytes<u8>
 core store_word unsafe-block 1 of 1
 core store_word unsafe-fn the whole body
 core store_word raw-memory store of u256 through *u256
 core store_word extern core::num::to_be<u256>
-core u128_wrapping_sub extern core::num::__sub_u128
 core u64_from_word extern core::num::__bitcast<u256, u64>
 core u64_wrapping_mul extern core::num::__mul_u64
 core usize_MASK extern core::num::__bitnot_usize
