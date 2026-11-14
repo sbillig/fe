@@ -20,4 +20,5 @@ rustc-hash.workspace = true
 [dev-dependencies]
 codegen.workspace = true
 driver.workspace = true
+serde_json = "1"
 url.workspace = true

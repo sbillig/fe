@@ -5,10 +5,11 @@
 use std::{collections::BTreeMap, env, fmt::Write, fs, panic, path::Path};
 
 use codegen::{
-    OptLevel, SonatinaTestOptions, emit_ingot_sonatina_bytecode, emit_module_sonatina_bytecode,
+    OptLevel, SonatinaTestOptions, TestSuiteOutput, emit_ingot_sonatina_bytecode,
+    emit_ingot_sonatina_sidecar, emit_module_sonatina_bytecode, emit_module_sonatina_sidecar,
     emit_test_suite_sonatina,
 };
-use common::InputDb;
+use common::{InputDb, ingot::Ingot};
 use cranelift_entity::EntityRef;
 use driver::{DriverDataBase, init_ingot};
 use fe_lean_export::{Library, Unsupported, export_contract_with_entries};
@@ -23,7 +24,7 @@ use hir::{
             ty_def::TyId,
         },
     },
-    hir_def::HirIngot,
+    hir_def::{Contract, HirIngot, TopLevelMod},
     test_db::HirAnalysisTestDb,
 };
 use num_bigint::BigUint;
@@ -56,41 +57,15 @@ fn export_corpus() {
     let (mut exported, mut skipped, mut uncompiled, mut total) = (0, Vec::new(), Vec::new(), 0);
     let files = env::var("LEAN_EXPORT_CORPUS").unwrap();
     for path in files.split(':') {
-        let name = path.rsplit('/').next().unwrap().trim_end_matches(".fe");
-        let is_ingot = Path::new(path).is_dir();
+        let name = file_name(path);
         // A file or ingot with errors is skipped. A panic of the exporter is
         // reported as what stopped the contract.
-        let analyzed = panic::catch_unwind(|| {
-            let mut db = DriverDataBase::default();
-            let (url, has_errors) = if is_ingot {
-                let url = Url::from_directory_path(path).unwrap();
-                let has_errors = init_ingot(&mut db, &url) || {
-                    let ingot = db.workspace().containing_ingot(&db, url.clone()).unwrap();
-                    db.run_on_ingot(ingot).has_errors(&db)
-                };
-                (url, has_errors)
-            } else {
-                let url = Url::from_file_path(path).unwrap();
-                let source = fs::read_to_string(path).unwrap();
-                let file = db.workspace().touch(&mut db, url.clone(), Some(source));
-                (url, db.run_on_top_mod(db.top_mod(file)).has_errors(&db))
-            };
-            (!has_errors).then_some((db, url))
-        });
-        let Ok(Some((db, url))) = analyzed else {
+        let Some((db, url)) = analyze(path) else {
             skipped.push(name);
             continue;
         };
         let db = &db;
-        let ingot = is_ingot.then(|| db.workspace().containing_ingot(db, url.clone()).unwrap());
-        let modules = match ingot {
-            Some(ingot) => {
-                let mut modules = ingot.all_modules(db).to_vec();
-                modules.sort_by_key(|module| module.name(db));
-                modules
-            }
-            None => vec![db.top_mod(db.workspace().get(db, &url).unwrap())],
-        };
+        let (ingot, modules) = modules(db, path, &url);
         let mut text = String::new();
         let mut library = Library::default();
         let mut models = Vec::new();
@@ -114,42 +89,11 @@ fn export_corpus() {
                     )
                     .unwrap();
                     let name = contract.name(db).unwrap().data(db).to_string();
-                    // The argument types generated calls are made from. An
-                    // arm whose types have no ABI form gets arbitrary words.
-                    let sol = resolve_lib_type_path(db, contract.scope(), "std::abi::Sol").unwrap();
-                    let canonical = |ty| {
-                        semantic_ty_to_abi_desc(db, ty)
-                            .map(|desc| desc.canonical_type)
-                            .unwrap_or_default()
-                    };
-                    let arms: Vec<_> = contract
-                        .recv_views(db)
-                        .flat_map(|recv| recv.arms(db))
-                        .filter_map(|arm| {
-                            let info = arm.abi_info(db, sol);
-                            let payable = arm.arm(db).is_some_and(|arm| arm.is_payable(db));
-                            let inputs = canonical(info.args_ty);
-                            Some(format!(
-                                "⟨{}, \"{inputs}\", {payable}⟩",
-                                info.selector_value?
-                            ))
-                        })
-                        .collect();
-                    let init_args = contract.init_args_ty(db);
-                    let init = if init_args == TyId::unit(db) {
-                        "()".to_string()
-                    } else {
-                        canonical(init_args)
-                    };
-                    let init_payable = contract.init(db).is_some_and(|init| init.is_payable(db));
                     let bytes = contract.code_address_space_slot_count(db) * 32;
                     models.push((
                         name,
                         format!("⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩"),
-                        format!(
-                            "{{ init := \"{init}\", initPayable := {init_payable}, arms := [{}] }}",
-                            arms.join(", ")
-                        ),
+                        interface(db, contract),
                     ));
                 }
                 Err(reason) => blockers.entry(reason.0).or_default().push(id),
@@ -199,24 +143,11 @@ fn export_corpus() {
             )
             .unwrap();
             if let Some(suite) = suite {
-                let tests: Vec<_> = suite
-                    .tests
-                    .iter()
-                    .map(|test| {
-                        let balance = BigUint::from_bytes_be(
-                            test.initial_balance.as_deref().unwrap_or_default(),
-                        );
-                        format!(
-                            "{{ name := \"{}\", selector := {}, balance := {balance} }}",
-                            test.name, test.selector
-                        )
-                    })
-                    .collect();
                 write!(
                     text,
                     "\n#eval Fe.EVM.Diff.main \"{name}\" Corpus.targets\n  (Fe.EVM.Diff.hex \"{}\")\n  [{}]\n",
                     hex(&suite.bytecode),
-                    tests.join(",\n   ")
+                    tests(&suite)
                 )
                 .unwrap();
             }
@@ -244,6 +175,184 @@ fn export_corpus() {
         let reason: String = reason.chars().take(400).collect();
         println!("BLOCK {}\t{reason}", ids.join(","));
     }
+}
+
+/// Compares the Sonatina IR of every contract of the colon-separated files and
+/// ingot directories in `SONATINA_CORPUS` with its bytecode, for
+/// `scripts/audit_sonatina.sh` of fe-equivm-proofs. Writes the sidecar of each
+/// contract to `SONATINA_CORPUS_OUT/<file>.<contract>.sidecar.json`, and
+/// `<file>.lean`, which runs the file's tests (`Fe.EVM.Diff.main`) and
+/// generated calls (`Fe.EVM.Diff.generated`) with the IR of each contract as
+/// its model.
+#[test]
+#[ignore = "reads its input from the environment"]
+fn sonatina_corpus() {
+    let out = env::var("SONATINA_CORPUS_OUT").unwrap();
+    let files = env::var("SONATINA_CORPUS").unwrap();
+    let (mut skipped, mut uncompiled) = (Vec::new(), Vec::new());
+    for path in files.split(':') {
+        let name = file_name(path);
+        let Some((db, url)) = analyze(path) else {
+            skipped.push(name);
+            continue;
+        };
+        let db = &db;
+        let (ingot, modules) = modules(db, path, &url);
+        if modules
+            .iter()
+            .all(|module| module.all_contracts(db).is_empty())
+        {
+            continue;
+        }
+        let compiled = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let sidecars = match ingot {
+                Some(ingot) => emit_ingot_sonatina_sidecar(db, ingot, OptLevel::O1, None),
+                None => emit_module_sonatina_sidecar(db, modules[0], OptLevel::O1, None),
+            };
+            let suite = emit_test_suite_sonatina(
+                db,
+                &modules,
+                OptLevel::O1,
+                SonatinaTestOptions::default(),
+                None,
+            );
+            Some((sidecars.ok()?, suite.ok()?))
+        }));
+        let Ok(Some((sidecars, suite))) = compiled else {
+            uncompiled.push(name);
+            continue;
+        };
+        let mut targets = Vec::new();
+        for &contract in modules.iter().flat_map(|module| module.all_contracts(db)) {
+            let contract_name = contract.name(db).unwrap().data(db).to_string();
+            let Some(sidecar) = sidecars.get(&contract_name) else {
+                continue;
+            };
+            let file = format!("{out}/{name}.{contract_name}.sidecar.json");
+            fs::write(&file, serde_json::to_string(sidecar).unwrap()).unwrap();
+            targets.push(format!("(\"{file}\", {})", interface(db, contract)));
+        }
+        let mut text = format!(
+            "import Fe.Sonatina.Diff\n\ndef targets : IO (List Fe.EVM.Diff.Target) :=\n  \
+             Fe.Sonatina.targetsOf \"{name}\"\n    [{}]\n",
+            targets.join(",\n     ")
+        );
+        if let Some(suite) = suite {
+            write!(
+                text,
+                "\n#eval do\n  Fe.EVM.Diff.main \"{name}\" (← targets)\n    (Fe.EVM.Diff.hex \"{}\")\n    [{}]\n",
+                hex(&suite.bytecode),
+                tests(&suite)
+            )
+            .unwrap();
+        }
+        writeln!(
+            text,
+            "\n#eval do Fe.EVM.Diff.generated \"{name}\" (← targets)"
+        )
+        .unwrap();
+        fs::write(format!("{out}/{name}.lean"), text).unwrap();
+    }
+    println!("files skipped: {skipped:?}, not compiled: {uncompiled:?}");
+}
+
+/// The name of a file or ingot directory, without `.fe`.
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap().trim_end_matches(".fe")
+}
+
+/// The analyzed file or ingot at `path` and its URL, or `None` if it has
+/// errors or the analysis panics.
+fn analyze(path: &str) -> Option<(DriverDataBase, Url)> {
+    panic::catch_unwind(|| {
+        let mut db = DriverDataBase::default();
+        let (url, has_errors) = if Path::new(path).is_dir() {
+            let url = Url::from_directory_path(path).unwrap();
+            let has_errors = init_ingot(&mut db, &url) || {
+                let ingot = db.workspace().containing_ingot(&db, url.clone()).unwrap();
+                db.run_on_ingot(ingot).has_errors(&db)
+            };
+            (url, has_errors)
+        } else {
+            let url = Url::from_file_path(path).unwrap();
+            let source = fs::read_to_string(path).unwrap();
+            let file = db.workspace().touch(&mut db, url.clone(), Some(source));
+            (url, db.run_on_top_mod(db.top_mod(file)).has_errors(&db))
+        };
+        (!has_errors).then_some((db, url))
+    })
+    .ok()
+    .flatten()
+}
+
+/// The ingot at `path`, if it is a directory, and its modules, or the module
+/// of the file.
+fn modules<'db>(
+    db: &'db DriverDataBase,
+    path: &str,
+    url: &Url,
+) -> (Option<Ingot<'db>>, Vec<TopLevelMod<'db>>) {
+    if Path::new(path).is_dir() {
+        let ingot = db.workspace().containing_ingot(db, url.clone()).unwrap();
+        let mut modules = ingot.all_modules(db).to_vec();
+        modules.sort_by_key(|module| module.name(db));
+        (Some(ingot), modules)
+    } else {
+        (None, vec![db.top_mod(db.workspace().get(db, url).unwrap())])
+    }
+}
+
+/// The `Fe.EVM.Diff.Interface` of a contract: the argument types generated
+/// calls are made from. An arm whose types have no ABI form gets arbitrary
+/// words.
+fn interface(db: &DriverDataBase, contract: Contract<'_>) -> String {
+    let sol = resolve_lib_type_path(db, contract.scope(), "std::abi::Sol").unwrap();
+    let canonical = |ty| {
+        semantic_ty_to_abi_desc(db, ty)
+            .map(|desc| desc.canonical_type)
+            .unwrap_or_default()
+    };
+    let arms: Vec<_> = contract
+        .recv_views(db)
+        .flat_map(|recv| recv.arms(db))
+        .filter_map(|arm| {
+            let info = arm.abi_info(db, sol);
+            let payable = arm.arm(db).is_some_and(|arm| arm.is_payable(db));
+            let inputs = canonical(info.args_ty);
+            Some(format!(
+                "⟨{}, \"{inputs}\", {payable}⟩",
+                info.selector_value?
+            ))
+        })
+        .collect();
+    let init_args = contract.init_args_ty(db);
+    let init = if init_args == TyId::unit(db) {
+        "()".to_string()
+    } else {
+        canonical(init_args)
+    };
+    let init_payable = contract.init(db).is_some_and(|init| init.is_payable(db));
+    format!(
+        "{{ init := \"{init}\", initPayable := {init_payable}, arms := [{}] }}",
+        arms.join(", ")
+    )
+}
+
+/// The `Fe.EVM.Diff.Test`s of a test suite.
+fn tests(suite: &TestSuiteOutput) -> String {
+    let tests: Vec<_> = suite
+        .tests
+        .iter()
+        .map(|test| {
+            let balance =
+                BigUint::from_bytes_be(test.initial_balance.as_deref().unwrap_or_default());
+            format!(
+                "{{ name := \"{}\", selector := {}, balance := {balance} }}",
+                test.name, test.selector
+            )
+        })
+        .collect();
+    tests.join(",\n   ")
 }
 
 fn hex(bytes: &[u8]) -> String {
