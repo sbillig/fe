@@ -1,4 +1,4 @@
-instances compared: 400
+instances compared: 401
 
 expected: drops opaque in the generic body: 13
   Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there
@@ -15,10 +15,11 @@ expected: drops opaque in the generic body: 13
   std::evm::effects::encode_error<Panic>: drop of Panic, which destroys nothing, is not there
   std::evm::effects::revert_error<Panic>: drop of Panic, which destroys nothing, is not there
 
-places of parameters in another space: 3
+places of parameters in another space: 4
   calldata_read::second<[u256; 2]>: root 0 in calldata where the generic body has memory
   closures::bump<Store>: root 0 in storage where the generic body has memory
   immutables::capped<Config>: root 0 in code where the generic body has memory
+  lib::bump<Store>: root 0 in storage where the generic body has memory
 
 unexpected: the first other difference: 71
   (T0)::encode<Sol, u256>: v6 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 4 }, Some("Load"))

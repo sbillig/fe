@@ -10,9 +10,12 @@
 //! its embedding defines.
 //!
 //! Contracts exported with one [`Library`] share the definitions of core and
-//! std that name nothing of a contract's own. A contract's text names them
-//! as its own: its embedding gives the ones in [`Export::uses`] those names
-//! in the contract's namespace, as Lean's `export` does.
+//! std that name nothing of a contract's own. The contracts of one ingot,
+//! exported with one [`IngotExport`], also share the definitions of the
+//! ingot's own code that more than one of them reaches. A contract's text
+//! names both as its own: its embedding gives the ones in [`Export::uses`]
+//! and [`Export::uses_shared`] those names in the contract's namespace, as
+//! Lean's `export` does.
 //!
 //! An export lists what its definitions take on trust ([`Export::trusted`]):
 //! what the type system and the access checker do not vouch for in the body
@@ -307,11 +310,12 @@ struct Member<'db> {
     low: usize,
     name: String,
     body: String,
-    own: bool,
+    scope: Scope,
+    refs: Vec<String>,
 }
 
 /// The definitions exports share: those of core and std that name nothing
-/// of a contract's own. A contract exported with a library uses the
+/// of an ingot's own. A contract exported with a library uses the
 /// definitions in it and adds the ones it is first to reach, so its own text
 /// follows the library's.
 #[derive(Clone, Default)]
@@ -325,6 +329,8 @@ pub struct Library {
     lenses: FxHashMap<String, String>,
     layouts: Vec<Item>,
     bodies: FxHashMap<(String, String), String>,
+    /// The library's definitions each of its definitions names.
+    refs: FxHashMap<String, Vec<String>>,
     checks: String,
     /// The constants `checks` states the value of.
     checked: FxHashSet<String>,
@@ -343,15 +349,18 @@ impl Library {
     }
 }
 
-/// A contract's own definitions.
+/// A contract's own definitions, or the definitions its ingot's contracts
+/// share.
 pub struct Export {
     /// The library's definitions that `text` and `checks` name, in order: a
     /// function, constant or type, or what a type's namespace holds, such as
     /// a structure's constructor.
     pub uses: Vec<String>,
+    /// The shared definitions of the ingot that they name, likewise.
+    pub uses_shared: Vec<String>,
     pub text: String,
-    /// What the definitions, the contract's own and the library's it uses,
-    /// take on trust, sorted.
+    /// What the definitions, these and the library's they reach, take on
+    /// trust, sorted.
     pub trusted: Vec<Trusted>,
     /// For each constant the contract defines, an `example` that the
     /// definition is the value the compiler computes for it, which code
@@ -371,14 +380,20 @@ impl Export {
             .collect()
     }
 
-    /// The Lean command that gives `uses` their names in the current
-    /// namespace, for a library in the namespace `library`. Empty if the
-    /// text names none of the library's.
-    pub fn uses_command(&self, library: &str) -> String {
-        if self.uses.is_empty() {
-            return String::new();
+    /// The Lean commands that give `uses` and `uses_shared` their names in
+    /// the current namespace, for a library in the namespace `library` and
+    /// the shared definitions in `shared`. Empty if the text names none of
+    /// either.
+    pub fn uses_command(&self, library: &str, shared: &str) -> String {
+        let commands: String = [(library, &self.uses), (shared, &self.uses_shared)]
+            .into_iter()
+            .filter(|(_, uses)| !uses.is_empty())
+            .map(|(space, uses)| format!("export {space} ({})\n", uses.join(" ")))
+            .collect();
+        if commands.is_empty() {
+            return commands;
         }
-        format!("export {library} ({})\n\n", self.uses.join(" "))
+        format!("{commands}\n")
     }
 }
 
@@ -472,206 +487,504 @@ impl fmt::Display for TrustKind {
 }
 
 /// A definition, or the definitions of one recursion: the names it defines,
-/// its text, and whether it is a contract's own.
+/// its text, and how far it is shared.
 #[derive(Clone)]
 struct Item {
     names: Vec<String>,
     text: String,
-    own: bool,
+    scope: Scope,
+    /// The definitions the text names, other than its own.
+    refs: Vec<String>,
 }
 
-/// The Lean definitions of `contract` that are its own: its storage layout,
-/// the functions and constants its entries reach, then its `init` and `recv`
-/// arms. The definitions of core and std they use are `library`'s.
-pub fn export_contract<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    library: &mut Library,
-) -> Result<Export, Unsupported> {
-    export(db, contract, false, library)
+/// How far a definition is shared: by every export with one library (core
+/// and std code that names nothing of an ingot's own), by the contracts of
+/// one ingot (the ingot's own code, and core and std code at its types, that
+/// names nothing of one contract's), or by one contract (its entries, the
+/// places of its fields, and what names them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Scope {
+    Library,
+    Ingot,
+    Contract,
 }
 
-/// As [`export_contract`], followed by the contract's entries. The runtime
-/// entry is one definition per arm that decodes its arguments, runs it and
-/// returns its result, and `runtime`, which dispatches on the selector. The
-/// deployment entry, `init_entry`, decodes the constructor arguments and runs
-/// `init`. They call std's decoder and encoder as exported.
-pub fn export_contract_with_entries<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    library: &mut Library,
-) -> Result<Export, Unsupported> {
-    export(db, contract, true, library)
-}
-
-fn export<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    with_entries: bool,
-    library: &mut Library,
-) -> Result<Export, Unsupported> {
-    let mut entries = vec![("init".to_string(), BodyOwner::ContractInit { contract })];
-    for (recv_idx, recv) in contract.recv_views(db).enumerate() {
-        entries.extend(recv.arms(db).enumerate().map(|(arm_idx, _)| {
-            (
-                format!("recv{recv_idx}_arm{arm_idx}"),
-                BodyOwner::ContractRecvArm {
-                    contract,
-                    recv_idx: recv_idx as u32,
-                    arm_idx: arm_idx as u32,
-                },
-            )
-        }));
+impl Scope {
+    /// The scope of code of the contract's ingot or of one it depends on, if
+    /// `own`, or else of core's or std's.
+    fn of(own: bool) -> Self {
+        if own { Self::Ingot } else { Self::Library }
     }
-    let mut module = Module {
-        db,
-        root: SemanticInstance::new(
+}
+
+/// The contracts of one ingot, exported one after another with one library.
+/// A definition of the ingot's own code is exported once, by the contract
+/// that reaches it first, and named by its instance: a later contract that
+/// reaches the instance uses that definition. [`IngotExport::finish`] puts
+/// each definition more than one contract reaches in the shared part, and
+/// the others with the one contract that reaches them.
+pub struct IngotExport<'db> {
+    db: &'db dyn HirAnalysisDb,
+    /// The Lean name of each instance of the ingot's code exported so far,
+    /// for each way it receives its access parameters.
+    names: FxHashMap<(SemanticInstanceKey<'db>, Carriers), String>,
+    taken: FxHashSet<String>,
+    nevers: FxHashSet<String>,
+    lenses: FxHashMap<String, String>,
+    /// The ingot's type and layout definitions, and its functions and
+    /// constants, each with the contract that exported it.
+    layouts: Vec<(Item, usize)>,
+    defs: Vec<(Item, usize)>,
+    contracts: Vec<Part>,
+    /// What each definition of the library's and the ingot's exported so
+    /// far takes on trust.
+    trusted: Vec<Trusted>,
+}
+
+/// What one contract's export adds: its own definitions and the ingot's it
+/// is first to reach, in order, the checks of their constants, and what its
+/// own take on trust.
+struct Part {
+    layouts: Vec<Placed>,
+    defs: Vec<Placed>,
+    checks: Vec<(String, String)>,
+    trusted: Vec<Trusted>,
+}
+
+/// A definition of a contract's export: the contract's own, or the place of
+/// one of the ingot's among [`IngotExport`]'s.
+enum Placed {
+    Contract(Item),
+    Ingot(usize),
+}
+
+/// The exports of an ingot's contracts: the definitions of the ingot's code
+/// that more than one of them reaches, and each contract's, in the order the
+/// contracts are exported.
+pub struct Exports {
+    pub shared: Export,
+    pub contracts: Vec<Export>,
+}
+
+impl<'db> IngotExport<'db> {
+    pub fn new(db: &'db dyn HirAnalysisDb) -> Self {
+        Self {
             db,
-            identity_semantic_instance_key(db, BodyOwner::ContractInit { contract }),
-        ),
-        names: FxHashMap::default(),
-        taken: entries
+            names: FxHashMap::default(),
+            taken: FxHashSet::default(),
+            nevers: FxHashSet::default(),
+            lenses: FxHashMap::default(),
+            layouts: Vec::new(),
+            defs: Vec::new(),
+            contracts: Vec::new(),
+            trusted: Vec::new(),
+        }
+    }
+
+    /// Exports the definitions of `contract`: its storage layout, the
+    /// functions and constants its entries reach, then its `init` and `recv`
+    /// arms. The definitions of core and std they use are `library`'s.
+    ///
+    /// With `with_entries`, the contract's entries follow. The runtime entry
+    /// is one definition per arm that decodes its arguments, runs it and
+    /// returns its result, and `runtime`, which dispatches on the selector.
+    /// The deployment entry, `init_entry`, decodes the constructor arguments
+    /// and runs `init`. They call std's decoder and encoder as exported.
+    ///
+    /// A contract that cannot be exported leaves the export and the library
+    /// as they were.
+    pub fn export_contract(
+        &mut self,
+        contract: Contract<'db>,
+        with_entries: bool,
+        library: &mut Library,
+    ) -> Result<(), Unsupported> {
+        let db = self.db;
+        let mut entries = vec![("init".to_string(), BodyOwner::ContractInit { contract })];
+        for (recv_idx, recv) in contract.recv_views(db).enumerate() {
+            entries.extend(recv.arms(db).enumerate().map(|(arm_idx, _)| {
+                (
+                    format!("recv{recv_idx}_arm{arm_idx}"),
+                    BodyOwner::ContractRecvArm {
+                        contract,
+                        recv_idx: recv_idx as u32,
+                        arm_idx: arm_idx as u32,
+                    },
+                )
+            }));
+        }
+        let mut module = Module {
+            db,
+            root: SemanticInstance::new(
+                db,
+                identity_semantic_instance_key(db, BodyOwner::ContractInit { contract }),
+            ),
+            names: self.names.clone(),
+            taken: entries
+                .iter()
+                .flat_map(|(name, _)| [name.clone(), format!("{name}_entry")])
+                .chain(PRELUDE.iter().map(|name| name.to_string()))
+                .chain(library.taken.iter().cloned())
+                .chain(self.taken.iter().cloned())
+                .collect(),
+            nevers: library.nevers.union(&self.nevers).cloned().collect(),
+            lenses: library
+                .lenses
+                .iter()
+                .chain(&self.lenses)
+                .map(|(name, slide)| (name.clone(), slide.clone()))
+                .collect(),
+            lens: None,
+            open: Vec::new(),
+            members: Vec::new(),
+            layouts: library
+                .layouts
+                .iter()
+                .chain(self.layouts.iter().map(|(item, _)| item))
+                .cloned()
+                .collect(),
+            bodies: library.bodies.clone(),
+            defs: Vec::new(),
+            embedded: FxHashSet::default(),
+            folded: Vec::new(),
+            checks: Vec::new(),
+            refs: Vec::new(),
+        };
+        // The Lean names of each instance whose body is exported.
+        let mut defined = FxHashMap::<_, Vec<String>>::default();
+        for (name, owner) in entries {
+            let key = identity_semantic_instance_key(db, owner);
+            let (body, _, refs) = module.body(&name, key, &Carriers::default())?;
+            module.define(&name, &body, Scope::Contract, refs);
+            defined.entry(key).or_default().push(name);
+        }
+        if with_entries {
+            module.runtime(contract)?;
+            module.init_entry(contract)?;
+        }
+        // A definition is shared no further than what it names: the
+        // creation code of a contract it deploys is the contract's.
+        let mut layouts = module
+            .layouts
+            .split_off(library.layouts.len() + self.layouts.len());
+        let mut contract_names = module.embedded;
+        let mut ingot_names: FxHashSet<_> = self
+            .layouts
             .iter()
-            .flat_map(|(name, _)| [name.clone(), format!("{name}_entry")])
-            .chain(PRELUDE.iter().map(|name| name.to_string()))
-            .chain(library.taken.iter().cloned())
-            .collect(),
-        nevers: library.nevers.clone(),
-        lenses: library.lenses.clone(),
-        lens: None,
-        open: Vec::new(),
-        members: Vec::new(),
-        layouts: library.layouts.clone(),
-        bodies: library.bodies.clone(),
-        defs: Vec::new(),
-        embedded: FxHashSet::default(),
-        folded: Vec::new(),
-        checks: Vec::new(),
-    };
-    // The Lean names of each instance whose body is exported.
-    let mut defined = FxHashMap::<_, Vec<String>>::default();
-    for (name, owner) in entries {
-        let key = identity_semantic_instance_key(db, owner);
-        let (body, _) = module.body(&name, key, &Carriers::default())?;
-        module.define(&name, &body, true);
-        defined.entry(key).or_default().push(name);
-    }
-    if with_entries {
-        module.runtime(contract)?;
-        module.init_entry(contract)?;
-    }
-    // A definition that names one of the contract's own, or the creation
-    // code of a contract it deploys, is its own.
-    let mut layouts = module.layouts.split_off(library.layouts.len());
-    let mut own = module.embedded;
-    loop {
-        let before = own.len();
-        for item in layouts.iter_mut().chain(&mut module.defs) {
-            item.own |= names_any(&item.text, &own);
-            if item.own {
-                own.extend(item.names.iter().cloned());
+            .chain(&self.defs)
+            .flat_map(|(item, _)| item.names.iter().cloned())
+            .collect();
+        loop {
+            let before = (contract_names.len(), ingot_names.len());
+            for item in layouts.iter_mut().chain(&mut module.defs) {
+                if item.refs.iter().any(|name| contract_names.contains(name)) {
+                    item.scope = Scope::Contract;
+                } else if item.refs.iter().any(|name| ingot_names.contains(name)) {
+                    item.scope = item.scope.max(Scope::Ingot);
+                }
+                match item.scope {
+                    Scope::Contract => contract_names.extend(item.names.iter().cloned()),
+                    Scope::Ingot => ingot_names.extend(item.names.iter().cloned()),
+                    Scope::Library => {}
+                }
+            }
+            if (contract_names.len(), ingot_names.len()) == before {
+                break;
             }
         }
-        if own.len() == before {
-            break;
-        }
-    }
-    let text = |own: bool| -> String {
-        let layouts = layouts.iter().filter(|item| item.own == own);
-        let defs = module.defs.iter().filter(|item| item.own == own);
-        layouts
-            .map(|item| format!("{}\n\n", item.text))
-            .chain(defs.map(|item| item.text.clone()))
-            .collect()
-    };
-    let exported = text(true);
-    library.text.push_str(&text(false));
-    let mut checks = String::new();
-    let mut checked = FxHashSet::default();
-    for (name, value) in &module.checks {
-        // Unfolding a constant that sums many fields takes the elaborator
-        // deeper than it goes by default.
-        let check =
-            format!("set_option maxRecDepth 10000 in\nexample : {name} = pure {value} := rfl\n");
-        if !own.contains(name) {
-            if library.checked.insert(name.clone()) {
+        let scope = |name: &String| {
+            if contract_names.contains(name) {
+                Scope::Contract
+            } else if ingot_names.contains(name) {
+                Scope::Ingot
+            } else {
+                Scope::Library
+            }
+        };
+        let mut checks = Vec::new();
+        for (name, value) in &module.checks {
+            // Unfolding a constant that sums many fields takes the elaborator
+            // deeper than it goes by default.
+            let check = format!(
+                "set_option maxRecDepth 10000 in\nexample : {name} = pure {value} := rfl\n"
+            );
+            if scope(name) != Scope::Library {
+                checks.push((name.clone(), check));
+            } else if library.checked.insert(name.clone()) {
                 library.checks.push_str(&check);
             }
-        } else if checked.insert(name) {
-            checks.push_str(&check);
         }
-    }
-    let shared = layouts.iter().chain(&module.defs).filter(|item| !item.own);
-    for name in shared.flat_map(|item| &item.names) {
-        library.names.insert(name.clone());
-        library.taken.insert(name.clone());
-    }
-    for item in layouts.into_iter().filter(|item| !item.own) {
-        if item.text.starts_with("structure ") || item.text.starts_with("inductive ") {
-            library.types.extend(item.names.iter().cloned());
+        let index = self.contracts.len();
+        let mut part = Part {
+            layouts: Vec::new(),
+            defs: Vec::new(),
+            checks,
+            trusted: Vec::new(),
+        };
+        let mut added = Vec::new();
+        for item in layouts {
+            match item.scope {
+                Scope::Library => added.push(item),
+                Scope::Ingot => {
+                    part.layouts.push(Placed::Ingot(self.layouts.len()));
+                    self.layouts.push((item, index));
+                }
+                Scope::Contract => part.layouts.push(Placed::Contract(item)),
+            }
         }
-        library.layouts.push(item);
-    }
-    let mut uses: Vec<_> = tokens(&exported)
-        .chain(tokens(&checks))
-        .filter(|token| {
-            let spaces = token.match_indices('.').map(|(at, _)| &token[..at]);
-            library.names.contains(*token)
-                || spaces
-                    .into_iter()
-                    .any(|space| library.types.contains(space))
-        })
-        .map(str::to_string)
-        .collect();
-    uses.sort_unstable();
-    uses.dedup();
-    module.nevers.retain(|name| !own.contains(name));
-    module.lenses.retain(|name, _| !own.contains(name));
-    module.bodies.retain(|_, name| !own.contains(name));
-    library.nevers = module.nevers;
-    library.lenses = module.lenses;
-    library.bodies = module.bodies;
-    for ((key, _), name) in module.names {
-        defined.entry(key).or_default().push(name);
-    }
-    let origin = |key: SemanticInstanceKey<'db>| match key.owner(db).scope().ingot(db).kind(db) {
-        IngotKind::Core => Origin::Core,
-        IngotKind::Std => Origin::Std,
-        _ => Origin::Own,
-    };
-    let mut trusted = Vec::new();
-    for (key, names) in &defined {
-        for (kind, detail) in trusted_parts(db, *key) {
-            trusted.extend(names.iter().map(|name| Trusted {
-                origin: origin(*key),
+        let layout_count = added.len();
+        for item in module.defs {
+            match item.scope {
+                Scope::Library => added.push(item),
+                Scope::Ingot => {
+                    part.defs.push(Placed::Ingot(self.defs.len()));
+                    self.defs.push((item, index));
+                }
+                Scope::Contract => part.defs.push(Placed::Contract(item)),
+            }
+        }
+        for (at, item) in added.iter().enumerate() {
+            if at < layout_count {
+                writeln!(library.text, "{}\n", item.text).unwrap();
+            } else {
+                library.text.push_str(&item.text);
+            }
+            library.names.extend(item.names.iter().cloned());
+            library.taken.extend(item.names.iter().cloned());
+        }
+        for (at, item) in added.into_iter().enumerate() {
+            for name in &item.names {
+                library.refs.insert(name.clone(), item.refs.clone());
+            }
+            if at < layout_count {
+                if item.text.starts_with("structure ") || item.text.starts_with("inductive ") {
+                    library.types.extend(item.names.iter().cloned());
+                }
+                library.layouts.push(item);
+            }
+        }
+        for ((key, carriers), name) in &module.names {
+            if scope(name) == Scope::Ingot {
+                self.names.insert((*key, carriers.clone()), name.clone());
+            }
+        }
+        for (name, slide) in module.lenses {
+            match scope(&name) {
+                Scope::Library => {
+                    library.lenses.insert(name, slide);
+                }
+                Scope::Ingot => {
+                    self.lenses.insert(name, slide);
+                }
+                Scope::Contract => {}
+            }
+        }
+        for name in module.nevers {
+            match scope(&name) {
+                Scope::Library => {
+                    library.nevers.insert(name);
+                }
+                Scope::Ingot => {
+                    self.nevers.insert(name);
+                }
+                Scope::Contract => {}
+            }
+        }
+        module
+            .bodies
+            .retain(|_, name| scope(name) == Scope::Library);
+        library.bodies = module.bodies;
+        self.taken.extend(module.taken);
+        for ((key, _), name) in module.names {
+            defined.entry(key).or_default().push(name);
+        }
+        let origin = |key: SemanticInstanceKey<'db>| match key.owner(db).scope().ingot(db).kind(db)
+        {
+            IngotKind::Core => Origin::Core,
+            IngotKind::Std => Origin::Std,
+            _ => Origin::Own,
+        };
+        let mut trusted = Vec::new();
+        for (key, names) in &defined {
+            for (kind, detail) in trusted_parts(db, *key) {
+                trusted.extend(names.iter().map(|name| Trusted {
+                    origin: origin(*key),
+                    definition: name.clone(),
+                    kind,
+                    detail: detail.clone(),
+                }));
+            }
+        }
+        for folded in module.folded {
+            let detail = format!(
+                "{} = {} ({})",
+                const_path(db, folded.constant.owner(db)),
+                folded.value,
+                folded.reason
+            );
+            trusted.extend(defined[&folded.body].iter().map(|name| Trusted {
+                origin: origin(folded.body),
                 definition: name.clone(),
-                kind,
+                kind: TrustKind::Folded,
                 detail: detail.clone(),
             }));
         }
+        // The contracts of an ingot have entries of the same names.
+        let (own, others) = trusted
+            .into_iter()
+            .partition(|item| scope(&item.definition) == Scope::Contract);
+        part.trusted = own;
+        self.trusted.extend::<Vec<_>>(others);
+        self.contracts.push(part);
+        Ok(())
     }
-    for folded in module.folded {
-        let detail = format!(
-            "{} = {} ({})",
-            const_path(db, folded.constant.owner(db)),
-            folded.value,
-            folded.reason
-        );
-        trusted.extend(defined[&folded.body].iter().map(|name| Trusted {
-            origin: origin(folded.body),
-            definition: name.clone(),
-            kind: TrustKind::Folded,
-            detail: detail.clone(),
-        }));
+
+    /// The shared part and each contract's. A contract reaches a definition
+    /// of the ingot's if its own definitions name it, or name one that
+    /// reaches it; one that a contract reaches other than the one that
+    /// exported it is shared.
+    pub fn finish(self, library: &Library) -> Exports {
+        let items: Vec<_> = self.layouts.iter().chain(&self.defs).collect();
+        let ids: FxHashMap<&str, usize> = items
+            .iter()
+            .enumerate()
+            .flat_map(|(id, (item, _))| item.names.iter().map(move |name| (name.as_str(), id)))
+            .collect();
+        let mut shared = vec![false; items.len()];
+        for (index, part) in self.contracts.iter().enumerate() {
+            let mut pending: Vec<&str> = part
+                .layouts
+                .iter()
+                .chain(&part.defs)
+                .filter_map(|placed| match placed {
+                    Placed::Contract(item) => Some(item.refs.iter().map(String::as_str)),
+                    Placed::Ingot(_) => None,
+                })
+                .flatten()
+                .collect();
+            let mut seen = FxHashSet::default();
+            while let Some(name) = pending.pop() {
+                if let Some(&id) = ids.get(name)
+                    && seen.insert(id)
+                {
+                    let (item, exporter) = items[id];
+                    shared[id] |= *exporter != index;
+                    pending.extend(item.refs.iter().map(String::as_str));
+                }
+            }
+        }
+        let shared_items: Vec<&Item> = items
+            .iter()
+            .zip(&shared)
+            .filter(|(_, shared)| **shared)
+            .map(|((item, _), _)| item)
+            .collect();
+        let shared_names: FxHashSet<String> = shared_items
+            .iter()
+            .flat_map(|item| item.names.iter().cloned())
+            .collect();
+        let shared_types: FxHashSet<String> = shared_items
+            .iter()
+            .filter(|item| {
+                item.text.starts_with("structure ") || item.text.starts_with("inductive ")
+            })
+            .flat_map(|item| item.names.iter().cloned())
+            .collect();
+        // An export of `items`, the first `layouts` of them type and layout
+        // definitions, with the checks `checks`: the trust of `own`, and of
+        // the ingot's and the library's definitions among those it reaches.
+        let export = |items: &[&Item], layouts: usize, checks: Vec<&String>, own: &[Trusted]| {
+            let mut text = String::new();
+            for (at, item) in items.iter().enumerate() {
+                if at < layouts {
+                    writeln!(text, "{}\n", item.text).unwrap();
+                } else {
+                    text.push_str(&item.text);
+                }
+            }
+            let mut seen = FxHashSet::default();
+            let checks: String = checks
+                .into_iter()
+                .filter(|check| seen.insert(*check))
+                .map(String::as_str)
+                .collect();
+            let mut reached: FxHashSet<&str> = items
+                .iter()
+                .flat_map(|item| item.names.iter().map(String::as_str))
+                .collect();
+            let mut pending: Vec<&str> = items
+                .iter()
+                .flat_map(|item| item.refs.iter().map(String::as_str))
+                .collect();
+            while let Some(name) = pending.pop() {
+                if let Some(refs) = library.refs.get(name)
+                    && reached.insert(name)
+                {
+                    pending.extend(refs.iter().map(String::as_str));
+                }
+            }
+            let mut trusted: Vec<_> = self
+                .trusted
+                .iter()
+                .filter(|item| reached.contains(item.definition.as_str()))
+                .chain(own)
+                .cloned()
+                .collect();
+            trusted.sort_unstable();
+            trusted.dedup();
+            let all = format!("{text}{checks}");
+            Export {
+                uses: uses(&all, &library.names, &library.types),
+                uses_shared: uses(&all, &shared_names, &shared_types),
+                text,
+                trusted,
+                checks,
+            }
+        };
+        let layouts = self.layouts.len();
+        let checks = self.contracts.iter().flat_map(|part| &part.checks);
+        let shared_checks = checks
+            .filter(|(name, _)| shared_names.contains(name))
+            .map(|(_, check)| check)
+            .collect();
+        let shared_layouts = shared[..layouts].iter().filter(|shared| **shared).count();
+        let contracts = self
+            .contracts
+            .iter()
+            .map(|part| {
+                // The contract's own definitions, and the ingot's only it
+                // reaches.
+                let mut own_items: Vec<&Item> = Vec::new();
+                let mut count = 0;
+                for (list, offset) in [(&part.layouts, 0), (&part.defs, layouts)] {
+                    count = own_items.len();
+                    for placed in list {
+                        match placed {
+                            Placed::Contract(item) => own_items.push(item),
+                            Placed::Ingot(at) if !shared[offset + at] => {
+                                own_items.push(&items[offset + at].0)
+                            }
+                            Placed::Ingot(_) => {}
+                        }
+                    }
+                }
+                let checks = part
+                    .checks
+                    .iter()
+                    .filter(|(name, _)| !shared_names.contains(name))
+                    .map(|(_, check)| check)
+                    .collect();
+                export(&own_items, count, checks, &part.trusted)
+            })
+            .collect();
+        // The shared definitions name one another as their own.
+        let mut common = export(&shared_items, shared_layouts, shared_checks, &[]);
+        common.uses_shared.clear();
+        Exports {
+            shared: common,
+            contracts,
+        }
     }
-    trusted.sort_unstable();
-    trusted.dedup();
-    Ok(Export {
-        uses,
-        text: exported,
-        trusted,
-        checks,
-    })
 }
 
 /// The definitions exported so far.
@@ -713,6 +1026,8 @@ struct Module<'db> {
     /// The name of each exported constant, with the value the compiler
     /// computes for it.
     checks: Vec<(String, String)>,
+    /// The definitions named by each text under way, innermost last.
+    refs: Vec<Vec<String>>,
 }
 
 /// A use of a constant whose definition has no model, in the body of the
@@ -728,17 +1043,18 @@ struct Folded<'db> {
 
 impl<'db> Module<'db> {
     /// The definition of `key`'s body after its name, which `name` is in
-    /// reports, and whether the body never returns. The definitions it uses
-    /// are exported first.
+    /// reports, whether the body never returns, and the definitions it
+    /// names. The definitions it uses are exported first.
     fn body(
         &mut self,
         name: &str,
         key: SemanticInstanceKey<'db>,
         carriers: &Carriers,
-    ) -> Result<(String, bool), Unsupported> {
+    ) -> Result<(String, bool, Vec<String>), Unsupported> {
         let normalized = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
-        BodyExporter {
+        let depth = self.begin();
+        let exported = BodyExporter {
             module: self,
             body: &normalized.body,
             carriers,
@@ -766,8 +1082,35 @@ impl<'db> Module<'db> {
             located: Vec::new(),
             entries: 0,
         }
-        .export()
-        .map_err(|error| Unsupported(format!("{name}: {}", error.0)))
+        .export();
+        let refs = self.end(depth);
+        let (body, never) =
+            exported.map_err(|error| Unsupported(format!("{name}: {}", error.0)))?;
+        Ok((body, never, refs))
+    }
+
+    /// Begins collecting the definitions the text exported next names, and
+    /// gives the depth to end it at.
+    fn begin(&mut self) -> usize {
+        self.refs.push(Vec::new());
+        self.refs.len() - 1
+    }
+
+    /// The definitions named since `begin` gave `depth`, sorted. Those named
+    /// by a text begun later and not ended, whose export stopped, are not
+    /// among them.
+    fn end(&mut self, depth: usize) -> Vec<String> {
+        let mut refs = self.refs.split_off(depth).swap_remove(0);
+        refs.sort_unstable();
+        refs.dedup();
+        refs
+    }
+
+    /// Notes that the text under way names the definition `name`.
+    fn note(&mut self, name: &str) {
+        if let Some(refs) = self.refs.last_mut() {
+            refs.push(name.to_string());
+        }
     }
 
     /// The patterns that bind the arguments of recv arm `owner`, in the order
@@ -812,6 +1155,7 @@ impl<'db> Module<'db> {
         for (recv_idx, recv) in contract.recv_views(db).enumerate() {
             for (arm_idx, arm) in recv.arms(db).enumerate() {
                 let name = format!("recv{recv_idx}_arm{arm_idx}");
+                let depth = self.begin();
                 let owner = BodyOwner::ContractRecvArm {
                     contract,
                     recv_idx: recv_idx as u32,
@@ -904,10 +1248,12 @@ impl<'db> Module<'db> {
                         writeln!(lines, "  {return_value} result").unwrap();
                     }
                 }
+                let refs = self.end(depth);
                 self.defs.push(Item {
                     names: vec![format!("{name}_entry")],
                     text: format!("def {name}_entry : FeM Empty := do\n{lines}\n"),
-                    own: true,
+                    scope: Scope::Contract,
+                    refs,
                 });
                 match info.selector_value {
                     _ if info.is_fallback => default = format!("{name}_entry"),
@@ -938,7 +1284,8 @@ impl<'db> Module<'db> {
                  if size.toNat < 4 then\n    {default}\n  else\n    \
                  let selector ← calldataSelector\n    {dispatch}{last}\n\n"
             ),
-            own: true,
+            scope: Scope::Contract,
+            refs: Vec::new(),
         });
         Ok(())
     }
@@ -956,6 +1303,7 @@ impl<'db> Module<'db> {
         let scope = contract.scope();
         let missing = |what: &str| Unsupported(format!("init_entry: missing `{what}`"));
         let generated = |error| Unsupported(format!("init_entry: generated call: {error:?}"));
+        let depth = self.begin();
         let mut lines = String::new();
         if !contract.init(db).is_some_and(|init| init.is_payable(db)) {
             lines.push_str("  nonPayable\n");
@@ -1075,16 +1423,19 @@ impl<'db> Module<'db> {
             }
             writeln!(lines, "  memoryBytes words (UInt256.ofNat {bytes})").unwrap();
         }
+        let refs = self.end(depth);
         self.defs.push(Item {
             names: vec!["init_entry".to_string()],
             text: format!("def init_entry (args : ByteArray) : FeM ByteArray := do\n{lines}\n"),
-            own: true,
+            scope: Scope::Contract,
+            refs,
         });
         Ok(())
     }
 
     /// The Lean name of the function or constant instance `key` that
-    /// receives its access parameters as `carriers`, exported on first use.
+    /// receives its access parameters as `carriers`, exported on first use,
+    /// which the text under way names.
     fn instance(
         &mut self,
         key: SemanticInstanceKey<'db>,
@@ -1103,8 +1454,9 @@ impl<'db> Module<'db> {
         {
             caller.low = caller.low.min(low);
         }
-        if let Some(name) = self.names.get(&instance) {
-            return Ok(name.clone());
+        if let Some(name) = self.names.get(&instance).cloned() {
+            self.note(&name);
+            return Ok(name);
         }
         let db = self.db;
         let base = match key.owner(db) {
@@ -1129,6 +1481,7 @@ impl<'db> Module<'db> {
                         .ok_or_else(|| Unsupported(format!("`{name}` of an unnamed contract")))?;
                     let code = format!("creation_{}", contract.data(db));
                     self.embedded.insert(code.clone());
+                    self.note(&code);
                     return Ok(format!("{read} {code}"));
                 }
                 match mode {
@@ -1169,8 +1522,10 @@ impl<'db> Module<'db> {
             _ => base,
         };
         let args = key.subst(db).generic_args(db);
-        let own = !shared_ingot(db, key.owner(db).scope().ingot(db))
-            || args.iter().any(|arg| self.own_ty(*arg));
+        let scope = Scope::of(
+            !shared_ingot(db, key.owner(db).scope().ingot(db))
+                || args.iter().any(|arg| self.own_ty(*arg)),
+        );
         let base = args.iter().fold(base, |name, arg| {
             format!("{name}_{}", lean_ident(arg.pretty_print(db)))
         });
@@ -1179,6 +1534,7 @@ impl<'db> Module<'db> {
         if under_way.is_some() {
             let name = self.fresh(&base);
             self.names.insert(instance, name.clone());
+            self.note(&name);
             return Ok(name);
         }
         if self.open.iter().any(|open| open.instance.0 == key) {
@@ -1191,7 +1547,7 @@ impl<'db> Module<'db> {
         });
         let exported = self.body(&base, key, &carriers);
         let open = self.open.pop().unwrap();
-        let (body, never) = exported?;
+        let (body, never, refs) = exported?;
         let lens = std::mem::take(&mut self.lens);
         let called = self.names.get(&instance).cloned();
         let recursive = called.is_some() || open.low < self.open.len();
@@ -1210,7 +1566,8 @@ impl<'db> Module<'db> {
                     low: open.low,
                     name: name.clone(),
                     body,
-                    own,
+                    scope,
+                    refs,
                 });
                 name
             }
@@ -1221,10 +1578,10 @@ impl<'db> Module<'db> {
             (Some(name), _) => {
                 let members = self.members.split_off(open.members);
                 let first = self.defs.len();
-                self.define(&name, &format!("{body}partial_fixpoint\n"), own);
+                self.define(&name, &format!("{body}partial_fixpoint\n"), scope, refs);
                 for member in &members {
                     let body = format!("{}partial_fixpoint\n", member.body);
-                    self.define(&member.name, &body, member.own);
+                    self.define(&member.name, &body, member.scope, member.refs.clone());
                 }
                 if !members.is_empty() {
                     let defs = self.defs.split_off(first);
@@ -1232,7 +1589,8 @@ impl<'db> Module<'db> {
                     self.defs.push(Item {
                         names: defs.iter().flat_map(|item| item.names.clone()).collect(),
                         text: format!("mutual\n{texts}end\n\n"),
-                        own: defs.iter().any(|item| item.own),
+                        scope: defs.iter().map(|item| item.scope).max().unwrap(),
+                        refs: defs.iter().flat_map(|item| item.refs.clone()).collect(),
                     });
                 }
                 name
@@ -1241,7 +1599,7 @@ impl<'db> Module<'db> {
             (None, Some(name)) => name.clone(),
             (None, None) => {
                 let name = self.fresh(&base);
-                self.define(&name, &body, own);
+                self.define(&name, &body, scope, refs);
                 self.bodies.insert((base, body), name.clone());
                 name
             }
@@ -1253,6 +1611,7 @@ impl<'db> Module<'db> {
             self.lenses.insert(name.clone(), slide);
         }
         self.names.insert((key, carriers), name.clone());
+        self.note(&name);
         Ok(name)
     }
 
@@ -1329,7 +1688,7 @@ impl<'db> Module<'db> {
     /// Appends the definition of `name` with the text `body` gives after the
     /// name: the pieces cut from it, last first, each named after it, then
     /// the definition.
-    fn define(&mut self, name: &str, body: &str, own: bool) {
+    fn define(&mut self, name: &str, body: &str, scope: Scope, refs: Vec<String>) {
         let mut texts = body.split(CUT);
         let main = texts.next().unwrap();
         let piece = name.trim_matches(['«', '»']);
@@ -1341,13 +1700,21 @@ impl<'db> Module<'db> {
         self.defs.push(Item {
             names: vec![name.to_string()],
             text,
-            own,
+            scope,
+            refs,
         });
     }
 
     /// The Lean name of `definition`, a type or layout definition named
-    /// `name`, or `name` with a number if a different definition has it.
-    fn layout(&mut self, name: String, own: bool, definition: impl Fn(&str) -> String) -> String {
+    /// `name`, or `name` with a number if a different definition has it,
+    /// which the text under way names. `refs` are the definitions it names.
+    fn layout(
+        &mut self,
+        name: String,
+        scope: Scope,
+        refs: Vec<String>,
+        definition: impl Fn(&str) -> String,
+    ) -> String {
         for n in 0.. {
             let name = match n {
                 0 => name.clone(),
@@ -1355,7 +1722,10 @@ impl<'db> Module<'db> {
             };
             let text = definition(&name);
             match self.layouts.iter().find(|known| known.names[0] == name) {
-                Some(known) if known.text == text => return name,
+                Some(known) if known.text == text => {
+                    self.note(&name);
+                    return name;
+                }
                 Some(_) => {}
                 // A type the exported text names from Lean or the prelude
                 // keeps its name.
@@ -1364,8 +1734,10 @@ impl<'db> Module<'db> {
                     self.layouts.push(Item {
                         names: vec![name.clone()],
                         text,
-                        own,
+                        scope,
+                        refs,
                     });
+                    self.note(&name);
                     return name;
                 }
             }
@@ -1689,6 +2061,7 @@ impl<'db> Module<'db> {
             _ => {}
         }
         if let Some(variants) = self.variants(ty) {
+            let depth = self.begin();
             let mut lean = Vec::new();
             for (variant, (name, fields)) in variants.into_iter().enumerate() {
                 let mut tys = Vec::new();
@@ -1702,19 +2075,27 @@ impl<'db> Module<'db> {
                 }
                 lean.push((name, tys));
             }
-            return Ok(self.enum_ty(lean_ident(pretty), self.own_ty(ty), &lean));
+            let refs = self.end(depth);
+            let scope = Scope::of(self.own_ty(ty));
+            return Ok(self.enum_ty(lean_ident(pretty), scope, refs, &lean));
         }
         if let Some(len) = ty.array_len(self.db) {
             let (_, args) = ty.decompose_ty_app(self.db);
             return Ok(format!("(Vector {} {len})", self.value_ty(args[0])?));
         }
+        let depth = self.begin();
         let mut tys = Vec::new();
         for (field, (name, ty)) in self.fields(ty)?.into_iter().enumerate() {
             steps.push(NDataProjection::Field(FieldIndex(field as u16)));
             tys.push((name, self.shape_ty(ty, steps, held)?));
             steps.pop();
         }
+        let refs = self.end(depth);
         if ty.is_tuple(self.db) || ty.as_closure(self.db).is_some() {
+            // A tuple's text is part of the text under way.
+            for name in &refs {
+                self.note(name);
+            }
             return Ok(match tys.as_slice() {
                 [] => "Unit".to_string(),
                 [(_, ty)] => ty.clone(),
@@ -1728,9 +2109,12 @@ impl<'db> Module<'db> {
         for (name, ty) in tys {
             writeln!(lines, "  {} : {ty}", name[0]).unwrap();
         }
-        Ok(self.layout(lean_ident(pretty), self.own_ty(ty), |name| {
-            format!("structure {name} where\n{lines}deriving Inhabited")
-        }))
+        Ok(self.layout(
+            lean_ident(pretty),
+            Scope::of(self.own_ty(ty)),
+            refs,
+            |name| format!("structure {name} where\n{lines}deriving Inhabited"),
+        ))
     }
 
     /// The Lean type of an enum named `name` whose variants have fields of
@@ -1738,7 +2122,13 @@ impl<'db> Module<'db> {
     /// for each field of each variant the projection that reads it and the
     /// function that replaces it. Both leave a value of another variant
     /// alone.
-    fn enum_ty(&mut self, name: String, own: bool, variants: &[(String, Vec<String>)]) -> String {
+    fn enum_ty(
+        &mut self,
+        name: String,
+        scope: Scope,
+        refs: Vec<String>,
+        variants: &[(String, Vec<String>)],
+    ) -> String {
         let mut ctors = String::new();
         let mut tags = String::new();
         let mut parts = String::new();
@@ -1773,7 +2163,7 @@ impl<'db> Module<'db> {
                 .unwrap();
             }
         }
-        self.layout(name, own, |name| {
+        self.layout(name, scope, refs, |name| {
             format!(
                 "inductive {name} where\n{ctors}deriving Inhabited\n\n\
                  def {name}.tag : {name} → UInt256\n{tags}{}",
@@ -1892,6 +2282,7 @@ impl<'db> Module<'db> {
                 "loadArray {stride} (fun q => {elem}) {place} {len}"
             ));
         }
+        let depth = self.begin();
         let name = self.value_ty(ty)?;
         let mut body = String::new();
         if let Some(variants) = self.variants(ty) {
@@ -1934,9 +2325,11 @@ impl<'db> Module<'db> {
             let parts: Vec<_> = (0..fields.len()).map(|index| format!("f{index}")).collect();
             writeln!(body, "  return {}", self.aggregate(ty, &parts)?).unwrap();
         }
+        let refs = self.end(depth);
         let loader = self.layout(
             format!("load_{}", lean_ident(ty.pretty_print(db))),
-            self.own_ty(ty),
+            Scope::of(self.own_ty(ty)),
+            refs,
             |loader| {
                 format!(
                     "def {loader} (p : Place) : FeM {name} := do\n{}",
@@ -1987,6 +2380,7 @@ impl<'db> Module<'db> {
             };
             return Err(Unsupported(format!("{} in {space}", ty.pretty_print(db))));
         }
+        let depth = self.begin();
         let name = self.value_ty(ty)?;
         let fields = self.fields(ty)?;
         let mut body = String::new();
@@ -1998,9 +2392,11 @@ impl<'db> Module<'db> {
         }
         let parts: Vec<_> = (0..fields.len()).map(|index| format!("f{index}")).collect();
         writeln!(body, "  return {}", self.aggregate(ty, &parts)?).unwrap();
+        let refs = self.end(depth);
         let loader = self.layout(
             format!("{space}load_{}", lean_ident(ty.pretty_print(db))),
-            self.own_ty(ty),
+            Scope::of(self.own_ty(ty)),
+            refs,
             |loader| {
                 format!(
                     "def {loader} (p : UInt256) : FeM {name} := do\n{}",
@@ -2037,6 +2433,7 @@ impl<'db> Module<'db> {
         if self.variants(ty).is_some() {
             return Err(Unsupported(format!("{} in memory", ty.pretty_print(db))));
         }
+        let depth = self.begin();
         let name = self.value_ty(ty)?;
         let mut body = String::new();
         let mut offset = 0;
@@ -2051,9 +2448,11 @@ impl<'db> Module<'db> {
         if body.is_empty() {
             body.push_str("  return ()\n");
         }
+        let refs = self.end(depth);
         let storer = self.layout(
             format!("mstore_{}", lean_ident(ty.pretty_print(db))),
-            self.own_ty(ty),
+            Scope::of(self.own_ty(ty)),
+            refs,
             |storer| {
                 format!(
                     "def {storer} (p : UInt256) (v : {name}) : FeM Unit := do\n{}",
@@ -2128,6 +2527,7 @@ impl<'db> Module<'db> {
                 "storeArray {stride} (fun q x => {elem}) {place} {value}"
             ));
         }
+        let depth = self.begin();
         let name = self.value_ty(ty)?;
         let mut body = String::new();
         if let Some(variants) = self.variants(ty) {
@@ -2206,9 +2606,11 @@ impl<'db> Module<'db> {
                 body.push_str("  return ()\n");
             }
         }
+        let refs = self.end(depth);
         let storer = self.layout(
             format!("store_{}", lean_ident(ty.pretty_print(db))),
-            self.own_ty(ty),
+            Scope::of(self.own_ty(ty)),
+            refs,
             |storer| {
                 format!(
                     "def {storer} (p : Place) (v : {name}) : FeM Unit := do\n{}",
@@ -2231,7 +2633,8 @@ impl<'db> Module<'db> {
             .collect();
         Ok(self.layout(
             format!("Layout.{}", lean_ident(pretty)),
-            self.own_ty(ty),
+            Scope::of(self.own_ty(ty)),
+            Vec::new(),
             |name| {
                 format!(
                     "def {name} : Layout :=\n  {{ storage := [{}] }}",
@@ -5005,9 +5408,12 @@ impl<'db> BodyExporter<'_, 'db> {
             codec: None,
         });
         let slot = layout.slot_offset;
-        let place = self.module.layout(format!("Field.{name}"), true, |name| {
-            format!("def {name} : Place :=\n  .storage (UInt256.ofNat {slot})")
-        });
+        let place = self.module.layout(
+            format!("Field.{name}"),
+            Scope::Contract,
+            Vec::new(),
+            |name| format!("def {name} : Place :=\n  .storage (UInt256.ofNat {slot})"),
+        );
         Ok((place, lane))
     }
 }
@@ -5302,12 +5708,19 @@ fn tokens(text: &str) -> impl Iterator<Item = &str> {
     text.split(move |c| !part(c))
 }
 
-/// Whether `text` names one of `names`, or something in its namespace.
-fn names_any(text: &str, names: &FxHashSet<String>) -> bool {
-    tokens(text).any(|token| {
-        let spaces = token.match_indices('.').map(|(at, _)| &token[..at]);
-        names.contains(token) || spaces.into_iter().any(|space| names.contains(space))
-    })
+/// The names in `text` of definitions among `names`, or of what the
+/// namespace of a type among `types` holds, sorted.
+fn uses(text: &str, names: &FxHashSet<String>, types: &FxHashSet<String>) -> Vec<String> {
+    let mut uses: Vec<_> = tokens(text)
+        .filter(|token| {
+            let mut spaces = token.match_indices('.').map(|(at, _)| &token[..at]);
+            names.contains(*token) || spaces.any(|space| types.contains(space))
+        })
+        .map(str::to_string)
+        .collect();
+    uses.sort_unstable();
+    uses.dedup();
+    uses
 }
 
 /// The lines of `texts`, each a step further in.

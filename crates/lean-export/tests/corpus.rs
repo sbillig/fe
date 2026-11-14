@@ -12,7 +12,7 @@ use codegen::{
 use common::{InputDb, ingot::Ingot};
 use cranelift_entity::EntityRef;
 use driver::{DriverDataBase, init_ingot};
-use fe_lean_export::{Library, Unsupported, export_contract_with_entries};
+use fe_lean_export::{IngotExport, Library, Unsupported};
 use hir::{
     analysis::{
         semantic::{
@@ -35,8 +35,9 @@ use url::Url;
 /// `LEAN_EXPORT_CORPUS_OUT/<file>.lean`, importing the modules
 /// `LEAN_EXPORT_CORPUS_IMPORTS` names, each contract in a namespace so that
 /// the file elaborates on its own, after the creation code of each contract
-/// an export deploys, and prints the construct each other contract stopped at
-/// as `BLOCK <ids>\t<reason>`.
+/// an export deploys and the definitions of the file's code that more than
+/// one of its contracts reaches, in `Corpus.<file>_shared`, and prints the
+/// construct each other contract stopped at as `BLOCK <ids>\t<reason>`.
 ///
 /// Writes what each exported contract takes on trust to
 /// `LEAN_EXPORT_CORPUS_OUT/<file>.trust`, each line after the contract's
@@ -71,50 +72,61 @@ fn export_corpus() {
         };
         let db = &db;
         let (ingot, modules) = modules(db, path, &url);
-        let mut text = String::new();
-        let (mut trust, mut checks) = (String::new(), String::new());
         let mut library = Library::default();
+        let mut ingot_export = IngotExport::new(db);
         let mut models = Vec::new();
         let contracts = modules.iter().flat_map(|module| module.all_contracts(db));
         for (index, &contract) in contracts.enumerate() {
             total += 1;
             let id = format!("{name}_{index}");
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-                export_contract_with_entries(db, contract, &mut library)
+                ingot_export.export_contract(contract, true, &mut library)
             }))
             .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
             match result {
-                Ok(lean) => {
+                Ok(()) => {
                     exported += 1;
-                    write!(
-                        text,
-                        "\nnamespace Corpus.{id}\nsection\n{}\
-                         set_option linter.unusedVariables false\n\n{}\nend\nend Corpus.{id}\n",
-                        lean.uses_command("Corpus.Lib"),
-                        lean.text
-                    )
-                    .unwrap();
-                    for item in &lean.trusted {
-                        writeln!(trust, "Corpus.{id} {item}").unwrap();
-                    }
-                    if !lean.checks.is_empty() {
-                        write!(
-                            checks,
-                            "\nnamespace Corpus.{id}\n{}{}end Corpus.{id}\n",
-                            lean.uses_command("Corpus.Lib"),
-                            lean.checks
-                        )
-                        .unwrap();
-                    }
                     let name = contract.name(db).unwrap().data(db).to_string();
                     let bytes = contract.code_address_space_slot_count(db) * 32;
                     models.push((
+                        id.clone(),
                         name,
                         format!("⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩"),
                         interface(db, contract),
                     ));
                 }
                 Err(reason) => blockers.entry(reason.0).or_default().push(id),
+            }
+        }
+        // The definitions the file's contracts share, then each contract's.
+        let exports = ingot_export.finish(&library);
+        let shared = format!("{name}_shared");
+        let (mut text, mut trust, mut checks) = (String::new(), String::new(), String::new());
+        let parts = [(shared.as_str(), &exports.shared)].into_iter().chain(
+            models
+                .iter()
+                .map(|(id, ..)| id.as_str())
+                .zip(&exports.contracts),
+        );
+        for (id, lean) in parts {
+            let uses = lean.uses_command("Corpus.Lib", &format!("Corpus.{shared}"));
+            write!(
+                text,
+                "\nnamespace Corpus.{id}\nsection\n{uses}\
+                 set_option linter.unusedVariables false\n\n{}\nend\nend Corpus.{id}\n",
+                lean.text
+            )
+            .unwrap();
+            for item in &lean.trusted {
+                writeln!(trust, "Corpus.{id} {item}").unwrap();
+            }
+            if !lean.checks.is_empty() {
+                write!(
+                    checks,
+                    "\nnamespace Corpus.{id}\n{uses}{}end Corpus.{id}\n",
+                    lean.checks
+                )
+                .unwrap();
             }
         }
         if models.is_empty() {
@@ -144,7 +156,7 @@ fn export_corpus() {
             text.insert_str(0, &creations);
             let targets: Vec<_> = models
                 .iter()
-                .map(|(contract, model, interface)| {
+                .map(|(_, contract, model, interface)| {
                     format!(
                         "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{}\", \
                          runtime := Fe.EVM.Diff.hex \"{}\",\n     model := {model},\n     \

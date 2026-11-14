@@ -509,26 +509,29 @@ fn describe(db: &dyn HirAnalysisDb, key: SemanticInstanceKey<'_>) -> String {
     format!("{name}<{}>", args.join(", "))
 }
 
-/// The function instances the entries of `contract` call, by the calls and
+/// The function instances the entries of `contracts` call, by the calls and
 /// constants of their bodies, each with its normalized body.
 fn instances<'db>(
     db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
+    contracts: &[Contract<'db>],
 ) -> Vec<SemanticInstanceKey<'db>> {
-    let mut pending = vec![identity_semantic_instance_key(
-        db,
-        BodyOwner::ContractInit { contract },
-    )];
-    for (recv_idx, recv) in contract.recv_views(db).enumerate() {
-        for (arm_idx, _) in recv.arms(db).enumerate() {
-            pending.push(identity_semantic_instance_key(
-                db,
-                BodyOwner::ContractRecvArm {
-                    contract,
-                    recv_idx: recv_idx as u32,
-                    arm_idx: arm_idx as u32,
-                },
-            ));
+    let mut pending = Vec::new();
+    for &contract in contracts {
+        pending.push(identity_semantic_instance_key(
+            db,
+            BodyOwner::ContractInit { contract },
+        ));
+        for (recv_idx, recv) in contract.recv_views(db).enumerate() {
+            for (arm_idx, _) in recv.arms(db).enumerate() {
+                pending.push(identity_semantic_instance_key(
+                    db,
+                    BodyOwner::ContractRecvArm {
+                        contract,
+                        recv_idx: recv_idx as u32,
+                        arm_idx: arm_idx as u32,
+                    },
+                ));
+            }
         }
     }
     let mut seen = Vec::new();
@@ -571,8 +574,8 @@ fn coherence() {
     let mut sections: [BTreeSet<String>; 3] = Default::default();
     let mut compared = 0;
     for (name, _) in FIXTURES {
-        with_fixture(name, |db, contract| {
-            for key in instances(db, contract) {
+        with_fixture(name, |db, contracts| {
+            for key in instances(db, contracts) {
                 let BodyOwner::Func(func, _) = key.owner(db) else {
                     continue;
                 };

@@ -43,14 +43,15 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("trust", true),
     ("ecrecover", true),
     ("bn254", true),
+    ("shared", true),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it
-/// deploys, or of the one contract of the root module of the ingot
-/// `tests/fixtures/<name>/`.
+/// deploys, or of the contracts of the root module of the ingot
+/// `tests/fixtures/<name>/`, in their order there.
 pub fn with_fixture<T>(
     name: &str,
-    f: impl for<'db> FnOnce(&'db dyn HirAnalysisDb, Contract<'db>) -> T,
+    f: impl for<'db> FnOnce(&'db dyn HirAnalysisDb, &[Contract<'db>]) -> T,
 ) -> T {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"));
     if fixture.is_dir() {
@@ -59,10 +60,7 @@ pub fn with_fixture<T>(
         assert!(!init_ingot(&mut db, &url), "{name} failed to load");
         let ingot = db.workspace().containing_ingot(&db, url).unwrap();
         assert!(!db.run_on_ingot(ingot).has_errors(&db), "{name} has errors");
-        let [contract] = ingot.root_mod(&db).all_contracts(&db).as_slice() else {
-            panic!("expected one contract in the root module of {name}");
-        };
-        f(&db, *contract)
+        f(&db, ingot.root_mod(&db).all_contracts(&db))
     } else {
         let source = fs::read_to_string(fixture.with_extension("fe")).unwrap();
         let mut db = HirAnalysisTestDb::default();
@@ -70,7 +68,7 @@ pub fn with_fixture<T>(
         let (top_mod, _) = db.top_mod(file);
         db.assert_no_diags(top_mod);
         let contract = *top_mod.all_contracts(&db).last().unwrap();
-        f(&db, contract)
+        f(&db, &[contract])
     }
 }
 

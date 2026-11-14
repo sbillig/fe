@@ -1,0 +1,51 @@
+// Two contracts of one ingot: `sum` and what it calls, which both reach, are
+// exported once; `left` and `right`, which one each reaches, with their
+// contract; `bump`, which names a field of `Left`, with `Left`.
+use std::abi::sol
+
+pub struct Pair { pub a: u256, pub b: u256 }
+
+const SCALE: u256 = 3
+
+fn scaled(_ x: u256) -> u256 { x * SCALE }
+
+fn sum(_ pair: Pair) -> u256 { scaled(pair.a) + pair.b }
+
+fn left(_ x: u256) -> u256 { sum(Pair { a: x, b: 1 }) }
+
+fn right(_ x: u256) -> u256 { sum(Pair { a: 1, b: x }) * 2 }
+
+struct Store { total: u256 }
+
+fn bump(_ by: u256) -> u256 uses (store: mut Store) {
+    store.total = store.total + left(by)
+    store.total
+}
+
+msg LeftMsg {
+    #[selector = sol("left(uint256)")]
+    Left { x: u256 } -> u256,
+}
+
+msg RightMsg {
+    #[selector = sol("right(uint256)")]
+    Right { x: u256 } -> u256,
+}
+
+pub contract Left {
+    mut store: Store,
+
+    recv LeftMsg {
+        Left { x } -> u256 uses (mut store) {
+            bump(x)
+        }
+    }
+}
+
+pub contract Right {
+    recv RightMsg {
+        Right { x } -> u256 {
+            right(x)
+        }
+    }
+}
