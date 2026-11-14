@@ -125,3 +125,16 @@ sonatina-codegen = { opt-level = 3 }
 sonatina-cranelift = { opt-level = 3 }
 sonatina-wasm = { opt-level = 3 }
 sonatina-verifier = { opt-level = 3 }
+
+# Local wiring: build against the Sonatina worktree with the lowering record.
+# Replace with a pinned revision once that Sonatina change is published.
+[patch."https://github.com/fe-lang/sonatina"]
+sonatina-codegen = { path = "../../sonatina/sidecar/crates/codegen" }
+sonatina-cranelift = { path = "../../sonatina/sidecar/crates/cranelift" }
+sonatina-ir = { path = "../../sonatina/sidecar/crates/ir" }
+sonatina-macros = { path = "../../sonatina/sidecar/crates/macros" }
+sonatina-parser = { path = "../../sonatina/sidecar/crates/parser" }
+sonatina-sp1 = { path = "../../sonatina/sidecar/crates/sp1" }
+sonatina-triple = { path = "../../sonatina/sidecar/crates/triple" }
+sonatina-verifier = { path = "../../sonatina/sidecar/crates/verifier" }
+sonatina-wasm = { path = "../../sonatina/sidecar/crates/wasm" }
