@@ -17,7 +17,9 @@
 //! An export lists what its definitions take on trust ([`Export::trusted`]):
 //! what the type system and the access checker do not vouch for in the body
 //! of each, and each constant it holds as the value the compiler computes
-//! for it.
+//! for it. It also states, for each constant it defines, that the
+//! definition is that value ([`Export::checks`], and [`Library::checks`] for
+//! the library's): Lean's kernel decides each by evaluating the definition.
 
 use std::fmt::{self, Write};
 
@@ -323,6 +325,9 @@ pub struct Library {
     lenses: FxHashMap<String, String>,
     layouts: Vec<Item>,
     bodies: FxHashMap<(String, String), String>,
+    checks: String,
+    /// The constants `checks` states the value of.
+    checked: FxHashSet<String>,
 }
 
 impl Library {
@@ -330,18 +335,31 @@ impl Library {
     pub fn text(&self) -> &str {
         &self.text
     }
+
+    /// The checks of the shared constants, as [`Export::checks`] has them,
+    /// in the order their definitions are added.
+    pub fn checks(&self) -> &str {
+        &self.checks
+    }
 }
 
 /// A contract's own definitions.
 pub struct Export {
-    /// The library's definitions that `text` names, in order: a function,
-    /// constant or type, or what a type's namespace holds, such as a
-    /// structure's constructor.
+    /// The library's definitions that `text` and `checks` name, in order: a
+    /// function, constant or type, or what a type's namespace holds, such as
+    /// a structure's constructor.
     pub uses: Vec<String>,
     pub text: String,
     /// What the definitions, the contract's own and the library's it uses,
     /// take on trust, sorted.
     pub trusted: Vec<Trusted>,
+    /// For each constant the contract defines, an `example` that the
+    /// definition is the value the compiler computes for it, which code
+    /// built from the contract uses in its place. The definition is the
+    /// `pure` of the value by definitional unfolding, which `rfl` has the
+    /// kernel check, at a recursion depth that lets the elaborator unfold
+    /// it.
+    pub checks: String,
 }
 
 impl Export {
@@ -528,6 +546,7 @@ fn export<'db>(
         defs: Vec::new(),
         embedded: FxHashSet::default(),
         folded: Vec::new(),
+        checks: Vec::new(),
     };
     // The Lean names of each instance whose body is exported.
     let mut defined = FxHashMap::<_, Vec<String>>::default();
@@ -567,6 +586,21 @@ fn export<'db>(
     };
     let exported = text(true);
     library.text.push_str(&text(false));
+    let mut checks = String::new();
+    let mut checked = FxHashSet::default();
+    for (name, value) in &module.checks {
+        // Unfolding a constant that sums many fields takes the elaborator
+        // deeper than it goes by default.
+        let check =
+            format!("set_option maxRecDepth 10000 in\nexample : {name} = pure {value} := rfl\n");
+        if !own.contains(name) {
+            if library.checked.insert(name.clone()) {
+                library.checks.push_str(&check);
+            }
+        } else if checked.insert(name) {
+            checks.push_str(&check);
+        }
+    }
     let shared = layouts.iter().chain(&module.defs).filter(|item| !item.own);
     for name in shared.flat_map(|item| &item.names) {
         library.names.insert(name.clone());
@@ -579,6 +613,7 @@ fn export<'db>(
         library.layouts.push(item);
     }
     let mut uses: Vec<_> = tokens(&exported)
+        .chain(tokens(&checks))
         .filter(|token| {
             let spaces = token.match_indices('.').map(|(at, _)| &token[..at]);
             library.names.contains(*token)
@@ -635,6 +670,7 @@ fn export<'db>(
         uses,
         text: exported,
         trusted,
+        checks,
     })
 }
 
@@ -674,6 +710,9 @@ struct Module<'db> {
     embedded: FxHashSet<String>,
     /// The uses of constants held as the value the compiler computes.
     folded: Vec<Folded<'db>>,
+    /// The name of each exported constant, with the value the compiler
+    /// computes for it.
+    checks: Vec<(String, String)>,
 }
 
 /// A use of a constant whose definition has no model, in the body of the
@@ -3102,7 +3141,14 @@ impl<'db> BodyExporter<'_, 'db> {
                                 .module
                                 .instance(constant.instance(db), Carriers::default())
                             {
-                                Ok(constant) => format!("let {name} ← {constant}"),
+                                Ok(defined) => {
+                                    if let EvalOutcome::Ready(value) = eval_const_ref(db, *constant)
+                                        && let Ok(value) = self.module.const_value(value.value(db))
+                                    {
+                                        self.module.checks.push((defined.clone(), value));
+                                    }
+                                    format!("let {name} ← {defined}")
+                                }
                                 // A constant whose definition has no model is
                                 // the value the compiler computes for it.
                                 Err(unsupported) => {

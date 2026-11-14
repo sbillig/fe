@@ -39,7 +39,8 @@ use url::Url;
 ///
 /// Writes what each exported contract takes on trust to
 /// `LEAN_EXPORT_CORPUS_OUT/<file>.trust`, each line after the contract's
-/// namespace.
+/// namespace, and the checks of the constants the exports define to
+/// `<file>.checks`, Lean commands that hold after the exports.
 ///
 /// A file that compiles ends in `Corpus.targets`, the creation and runtime
 /// bytecode, model and interface of each exported contract. A call of
@@ -96,7 +97,7 @@ fn export_corpus() {
             None => vec![db.top_mod(db.workspace().get(db, &url).unwrap())],
         };
         let mut text = String::new();
-        let mut trust = String::new();
+        let (mut trust, mut checks) = (String::new(), String::new());
         let mut library = Library::default();
         let mut models = Vec::new();
         let contracts = modules.iter().flat_map(|module| module.all_contracts(db));
@@ -120,6 +121,15 @@ fn export_corpus() {
                     .unwrap();
                     for item in &lean.trusted {
                         writeln!(trust, "Corpus.{id} {item}").unwrap();
+                    }
+                    if !lean.checks.is_empty() {
+                        write!(
+                            checks,
+                            "\nnamespace Corpus.{id}\n{}{}end Corpus.{id}\n",
+                            lean.uses_command("Corpus.Lib"),
+                            lean.checks
+                        )
+                        .unwrap();
                     }
                     let name = contract.name(db).unwrap().data(db).to_string();
                     // The argument types generated calls are made from. An
@@ -244,6 +254,11 @@ fn export_corpus() {
         );
         fs::write(format!("{out}/{name}.lean"), header + &text).unwrap();
         fs::write(format!("{out}/{name}.trust"), trust).unwrap();
+        let library_checks = format!(
+            "\nnamespace Corpus.Lib\n{}end Corpus.Lib\n",
+            library.checks()
+        );
+        fs::write(format!("{out}/{name}.checks"), library_checks + &checks).unwrap();
     }
     println!(
         "contracts: {total}, exported: {exported}, files skipped: {skipped:?}, \

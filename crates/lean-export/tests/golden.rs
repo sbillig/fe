@@ -7,8 +7,9 @@ use load::{FIXTURES, compare, with_fixture};
 /// deploys, or the one contract of the root module of the ingot
 /// `tests/fixtures/<name>/`, exported with one library, `golden/lib.lean`.
 /// Each golden file has the contract's own definitions, after the names they
-/// call the library's by, for a library in a namespace `Lib`, and
-/// `<name>.trust` what they take on trust.
+/// call the library's by, for a library in a namespace `Lib`; `<name>.trust`
+/// has what they take on trust, and `<name>.checks` the checks of its
+/// constants, if it defines any.
 #[test]
 fn golden() {
     let mut library = Library::default();
@@ -25,6 +26,10 @@ fn golden() {
             &format!("{}{}", own.uses_command("Lib"), own.text),
         );
         compare(&format!("{name}.trust"), &own.trust_report());
+        if !own.checks.is_empty() {
+            compare(&format!("{name}.checks"), &own.checks);
+        }
     }
     compare("lib.lean", library.text());
+    compare("lib.checks", library.checks());
 }

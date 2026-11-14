@@ -1,0 +1,10 @@
+set_option maxRecDepth 10000 in
+example : Get0_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Get1_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Set0_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : Set1_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : SetBoth_HEAD_SIZE = pure (UInt256.ofNat 64) := rfl

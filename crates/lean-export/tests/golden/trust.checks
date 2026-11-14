@@ -1,0 +1,10 @@
+set_option maxRecDepth 10000 in
+example : Get_SELECTOR = pure (UInt256.ofNat 1) := rfl
+set_option maxRecDepth 10000 in
+example : Get_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Deploy_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Ask_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : Poke_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl

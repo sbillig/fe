@@ -1,0 +1,92 @@
+set_option maxRecDepth 10000 in
+example : Sol_SELECTOR_SIZE = pure (UInt256.ofNat 4) := rfl
+set_option maxRecDepth 10000 in
+example : u64_IS_SIGNED = pure false := rfl
+set_option maxRecDepth 10000 in
+example : U64_MASK = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : u64_MASK = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : u64_SIGN_BIT = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : U256_MASK = pure (UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007913129639935) := rfl
+set_option maxRecDepth 10000 in
+example : u256_IS_DYNAMIC = pure false := rfl
+set_option maxRecDepth 10000 in
+example : u256_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : usize_IS_SIGNED = pure false := rfl
+set_option maxRecDepth 10000 in
+example : usize_MASK = pure (UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007913129639935) := rfl
+set_option maxRecDepth 10000 in
+example : I256_SIGN_BIT = pure (UInt256.ofNat 57896044618658097711785492504343953926634992332820282019728792003956564819968) := rfl
+set_option maxRecDepth 10000 in
+example : usize_SIGN_BIT = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : MAX_ALLOCATION = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : PANIC_OUT_OF_MEMORY = pure (UInt256.ofNat 65) := rfl
+set_option maxRecDepth 10000 in
+example : PANIC_INDEX_OUT_OF_BOUNDS = pure (UInt256.ofNat 50) := rfl
+set_option maxRecDepth 10000 in
+example : const_u256 = pure false := rfl
+set_option maxRecDepth 10000 in
+example : StoragePackedArray_LANES_PER_SLOT_8 = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : u256_IS_SIGNED = pure false := rfl
+set_option maxRecDepth 10000 in
+example : StoragePackedArray_LANE_MASK_8 = pure (UInt256.ofNat 255) := rfl
+set_option maxRecDepth 10000 in
+example : tuple_HEAD_SIZE_u256 = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : Address_IS_DYNAMIC = pure false := rfl
+set_option maxRecDepth 10000 in
+example : Address_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : bool_IS_DYNAMIC = pure false := rfl
+set_option maxRecDepth 10000 in
+example : bool_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : const_bool = pure false := rfl
+set_option maxRecDepth 10000 in
+example : tuple_HEAD_SIZE_u256_u256 = pure (UInt256.ofNat 64) := rfl
+set_option maxRecDepth 10000 in
+example : i8_IS_SIGNED = pure true := rfl
+set_option maxRecDepth 10000 in
+example : U8_MASK = pure (UInt256.ofNat 255) := rfl
+set_option maxRecDepth 10000 in
+example : i8_MASK = pure (UInt256.ofNat 255) := rfl
+set_option maxRecDepth 10000 in
+example : I8_SIGN_BIT = pure (UInt256.ofNat 128) := rfl
+set_option maxRecDepth 10000 in
+example : i8_SIGN_BIT = pure (UInt256.ofNat 128) := rfl
+set_option maxRecDepth 10000 in
+example : PANIC_STORAGE_ENCODING = pure (UInt256.ofNat 34) := rfl
+set_option maxRecDepth 10000 in
+example : Panic_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : u8_BITS = pure (UInt256.ofNat 8) := rfl
+set_option maxRecDepth 10000 in
+example : u8_IS_SIGNED = pure false := rfl
+set_option maxRecDepth 10000 in
+example : u8_MASK = pure (UInt256.ofNat 255) := rfl
+set_option maxRecDepth 10000 in
+example : u8_SIGN_BIT = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : DynString_IS_DYNAMIC = pure true := rfl
+set_option maxRecDepth 10000 in
+example : DynString_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : const_DynString = pure false := rfl
+set_option maxRecDepth 10000 in
+example : u8_IS_DYNAMIC = pure false := rfl
+set_option maxRecDepth 10000 in
+example : u8_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : const_u8 = pure false := rfl
+set_option maxRecDepth 10000 in
+example : tuple_IS_DYNAMIC = pure false := rfl
+set_option maxRecDepth 10000 in
+example : tuple_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : const_Address = pure false := rfl

@@ -1,0 +1,2 @@
+set_option maxRecDepth 10000 in
+example : WEIGHTS = pure #v[(UInt256.ofNat 1), (UInt256.ofNat 10), (UInt256.ofNat 100)] := rfl

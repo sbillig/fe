@@ -1,0 +1,22 @@
+set_option maxRecDepth 10000 in
+example : Name_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Approve_HEAD_SIZE = pure (UInt256.ofNat 64) := rfl
+set_option maxRecDepth 10000 in
+example : TotalSupply_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : TransferFrom_HEAD_SIZE = pure (UInt256.ofNat 96) := rfl
+set_option maxRecDepth 10000 in
+example : Withdraw_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : Decimals_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : BalanceOf_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : Symbol_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Transfer_HEAD_SIZE = pure (UInt256.ofNat 64) := rfl
+set_option maxRecDepth 10000 in
+example : Deposit_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Allowance_HEAD_SIZE = pure (UInt256.ofNat 64) := rfl
