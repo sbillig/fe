@@ -1,0 +1,82 @@
+instances compared: 266
+
+expected: drops opaque in the generic body: 13
+  Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there
+  core::abi::encode_alloc<Sol, ()>: drop of (), which destroys nothing, is not there
+  core::abi::encode_alloc<Sol, (u256)>: drop of (u256), which destroys nothing, is not there
+  std::evm::effects::Call::call<Evm, Get>: drop of Get, which destroys nothing, is not there
+  std::evm::effects::Call::try_call<Evm, Get>: drop of Get, which destroys nothing, is not there
+  std::evm::effects::Log::emit<Evm, Approval>: drop of Approval, which destroys nothing, is not there
+  std::evm::effects::Log::emit<Evm, Deposit>: drop of Deposit, which destroys nothing, is not there
+  std::evm::effects::Log::emit<Evm, Transfer>: drop of Transfer, which destroys nothing, is not there
+  std::evm::effects::Log::emit<Evm, Withdrawal>: drop of Withdrawal, which destroys nothing, is not there
+  std::evm::effects::encode_calldata<Get>: drop of Get, which destroys nothing, is not there
+  std::evm::effects::encode_calldata<Panic>: drop of Panic, which destroys nothing, is not there
+  std::evm::effects::encode_error<Panic>: drop of Panic, which destroys nothing, is not there
+  std::evm::effects::revert_error<Panic>: drop of Panic, which destroys nothing, is not there
+
+places of parameters in another space: 3
+  calldata_read::second<[u256; 2]>: root 0 in calldata where the generic body has memory
+  closures::bump<Store>: root 0 in storage where the generic body has memory
+  immutables::capped<Config>: root 0 in code where the generic body has memory
+
+unexpected: the first other difference: 59
+  (T0)::encode<Sol, u256>: v6 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 4 }, Some("Load"))
+  (T0)::payload_size<u256>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Load"))
+  (T0, T1)::decode_from_prechecked_head<Sol, u256, u256, CallData>: v18 (Statement { block: NBlockId(0), statement: 17 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 17 }, Some("AggregateMake"))
+  (T0, T1, T2, T3)::append_to<[u8; 5], [u8; 1], String<7>, [u8; 1], 14>: v2 (Statement { block: NBlockId(0), statement: 0 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Load"))
+  (T0, T1, T2, T3, T4, T5)::append_to<[u8; 10], [u8; 1], String<7>, [u8; 1], String<7>, [u8; 1], 27>: v2 (Statement { block: NBlockId(0), statement: 0 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Load"))
+  (T0, T1, T2, T3, T4, T5)::append_to<[u8; 7], [u8; 1], String<7>, [u8; 1], String<7>, [u8; 1], 24>: v2 (Statement { block: NBlockId(0), statement: 0 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Load"))
+  (T0, T1, T2, T3, T4, T5, T6, T7)::append_to<[u8; 8], [u8; 1], String<7>, [u8; 1], String<7>, [u8; 1], String<7>, [u8; 1], 33>: v2 (Statement { block: NBlockId(0), statement: 0 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Load"))
+  Address::call<Evm, Get>: block 0: terminator Return(Some(NOperand { value: NValueId(8), origin: Some(ExprId(8)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(8), origin: Some(ExprId(8)), mode: Copy }))
+  CallOutcome::decode<u256>: block 3: terminator Return(Some(NOperand { value: NValueId(17), origin: Some(ExprId(20)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(17), origin: Some(ExprId(20)), mode: Copy }))
+  Evm::decode_args<(u256, u256)>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Copy }))
+  PackedBytes<const N: usize>::zero<14>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
+  PackedBytes<const N: usize>::zero<24>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
+  PackedBytes<const N: usize>::zero<27>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
+  PackedBytes<const N: usize>::zero<33>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
+  S::downcast_saturate<u256, usize>: v0: type View u256 where the instance has u256
+  S::downcast_saturate<u64, usize>: v0: type View u64 where the instance has u64
+  S::downcast_truncate<i256, i8>: v0: type View i256 where the instance has i256
+  S::downcast_truncate<u256, u64>: v0: type View u256 where the instance has u256
+  S::downcast_truncate<u256, u8>: v0: type View u256 where the instance has u256
+  S::downcast_truncate<usize, u64>: v0: type View usize where the instance has usize
+  S::downcast_unchecked<u256, i256>: v0: type View u256 where the instance has u256
+  S::downcast_unchecked<u256, usize>: v0: type View u256 where the instance has u256
+  SolSlot::read<u8>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(6)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(6)), mode: Copy }))
+  SolSlot::write<u8>: v8 (Statement { block: NBlockId(1), statement: 2 }, Some("Forward")) where the instance has (Statement { block: NBlockId(1), statement: 2 }, Some("Call"))
+  SolWord::get<u8>: block 0: terminator Return(Some(NOperand { value: NValueId(10), origin: Some(ExprId(14)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(10), origin: Some(ExprId(14)), mode: Copy }))
+  SolWord::set<u8>: v13 (Statement { block: NBlockId(0), statement: 10 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 10 }, Some("Call"))
+  core::abi::AbiSize::payload_size<u256>: v0: type View u256 where the instance has u256
+  core::abi::Decode::decode_from_bounded<u256, Sol, CallData>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(9)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(9)), mode: Copy }))
+  core::abi::Decode::decode_from_bounded<u256, Sol, MemSlice<u8>>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(9)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(9)), mode: Copy }))
+  core::abi::Decode::decode_from_prechecked_head<u256, Sol, MemSlice<u8>>: block 0: terminator Return(Some(NOperand { value: NValueId(3), origin: Some(ExprId(5)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(3), origin: Some(ExprId(5)), mode: Copy }))
+  core::abi::abi_field_size<u256>: v0: type View u256 where the instance has u256
+  core::abi::abi_single_root_size<u256>: v0: type View u256 where the instance has u256
+  core::abi::decode_field_from_prechecked_head<Sol, u256, CallData>: block 1: terminator Return(Some(NOperand { value: NValueId(9), origin: Some(ExprId(12)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(9), origin: Some(ExprId(12)), mode: Copy }))
+  core::abi::decode_field_from_prechecked_head<Sol, u256, MemSlice<u8>>: block 1: terminator Return(Some(NOperand { value: NValueId(9), origin: Some(ExprId(12)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(9), origin: Some(ExprId(12)), mode: Copy }))
+  core::abi::decode_frame_from<Sol, (u256, u256), CallData>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(10)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(10)), mode: Copy }))
+  core::abi::decode_frame_from<Sol, u256, MemSlice<u8>>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(10)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(10)), mode: Copy }))
+  core::abi::dynamic_payload_size<u256>: v0: type View u256 where the instance has u256
+  core::abi::encode_field<Sol, u256>: v0: type View u256 where the instance has u256
+  core::abi::encode_single_root_alloc<Sol, u256>: v0 (Statement { block: NBlockId(0), statement: 0 }, Some("MakeView")) where the instance has (EntryParam { param: 0 }, None)
+  core::iter::Collection::fold<[u256; 2], (), (), u256, |own u256, u256| -> u256>: v3 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (BlockParam { block: NBlockId(1), index: 0 }, None)
+  core::num::__bitcast<i256, u256>: v0: type View i256 where the instance has i256
+  core::num::__bitcast<u256, i256>: v0: type View u256 where the instance has u256
+  core::num::__bitcast<u256, i8>: v0: type View u256 where the instance has u256
+  core::num::__bitcast<u256, u64>: v0: type View u256 where the instance has u256
+  core::num::__bitcast<u256, u8>: v0: type View u256 where the instance has u256
+  core::num::__bitcast<u256, usize>: v0: type View u256 where the instance has u256
+  core::num::from_be<u256>: v0: type View u256 where the instance has u256
+  core::num::to_be<u256>: v0: type View u256 where the instance has u256
+  core::ptr::cast<u8, u8>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("PointerCast")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Forward"))
+  std::abi::sol::decode_input_at<(u256, u256), CallData>: block 0: terminator Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Copy }))
+  std::abi::sol::decode_output<u256, MemSlice<u8>>: block 0: terminator Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Copy }))
+  std::abi::sol::decode_output_at<u256, MemSlice<u8>>: block 1: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Copy }))
+  std::evm::effects::Call::call<Evm, Get>: block 0: terminator Return(Some(NOperand { value: NValueId(7), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(7), origin: Some(ExprId(7)), mode: Copy }))
+  std::evm::effects::Create::create2<Evm, Child>: v4 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Call"))
+  std::evm::effects::contract_init_code<Child>: v20 (Statement { block: NBlockId(2), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(2), statement: 0 }, Some("Call"))
+  std::evm::effects::decode_returndata<u256>: block 0: terminator Return(Some(NOperand { value: NValueId(1), origin: Some(ExprId(3)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(1), origin: Some(ExprId(3)), mode: Copy }))
+  std::evm::effects::encode_abi_payload<()>: v1 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Call"))
+  std::evm::effects::encode_abi_payload<(u256)>: v1 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Call"))
+  std::evm::effects::revert<u256>: v1 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Call"))
