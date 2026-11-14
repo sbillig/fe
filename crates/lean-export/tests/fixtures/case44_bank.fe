@@ -1,0 +1,33 @@
+// The contract `Case44Bank` of Fe's `crates/fe/tests/fixtures/fe_test/acceptance.fe` (as of
+// 8a33d20257), copied verbatim from its case-44 comment to the contract, alone in a file. Of that
+// file's imports it uses `Address` and `StorageMap`, which this `use` brings.
+use std::evm::{Address, StorageMap}
+
+// 44. A map passed as `credit(mut ledger.balances, ..)` is written through
+// the `mut` parameter.
+struct Ledger {
+    balances: StorageMap<Address, u256>,
+    total: u256,
+}
+
+fn credit(_ m: mut StorageMap<Address, u256>, _ who: Address, _ amount: u256) {
+    m[who] += amount
+}
+
+msg LedgerMsg {
+    #[selector = 1]
+    Credit { who: Address, amount: u256 } -> u256,
+}
+
+pub contract Case44Bank {
+    mut ledger: Ledger,
+
+    recv LedgerMsg {
+        Credit { who, amount } -> u256 uses (mut ledger) {
+            credit(mut ledger.balances, who, amount)
+            credit(mut ledger.balances, who, amount)
+            ledger.total += amount
+            ledger.balances[who] + ledger.total
+        }
+    }
+}

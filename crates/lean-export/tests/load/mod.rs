@@ -43,6 +43,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("trust", true),
     ("precompiles", true),
     ("shared", true),
+    ("case44_bank", true),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it
