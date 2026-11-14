@@ -1,0 +1,40 @@
+core MemBuffer_drop unsafe-block 1 of 1
+core MemBuffer_extend_over_u64 unsafe-fn the whole body
+core MemBuffer_extend_over_u64 extern core::ptr::offset_bytes<u8>
+core MemBuffer_index_mut unsafe-block 1 of 1
+core MemBuffer_index_mut raw-memory mut borrow of u8 through *u8
+core MemBuffer_index_mut extern core::ptr::offset_bytes<u8>
+core MemBuffer_new unsafe-block 1 of 2
+core MemBuffer_new unsafe-block 2 of 2
+core MemBuffer_new_uninit unsafe-fn the whole body
+core MemBuffer_set_len unsafe-fn the whole body
+core MemBuffer_span_ref unsafe-block 1 of 1
+core MemBuffer_try_new unsafe-block 1 of 2
+core MemBuffer_try_new unsafe-block 2 of 2
+core MemBuffer_write_le_u64 unsafe-block 1 of 1
+core MemBuffer_write_le_u64 raw-memory store of u64 through *u64
+core MemBuffer_write_le_u64 extern core::num::to_le<u64>
+core MemSlice_empty_u8 unsafe-block 1 of 1
+core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core dealloc_u8 unsafe-fn the whole body
+core dealloc_u8 extern core::ptr::dealloc_raw
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core index_out_of_bounds extern core::panic_code
+core try_alloc_bytes extern core::ptr::try_alloc_raw
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+core zero_bytes unsafe-fn the whole body
+core zero_bytes raw-memory core::ptr::zero_mem
+std Evm_calldatacopy unsafe-block 1 of 2
+std Evm_calldatacopy unsafe-block 2 of 2
+std Evm_calldatacopy raw-memory std::evm::ops::calldatacopy
+std Evm_calldatasize extern std::evm::ops::calldatasize
+std Evm_return_data unsafe-block 1 of 1
+std Evm_return_data extern std::evm::ops::return_data
+std Evm_revert unsafe-block 1 of 1
+std Evm_revert extern std::evm::ops::revert
+std prepare_copy_destination unsafe-block 1 of 1
+std prepare_copy_destination extern core::panic
+std prepare_copy_destination extern core::ptr::offset_bytes<u8>

@@ -1,11 +1,12 @@
 // fevm's precompiles as contracts, one for each. The other files of `src` are copied verbatim
 // from `ingots/precompiles/src` of fe-lang/fevm at commit
-// a631a777b7d1761bccfc8af4e7471643905b9354, and `word_at` below from its `lib.fe`. `keccak/` is
-// fe-lang/keccak at commit 345d5088de986fe54b23a6aaa3a33e1c349d0960, the dependency fevm's
-// `fe.toml` pins, for its `ByteSource`. The rest of this file is not fevm's.
+// a631a777b7d1761bccfc8af4e7471643905b9354, and from its `lib.fe` so are `word_at` and the
+// definitions from `SUCCESS` to `ecrecover` below. `keccak/` is fe-lang/keccak at commit
+// 345d5088de986fe54b23a6aaa3a33e1c349d0960, the dependency fevm's `fe.toml` pins, for its
+// `ByteSource` and `Keccak256`. The rest of this file is not fevm's.
 use core::{MemBuffer, MemSpan, Option}
 use core::num::swap_bytes
-use keccak::ByteSource
+use keccak::{ByteSource, Keccak256}
 use std::abi::sol
 use std::evm::RawOps
 
@@ -23,6 +24,68 @@ pub fn word_at<T: ByteSource>(_ input: T, offset: usize) -> u256 {
         value = (value << 8) | if index < input.len() { input.byte_at(index) as u256 } else { 0 }
     }
     value
+}
+
+/// The call returned output and consumed `gas_used`.
+pub const SUCCESS: u8 = 0
+/// An exceptional halt: invalid input or insufficient gas consumes all forwarded gas.
+pub const FAILURE: u8 = 1
+/// The host could not allocate the output or its working memory; this is
+/// not an EVM outcome.
+pub const HOST_ALLOCATION: u8 = 2
+
+pub struct Output { pub status: u8, pub gas_used: u64, pub output: MemBuffer }
+
+pub(ingot) fn host_allocation(_ gas_used: u64) -> Output {
+    Output { status: HOST_ALLOCATION, gas_used, output: MemBuffer::empty() }
+}
+
+// An output of `source`'s bytes, eight at a time.
+fn copied<T: ByteSource>(_ source: T, gas_used: u64) -> Output {
+    let len = source.len()
+    let Option::Some(var output) = MemBuffer::try_new(len) else { return host_allocation(gas_used) }
+    var i: usize = 0
+    while i + 8 <= len {
+        output.write_le<u64>(offset: i, value: source.lane_at(i))
+        i += 8
+    }
+    while i < len {
+        output[i] = source.byte_at(i)
+        i += 1
+    }
+    Output { status: SUCCESS, gas_used, output }
+}
+
+// An output of big-endian words.
+fn words<const N: usize>(_ values: [u256; N], gas_used: u64) -> Output {
+    let Option::Some(var output) = MemBuffer::try_new(N * 32) else { return host_allocation(gas_used) }
+    for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
+    Output { status: SUCCESS, gas_used, output }
+}
+
+/// The address whose secp256k1 key signed `hash` as (recovery_id, r, s), for a
+/// recovery id of 0 or 1 and 0 < r, s < n; none when no key recovers.
+pub fn recover_signer(hash: u256, recovery_id: u256, r: u256, s: u256) -> Option<u256> {
+    let Option::Some(key) = secp256k1::recover(hash, recovery_id, r, s) else { return Option::None }
+    var digest = Keccak256::new()
+    digest.update_word(key.x, len: 32)
+    digest.update_word(key.y, len: 32)
+    Option::Some(digest.finish_word() & 0xffffffffffffffffffffffffffffffffffffffff)
+}
+
+// Recover the signer address of (hash, v, r, s). Malformed or unrecoverable
+// signatures succeed with empty output.
+fn ecrecover<T: ByteSource>(_ input: T) -> Output {
+    let hash = word_at(input, offset: 0)
+    let v = word_at(input, offset: 32)
+    let r = word_at(input, offset: 64)
+    let s = word_at(input, offset: 96)
+    let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
+    let signer = if malformed { Option::None } else { recover_signer(hash, recovery_id: v - 27, r, s) }
+    match signer {
+        Option::Some(address) => words([address], gas_used: 3000),
+        Option::None => Output { status: SUCCESS, gas_used: 3000, output: MemBuffer::empty() },
+    }
 }
 
 // The call data, in memory.
@@ -97,6 +160,48 @@ pub contract Ripemd160 {
             var output = MemBuffer::new(32)
             output.write_word(offset: 0, value: hashes::ripemd160(input()))
             raw.return_data(data: output.span())
+        }
+    }
+}
+
+/// ECMUL (0x07): every call multiplies the point of its call data by its scalar, as `bn254::mul`
+/// reads them, and returns the 64 bytes of the product, or reverts without data where the
+/// precompile fails.
+pub contract Bn254Mul {
+    recv {
+        _ uses (raw: mut RawOps) {
+            match bn254::mul(input()) {
+                Option::Some(product) => {
+                    var output = MemBuffer::new(64)
+                    output.write_word(offset: 0, value: product[0])
+                    output.write_word(offset: 32, value: product[1])
+                    raw.return_data(data: output.span())
+                }
+                Option::None => raw.revert(data: MemSpan::empty()),
+            }
+        }
+    }
+}
+
+/// ECRECOVER (0x01) in the precompile's own format: every call returns what fevm's `ecrecover`
+/// outputs for its call data, the address as a word, or nothing for a malformed or unrecoverable
+/// signature.
+pub contract EcrecoverPrecompile {
+    recv {
+        _ uses (raw: mut RawOps) {
+            let result = ecrecover(input())
+            raw.return_data(data: result.output.span())
+        }
+    }
+}
+
+/// IDENTITY (0x04): every call returns its call data, as fevm's `copied` copies it.
+pub contract Identity {
+    recv {
+        _ uses (raw: mut RawOps) {
+            let result = copied(input(), gas_used: 0)
+            if result.status != SUCCESS { raw.revert(data: MemSpan::empty()) }
+            raw.return_data(data: result.output.span())
         }
     }
 }

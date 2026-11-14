@@ -4409,3 +4409,103 @@ def array_next_u32_5 (v0 : (Vector UInt256 5)) (v1 : UInt256) : FeM UInt256 := d
   let v4 ← usize_wrapping_add v3 v2
   return v4
 
+def u256_wrapping_sub (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v0 - v1
+  return v2
+
+inductive Option_MemBuffer where
+  | None
+  | Some (f0 : MemBuffer)
+deriving Inhabited
+
+def Option_MemBuffer.tag : Option_MemBuffer → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_MemBuffer.Some_0 : Option_MemBuffer → MemBuffer
+  | .Some f0 => f0
+  | _ => default
+
+def Option_MemBuffer.set_Some_0 (x : Option_MemBuffer) (v : MemBuffer) : Option_MemBuffer :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
+inductive Option_u8 where
+  | None
+  | Some (f0 : UInt256)
+deriving Inhabited
+
+def Option_u8.tag : Option_u8 → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_u8.Some_0 : Option_u8 → UInt256
+  | .Some f0 => f0
+  | _ => default
+
+def Option_u8.set_Some_0 (x : Option_u8) (v : UInt256) : Option_u8 :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
+
+def try_alloc_bytes (v0 : UInt256) : FeM Option_u8 := do
+  let v2 := v0
+  let v3 ← MAX_ALLOCATION
+  let v4 := decide (v3.toNat < v2.toNat)
+  if v4 then
+    let v5 := Option_u8.None
+    return v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 ← alloc v0
+    let v9 := v8
+    let v10 := v9
+    let v11 := (UInt256.ofNat 0)
+    let v12 := decide (v10 = v11)
+    let b6 : Option_u8 → FeM Option_u8 := fun v1 => do
+      return v1
+    if v12 then
+      let v13 := Option_u8.None
+      let v14 := v13
+      b6 v14
+    else
+      let v15 := Option_u8.Some v9
+      let v16 := v15
+      b6 v16
+
+def MemBuffer_try_new (v0 : UInt256) : FeM Option_MemBuffer := do
+  let v1 ← try_alloc_bytes v0
+  let v2 := match v1 with | .Some .. => true | _ => false
+  if v2 then
+    let v3 := v1.Some_0
+    let v4 := v3
+    let v5 ← zero_bytes v4 v0
+    let v6 := v0
+    let v7 := v0
+    let v8 := (MemBuffer.mk v4 v6 v7)
+    let v9 := Option_MemBuffer.Some v8
+    return v9
+  else
+    let v10 := Option_MemBuffer.None
+    return v10
+
+def MemBuffer_index_mut (v0 : MemBuffer) (v1 : UInt256) : FeM (UInt256 × (UInt256 → FeM MemBuffer)) := do
+  let mut v0 := v0
+  let v2 := v0.len
+  let v3 := decide (v2.toNat ≤ v1.toNat)
+  if v3 then
+    let v4 ← index_out_of_bounds
+    nomatch v4
+  else
+    let v5 := ()
+    let v6 := v5
+    let v7 := v0.ptr
+    let v8 := v7 + v1
+    let v9 := v8
+    let slide : UInt256 → FeM MemBuffer := fun g => do
+      let mut v0 := v0
+      return v0
+    return (v9, slide)
+

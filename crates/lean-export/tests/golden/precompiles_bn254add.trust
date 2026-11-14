@@ -1,4 +1,3 @@
-own word_at_MemBuffer extern core::num::swap_bytes<u64>
 core MemBuffer_extend_over_u256 unsafe-fn the whole body
 core MemBuffer_extend_over_u256 extern core::ptr::offset_bytes<u8>
 core MemBuffer_new unsafe-block 1 of 2
@@ -13,14 +12,10 @@ core MemSlice_empty_u8 unsafe-block 1 of 1
 core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
 core alloc_bytes extern core::panic_code
 core alloc_bytes extern core::ptr::alloc_raw
-core assert extern core::panic
 core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
 core index_out_of_bounds extern core::panic_code
-core u64_from_word extern core::num::__bitcast<u256, u64>
-core u64_wrapping_mul extern core::num::__mul_u64
 core usize_MASK extern core::num::__bitnot_usize
 core usize_from_word extern core::num::__bitcast<u256, usize>
-core usize_wrapping_add extern core::num::__add_usize
 core zero_bytes unsafe-fn the whole body
 core zero_bytes raw-memory core::ptr::zero_mem
 std Evm_calldatacopy unsafe-block 1 of 2
