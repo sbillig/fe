@@ -1,4 +1,4 @@
-instances compared: 266
+instances compared: 335
 
 expected: drops opaque in the generic body: 13
   Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there
@@ -20,7 +20,7 @@ places of parameters in another space: 3
   closures::bump<Store>: root 0 in storage where the generic body has memory
   immutables::capped<Config>: root 0 in code where the generic body has memory
 
-unexpected: the first other difference: 59
+unexpected: the first other difference: 67
   (T0)::encode<Sol, u256>: v6 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 4 }, Some("Load"))
   (T0)::payload_size<u256>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Load"))
   (T0, T1)::decode_from_prechecked_head<Sol, u256, u256, CallData>: v18 (Statement { block: NBlockId(0), statement: 17 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 17 }, Some("AggregateMake"))
@@ -37,9 +37,15 @@ unexpected: the first other difference: 59
   PackedBytes<const N: usize>::zero<33>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
   S::downcast_saturate<u256, usize>: v0: type View u256 where the instance has u256
   S::downcast_saturate<u64, usize>: v0: type View u64 where the instance has u64
+  S::downcast_truncate<i128, i64>: v0: type View i128 where the instance has i128
+  S::downcast_truncate<i128, u64>: v0: type View i128 where the instance has i128
   S::downcast_truncate<i256, i8>: v0: type View i256 where the instance has i256
+  S::downcast_truncate<i64, u64>: v0: type View i64 where the instance has i64
+  S::downcast_truncate<u128, u64>: v0: type View u128 where the instance has u128
   S::downcast_truncate<u256, u64>: v0: type View u256 where the instance has u256
   S::downcast_truncate<u256, u8>: v0: type View u256 where the instance has u256
+  S::downcast_truncate<u256, usize>: v0: type View u256 where the instance has u256
+  S::downcast_truncate<u64, i64>: v0: type View u64 where the instance has u64
   S::downcast_truncate<usize, u64>: v0: type View usize where the instance has usize
   S::downcast_unchecked<u256, i256>: v0: type View u256 where the instance has u256
   S::downcast_unchecked<u256, usize>: v0: type View u256 where the instance has u256
@@ -63,12 +69,14 @@ unexpected: the first other difference: 59
   core::iter::Collection::fold<[u256; 2], (), (), u256, |own u256, u256| -> u256>: v3 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (BlockParam { block: NBlockId(1), index: 0 }, None)
   core::num::__bitcast<i256, u256>: v0: type View i256 where the instance has i256
   core::num::__bitcast<u256, i256>: v0: type View u256 where the instance has u256
+  core::num::__bitcast<u256, i64>: v0: type View u256 where the instance has u256
   core::num::__bitcast<u256, i8>: v0: type View u256 where the instance has u256
   core::num::__bitcast<u256, u64>: v0: type View u256 where the instance has u256
   core::num::__bitcast<u256, u8>: v0: type View u256 where the instance has u256
   core::num::__bitcast<u256, usize>: v0: type View u256 where the instance has u256
   core::num::from_be<u256>: v0: type View u256 where the instance has u256
   core::num::to_be<u256>: v0: type View u256 where the instance has u256
+  core::num::trailing_zeros<u64>: v0: type View u64 where the instance has u64
   core::ptr::cast<u8, u8>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("PointerCast")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Forward"))
   std::abi::sol::decode_input_at<(u256, u256), CallData>: block 0: terminator Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Copy }))
   std::abi::sol::decode_output<u256, MemSlice<u8>>: block 0: terminator Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Copy }))

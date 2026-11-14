@@ -90,3 +90,17 @@ set_option maxRecDepth 10000 in
 example : tuple_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
 set_option maxRecDepth 10000 in
 example : const_Address = pure false := rfl
+set_option maxRecDepth 10000 in
+example : i64_IS_SIGNED = pure true := rfl
+set_option maxRecDepth 10000 in
+example : i64_MASK = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : I64_SIGN_BIT = pure (UInt256.ofNat 9223372036854775808) := rfl
+set_option maxRecDepth 10000 in
+example : i64_SIGN_BIT = pure (UInt256.ofNat 9223372036854775808) := rfl
+set_option maxRecDepth 10000 in
+example : tuple_IS_DYNAMIC_bool_u256_u256 = pure false := rfl
+set_option maxRecDepth 10000 in
+example : tuple_HEAD_SIZE_bool_u256_u256 = pure (UInt256.ofNat 96) := rfl
+set_option maxRecDepth 10000 in
+example : tuple_IS_PARAM_LIST_bool_u256_u256 = pure true := rfl

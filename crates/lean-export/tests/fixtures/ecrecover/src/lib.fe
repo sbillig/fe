@@ -1,0 +1,27 @@
+// The secp256k1 key recovery of fevm's precompiles, as a contract. The other files of `src` are
+// copied verbatim from `ingots/precompiles/src` of fe-lang/fevm at commit
+// a631a777b7d1761bccfc8af4e7471643905b9354; this one is not.
+use core::Option
+use std::abi::sol
+
+msg EcrecoverMsg {
+    #[selector = sol("recover(uint256,uint256,uint256,uint256)")]
+    Recover { hash: u256, recovery_id: u256, r: u256, s: u256 } -> (bool, u256, u256),
+}
+
+/// `recover` returns the public key (x, y) that signed `hash` as (recovery_id, r, s), after
+/// `true`, or `false` and zeros when no key recovers. Its arguments are checked as fevm's
+/// ECRECOVER checks them before it calls `secp256k1::recover`, which requires them.
+pub contract Ecrecover {
+    recv EcrecoverMsg {
+        Recover { hash, recovery_id, r, s } -> (bool, u256, u256) {
+            if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
+                return (false, 0, 0)
+            }
+            match secp256k1::recover(hash, recovery_id, r, s) {
+                Option::Some(key) => (true, key.x, key.y),
+                Option::None => (false, 0, 0),
+            }
+        }
+    }
+}

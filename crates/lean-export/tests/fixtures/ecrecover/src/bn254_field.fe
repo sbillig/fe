@@ -1,0 +1,218 @@
+use ingot::montgomery::{Modulus, Mont}
+pub use ingot::montgomery::Field
+
+// BN254 (alt_bn128) base field p and the tower Fp2 = Fp[u]/(u^2 + 1),
+// Fp6 = Fp2[v]/(v^3 - (9 + u)), Fp12 = Fp6[w]/(w^2 - v), as in EIP-197.
+pub const MODULUS: u256 = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47
+
+pub struct Bn254Base {}
+
+impl Modulus for Bn254Base {
+    const VALUE: u256 = MODULUS
+    const P0: u64 = 0x3c208c16d87cfd47
+    const P1: u64 = 0x97816a916871ca8d
+    const P2: u64 = 0xb85045b68181585d
+    const P3: u64 = 0x30644e72e131a029
+    const INV: u64 = 0x87d20782e4866389
+    const R2: u256 = 0x06d89f71cab8351f47ab1eff0a417ff6b5e71911d44501fbf32cfc5b538afa89
+    const SIGNED_62: [i64; 5] = [0x3c208c16d87cfd47, 0x1e05aa45a1c72a34, 0x05045b68181585d9, 0x19139cb84c680a6e, 0x30]
+    const INV62: u64 = 0x382df87d1b799c77
+    const R3: u256 = 0x20fd6e902d592544ef7f0b0c0ada0afb62f210e6a7283db6b1cd6dafda1530df
+}
+
+pub type Fp = Mont<Bn254Base>
+
+/// The field element of a canonical integer `value < p`.
+pub fn fp(_ value: u256) -> Fp { Fp::new(value) }
+
+/// The canonical integer of a field element.
+pub fn fp_value(_ a: Fp) -> u256 { a.value() }
+
+/// c0 + c1 u with u^2 = -1.
+pub struct Fp2 { pub c0: Fp, pub c1: Fp }
+
+impl Copy for Fp2 {}
+
+impl Fp2 {
+    pub fn scale(self, _ k: Fp) -> Fp2 { Fp2 { c0: self.c0.mul(k), c1: self.c1.mul(k) } }
+    /// The p-power Frobenius: u maps to -u.
+    pub fn conjugate(self) -> Fp2 { Fp2 { c0: self.c0, c1: self.c1.neg() } }
+    // Multiply by the sextic non-residue 9 + u.
+    pub fn mul_by_xi(self) -> Fp2 {
+        let nine_c0 = self.c0.double().double().double().add(self.c0)
+        let nine_c1 = self.c1.double().double().double().add(self.c1)
+        Fp2 { c0: nine_c0.sub(self.c1), c1: self.c0.add(nine_c1) }
+    }
+}
+
+impl Field for Fp2 {
+    fn zero() -> Self { Fp2 { c0: Fp::zero(), c1: Fp::zero() } }
+    fn one() -> Self { Fp2 { c0: Fp::one(), c1: Fp::zero() } }
+    fn add(self, _ other: Self) -> Self { Fp2 { c0: self.c0.add(other.c0), c1: self.c1.add(other.c1) } }
+    fn sub(self, _ other: Self) -> Self { Fp2 { c0: self.c0.sub(other.c0), c1: self.c1.sub(other.c1) } }
+    fn mul(self, _ other: Self) -> Self {
+        let t0 = self.c0.mul(other.c0)
+        let t1 = self.c1.mul(other.c1)
+        let cross = self.c0.add(self.c1).mul(other.c0.add(other.c1))
+        Fp2 { c0: t0.sub(t1), c1: cross.sub(t0).sub(t1) }
+    }
+    fn square(self) -> Self {
+        let product = self.c0.mul(self.c1)
+        Fp2 { c0: self.c0.add(self.c1).mul(self.c0.sub(self.c1)), c1: product.double() }
+    }
+    fn double(self) -> Self { self.add(self) }
+    fn neg(self) -> Self { Fp2 { c0: self.c0.neg(), c1: self.c1.neg() } }
+    fn inverse(self) -> Self {
+        let norm = self.c0.square().add(self.c1.square()).inverse()
+        Fp2 { c0: self.c0.mul(norm), c1: self.c1.neg().mul(norm) }
+    }
+    fn is_zero(self) -> bool { self.c0.is_zero() && self.c1.is_zero() }
+    fn equals(self, _ other: Self) -> bool { self.c0.equals(other.c0) && self.c1.equals(other.c1) }
+}
+
+fn fp2(_ c0: u256, _ c1: u256) -> Fp2 { Fp2 { c0: fp(c0), c1: fp(c1) } }
+
+// (a + b w)^2 in Fp4 = Fp2[w]/(w^2 - xi), as (c0, c1).
+fn fp4_square(_ a: Fp2, _ b: Fp2) -> (Fp2, Fp2) {
+    let t0 = a.square()
+    let t1 = b.square()
+    (t1.mul_by_xi().add(t0), a.add(b).square().sub(t0).sub(t1))
+}
+
+/// c0 + c1 v + c2 v^2 with v^3 = 9 + u.
+pub struct Fp6 { pub c0: Fp2, pub c1: Fp2, pub c2: Fp2 }
+
+impl Copy for Fp6 {}
+
+impl Fp6 {
+    pub fn zero() -> Fp6 { Fp6 { c0: Fp2::zero(), c1: Fp2::zero(), c2: Fp2::zero() } }
+    pub fn one() -> Fp6 { Fp6 { c0: Fp2::one(), c1: Fp2::zero(), c2: Fp2::zero() } }
+    pub fn add(self, _ other: Fp6) -> Fp6 {
+        Fp6 { c0: self.c0.add(other.c0), c1: self.c1.add(other.c1), c2: self.c2.add(other.c2) }
+    }
+    pub fn sub(self, _ other: Fp6) -> Fp6 {
+        Fp6 { c0: self.c0.sub(other.c0), c1: self.c1.sub(other.c1), c2: self.c2.sub(other.c2) }
+    }
+    pub fn neg(self) -> Fp6 { Fp6 { c0: self.c0.neg(), c1: self.c1.neg(), c2: self.c2.neg() } }
+    pub fn mul(self, _ other: Fp6) -> Fp6 {
+        let t0 = self.c0.mul(other.c0)
+        let t1 = self.c1.mul(other.c1)
+        let t2 = self.c2.mul(other.c2)
+        let c0 = self.c1.add(self.c2).mul(other.c1.add(other.c2)).sub(t1).sub(t2).mul_by_xi().add(t0)
+        let c1 = self.c0.add(self.c1).mul(other.c0.add(other.c1)).sub(t0).sub(t1).add(t2.mul_by_xi())
+        let c2 = self.c0.add(self.c2).mul(other.c0.add(other.c2)).sub(t0).sub(t2).add(t1)
+        Fp6 { c0, c1, c2 }
+    }
+    // Multiply by v.
+    pub fn mul_by_v(self) -> Fp6 { Fp6 { c0: self.c2.mul_by_xi(), c1: self.c0, c2: self.c1 } }
+    pub fn scale(self, _ k: Fp2) -> Fp6 { Fp6 { c0: self.c0.mul(k), c1: self.c1.mul(k), c2: self.c2.mul(k) } }
+    // Multiply by b0 + b1 v, with five products.
+    pub fn mul_by_01(self, _ b0: Fp2, _ b1: Fp2) -> Fp6 {
+        let t0 = self.c0.mul(b0)
+        let t1 = self.c1.mul(b1)
+        Fp6 {
+            c0: self.c1.add(self.c2).mul(b1).sub(t1).mul_by_xi().add(t0),
+            c1: self.c0.add(self.c1).mul(b0.add(b1)).sub(t0).sub(t1),
+            c2: self.c0.add(self.c2).mul(b0).sub(t0).add(t1),
+        }
+    }
+    // The p^k Frobenius for k = 1, 2, 3: v^(p^k) = xi^((p^k - 1)/3) v.
+    pub fn frobenius(self, _ k: u64) -> Fp6 {
+        let c0 = if k % 2 == 1 { self.c0.conjugate() } else { self.c0 }
+        let c1 = if k % 2 == 1 { self.c1.conjugate() } else { self.c1 }
+        let c2 = if k % 2 == 1 { self.c2.conjugate() } else { self.c2 }
+        let (v, v2) = if k == 1 {
+            (fp2(0x2fb347984f7911f74c0bec3cf559b143b78cc310c2c3330c99e39557176f553d, 0x16c9e55061ebae204ba4cc8bd75a079432ae2a1d0b7c9dce1665d51c640fcba2),
+             fp2(0x05b54f5e64eea80180f3c0b75a181e84d33365f7be94ec72848a1f55921ea762, 0x2c145edbe7fd8aee9f3a80b03b0b1c923685d2ea1bdec763c13b4711cd2b8126))
+        } else if k == 2 {
+            (fp2(0x30644e72e131a0295e6dd9e7e0acccb0c28f069fbb966e3de4bd44e5607cfd48, 0),
+             fp2(0x59e26bcea0d48bacd4f263f1acdb5c4f5763473177fffffe, 0))
+        } else {
+            (fp2(0x0856e078b755ef0abaff1c77959f25ac805ffd3d5d6942d37b746ee87bdcfb6d, 0x04f1de41b3d1766fa9f30e6dec26094f0fdf31bf98ff2631380cab2baaa586de),
+             fp2(0x0bc58c6611c08dab19bee0f7b5b2444ee633094575b06bcb0e1a92bc3ccbf066, 0x23d5e999e1910a12feb0f6ef0cd21d04a44a9e08737f96e55fe3ed9d730c239f))
+        }
+        Fp6 { c0, c1: c1.mul(v), c2: c2.mul(v2) }
+    }
+    pub fn inverse(self) -> Fp6 {
+        let c0 = self.c0.square().sub(self.c1.mul(self.c2).mul_by_xi())
+        let c1 = self.c2.square().mul_by_xi().sub(self.c0.mul(self.c1))
+        let c2 = self.c1.square().sub(self.c0.mul(self.c2))
+        let norm = self.c0.mul(c0).add(self.c2.mul(c1).add(self.c1.mul(c2)).mul_by_xi()).inverse()
+        Fp6 { c0: c0.mul(norm), c1: c1.mul(norm), c2: c2.mul(norm) }
+    }
+    pub fn equals(self, _ other: Fp6) -> bool {
+        self.c0.equals(other.c0) && self.c1.equals(other.c1) && self.c2.equals(other.c2)
+    }
+}
+
+/// c0 + c1 w with w^2 = v.
+pub struct Fp12 { pub c0: Fp6, pub c1: Fp6 }
+
+impl Copy for Fp12 {}
+
+impl Fp12 {
+    pub fn one() -> Fp12 { Fp12 { c0: Fp6::one(), c1: Fp6::zero() } }
+    pub fn mul(self, _ other: Fp12) -> Fp12 {
+        let t0 = self.c0.mul(other.c0)
+        let t1 = self.c1.mul(other.c1)
+        let c1 = self.c0.add(self.c1).mul(other.c0.add(other.c1)).sub(t0).sub(t1)
+        Fp12 { c0: t0.add(t1.mul_by_v()), c1 }
+    }
+    pub fn square(self) -> Fp12 {
+        // (a0 + a1 w)^2 = a0^2 + v a1^2 + 2 a0 a1 w, with two Fp6 products.
+        let product = self.c0.mul(self.c1)
+        let mixed = self.c0.add(self.c1).mul(self.c0.add(self.c1.mul_by_v()))
+        Fp12 { c0: mixed.sub(product).sub(product.mul_by_v()), c1: product.add(product) }
+    }
+    // The p^6 Frobenius: w maps to -w; the inverse in the cyclotomic subgroup.
+    pub fn conjugate(self) -> Fp12 { Fp12 { c0: self.c0, c1: self.c1.neg() } }
+    // The p^k Frobenius for k = 1, 2, 3: w^(p^k) = xi^((p^k - 1)/6) w.
+    pub fn frobenius(self, _ k: u64) -> Fp12 {
+        let w = if k == 1 {
+            fp2(0x1284b71c2865a7dfe8b99fdd76e68b605c521e08292f2176d60b35dadcc9e470, 0x246996f3b4fae7e6a6327cfe12150b8e747992778eeec7e5ca5cf05f80f362ac)
+        } else if k == 2 {
+            fp2(0x30644e72e131a0295e6dd9e7e0acccb0c28f069fbb966e3de4bd44e5607cfd49, 0)
+        } else {
+            fp2(0x19dc81cfcc82e4bbefe9608cd0acaa90894cb38dbe55d24ae86f7d391ed4a67f, 0x00abf8b60be77d7306cbeee33576139d7f03a5e397d439ec7694aa2bf4c0c101)
+        }
+        Fp12 { c0: self.c0.frobenius(k), c1: self.c1.frobenius(k).scale(w) }
+    }
+    // Multiply by a + (b + c v) w, the shape of a Miller loop line.
+    pub fn mul_by_line(self, a: Fp2, b: Fp2, c: Fp2) -> Fp12 {
+        let t0 = self.c0.scale(a)
+        let t1 = self.c1.mul_by_01(b, c)
+        let c1 = self.c0.add(self.c1).mul_by_01(a.add(b), c).sub(t0).sub(t1)
+        Fp12 { c0: t0.add(t1.mul_by_v()), c1 }
+    }
+    // Squaring in the cyclotomic subgroup (Granger-Scott, https://eprint.iacr.org/2009/565).
+    pub fn cyclotomic_square(self) -> Fp12 {
+        var z0 = self.c0.c0
+        var z4 = self.c0.c1
+        var z3 = self.c0.c2
+        var z2 = self.c1.c0
+        var z1 = self.c1.c1
+        var z5 = self.c1.c2
+        let (t0, t1) = fp4_square(z0, z1)
+        z0 = t0.sub(z0)
+        z0 = z0.double().add(t0)
+        z1 = t1.add(z1)
+        z1 = z1.double().add(t1)
+        let (u0, u1) = fp4_square(z2, z3)
+        let (u2, u3) = fp4_square(z4, z5)
+        z4 = u0.sub(z4)
+        z4 = z4.double().add(u0)
+        z5 = u1.add(z5)
+        z5 = z5.double().add(u1)
+        let n = u3.mul_by_xi()
+        z2 = n.add(z2)
+        z2 = z2.double().add(n)
+        z3 = u2.sub(z3)
+        z3 = z3.double().add(u2)
+        Fp12 { c0: Fp6 { c0: z0, c1: z4, c2: z3 }, c1: Fp6 { c0: z2, c1: z1, c2: z5 } }
+    }
+    pub fn inverse(self) -> Fp12 {
+        let norm = self.c0.mul(self.c0).sub(self.c1.mul(self.c1).mul_by_v()).inverse()
+        Fp12 { c0: self.c0.mul(norm), c1: self.c1.mul(norm).neg() }
+    }
+    pub fn equals(self, _ other: Fp12) -> bool { self.c0.equals(other.c0) && self.c1.equals(other.c1) }
+}

@@ -1,0 +1,132 @@
+use core::Option
+use ingot::bn254_curve::Point
+use ingot::montgomery::{Field, Modulus, Mont}
+
+// secp256k1 (SEC 2): y^2 = x^3 + 7 over F_p, with a prime-order group of order n.
+pub const P: u256 = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f
+pub const N: u256 = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+const GX: u256 = 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+const GY: u256 = 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8
+
+pub struct PublicKey { pub x: u256, pub y: u256 }
+
+pub struct Base {}
+
+impl Modulus for Base {
+    const VALUE: u256 = P
+    const P0: u64 = 0xfffffffefffffc2f
+    const P1: u64 = 0xffffffffffffffff
+    const P2: u64 = 0xffffffffffffffff
+    const P3: u64 = 0xffffffffffffffff
+    const INV: u64 = 0xd838091dd2253531
+    const R2: u256 = 0x1000007a2000e90a1
+    const SIGNED_62: [i64; 5] = [0x3ffffffefffffc2f, 0x3fffffffffffffff, 0x3fffffffffffffff, 0x3fffffffffffffff, 0xff]
+    const INV62: u64 = 0x27c7f6e22ddacacf
+    const R3: u256 = 0x100000b73002bb1e33795f671
+}
+
+pub struct Order {}
+
+impl Modulus for Order {
+    const VALUE: u256 = N
+    const P0: u64 = 0xbfd25e8cd0364141
+    const P1: u64 = 0xbaaedce6af48a03b
+    const P2: u64 = 0xfffffffffffffffe
+    const P3: u64 = 0xffffffffffffffff
+    const INV: u64 = 0x4b0dff665588b13f
+    const R2: u256 = 0x9d671cd581c69bc5e697f5e45bcd07c6741496c20e7cf878896cf21467d7d140
+    const SIGNED_62: [i64; 5] = [0x3fd25e8cd0364141, 0x2abb739abd2280ee, 0x3fffffffffffffeb, 0x3fffffffffffffff, 0xff]
+    const INV62: u64 = 0x34f20099aa774ec1
+    const R3: u256 = 0x555d800c18ef116db1b31347f1d0b2da0017648444d4322c7bc0cfe0e9ff41ed
+}
+
+type Fp = Mont<Base>
+type Scalar = Mont<Order>
+
+fn generator() -> Point<Fp> { Point::affine(x: Fp::new(GX), y: Fp::new(GY)) }
+
+// u * G + v * Q for an affine Q by Shamir's simultaneous double-and-add over
+// two-bit windows, adding [i] G + [j] Q from an affine table.
+fn combination(u: u256, v: u256, q: Point<Fp>) -> Point<Fp> {
+    let g = generator()
+    // table[4 i + j] = [i] G + [j] Q.
+    var table = [Point<Fp>::infinity(); 16]
+    table[1] = q
+    table[2] = q.double()
+    table[3] = table[2].add(q)
+    table[4] = g
+    table[8] = g.double()
+    table[12] = table[8].add(g)
+    for i in [4 as usize, 8, 12] {
+        for j in 1..4 { table[i + j] = table[i].add(table[j]) }
+    }
+    // Affine coordinates, with one inversion for all (Montgomery's trick);
+    // an entry at infinity keeps z = 0 and is skipped.
+    var prefix = [Fp::one(); 16]
+    var running = Fp::one()
+    for k in 1..16 {
+        prefix[k] = running
+        if !table[k].is_infinity() { running = running.mul(table[k].z) }
+    }
+    var inverse = running.inverse()
+    var k: usize = 16
+    while k > 1 {
+        k -= 1
+        if table[k].is_infinity() { continue }
+        let z_inverse = inverse.mul(prefix[k])
+        inverse = inverse.mul(table[k].z)
+        let z_inverse2 = z_inverse.square()
+        table[k] = Point::affine(x: table[k].x.mul(z_inverse2), y: table[k].y.mul(z_inverse2.mul(z_inverse)))
+    }
+    var result = Point<Fp>::infinity()
+    var bit: u64 = 256
+    while bit > 0 {
+        bit -= 2
+        result = result.double().double()
+        let entry: usize = ((((u >> bit as u256) & 3) << 2) | ((v >> bit as u256) & 3)).downcast_truncate()
+        if entry != 0 && !table[entry].is_infinity() {
+            result = result.add_affine(x2: table[entry].x, y2: table[entry].y)
+        }
+    }
+    result
+}
+
+/// Recover the signer's public key from a 32-byte message hash, a recovery id
+/// (0 or 1: the parity of R's y coordinate) and a signature with 0 < r, s < n.
+/// None when r is not the x coordinate of a curve point or the key is infinity.
+pub fn recover(hash: u256, recovery_id: u256, r: u256, s: u256) -> Option<PublicKey> {
+    core::assert(recovery_id <= 1 && r != 0 && r < N && s != 0 && s < N)
+    let x = Fp::new(r)
+    let alpha = x.square().mul(x).add(Fp::new(7))
+    // p = 3 (mod 4), so a square root of alpha is alpha^((p + 1) / 4).
+    let beta = alpha.pow((P + 1) / 4)
+    if !beta.square().equals(alpha) { return Option::None }
+    let y = if beta.value() & 1 == recovery_id { beta } else { beta.neg() }
+    let r_inverse = Scalar::new(r).inverse()
+    let u = Scalar::new(hash % N).neg().mul(r_inverse).value()
+    let v = Scalar::new(s).mul(r_inverse).value()
+    let key = combination(u, v, q: Point::affine(x, y))
+    if key.is_infinity() { return Option::None }
+    let (key_x, key_y) = key.to_affine()
+    Option::Some(PublicKey { x: key_x.value(), y: key_y.value() })
+}
+
+#[test]
+fn secp256k1_field_arithmetic_edges() {
+    // (-1)^2 = 1, -1 + -1 = -2, and products near both moduli reduce exactly.
+    core::assert(Fp::new(P - 1).square().value() == 1)
+    core::assert(Fp::new(P - 1).double().value() == P - 2)
+    core::assert(Fp::zero().sub(Fp::one()).value() == P - 1)
+    core::assert(Fp::new(1 << 255).double().value() == 0x1000003d1)
+    for x in [1 as u256, 2, 3, 0x1000003d1, P - 1, P - 2, 0x123456789abcdef0fedcba9876543210] {
+        core::assert(Fp::new(x).mul(Fp::new(x).inverse()).value() == 1)
+        core::assert(Scalar::new(x % N).mul(Scalar::new(x % N).inverse()).value() == 1)
+    }
+    // The generator lies on the curve: y^2 = x^3 + 7.
+    let g = generator()
+    core::assert(g.y.square().equals(g.x.square().mul(g.x).add(Fp::new(7))))
+    // n * G is the point at infinity, and (n - 1) * G = -G.
+    core::assert(combination(u: N, v: 0, q: g).is_infinity())
+    let (minus_x, minus_y) = combination(u: N - 1, v: 0, q: g).to_affine()
+    core::assert(minus_x.value() == GX && minus_y.value() == P - GY)
+}

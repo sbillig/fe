@@ -1,0 +1,54 @@
+set_option maxRecDepth 10000 in
+example : N = pure (UInt256.ofNat 115792089237316195423570985008687907852837564279074904382605163141518161494337) := rfl
+set_option maxRecDepth 10000 in
+example : P = pure (UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007908834671663) := rfl
+set_option maxRecDepth 10000 in
+example : Base_VALUE = pure (UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007908834671663) := rfl
+set_option maxRecDepth 10000 in
+example : Base_R2 = pure (UInt256.ofNat 18446752466076602529) := rfl
+set_option maxRecDepth 10000 in
+example : Base_INV = pure (UInt256.ofNat 15580212934572586289) := rfl
+set_option maxRecDepth 10000 in
+example : Base_P0 = pure (UInt256.ofNat 18446744069414583343) := rfl
+set_option maxRecDepth 10000 in
+example : Base_P1 = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : Base_P2 = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : Base_P3 = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : Order_VALUE = pure (UInt256.ofNat 115792089237316195423570985008687907852837564279074904382605163141518161494337) := rfl
+set_option maxRecDepth 10000 in
+example : Order_R2 = pure (UInt256.ofNat 71195301480278335217902614543643724933430614355449737089222010364394701574464) := rfl
+set_option maxRecDepth 10000 in
+example : Order_INV = pure (UInt256.ofNat 5408259542528602431) := rfl
+set_option maxRecDepth 10000 in
+example : Order_P0 = pure (UInt256.ofNat 13822214165235122497) := rfl
+set_option maxRecDepth 10000 in
+example : Order_P1 = pure (UInt256.ofNat 13451932020343611451) := rfl
+set_option maxRecDepth 10000 in
+example : Order_P2 = pure (UInt256.ofNat 18446744073709551614) := rfl
+set_option maxRecDepth 10000 in
+example : Order_P3 = pure (UInt256.ofNat 18446744073709551615) := rfl
+set_option maxRecDepth 10000 in
+example : Order_SIGNED_62 = pure #v[(UInt256.ofNat 4598842128380346689), (UInt256.ofNat 3079181878673178862), (UInt256.ofNat 4611686018427387883), (UInt256.ofNat 4611686018427387903), (UInt256.ofNat 255)] := rfl
+set_option maxRecDepth 10000 in
+example : Order_INV62 = pure (UInt256.ofNat 3815112494326173377) := rfl
+set_option maxRecDepth 10000 in
+example : M62 = pure (UInt256.ofNat 4611686018427387903) := rfl
+set_option maxRecDepth 10000 in
+example : M62_SIGNED = pure (UInt256.ofNat 4611686018427387903) := rfl
+set_option maxRecDepth 10000 in
+example : Order_R3 = pure (UInt256.ofNat 38611792656279623856209604949727965891812033543773964974832218758873530450413) := rfl
+set_option maxRecDepth 10000 in
+example : GX = pure (UInt256.ofNat 55066263022277343669578718895168534326250603453777594175500187360389116729240) := rfl
+set_option maxRecDepth 10000 in
+example : GY = pure (UInt256.ofNat 32670510020758816978083085130507043184471273380659243275938904335757337482424) := rfl
+set_option maxRecDepth 10000 in
+example : Base_SIGNED_62 = pure #v[(UInt256.ofNat 4611686014132419631), (UInt256.ofNat 4611686018427387903), (UInt256.ofNat 4611686018427387903), (UInt256.ofNat 4611686018427387903), (UInt256.ofNat 255)] := rfl
+set_option maxRecDepth 10000 in
+example : Base_INV62 = pure (UInt256.ofNat 2866531139136965327) := rfl
+set_option maxRecDepth 10000 in
+example : Base_R3 = pure (UInt256.ofNat 79228216581683516649686562417) := rfl
+set_option maxRecDepth 10000 in
+example : Recover_HEAD_SIZE = pure (UInt256.ofNat 128) := rfl
