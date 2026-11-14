@@ -177,9 +177,13 @@ fn export_corpus() {
         } else {
             uncompiled.push(name);
         }
-        // The file's contracts share the definitions of core and std.
+        // The file's contracts share the definitions of core and std. Lean
+        // elaborates a loop that runs in the exit of loops before it deeper
+        // than its default limit of 512 allows when they carry many
+        // variables, as the four loops of fevm's secp256k1 `combination` do.
         let header = format!(
-            "{imports}open Ethereum Ethereum.EVM Fe Fe.EVM\n\nnamespace Corpus.Lib\nsection\n\
+            "{imports}set_option maxRecDepth 2048\nopen Ethereum Ethereum.EVM Fe Fe.EVM\n\n\
+             namespace Corpus.Lib\nsection\n\
              set_option linter.unusedVariables false\n\n{}\nend\nend Corpus.Lib\n",
             library.text()
         );
