@@ -1,7 +1,9 @@
 mod load;
 
+use std::{env, fs};
+
 use fe_lean_export::{Export, IngotExport, Library};
-use load::{FIXTURES, compare, with_fixture};
+use load::{FIXTURES, compare, golden_path, with_fixture};
 
 /// The last contract of each `tests/fixtures/<name>.fe`, after those it
 /// deploys, or the contracts of the root module of the ingot
@@ -10,9 +12,9 @@ use load::{FIXTURES, compare, with_fixture};
 /// they call the library's by, for a library in a namespace `Lib`, and the
 /// shared definitions of its ingot by, for those in a namespace `Shared`;
 /// `.trust` has what they take on trust, and `.checks` the checks of their
-/// constants, if they define any. A fixture with one contract has its
-/// files, `<name>.lean`; one with several has the shared definitions in
-/// those and each contract's in `<name>_<contract>.lean`.
+/// constants, if they define any, and is absent otherwise. A fixture with one
+/// contract has its files, `<name>.lean`; one with several has the shared
+/// definitions in those and each contract's in `<name>_<contract>.lean`.
 #[test]
 fn golden() {
     let mut library = Library::default();
@@ -22,8 +24,20 @@ fn golden() {
             &format!("{}{}", export.uses_command("Lib", "Shared"), export.text),
         );
         compare(&format!("{file}.trust"), &export.trust_report());
+        let checks = format!("{file}.checks");
         if !export.checks.is_empty() {
-            compare(&format!("{file}.checks"), &export.checks);
+            compare(&checks, &export.checks);
+        } else {
+            // A part whose constants all moved to the shared part keeps no
+            // checks file.
+            let golden = golden_path(&checks);
+            if env::var_os("LEAN_EXPORT_BLESS").is_some() && golden.exists() {
+                fs::remove_file(&golden).unwrap();
+            }
+            assert!(
+                !golden.exists(),
+                "golden/{checks} is left from checks now empty"
+            );
         }
     };
     for &(name, entries) in FIXTURES {

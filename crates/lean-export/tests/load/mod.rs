@@ -71,10 +71,15 @@ pub fn with_fixture<T>(
     }
 }
 
+/// `tests/golden/<file>`.
+pub fn golden_path(file: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/{file}"))
+}
+
 /// Compares `text` with `tests/golden/<file>`. `LEAN_EXPORT_BLESS=1`
 /// rewrites the golden file.
 pub fn compare(file: &str, text: &str) {
-    let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/{file}"));
+    let golden = golden_path(file);
     if env::var_os("LEAN_EXPORT_BLESS").is_some() {
         fs::write(&golden, text).unwrap();
     }
