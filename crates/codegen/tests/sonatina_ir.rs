@@ -151,6 +151,54 @@ fn observability_preserves_creation_and_runtime_bytecode(fixture: Fixture<&str>)
     });
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "observability_preserves_creation_and_runtime_bytecode.fe")]
+fn sidecar_holds_compiled_ir_and_sections(fixture: Fixture<&str>) {
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        for level in [OptLevel::O0, OptLevel::O1] {
+            let bytecode = fe_codegen::emit_module_sonatina_bytecode(db, top_mod, level, None)
+                .expect("bytecode compilation");
+            let sidecars = fe_codegen::emit_module_sonatina_sidecar(db, top_mod, level, None)
+                .expect("sidecar compilation");
+            let ir = emit_module_sonatina_ir_optimized(db, top_mod, level, None)
+                .expect("optimized Sonatina IR should emit");
+            assert_eq!(
+                bytecode.keys().collect::<Vec<_>>(),
+                sidecars.keys().collect::<Vec<_>>()
+            );
+            for (name, sidecar) in &sidecars {
+                assert_eq!(sidecar.ir, ir, "{name}, {level:?}");
+                let section = |section: &str| {
+                    sidecar
+                        .sections
+                        .iter()
+                        .find(|s| s.name == section)
+                        .unwrap_or_else(|| panic!("{name} has no {section} section"))
+                };
+                let (init, runtime) = (section("init"), section("runtime"));
+                assert_eq!(init.bytecode, hex::encode(&bytecode[name].deploy));
+                assert_eq!(runtime.bytecode, hex::encode(&bytecode[name].runtime));
+                let embed = init
+                    .symbols
+                    .iter()
+                    .find(|symbol| symbol.symbol == format!("&{name}_runtime"))
+                    .expect("init embeds the runtime");
+                let start = 2 * embed.offset as usize;
+                assert_eq!(
+                    &init.bytecode[start..start + 2 * embed.size as usize],
+                    runtime.bytecode
+                );
+                for section in [init, runtime] {
+                    let whole = section.symbols.iter().find(|symbol| symbol.symbol == ".");
+                    assert_eq!(
+                        whole.map(|symbol| (symbol.offset, 2 * symbol.size as usize)),
+                        Some((0, section.bytecode.len()))
+                    );
+                }
+            }
+        }
+    });
+}
+
 fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a str> {
     let header = ir
         .lines()

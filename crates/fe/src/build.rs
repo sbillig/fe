@@ -6,7 +6,7 @@ use std::{
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
-use codegen::{OptLevel, SonatinaContractBytecode};
+use codegen::{LowerError, OptLevel, SonatinaContractBytecode, SonatinaSidecar};
 #[cfg(feature = "sp1")]
 use common::cache::cache_dir;
 #[cfg(feature = "cranelift")]
@@ -72,6 +72,7 @@ struct EmitSelection {
     abi: bool,
     metadata: bool,
     sizes: bool,
+    sidecar: bool,
     executable: bool,
     object: bool,
     staticlib: bool,
@@ -88,6 +89,7 @@ impl EmitSelection {
             abi: false,
             metadata: false,
             sizes: false,
+            sidecar: false,
             executable: false,
             object: false,
             staticlib: false,
@@ -102,6 +104,7 @@ impl EmitSelection {
                 BuildEmit::Abi => selection.abi = true,
                 BuildEmit::Metadata => selection.metadata = true,
                 BuildEmit::Sizes => selection.sizes = true,
+                BuildEmit::Sidecar => selection.sidecar = true,
                 BuildEmit::Executable => selection.executable = true,
                 BuildEmit::Object => selection.object = true,
                 BuildEmit::Staticlib => selection.staticlib = true,
@@ -182,10 +185,14 @@ fn validate_build_request(
             Err("native output does not support `--contract`".to_string())
         }
         #[cfg(feature = "cranelift")]
-        BuildBackend::Native if emit.writes_any_bytecode() || emit.abi || emit.metadata => Err(
+        BuildBackend::Native
+            if emit.writes_any_bytecode() || emit.abi || emit.metadata || emit.sidecar =>
+        {
+            Err(
             "native backend only supports `--emit executable`, `--emit object`, `--emit staticlib` and `--emit ir`"
                 .to_string(),
-        ),
+            )
+        }
         #[cfg(feature = "cranelift")]
         BuildBackend::Native if emit.executable && emit.library() => Err(
             "`--emit executable` cannot be combined with `--emit object` or `--emit staticlib`, which build a library without `main`"
@@ -211,6 +218,7 @@ fn validate_build_request(
             if emit.writes_any_bytecode()
                 || emit.abi
                 || emit.metadata
+                || emit.sidecar
                 || emit.executable
                 || emit.library() =>
         {
@@ -227,6 +235,7 @@ fn validate_build_request(
             if emit.writes_any_bytecode()
                 || emit.abi
                 || emit.metadata
+                || emit.sidecar
                 || emit.executable
                 || emit.library() =>
         {
@@ -1544,6 +1553,16 @@ fn build_ingot(
         }
     }
 
+    if emit.sidecar {
+        let sidecars = match target_mod {
+            Some(top_mod) => {
+                codegen::emit_module_sonatina_sidecar(db, top_mod, opt_level, contract)
+            }
+            None => codegen::emit_ingot_sonatina_sidecar(db, ingot, opt_level, contract),
+        };
+        had_errors |= write_sidecar_artifacts(&names_to_build, sidecars, out_dir, report_dir);
+    }
+
     if emit.abi {
         had_errors |= write_abi_artifacts(db, ingot, &names_to_build, out_dir, report_dir);
     }
@@ -1706,6 +1725,11 @@ fn build_top_mod(
                 emit,
             );
         }
+    }
+
+    if emit.sidecar {
+        let sidecars = codegen::emit_module_sonatina_sidecar(db, top_mod, opt_level, contract);
+        had_errors |= write_sidecar_artifacts(&names_to_build, sidecars, out_dir, report_dir);
     }
 
     if emit.abi {
@@ -2045,6 +2069,7 @@ fn ensure_output_dirs(
     if emit.writes_any_bytecode()
         || emit.abi
         || emit.metadata
+        || emit.sidecar
         || emit.executable
         || emit.library()
         || emit.elf
@@ -2575,6 +2600,43 @@ fn write_sonatina_bytecode_artifacts(
     had_errors
 }
 
+fn write_sidecar_artifacts(
+    names_to_build: &[String],
+    sidecars: Result<BTreeMap<String, SonatinaSidecar>, LowerError>,
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+) -> bool {
+    let sidecars = match sidecars {
+        Ok(sidecars) => sidecars,
+        Err(err) => {
+            eprintln!("Error: Failed to compile Sonatina sidecar: {err}");
+            return true;
+        }
+    };
+    let mut had_errors = false;
+    for name in names_to_build {
+        let Some(sidecar) = sidecars.get(name) else {
+            eprintln!("Error: Sonatina did not emit a sidecar for contract \"{name}\"");
+            had_errors = true;
+            continue;
+        };
+        let file_name = format!("{}.sidecar.json", sanitize_filename(name));
+        let json =
+            serde_json::to_string_pretty(sidecar).expect("sidecar serialization cannot fail");
+        let path = out_dir.join(&file_name);
+        if let Err(err) = fs::write(path.as_std_path(), &json) {
+            eprintln!("Error: Failed to write {path}: {err}");
+            had_errors = true;
+            continue;
+        }
+        if let Some(dir) = report_dir {
+            let _ = fs::write(dir.join(&file_name).as_std_path(), &json);
+        }
+        println!("Wrote {path}");
+    }
+    had_errors
+}
+
 fn derive_ingot_ir_file_stem(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
     if let Some(name) = ingot
         .config(db)
@@ -2612,6 +2674,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     }
     if emit.sizes {
         parts.push("sizes");
+    }
+    if emit.sidecar {
+        parts.push("sidecar");
     }
     if emit.executable {
         parts.push("executable");
@@ -2840,6 +2905,7 @@ mod tests {
             abi: true,
             metadata: false,
             sizes: false,
+            sidecar: false,
             executable: false,
             object: false,
             staticlib: false,
