@@ -15,17 +15,11 @@ use hir::hir_def::TopLevelMod;
 use mir::{RuntimePackage, build_runtime_package};
 use serde::Serialize;
 use sonatina_codegen::object::{
-    ObjectArtifact, SymbolId,
+    ObjectArtifact,
     lowering::{
         CodeLabel, DynSpInitLowering, MallocLowering, SectionLowering, SpillLocation,
         StableLowering, StackSlot,
     },
-};
-use sonatina_ir::{
-    Module,
-    inst::data::SymbolRef,
-    ir_writer::{IrWrite, ModuleWriter},
-    module::ModuleCtx,
 };
 
 use super::{
@@ -51,9 +45,10 @@ pub struct SidecarSection {
     pub name: String,
     /// The section's bytes, in hex.
     pub bytecode: String,
-    /// The symbols the section defines, by offset.
+    /// The symbols the section defines, by offset, as the section's IR (`lowering.source_ir`)
+    /// names them.
     pub symbols: Vec<SidecarSymbol>,
-    pub lowering: Option<SidecarLowering>,
+    pub lowering: SidecarLowering,
 }
 
 /// How the backend lowered the section (`SectionLowering` of Sonatina).
@@ -312,62 +307,45 @@ pub struct SidecarSymbol {
     pub size: u32,
 }
 
-/// The optimized module, as text, and the context that names its symbols after the module
-/// itself is consumed by compilation.
-pub(super) struct PostOptModule {
-    ir: String,
-    ctx: ModuleCtx,
-}
-
-impl PostOptModule {
-    pub(super) fn new(module: &Module) -> Self {
-        Self {
-            ir: ModuleWriter::new(module).dump_string(),
-            ctx: module.ctx.clone(),
-        }
-    }
-
-    pub(super) fn sidecar(self, object: &str, artifact: &ObjectArtifact) -> SonatinaSidecar {
+impl SonatinaSidecar {
+    /// The sidecar of `object`, compiled to `artifact` from the module whose text is `ir`.
+    pub(super) fn new(
+        ir: String,
+        object: &str,
+        artifact: &ObjectArtifact,
+    ) -> Result<Self, LowerError> {
         let sections = artifact
             .sections
             .iter()
             .map(|(name, section)| {
-                let mut symbols: Vec<_> = section
-                    .symtab
-                    .iter()
-                    .map(|(id, def)| {
-                        let symbol = match id {
-                            SymbolId::Func(func) => SymbolRef::Func(*func),
-                            SymbolId::Global(global) => SymbolRef::Global(*global),
-                            SymbolId::Embed(embed) => SymbolRef::Embed(embed.clone()),
-                            SymbolId::CurrentSection => SymbolRef::CurrentSection,
-                        };
-                        let mut text = Vec::new();
-                        symbol
-                            .write(&mut text, &self.ctx)
-                            .expect("in-memory write should not fail");
-                        SidecarSymbol {
-                            symbol: String::from_utf8(text).expect("symbols are UTF-8"),
-                            offset: def.offset,
-                            size: def.size,
-                        }
-                    })
-                    .collect();
-                symbols.sort_by(|a, b| (a.offset, &a.symbol).cmp(&(b.offset, &b.symbol)));
-                SidecarSection {
+                let lowering = section.lowering.as_ref().ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "section `{}` of `{object}` has no lowering record",
+                        name.0
+                    ))
+                })?;
+                Ok(SidecarSection {
                     name: name.0.to_string(),
                     bytecode: hex::encode(&section.bytes),
-                    symbols,
-                    lowering: section.lowering.as_ref().map(SidecarLowering::from),
-                }
+                    symbols: lowering
+                        .symbols
+                        .iter()
+                        .map(|(symbol, def)| SidecarSymbol {
+                            symbol: symbol.clone(),
+                            offset: def.offset,
+                            size: def.size,
+                        })
+                        .collect(),
+                    lowering: lowering.into(),
+                })
             })
-            .collect();
-        SonatinaSidecar {
+            .collect::<Result<_, LowerError>>()?;
+        Ok(Self {
             version: SIDECAR_VERSION,
             object: object.to_string(),
-            ir: self.ir,
+            ir,
             sections,
-        }
+        })
     }
 }
 

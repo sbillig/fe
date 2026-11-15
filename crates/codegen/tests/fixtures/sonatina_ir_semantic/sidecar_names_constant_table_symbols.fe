@@ -1,0 +1,20 @@
+msg TableMsg {
+    #[selector = 0x01]
+    Get { i: usize } -> u256,
+}
+
+const TABLE: [u256; 6] = [5, 17, 2, 99, 1234567, 8]
+
+fn lookup(_ table: [u256; 6], _ i: usize) -> u256 {
+    table[i % 6]
+}
+
+// `TABLE` is read at an index from calldata: the backend specializes `lookup`
+// for it and keeps its words as data of the runtime section.
+pub contract Table {
+    recv TableMsg {
+        Get { i } -> u256 {
+            lookup(TABLE, i)
+        }
+    }
+}

@@ -310,11 +310,12 @@ fn compile_runtime_objects(
     Ok(artifacts)
 }
 
-/// A compiled module's objects, the trace facts of its optimized IR, and that IR when asked for.
+/// A compiled module's objects, the trace facts of its optimized IR, and that IR's text when
+/// asked for.
 type CompiledModule = (
     Vec<ObjectArtifact>,
     Vec<trace_facts::TraceFact>,
-    Option<sidecar::PostOptModule>,
+    Option<String>,
 );
 
 fn compile_runtime_objects_with_postopt_trace(
@@ -340,7 +341,7 @@ fn compile_runtime_objects_with_postopt_trace(
         Vec::new()
     };
     // The module the backend compiles is the optimized one, unchanged.
-    let post_opt = capture_ir.then(|| sidecar::PostOptModule::new(compile.optimize()));
+    let post_opt = capture_ir.then(|| ModuleWriter::new(compile.optimize()).dump_string());
     let artifacts = compile
         .compile()
         .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
@@ -1747,7 +1748,9 @@ fn compile_lowered_object(
         .into_iter()
         .find(|artifact| artifact.object.0.as_str() == name)
         .ok_or_else(|| LowerError::Internal(format!("compiled object `{name}` not found")))?;
-    let sidecar = post_opt.map(|post_opt| post_opt.sidecar(&name, &artifact));
+    let sidecar = post_opt
+        .map(|ir| SonatinaSidecar::new(ir, &name, &artifact))
+        .transpose()?;
     Ok((artifact, trace, sidecar))
 }
 

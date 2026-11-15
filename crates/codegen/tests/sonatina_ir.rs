@@ -9,8 +9,14 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
-use std::{collections::HashSet, path::Path};
+use fe_codegen::{
+    OptLevel, SonatinaSidecar, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized,
+};
+use hir::hir_def::TopLevelMod;
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+};
 use test_utils::{
     _macro_support::_insta::{self, Settings},
     fixture_shards,
@@ -20,7 +26,7 @@ use url::Url;
 
 fn with_top_mod_for_source<T>(
     fixture: &Fixture<&str>,
-    f: impl for<'db> FnOnce(&'db DriverDataBase, hir::hir_def::TopLevelMod<'db>) -> T,
+    f: impl for<'db> FnOnce(&'db DriverDataBase, TopLevelMod<'db>) -> T,
 ) -> T {
     let mut db = DriverDataBase::default();
     let file_url = Url::from_file_path(fixture.path()).expect("fixture path should be absolute");
@@ -151,59 +157,115 @@ fn observability_preserves_creation_and_runtime_bytecode(fixture: Fixture<&str>)
     });
 }
 
+/// The sidecars of `top_mod` at `level`, checked against its bytecode and IR: each symbol is
+/// a function or global of its section's IR, and each function's symbol is where its code starts.
+fn checked_sidecars(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    level: OptLevel,
+) -> BTreeMap<String, SonatinaSidecar> {
+    let bytecode = fe_codegen::emit_module_sonatina_bytecode(db, top_mod, level, None)
+        .expect("bytecode compilation");
+    let sidecars = fe_codegen::emit_module_sonatina_sidecar(db, top_mod, level, None)
+        .expect("sidecar compilation");
+    let ir = emit_module_sonatina_ir_optimized(db, top_mod, level, None)
+        .expect("optimized Sonatina IR should emit");
+    assert_eq!(
+        bytecode.keys().collect::<Vec<_>>(),
+        sidecars.keys().collect::<Vec<_>>()
+    );
+    for (name, sidecar) in &sidecars {
+        assert_eq!(sidecar.ir, ir, "{name}, {level:?}");
+        let section = |section: &str| {
+            sidecar
+                .sections
+                .iter()
+                .find(|s| s.name == section)
+                .unwrap_or_else(|| panic!("{name} has no {section} section"))
+        };
+        let (init, runtime) = (section("init"), section("runtime"));
+        assert_eq!(init.bytecode, hex::encode(&bytecode[name].deploy));
+        assert_eq!(runtime.bytecode, hex::encode(&bytecode[name].runtime));
+        let embed = init
+            .symbols
+            .iter()
+            .find(|symbol| symbol.symbol == format!("&{name}_runtime"))
+            .expect("init embeds the runtime");
+        let start = 2 * embed.offset as usize;
+        assert_eq!(
+            &init.bytecode[start..start + 2 * embed.size as usize],
+            runtime.bytecode
+        );
+        for section in [init, runtime] {
+            let whole = section.symbols.iter().find(|symbol| symbol.symbol == ".");
+            assert_eq!(
+                whole.map(|symbol| (symbol.offset, 2 * symbol.size as usize)),
+                Some((0, section.bytecode.len()))
+            );
+            let lowering = &section.lowering;
+            assert!(lowering.machine_ir.contains("func "));
+            for func in &lowering.funcs {
+                let symbol = section
+                    .symbols
+                    .iter()
+                    .find(|symbol| symbol.symbol == format!("%{}", func.name));
+                assert_eq!(func.offset, symbol.map(|symbol| symbol.offset));
+            }
+            let declares = |keyword: &str, name: &str| {
+                lowering
+                    .source_ir
+                    .lines()
+                    .any(|line| line.starts_with(keyword) && line.contains(name))
+            };
+            for symbol in &section.symbols {
+                let text = &symbol.symbol;
+                if text.starts_with('%') {
+                    assert!(declares("func ", &format!("{text}(")), "{name}: {text}");
+                    assert!(symbol.offset + symbol.size <= lowering.code_size);
+                } else if text.starts_with('$') {
+                    assert!(declares("global ", &format!("{text} =")), "{name}: {text}");
+                    assert!(symbol.offset >= lowering.code_size);
+                }
+            }
+        }
+    }
+    sidecars
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "observability_preserves_creation_and_runtime_bytecode.fe")]
 fn sidecar_holds_compiled_ir_and_sections(fixture: Fixture<&str>) {
     with_top_mod_for_source(&fixture, |db, top_mod| {
         for level in [OptLevel::O0, OptLevel::O1] {
-            let bytecode = fe_codegen::emit_module_sonatina_bytecode(db, top_mod, level, None)
-                .expect("bytecode compilation");
-            let sidecars = fe_codegen::emit_module_sonatina_sidecar(db, top_mod, level, None)
-                .expect("sidecar compilation");
-            let ir = emit_module_sonatina_ir_optimized(db, top_mod, level, None)
-                .expect("optimized Sonatina IR should emit");
-            assert_eq!(
-                bytecode.keys().collect::<Vec<_>>(),
-                sidecars.keys().collect::<Vec<_>>()
+            checked_sidecars(db, top_mod, level);
+        }
+    });
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "sidecar_names_constant_table_symbols.fe")]
+fn sidecar_names_symbols_of_the_section_ir(fixture: Fixture<&str>) {
+    let mut word = [0; 32];
+    word[28..].copy_from_slice(&1234567u32.to_be_bytes());
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::Os] {
+            let sidecars = checked_sidecars(db, top_mod, level);
+            let runtime = sidecars["Table"]
+                .sections
+                .iter()
+                .find(|section| section.name == "runtime")
+                .expect("a runtime section");
+            let table = runtime
+                .symbols
+                .iter()
+                .find(|symbol| symbol.symbol.starts_with('$'))
+                .unwrap_or_else(|| panic!("{level:?}: the runtime has no data"));
+            let bytes = hex::decode(&runtime.bytecode).expect("hex");
+            assert!(
+                bytes[table.offset as usize..(table.offset + table.size) as usize]
+                    .windows(32)
+                    .any(|window| window == word),
+                "{level:?}: {} does not hold the table",
+                table.symbol
             );
-            for (name, sidecar) in &sidecars {
-                assert_eq!(sidecar.ir, ir, "{name}, {level:?}");
-                let section = |section: &str| {
-                    sidecar
-                        .sections
-                        .iter()
-                        .find(|s| s.name == section)
-                        .unwrap_or_else(|| panic!("{name} has no {section} section"))
-                };
-                let (init, runtime) = (section("init"), section("runtime"));
-                assert_eq!(init.bytecode, hex::encode(&bytecode[name].deploy));
-                assert_eq!(runtime.bytecode, hex::encode(&bytecode[name].runtime));
-                let embed = init
-                    .symbols
-                    .iter()
-                    .find(|symbol| symbol.symbol == format!("&{name}_runtime"))
-                    .expect("init embeds the runtime");
-                let start = 2 * embed.offset as usize;
-                assert_eq!(
-                    &init.bytecode[start..start + 2 * embed.size as usize],
-                    runtime.bytecode
-                );
-                for section in [init, runtime] {
-                    let whole = section.symbols.iter().find(|symbol| symbol.symbol == ".");
-                    assert_eq!(
-                        whole.map(|symbol| (symbol.offset, 2 * symbol.size as usize)),
-                        Some((0, section.bytecode.len()))
-                    );
-                    let lowering = section.lowering.as_ref().expect("a lowering record");
-                    assert!(lowering.machine_ir.contains("func "));
-                    for func in &lowering.funcs {
-                        let symbol = section
-                            .symbols
-                            .iter()
-                            .find(|symbol| symbol.symbol == format!("%{}", func.name));
-                        assert_eq!(func.offset, symbol.map(|symbol| symbol.offset));
-                    }
-                }
-            }
         }
     });
 }
