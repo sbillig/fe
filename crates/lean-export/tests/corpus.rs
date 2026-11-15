@@ -91,7 +91,9 @@ fn export_corpus() {
                     models.push((
                         id.clone(),
                         name,
-                        format!("⟨Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩"),
+                        format!(
+                            "⟨deploy Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩"
+                        ),
                         interface(db, contract),
                     ));
                 }
