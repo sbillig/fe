@@ -11,7 +11,8 @@ use url::Url;
 
 /// The fixtures in the order they are exported in, and whether with their
 /// entries. The contracts with bytecode certificates come first, and WETH9,
-/// certified after the others, last.
+/// certified after the others, last. Fixtures added later go at the end, so
+/// that the library definitions they add follow the existing ones.
 pub const FIXTURES: &[(&str, bool)] = &[
     ("scalar_store", true),
     ("code_scalar", true),
@@ -45,6 +46,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("shared", true),
     ("case44_bank", true),
     ("nested_loops", false),
+    ("deposit_contract", true),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it

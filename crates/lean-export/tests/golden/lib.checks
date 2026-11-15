@@ -104,3 +104,21 @@ set_option maxRecDepth 10000 in
 example : tuple_HEAD_SIZE_bool_u256_u256 = pure (UInt256.ofNat 96) := rfl
 set_option maxRecDepth 10000 in
 example : tuple_IS_PARAM_LIST_bool_u256_u256 = pure true := rfl
+set_option maxRecDepth 10000 in
+example : Bytes_IS_DYNAMIC = pure true := rfl
+set_option maxRecDepth 10000 in
+example : Bytes_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : tuple_HEAD_SIZE_Bytes_Bytes_Bytes_Bytes_Bytes = pure (UInt256.ofNat 160) := rfl
+set_option maxRecDepth 10000 in
+example : FixedBytes_IS_DYNAMIC_32 = pure false := rfl
+set_option maxRecDepth 10000 in
+example : FixedBytes_HEAD_SIZE_32 = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : MAX_PAYLOAD_LEN = pure (UInt256.ofNat 18446744073709551584) := rfl
+set_option maxRecDepth 10000 in
+example : const_Bytes = pure false := rfl
+set_option maxRecDepth 10000 in
+example : FixedBytes_IS_DYNAMIC_4 = pure false := rfl
+set_option maxRecDepth 10000 in
+example : FixedBytes_HEAD_SIZE_4 = pure (UInt256.ofNat 32) := rfl

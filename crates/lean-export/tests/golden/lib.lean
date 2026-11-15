@@ -5021,3 +5021,1113 @@ def MemArray_zero_u64 (v0 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
   v0 := v1_0
   return ((), v0)
 
+structure FixedBytes_32 where
+  val : UInt256
+deriving Inhabited
+
+structure Bytes where
+  data : UInt256
+  len : UInt256
+  size : UInt256
+deriving Inhabited
+
+structure FixedBytes_4 where
+  val : UInt256
+deriving Inhabited
+
+def cast_u8_ChunkPair (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 := v1
+  return v2
+
+def alloc_ChunkPair : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 64)
+  let v1 ← alloc_bytes v0
+  let v2 ← cast_u8_ChunkPair v1
+  return v2
+
+def write_pair (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Unit := do
+  let v3 := v1
+  mstore v0 v3
+  let v4 := ()
+  let v5 := v2
+  mstore (v0 + UInt256.ofNat 32) v5
+  let v6 := ()
+  return ()
+
+def alloc_pair (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← alloc_ChunkPair
+  let v3 := v2
+  let v4 ← write_pair v3 v0 v1
+  return v3
+
+def cast_ChunkPair_u8 (v0 : UInt256) : FeM UInt256 := do
+  let v1 := v0
+  let v2 := v1
+  return v2
+
+def byte_ptr_ChunkPair (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← cast_ChunkPair_u8 v0
+  return v1
+
+def pair_offset (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← byte_ptr_ChunkPair v0
+  return v1
+
+def sha256_64_to (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← gas
+  let v3 := (UInt256.ofNat 2)
+  let v4 := (UInt256.ofNat 64)
+  let v5 := (UInt256.ofNat 32)
+  let v6 ← staticcallPrecompile v2 v3 v0 v4 v1 v5
+  let v7 := v6
+  let v8 := (UInt256.ofNat 0)
+  let v9 := decide (v7 = v8)
+  if v9 then
+    let v10 ← revertEmpty
+    nomatch v10
+  else
+    let v11 := ()
+    let v12 := v11
+    let v13 ← returndatasize
+    let v14 := (UInt256.ofNat 32)
+    let v15 := decide (v13.toNat < v14.toNat)
+    if v15 then
+      let v16 ← revertEmpty
+      nomatch v16
+    else
+      let v17 := ()
+      let v18 := v17
+      let v19 ← mload v1
+      return v19
+
+def hash_pair_buffer (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← pair_offset v0
+  let v2 := v1
+  let v3 ← sha256_64_to v2 v2
+  return v3
+
+def hash_pair (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← alloc_pair v0 v1
+  let v3 := v2
+  let v4 ← hash_pair_buffer v3
+  return v4
+
+def Bytes_len (v0 : Bytes) : FeM UInt256 := do
+  let v1 := v0.len
+  return v1
+
+def ether (v0 : UInt256) : FeM Wei := do
+  let v1 := v0
+  let v2 := (UInt256.ofNat 1000000000000000000)
+  let v3 ← checkedMul v1 v2
+  let v4 := (Wei.mk v3)
+  return v4
+
+def Wei_ge (v0 : Wei) (v1 : Wei) : FeM Bool := do
+  let v2 := v0.amount
+  let v3 := v1.amount
+  let v4 := decide (v3.toNat ≤ v2.toNat)
+  return v4
+
+def gwei (v0 : UInt256) : FeM Wei := do
+  let v1 := v0
+  let v2 := (UInt256.ofNat 1000000000)
+  let v3 ← checkedMul v1 v2
+  let v4 := (Wei.mk v3)
+  return v4
+
+def Wei_rem (v0 : Wei) (v1 : Wei) : FeM Wei := do
+  let v2 := v0.amount
+  let v3 := v1.amount
+  let v4 ← checkedRem v2 v3
+  let v5 := (Wei.mk v4)
+  return v5
+
+def Wei_eq (v0 : Wei) (v1 : Wei) : FeM Bool := do
+  let v2 := v0.amount
+  let v3 := v1.amount
+  let v4 := decide (v2 = v3)
+  return v4
+
+def Wei_div (v0 : Wei) (v1 : Wei) : FeM UInt256 := do
+  let v2 := v0.amount
+  let v3 := v1.amount
+  let v4 ← checkedDiv v2 v3
+  return v4
+
+def Bytes_payload_ptr (v0 : Bytes) : FeM UInt256 := do
+  let v1 := v0.data
+  let v2 := (UInt256.ofNat 32)
+  let v3 := v1 + v2
+  return v3
+
+def Bytes_span_ref (v0 : Bytes) : FeM MemSlice_u8 := do
+  let v1 ← Bytes_payload_ptr v0
+  let v2 := v0.len
+  let v3 ← MemSlice_from_raw_parts_ref_u8 v1 v2
+  return v3
+
+def elem_u8 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := (UInt256.ofNat 1)
+  let v3 := v1
+  let v4 ← usize_wrapping_mul v3 v2
+  let v5 := v0 + v4
+  return v5
+
+def MemSlice_slice_ref_u8 (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM MemSlice_u8 := do
+  let v3 := v0.len
+  let v4 := decide (v3.toNat < v1.toNat)
+  let b1 : FeM MemSlice_u8 := do
+    let v13 ← index_out_of_bounds
+    nomatch v13
+  if v4 then
+    b1
+  else
+    let v5 := v0.len
+    let v6 ← checkedSub v5 v1
+    let v7 := decide (v6.toNat < v2.toNat)
+    if v7 then
+      b1
+    else
+      let v8 := ()
+      let v9 := v8
+      let v10 := v0.ptr
+      let v11 ← elem_u8 v10 v1
+      let v12 ← MemSlice_from_raw_parts_ref_u8 v11 v2
+      return v12
+
+def ByteVector_48_hash_tree_root (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+  let v3 := v2
+  let v4 := (UInt256.ofNat 48)
+  let v5 := decide (v3 = v4)
+  if v5 then
+    let v6 := ()
+    let v7 ← downcast_unchecked_u256_usize v1
+    let v8 ← downcast_unchecked_u256_usize v2
+    let v9 ← MemSlice_slice_ref_u8 v0 v7 v8
+    let v11 ← MemSlice_ptr_u8 v9
+    let v12 := v11
+    let v13 := (UInt256.ofNat 32)
+    let v14 := v12 + v13
+    let v15 ← mload v14
+    let v16 := v15
+    let v17 ← mload v12
+    let v18 := (UInt256.ofNat 128)
+    let v19 := v16 >>> v18
+    let v20 := (UInt256.ofNat 128)
+    let v21 := v19 <<< v20
+    let v22 ← alloc_pair v17 v21
+    let v23 := v22
+    let v24 ← hash_pair_buffer v23
+    return v24
+  else
+    M.panic 0x01
+
+def hash_tree_root_ByteVector_48 (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+  let v3 ← ByteVector_48_hash_tree_root v0 v1 v2
+  return v3
+
+def Bytes_word_at (v0 : Bytes) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v1
+  let v3 := v0.len
+  let v4 := decide (v3.toNat ≤ v2.toNat)
+  if v4 then
+    let v5 ← trap
+    nomatch v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 ← Bytes_payload_ptr v0
+    let v9 := v8 + v1
+    let v10 := v0.len
+    let v11 := v1
+    let v12 ← checkedSub v10 v11
+    let v13 ← readPaddedWord v9 v12
+    return v13
+
+def u64_chunk_k1 (v22 : UInt256) (r0 : UInt256) : FeM UInt256 := do
+  let mut r0 := r0
+  let v23 := (UInt256.ofNat 16)
+  let v24 := v22 <<< v23
+  let v25 := r0
+  let v26 := v25
+  let v27 := (UInt256.ofNat 16)
+  let v28 := v26 >>> v27
+  let v29 := (UInt256.ofNat 281470681808895)
+  let v30 := v28 &&& v29
+  let v31 := v24 ||| v30
+  let v32 := v31
+  r0 := v32
+  let v33 := ()
+  let v34 := r0
+  let v35 := v34
+  let v36 := (UInt256.ofNat 32)
+  let v37 := v35 <<< v36
+  let v38 := r0
+  let v39 := v38
+  let v40 := (UInt256.ofNat 32)
+  let v41 := v39 >>> v40
+  let v42 := v37 ||| v41
+  let v43 := (UInt256.ofNat 192)
+  let v44 := v42 <<< v43
+  return v44
+
+def u64_chunk (v0 : UInt256) : FeM UInt256 := do
+  let mut r0 : UInt256 := default
+  let v1 := v0
+  let v2 := v1
+  let v3 := v2
+  r0 := v3
+  let v4 := r0
+  let v5 := v4
+  let v6 := (UInt256.ofNat 71777214294589695)
+  let v7 := v5 &&& v6
+  let v8 := (UInt256.ofNat 8)
+  let v9 := v7 <<< v8
+  let v10 := r0
+  let v11 := v10
+  let v12 := (UInt256.ofNat 8)
+  let v13 := v11 >>> v12
+  let v14 := (UInt256.ofNat 71777214294589695)
+  let v15 := v13 &&& v14
+  let v16 := v9 ||| v15
+  let v17 := v16
+  r0 := v17
+  let v18 := ()
+  let v19 := r0
+  let v20 := v19
+  let v21 := (UInt256.ofNat 281470681808895)
+  let v22 := v20 &&& v21
+  u64_chunk_k1 v22 r0
+
+def ByteVector_96_hash_tree_root (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+  let v3 := v2
+  let v4 := (UInt256.ofNat 96)
+  let v5 := decide (v3 = v4)
+  if v5 then
+    let v6 := ()
+    let v7 ← downcast_unchecked_u256_usize v1
+    let v8 ← downcast_unchecked_u256_usize v2
+    let v9 ← MemSlice_slice_ref_u8 v0 v7 v8
+    let v11 ← MemSlice_ptr_u8 v9
+    let v12 := v11
+    let v13 := (UInt256.ofNat 0)
+    let v14 := (UInt256.ofNat 0)
+    let v15 ← alloc_pair v13 v14
+    let v16 := v15
+    let v17 ← pair_offset v16
+    let v18 := v17
+    let v19 ← sha256_64_to v12 v18
+    let v20 := v19
+    let v21 := (UInt256.ofNat 64)
+    let v22 := v12 + v21
+    let v23 ← mload v22
+    let v24 := (UInt256.ofNat 0)
+    let v25 ← write_pair v16 v23 v24
+    let v26 ← hash_pair_buffer v16
+    let v27 := v26
+    let v28 ← write_pair v16 v20 v27
+    let v29 ← hash_pair_buffer v16
+    return v29
+  else
+    M.panic 0x01
+
+def hash_tree_root_ByteVector_96 (v0 : MemSlice_u8) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+  let v3 ← ByteVector_96_hash_tree_root v0 v1 v2
+  return v3
+
+def merkleize4 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM UInt256 := do
+  let v4 ← alloc_pair v0 v1
+  let v5 := v4
+  let v6 ← hash_pair_buffer v5
+  let v7 := v6
+  let v8 ← write_pair v5 v2 v3
+  let v9 ← hash_pair_buffer v5
+  let v10 := v9
+  let v11 ← write_pair v5 v7 v10
+  let v12 ← hash_pair_buffer v5
+  return v12
+
+def tuple_u256_u256_u256_u256_merkleize (v0 : (UInt256 × UInt256 × UInt256 × UInt256)) : FeM UInt256 := do
+  let v1 := v0.fst
+  let v2 := v0.snd.fst
+  let v3 := v0.snd.snd.fst
+  let v4 := v0.snd.snd.snd
+  let v5 ← merkleize4 v1 v2 v3 v4
+  return v5
+
+def Bytes_from_validated_abi_tail (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM Bytes := do
+  let v3 := v0
+  let v4 := v1
+  let v5 := v2
+  let v6 := (Bytes.mk v3 v4 v5)
+  return v6
+
+def Bytes_empty : FeM Bytes := do
+  let v0 := (UInt256.ofNat 32)
+  let v1 ← alloc_bytes v0
+  let v2 := v1
+  let v3 := (UInt256.ofNat 0)
+  let v4 ← store_word v2 v3
+  let v5 := (UInt256.ofNat 0)
+  let v6 := (UInt256.ofNat 32)
+  let v7 ← Bytes_from_validated_abi_tail v2 v5 v6
+  return v7
+
+def Bytes_from_word_prefix (v0 : UInt256) (v1 : UInt256) : FeM Bytes := do
+  let v2 := v1
+  let v3 := (UInt256.ofNat 32)
+  let v4 := decide (v3.toNat < v2.toNat)
+  if v4 then
+    let v5 ← trap
+    nomatch v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 := v1
+    let v9 := (UInt256.ofNat 0)
+    let v10 := decide (v8 = v9)
+    if v10 then
+      let v11 ← Bytes_empty
+      return v11
+    else
+      let v12 := ()
+      let v13 := v12
+      let v14 := (UInt256.ofNat 64)
+      let v15 ← alloc_bytes v14
+      let v16 := v15
+      let v17 := (UInt256.ofNat 32)
+      let v18 := v1
+      let v19 := v18
+      let v20 ← checkedSub v17 v19
+      let v21 := (UInt256.ofNat 8)
+      let v22 ← checkedMul v20 v21
+      let v23 := v22
+      let v24 := v1
+      let v25 := v24
+      let v26 ← store_word v16 v25
+      let v27 := (UInt256.ofNat 32)
+      let v28 := v16 + v27
+      let v29 := v0
+      let v30 := v29 >>> v23
+      let v31 := v30 <<< v23
+      let v32 ← store_word v28 v31
+      let v33 := (UInt256.ofNat 64)
+      let v34 ← Bytes_from_validated_abi_tail v16 v1 v33
+      return v34
+
+def serialize_u64 (v0 : UInt256) : FeM Bytes := do
+  let v1 ← u64_chunk v0
+  let v2 := (UInt256.ofNat 8)
+  let v3 ← Bytes_from_word_prefix v1 v2
+  return v3
+
+def Bytes_IS_DYNAMIC : FeM Bool := do
+  let v0 := true
+  return v0
+
+def Bytes_HEAD_SIZE : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 32)
+  return v0
+
+def abi_field_head_size_Bytes : FeM UInt256 := do
+  let v0 ← Bytes_IS_DYNAMIC
+  if v0 then
+    let v1 := (UInt256.ofNat 32)
+    return v1
+  else
+    let v2 := ()
+    let v3 := v2
+    let v4 ← Bytes_HEAD_SIZE
+    return v4
+
+def tuple_HEAD_SIZE_Bytes_Bytes_Bytes_Bytes_Bytes : FeM UInt256 := do
+  let v0 ← abi_field_head_size_Bytes
+  let v1 ← abi_field_head_size_Bytes
+  let v2 ← checkedAdd v0 v1
+  let v3 ← abi_field_head_size_Bytes
+  let v4 ← checkedAdd v2 v3
+  let v5 ← abi_field_head_size_Bytes
+  let v6 ← checkedAdd v4 v5
+  let v7 ← abi_field_head_size_Bytes
+  let v8 ← checkedAdd v6 v7
+  return v8
+
+def Bytes_encoded_size (v0 : Bytes) : FeM UInt256 := do
+  let v1 := v0.size
+  return v1
+
+def Bytes_payload_size (v0 : Bytes) : FeM UInt256 := do
+  let v1 ← Bytes_encoded_size v0
+  return v1
+
+def dynamic_payload_size_Bytes (v0 : Bytes) : FeM UInt256 := do
+  let v1 ← Bytes_IS_DYNAMIC
+  if v1 then
+    let v2 ← Bytes_payload_size v0
+    return v2
+  else
+    let v3 := ()
+    let v4 := v3
+    let v5 := (UInt256.ofNat 0)
+    return v5
+
+def tuple_payload_size_Bytes_Bytes_Bytes_Bytes_Bytes (v0 : (Bytes × Bytes × Bytes × Bytes × Bytes)) : FeM UInt256 := do
+  let v1 ← tuple_HEAD_SIZE_Bytes_Bytes_Bytes_Bytes_Bytes
+  let v4 ← dynamic_payload_size_Bytes v0.fst
+  let v5 := v1 + v4
+  let v8 ← dynamic_payload_size_Bytes v0.snd.fst
+  let v9 := v5 + v8
+  let v12 ← dynamic_payload_size_Bytes v0.snd.snd.fst
+  let v13 := v9 + v12
+  let v16 ← dynamic_payload_size_Bytes v0.snd.snd.snd.fst
+  let v17 := v13 + v16
+  let v20 ← dynamic_payload_size_Bytes v0.snd.snd.snd.snd
+  let v21 := v17 + v20
+  return v21
+
+def abi_payload_size_tuple_Bytes_Bytes_Bytes_Bytes_Bytes (v0 : (Bytes × Bytes × Bytes × Bytes × Bytes)) : FeM UInt256 := do
+  let v1 ← tuple_payload_size_Bytes_Bytes_Bytes_Bytes_Bytes v0
+  return v1
+
+def Bytes_encoded_span (v0 : Bytes) : FeM MemSlice_u8 := do
+  let v1 := v0.data
+  let v2 := v0.size
+  let v3 ← word_to_usize v2
+  let v4 ← MemSlice_from_raw_parts_ref_u8 v1 v3
+  return v4
+
+def Bytes_encode_Sol (v0 : Bytes) (v1 : AbiFrame) : FeM Unit := do
+  let v2 := (UInt256.ofNat 0)
+  let v3 ← Bytes_encoded_span v0
+  let v5 ← AbiFrame_copy_from v1 v2 v3
+  return ()
+
+def encode_field_Sol_Bytes (v0 : Bytes) (v1 : AbiFrame) (v2 : UInt256) (r0 : AbiFrame) : FeM AbiFrame := do
+  let mut r0 := r0
+  let mut r1 : AbiFrame := default
+  let mut r2 : AbiFrame := default
+  let v3 ← Bytes_IS_DYNAMIC
+  if v3 then
+    let v4 ← Bytes_payload_size v0
+    let v5 := v4
+    let v6 ← AbiFrame_len v1
+    let v8 ← AbiFrame_len r0
+    let v9 := v6 - v8
+    let v10 ← AbiFrame_store_word v1 v2 v9
+    let v11 := (UInt256.ofNat 0)
+    let v13 ← AbiFrame_slice r0 v11 v5
+    r1 := v13
+    let v15 ← Bytes_encode_Sol v0 r1
+    let v17 ← AbiFrame_tail r0 v5
+    return v17
+  else
+    let v18 := ()
+    let v19 := v18
+    let v20 ← Bytes_HEAD_SIZE
+    let v21 ← AbiFrame_slice v1 v2 v20
+    r2 := v21
+    let v23 ← Bytes_encode_Sol v0 r2
+    let v24 := r0
+    return v24
+
+def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes_k1 (v0 : (Bytes × Bytes × Bytes × Bytes × Bytes)) (v1 : AbiFrame) (v11 : UInt256) (v14 : UInt256) (v17 : UInt256) (v20 : UInt256) (v29 : AbiFrame) (r0 : AbiFrame) : FeM Unit := do
+  let mut r0 := r0
+  let v31 ← encode_field_Sol_Bytes v0.snd.fst v1 v11 v29
+  let v32 := v31
+  r0 := v32
+  let v33 := ()
+  let v34 := r0
+  let v35 := v34
+  let v37 ← encode_field_Sol_Bytes v0.snd.snd.fst v1 v14 v35
+  let v38 := v37
+  r0 := v38
+  let v39 := ()
+  let v40 := r0
+  let v41 := v40
+  let v43 ← encode_field_Sol_Bytes v0.snd.snd.snd.fst v1 v17 v41
+  let v44 := v43
+  r0 := v44
+  let v45 := ()
+  let v46 := r0
+  let v47 := v46
+  let v49 ← encode_field_Sol_Bytes v0.snd.snd.snd.snd v1 v20 v47
+  return ()
+
+def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes (v0 : (Bytes × Bytes × Bytes × Bytes × Bytes)) (v1 : AbiFrame) : FeM Unit := do
+  let mut r0 : AbiFrame := default
+  let v7 ← tuple_HEAD_SIZE_Bytes_Bytes_Bytes_Bytes_Bytes
+  let v8 ← AbiFrame_tail v1 v7
+  let v9 := v8
+  r0 := v9
+  let v10 ← abi_field_head_size_Bytes
+  let v11 := v10
+  let v12 ← abi_field_head_size_Bytes
+  let v13 := v11 + v12
+  let v14 := v13
+  let v15 ← abi_field_head_size_Bytes
+  let v16 := v14 + v15
+  let v17 := v16
+  let v18 ← abi_field_head_size_Bytes
+  let v19 := v17 + v18
+  let v20 := v19
+  let v21 := (UInt256.ofNat 0)
+  let v22 := r0
+  let v23 := v22
+  let v25 ← encode_field_Sol_Bytes v0.fst v1 v21 v23
+  let v26 := v25
+  r0 := v26
+  let v27 := ()
+  let v28 := r0
+  let v29 := v28
+  tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes_k1 v0 v1 v11 v14 v17 v20 v29 r0
+
+def Bytes_drop (v0 : Bytes) : FeM Unit := do
+  let v1 := v0.data
+  let v2 ← dealloc_u8 v1
+  return ()
+
+def encode_alloc_Sol_tuple_Bytes_Bytes_Bytes_Bytes_Bytes (r0 : (Bytes × Bytes × Bytes × Bytes × Bytes)) : FeM MemBuffer := do
+  let mut r0 := r0
+  let mut r1 : MemBuffer := default
+  let mut r2 : AbiFrame := default
+  let v1 ← abi_payload_size_tuple_Bytes_Bytes_Bytes_Bytes_Bytes r0
+  let v2 := v1
+  let v3 ← allocation_len v2
+  let v4 ← MemBuffer_new v3
+  let v5 := v4
+  r1 := v5
+  let v7 ← MemBuffer_ptr r1
+  let v8 ← AbiFrame_from_raw_parts v7 v2
+  r2 := v8
+  let v11 ← tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes r0 r2
+  let _ ← Bytes_drop r0.fst
+  let _ ← Bytes_drop r0.snd.fst
+  let _ ← Bytes_drop r0.snd.snd.fst
+  let _ ← Bytes_drop r0.snd.snd.snd.fst
+  let _ ← Bytes_drop r0.snd.snd.snd.snd
+  let v12 := r1
+  return v12
+
+def encode_abi_payload_tuple_Bytes_Bytes_Bytes_Bytes_Bytes (v0 : (Bytes × Bytes × Bytes × Bytes × Bytes)) : FeM MemBuffer := do
+  let v1 := v0
+  let v2 ← encode_alloc_Sol_tuple_Bytes_Bytes_Bytes_Bytes_Bytes v1
+  return v2
+
+def Evm_log1 (v1 : MemSlice_u8) (v2 : UInt256) : FeM Unit := do
+  let v3 ← MemSlice_ptr_u8 v1
+  let v4 ← MemSlice_len_u8 v1
+  let v5 := v4
+  let v6 ← logData v3 v5 #[v2]
+  return ()
+
+def mix_in_length (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 ← u64_chunk v1
+  let v3 ← hash_pair v0 v2
+  return v3
+
+def FixedBytes_IS_DYNAMIC_32 : FeM Bool := do
+  let v0 := false
+  return v0
+
+def FixedBytes_HEAD_SIZE_32 : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 32)
+  return v0
+
+def abi_field_head_size_FixedBytes_32 : FeM UInt256 := do
+  let v0 ← FixedBytes_IS_DYNAMIC_32
+  if v0 then
+    let v1 := (UInt256.ofNat 32)
+    return v1
+  else
+    let v2 := ()
+    let v3 := v2
+    let v4 ← FixedBytes_HEAD_SIZE_32
+    return v4
+
+def MAX_PAYLOAD_LEN : FeM UInt256 := do
+  let v0 ← MAX_ALLOCATION
+  let v1 := v0
+  let v2 := (UInt256.ofNat 31)
+  let v3 ← checkedSub v1 v2
+  return v3
+
+def checked_dynamic_payload_after_head_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
+  let v3 ← CallData_word_at v0 v1
+  let v4 := v3
+  let v5 := v2
+  let v6 := v1
+  let v7 := (UInt256.ofNat 32)
+  let v8 ← checkedAdd v6 v7
+  let v9 ← checkedSub v5 v8
+  let v10 := decide (v9.toNat < v4.toNat)
+  let b1 : FeM (UInt256 × UInt256) := do
+    let v23 ← Sol_decode_error
+    nomatch v23
+  if v10 then
+    b1
+  else
+    let v11 ← MAX_PAYLOAD_LEN
+    let v12 := (UInt256.ofNat 32)
+    let v13 ← checkedSub v11 v12
+    let v14 := decide (v13.toNat < v4.toNat)
+    if v14 then
+      b1
+    else
+      let v15 := ()
+      let v16 := v15
+      let v17 := (UInt256.ofNat 63)
+      let v18 ← checkedAdd v4 v17
+      let v19 := (UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007913129639904)
+      let v20 := v18 &&& v19
+      let v21 := v20
+      let v22 := (v4, v21)
+      return v22
+
+def checked_dynamic_payload_with_input_len_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256) := do
+  let v3 := (UInt256.ofNat 32)
+  let v4 ← checked_frame_end_Sol v1 v3 v2
+  let v5 ← checked_dynamic_payload_after_head_Sol_CallData v0 v1 v2
+  return v5
+
+def alloc_bytes_unchecked (v0 : UInt256) : FeM UInt256 := do
+  let v1 ← alloc v0
+  return v1
+
+def CallData_copy_to_memory_unchecked (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM Unit := do
+  let v4 := v0.base
+  let v5 := v2
+  let v6 := v4 + v5
+  let v7 ← calldatacopy v1 v6 v3
+  return ()
+
+def copy_padded_payload_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) : FeM Unit := do
+  let v5 := v4
+  let v6 := (UInt256.ofNat 32)
+  let v7 ← checkedSub v5 v6
+  let v8 ← ptr_offset v2 v7
+  let v9 := (UInt256.ofNat 0)
+  let v10 ← store_word v8 v9
+  let v11 ← CallData_copy_to_memory_unchecked v0 v2 v1 v3
+  return ()
+
+def copy_dynamic_bytes_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) : FeM Unit := do
+  let v5 := (UInt256.ofNat 32)
+  let v6 := v3
+  let v7 ← checkedAdd v5 v6
+  let v8 ← copy_padded_payload_CallData v0 v1 v2 v7 v4
+  return ()
+
+def copy_dynamic_payload_from_with_input_len_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM (UInt256 × UInt256 × UInt256) := do
+  let v3 ← checked_dynamic_payload_with_input_len_Sol_CallData v0 v1 v2
+  let v4 := v3
+  let v5 := v4.fst
+  let v6 := v5
+  let v7 := v4.snd
+  let v8 := v7
+  let v9 ← word_to_usize v8
+  let v10 ← alloc_bytes_unchecked v9
+  let v11 := v10
+  let v12 ← copy_dynamic_bytes_CallData v0 v1 v11 v6 v8
+  let v13 := (v11, v6, v8)
+  return v13
+
+def Bytes_decode_from_bounded_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Bytes := do
+  let v3 ← copy_dynamic_payload_from_with_input_len_Sol_CallData v0 v1 v2
+  let v4 := v3
+  let v5 := v4.fst
+  let v6 := v4.snd.fst
+  let v7 ← word_to_usize v6
+  let v8 := v4.snd.snd
+  let v9 ← Bytes_from_validated_abi_tail v5 v7 v8
+  return v9
+
+def copy_dynamic_payload_from_Sol_CallData (v0 : CallData) (v1 : UInt256) : FeM (UInt256 × UInt256 × UInt256) := do
+  let v2 ← len_CallData v0
+  let v3 := v2
+  let v4 ← copy_dynamic_payload_from_with_input_len_Sol_CallData v0 v1 v3
+  return v4
+
+def Bytes_decode_from_Sol_CallData (v0 : CallData) (v1 : UInt256) : FeM Bytes := do
+  let v2 ← copy_dynamic_payload_from_Sol_CallData v0 v1
+  let v3 := v2
+  let v4 := v3.fst
+  let v5 := v3.snd.fst
+  let v6 ← word_to_usize v5
+  let v7 := v3.snd.snd
+  let v8 ← Bytes_from_validated_abi_tail v4 v6 v7
+  return v8
+
+def decode_field_from_prechecked_head_Sol_Bytes_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM Bytes := do
+  let v4 ← Bytes_IS_DYNAMIC
+  if v4 then
+    let v5 ← CallData_word_at v0 v2
+    let v6 := v5
+    let v7 ← checked_tail_Sol v1 v6
+    let v8 := v7
+    let v9 ← Bytes_decode_from_bounded_Sol_CallData v0 v8 v3
+    return v9
+  else
+    let v10 := ()
+    let v11 := v10
+    let v12 ← Bytes_decode_from_Sol_CallData v0 v2
+    return v12
+
+def decode_field_from_Sol_Bytes_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Bytes := do
+  let v3 ← Bytes_IS_DYNAMIC
+  if v3 then
+    let v4 ← CallData_word_at v0 v2
+    let v5 := v4
+    let v6 ← checked_tail_Sol v1 v5
+    let v7 ← Bytes_decode_from_Sol_CallData v0 v6
+    return v7
+  else
+    let v8 := ()
+    let v9 := v8
+    let v10 ← Bytes_decode_from_Sol_CallData v0 v2
+    return v10
+
+def decode_msg_field_from_Sol_Bytes_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM Bytes := do
+  let v4 ← Bytes_IS_DYNAMIC
+  if v4 then
+    let v5 ← decode_field_from_prechecked_head_Sol_Bytes_CallData v0 v1 v2 v3
+    return v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 ← decode_field_from_Sol_Bytes_CallData v0 v1 v2
+    return v8
+
+def decode_fixed_bytes_word (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+  let v2 := v1
+  let v3 := (UInt256.ofNat 0)
+  let v4 := decide (v2 = v3)
+  let b1 : FeM UInt256 := do
+    let v33 ← revertEmpty
+    nomatch v33
+  if v4 then
+    b1
+  else
+    let v5 := v1
+    let v6 := (UInt256.ofNat 32)
+    let v7 := decide (v6.toNat < v5.toNat)
+    if v7 then
+      b1
+    else
+      let v8 := ()
+      let v9 := v8
+      let v10 := v1
+      let v11 := (UInt256.ofNat 32)
+      let v12 := decide (v10 = v11)
+      if v12 then
+        let v13 := v0
+        return v13
+      else
+        let v14 := ()
+        let v15 := v14
+        let v16 := v0
+        let v17 := v1
+        let v18 := (UInt256.ofNat 8)
+        let v19 := v17 * v18
+        let v20 := v16 <<< v19
+        let v21 := (UInt256.ofNat 0)
+        let v22 := decide (v20 = v21)
+        if v22 then
+          let v23 := v0
+          let v24 := (UInt256.ofNat 32)
+          let v25 := v1
+          let v26 := v24 - v25
+          let v27 := (UInt256.ofNat 8)
+          let v28 := v26 * v27
+          let v29 := v23 >>> v28
+          return v29
+        else
+          let v30 := ()
+          let v31 := v30
+          let v32 ← revertEmpty
+          let v32 : UInt256 := nomatch v32
+          return v32
+
+def FixedBytes_decode_from_Sol_32_CallData (v0 : CallData) (v1 : UInt256) : FeM FixedBytes_32 := do
+  let v2 ← CallData_word_at v0 v1
+  let v3 := (UInt256.ofNat 32)
+  let v4 := v3
+  let v5 ← decode_fixed_bytes_word v2 v4
+  let v6 := (FixedBytes_32.mk v5)
+  return v6
+
+def decode_from_bounded_FixedBytes_32_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM FixedBytes_32 := do
+  let v3 ← FixedBytes_HEAD_SIZE_32
+  let v4 ← checked_frame_end_Sol v1 v3 v2
+  let v5 ← FixedBytes_decode_from_Sol_32_CallData v0 v1
+  return v5
+
+def decode_field_from_prechecked_head_Sol_FixedBytes_32_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM FixedBytes_32 := do
+  let v4 ← FixedBytes_IS_DYNAMIC_32
+  if v4 then
+    let v5 ← CallData_word_at v0 v2
+    let v6 := v5
+    let v7 ← checked_tail_Sol v1 v6
+    let v8 := v7
+    let v9 ← decode_from_bounded_FixedBytes_32_Sol_CallData v0 v8 v3
+    return v9
+  else
+    let v10 := ()
+    let v11 := v10
+    let v12 ← FixedBytes_decode_from_Sol_32_CallData v0 v2
+    return v12
+
+def decode_field_from_Sol_FixedBytes_32_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM FixedBytes_32 := do
+  let v3 ← FixedBytes_IS_DYNAMIC_32
+  if v3 then
+    let v4 ← CallData_word_at v0 v2
+    let v5 := v4
+    let v6 ← checked_tail_Sol v1 v5
+    let v7 ← FixedBytes_decode_from_Sol_32_CallData v0 v6
+    return v7
+  else
+    let v8 := ()
+    let v9 := v8
+    let v10 ← FixedBytes_decode_from_Sol_32_CallData v0 v2
+    return v10
+
+def decode_msg_field_from_Sol_FixedBytes_32_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM FixedBytes_32 := do
+  let v4 ← FixedBytes_IS_DYNAMIC_32
+  if v4 then
+    let v5 ← decode_field_from_prechecked_head_Sol_FixedBytes_32_CallData v0 v1 v2 v3
+    return v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 ← decode_field_from_Sol_FixedBytes_32_CallData v0 v1 v2
+    return v8
+
+def const_Bytes : FeM Bool := do
+  let v0 := false
+  return v0
+
+def abi_payload_size_Bytes (v0 : Bytes) : FeM UInt256 := do
+  let v1 ← Bytes_payload_size v0
+  return v1
+
+def encode_alloc_Sol_Bytes (r0 : Bytes) : FeM MemBuffer := do
+  let mut r0 := r0
+  let mut r1 : MemBuffer := default
+  let mut r2 : AbiFrame := default
+  let v1 ← abi_payload_size_Bytes r0
+  let v2 := v1
+  let v3 ← allocation_len v2
+  let v4 ← MemBuffer_new v3
+  let v5 := v4
+  r1 := v5
+  let v7 ← MemBuffer_ptr r1
+  let v8 ← AbiFrame_from_raw_parts v7 v2
+  r2 := v8
+  let v11 ← Bytes_encode_Sol r0 r2
+  let _ ← Bytes_drop r0
+  let v12 := r1
+  return v12
+
+def abi_field_size_Bytes (v0 : Bytes) : FeM UInt256 := do
+  let v1 ← Bytes_payload_size v0
+  let v2 := v1
+  let v3 ← Bytes_IS_DYNAMIC
+  if v3 then
+    let v4 := (UInt256.ofNat 32)
+    let v5 ← checkedAdd v4 v2
+    return v5
+  else
+    let v6 := ()
+    let v7 := v6
+    return v2
+
+def abi_single_root_size_Bytes (v0 : Bytes) : FeM UInt256 := do
+  let v1 ← abi_field_size_Bytes v0
+  return v1
+
+def abi_single_root_head_size_Bytes : FeM UInt256 := do
+  let v0 ← abi_field_head_size_Bytes
+  return v0
+
+def encode_single_root_alloc_Sol_Bytes (r0 : Bytes) : FeM MemBuffer := do
+  let mut r0 := r0
+  let mut r1 : MemBuffer := default
+  let mut r2 : AbiFrame := default
+  let v1 ← abi_single_root_size_Bytes r0
+  let v2 := v1
+  let v3 ← allocation_len v2
+  let v4 ← MemBuffer_new v3
+  let v5 := v4
+  r1 := v5
+  let v7 ← MemBuffer_ptr r1
+  let v8 ← AbiFrame_from_raw_parts v7 v2
+  let v9 := v8
+  r2 := v9
+  let v10 := (UInt256.ofNat 0)
+  let v11 ← abi_single_root_head_size_Bytes
+  let v13 ← AbiFrame_tail r2 v11
+  let v16 ← encode_field_Sol_Bytes r0 r2 v10 v13
+  let _ ← Bytes_drop r0
+  let v17 := r1
+  return v17
+
+def encode_return_alloc_Sol_Bytes (v0 : Bytes) : FeM MemBuffer := do
+  let v1 ← const_Bytes
+  if v1 then
+    let v2 := v0
+    let v3 ← encode_alloc_Sol_Bytes v2
+    return v3
+  else
+    let v4 := ()
+    let v5 := v4
+    let v6 := v0
+    let v7 ← encode_single_root_alloc_Sol_Bytes v6
+    return v7
+
+def Evm_return_value_Sol_Bytes (r0 : Bytes) : FeM Empty := do
+  let mut r0 := r0
+  let mut r1 : FixedMemBuffer_32 := default
+  let mut r2 : FixedMemBuffer_64 := default
+  let mut r3 : MemBuffer := default
+  let mut r4 : MemBuffer := default
+  let mut r5 : AbiFrame := default
+  let mut r6 : AbiFrame := default
+  let mut r7 : AbiFrame := default
+  let v1 ← Bytes_IS_DYNAMIC
+  let v2 := !v1
+  if v2 then
+    let v3 ← Bytes_HEAD_SIZE
+    let v4 := (UInt256.ofNat 32)
+    let v5 := decide (v3.toNat ≤ v4.toNat)
+    if v5 then
+      let v6 ← FixedMemBuffer_alloc_32
+      let v7 := v6
+      r1 := v7
+      let v9 ← FixedMemBuffer_ptr_32 r1
+      let v10 ← Bytes_HEAD_SIZE
+      let v11 ← AbiFrame_from_raw_parts v9 v10
+      r5 := v11
+      let v14 ← Bytes_encode_Sol r0 r5
+      let v16 ← FixedMemBuffer_ptr_32 r1
+      let v17 ← Bytes_HEAD_SIZE
+      let v18 ← downcast_unchecked_u256_usize v17
+      let v19 ← MemSlice_from_raw_parts_ref_u8 v16 v18
+      let v22 ← Evm_return_data v19
+      nomatch v22
+    else
+      let v23 ← Bytes_HEAD_SIZE
+      let v24 := (UInt256.ofNat 64)
+      let v25 := decide (v23.toNat ≤ v24.toNat)
+      if v25 then
+        let v26 ← FixedMemBuffer_alloc_64
+        let v27 := v26
+        r2 := v27
+        let v29 ← FixedMemBuffer_ptr_64 r2
+        let v30 ← Bytes_HEAD_SIZE
+        let v31 ← AbiFrame_from_raw_parts v29 v30
+        r6 := v31
+        let v34 ← Bytes_encode_Sol r0 r6
+        let v36 ← FixedMemBuffer_ptr_64 r2
+        let v37 ← Bytes_HEAD_SIZE
+        let v38 ← downcast_unchecked_u256_usize v37
+        let v39 ← MemSlice_from_raw_parts_ref_u8 v36 v38
+        let v42 ← Evm_return_data v39
+        nomatch v42
+      else
+        let v43 ← Bytes_HEAD_SIZE
+        let v44 ← downcast_unchecked_u256_usize v43
+        let v45 ← MemBuffer_new v44
+        let v46 := v45
+        r3 := v46
+        let v48 ← MemBuffer_ptr r3
+        let v49 ← Bytes_HEAD_SIZE
+        let v50 ← AbiFrame_from_raw_parts v48 v49
+        r7 := v50
+        let v53 ← Bytes_encode_Sol r0 r7
+        let v55 ← MemBuffer_span_ref r3
+        let v58 ← Evm_return_data v55
+        nomatch v58
+  else
+    let v59 := r0
+    let v60 := v59
+    let v61 ← encode_return_alloc_Sol_Bytes v60
+    let v62 := v61
+    r4 := v62
+    let v64 ← MemBuffer_span_ref r4
+    let v67 ← Evm_return_bytes v64
+    nomatch v67
+
+def FixedBytes_IS_DYNAMIC_4 : FeM Bool := do
+  let v0 := false
+  return v0
+
+def FixedBytes_HEAD_SIZE_4 : FeM UInt256 := do
+  let v0 := (UInt256.ofNat 32)
+  return v0
+
+def abi_field_head_size_FixedBytes_4 : FeM UInt256 := do
+  let v0 ← FixedBytes_IS_DYNAMIC_4
+  if v0 then
+    let v1 := (UInt256.ofNat 32)
+    return v1
+  else
+    let v2 := ()
+    let v3 := v2
+    let v4 ← FixedBytes_HEAD_SIZE_4
+    return v4
+
+def FixedBytes_decode_from_Sol_4_CallData (v0 : CallData) (v1 : UInt256) : FeM FixedBytes_4 := do
+  let v2 ← CallData_word_at v0 v1
+  let v3 := (UInt256.ofNat 4)
+  let v4 := v3
+  let v5 ← decode_fixed_bytes_word v2 v4
+  let v6 := (FixedBytes_4.mk v5)
+  return v6
+
+def decode_from_bounded_FixedBytes_4_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM FixedBytes_4 := do
+  let v3 ← FixedBytes_HEAD_SIZE_4
+  let v4 ← checked_frame_end_Sol v1 v3 v2
+  let v5 ← FixedBytes_decode_from_Sol_4_CallData v0 v1
+  return v5
+
+def decode_field_from_prechecked_head_Sol_FixedBytes_4_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM FixedBytes_4 := do
+  let v4 ← FixedBytes_IS_DYNAMIC_4
+  if v4 then
+    let v5 ← CallData_word_at v0 v2
+    let v6 := v5
+    let v7 ← checked_tail_Sol v1 v6
+    let v8 := v7
+    let v9 ← decode_from_bounded_FixedBytes_4_Sol_CallData v0 v8 v3
+    return v9
+  else
+    let v10 := ()
+    let v11 := v10
+    let v12 ← FixedBytes_decode_from_Sol_4_CallData v0 v2
+    return v12
+
+def decode_field_from_Sol_FixedBytes_4_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM FixedBytes_4 := do
+  let v3 ← FixedBytes_IS_DYNAMIC_4
+  if v3 then
+    let v4 ← CallData_word_at v0 v2
+    let v5 := v4
+    let v6 ← checked_tail_Sol v1 v5
+    let v7 ← FixedBytes_decode_from_Sol_4_CallData v0 v6
+    return v7
+  else
+    let v8 := ()
+    let v9 := v8
+    let v10 ← FixedBytes_decode_from_Sol_4_CallData v0 v2
+    return v10
+
+def decode_msg_field_from_Sol_FixedBytes_4_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM FixedBytes_4 := do
+  let v4 ← FixedBytes_IS_DYNAMIC_4
+  if v4 then
+    let v5 ← decode_field_from_prechecked_head_Sol_FixedBytes_4_CallData v0 v1 v2 v3
+    return v5
+  else
+    let v6 := ()
+    let v7 := v6
+    let v8 ← decode_field_from_Sol_FixedBytes_4_CallData v0 v1 v2
+    return v8
+

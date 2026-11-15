@@ -1,0 +1,12 @@
+set_option maxRecDepth 10000 in
+example : DEPOSIT_CONTRACT_TREE_DEPTH = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : MAX_DEPOSIT_COUNT = pure (UInt256.ofNat 4294967295) := rfl
+set_option maxRecDepth 10000 in
+example : Deposit_HEAD_SIZE = pure (UInt256.ofNat 128) := rfl
+set_option maxRecDepth 10000 in
+example : GetDepositRoot_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : GetDepositCount_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : SupportsInterface_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
