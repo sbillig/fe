@@ -3349,7 +3349,7 @@ structure Range_Known_1_Known_16 where
   «end» : Unit
 deriving Inhabited
 
-def assert (v0 : Bool) : FeM Unit := do
+def «assert» (v0 : Bool) : FeM Unit := do
   let v1 := v0
   let v2 := !v1
   if v2 then

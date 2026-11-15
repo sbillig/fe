@@ -12,7 +12,6 @@ core MemSlice_u8_read_le_u64 extern core::num::from_le<u64>
 core MemSlice_u8_value_ptr_u64 extern core::ptr::offset_bytes<u8>
 core alloc_bytes extern core::panic_code
 core alloc_bytes extern core::ptr::alloc_raw
-core assert extern core::panic
 core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
 core i128_to_word extern core::num::__bitcast<i256, u256>
 core i64_from_word extern core::num::__bitcast<u256, i64>
@@ -24,3 +23,4 @@ core u64_wrapping_mul extern core::num::__mul_u64
 core usize_MASK extern core::num::__bitnot_usize
 core usize_from_word extern core::num::__bitcast<u256, usize>
 core usize_wrapping_add extern core::num::__add_usize
+core «assert» extern core::panic

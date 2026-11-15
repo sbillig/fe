@@ -5849,6 +5849,9 @@ fn field_path(path: &NDataPath) -> Result<Vec<Step>, Unsupported> {
 fn lean_name(name: &str) -> String {
     const RESERVED: &[&str] = &[
         "abbrev",
+        // A `do` element from Lean 4.35 on: `assert P` for `vcgen`.  `let v ← assert c` parses
+        // as that element rather than a call, and `«assert»` as the call on every version.
+        "assert",
         "at",
         "axiom",
         "break",
@@ -5872,6 +5875,8 @@ fn lean_name(name: &str) -> String {
         "from",
         "fun",
         "have",
+        // A term and `do` element from Lean 4.35 on (`idbg e`), so no longer an identifier.
+        "idbg",
         "if",
         "import",
         "in",

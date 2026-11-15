@@ -105,7 +105,6 @@ core MemSlice_slice_ref_u64 unsafe-block 1 of 1
 core MemSlice_zero_u64 unsafe-block 1 of 1
 core alloc_bytes extern core::panic_code
 core alloc_bytes extern core::ptr::alloc_raw
-core assert extern core::panic
 core copy unsafe-fn the whole body
 core copy_raw unsafe-fn the whole body
 core copy_raw raw-memory core::ptr::copy_mem
@@ -130,6 +129,7 @@ core usize_wrapping_add extern core::num::__add_usize
 core usize_wrapping_mul extern core::num::__mul_usize
 core zero_bytes unsafe-fn the whole body
 core zero_bytes raw-memory core::ptr::zero_mem
+core «assert» extern core::panic
 std Evm_calldatacopy unsafe-block 1 of 2
 std Evm_calldatacopy unsafe-block 2 of 2
 std Evm_calldatacopy raw-memory std::evm::ops::calldatacopy

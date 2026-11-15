@@ -1,4 +1,4 @@
-export Lib (MemBuffer MemBuffer_empty MemBuffer_index_ref MemBuffer_len MemBuffer_read_le_u64 Range_Known_1_Known_16 Range_Known_1_Known_16.mk Range_Known_1_Known_4 Range_Known_1_Known_4.mk Range_Unknown_Unknown Range_Unknown_Unknown.mk Range_Unknown_Unknown_at Range_Unknown_Unknown_has Range_Unknown_Unknown_next Range_Unknown_Unknown_start Range_at_1_16 Range_at_1_4 Range_has_1_16 Range_has_1_4 Range_next_1_16 Range_next_1_4 Range_start_1_16 Range_start_1_4 array_at_ref_usize_3 array_has_usize_3 array_next_usize_3 array_start_usize_3 assert downcast_truncate_i128_i64 downcast_truncate_i128_u64 downcast_truncate_i64_u64 downcast_truncate_u128_u64 downcast_truncate_u256_u64 downcast_truncate_u256_usize downcast_truncate_u64_i64 u128_wrapping_sub u64_wrapping_mul)
+export Lib (MemBuffer MemBuffer_empty MemBuffer_index_ref MemBuffer_len MemBuffer_read_le_u64 Range_Known_1_Known_16 Range_Known_1_Known_16.mk Range_Known_1_Known_4 Range_Known_1_Known_4.mk Range_Unknown_Unknown Range_Unknown_Unknown.mk Range_Unknown_Unknown_at Range_Unknown_Unknown_has Range_Unknown_Unknown_next Range_Unknown_Unknown_start Range_at_1_16 Range_at_1_4 Range_has_1_16 Range_has_1_4 Range_next_1_16 Range_next_1_4 Range_start_1_16 Range_start_1_4 array_at_ref_usize_3 array_has_usize_3 array_next_usize_3 array_start_usize_3 downcast_truncate_i128_i64 downcast_truncate_i128_u64 downcast_truncate_i64_u64 downcast_truncate_u128_u64 downcast_truncate_u256_u64 downcast_truncate_u256_usize downcast_truncate_u64_i64 u128_wrapping_sub u64_wrapping_mul «assert»)
 
 structure Mont_Base where
   l0 : UInt256
@@ -513,7 +513,7 @@ def Mont_new_Base (v0 : UInt256) : FeM Mont_Base := do
   let v1 := v0
   let v2 ← Base_VALUE
   let v3 := decide (v1.toNat < v2.toNat)
-  let v4 ← assert v3
+  let v4 ← «assert» v3
   let v5 ← raw_Base v0
   r0 := v5
   let v6 ← Base_R2
@@ -1066,7 +1066,7 @@ def Mont_new_Order (v0 : UInt256) : FeM Mont_Order := do
   let v1 := v0
   let v2 ← Order_VALUE
   let v3 := decide (v1.toNat < v2.toNat)
-  let v4 ← assert v3
+  let v4 ← «assert» v3
   let v5 ← raw_Order v0
   r0 := v5
   let v6 ← Order_R2
@@ -4076,7 +4076,7 @@ def recover (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM Op
     let mut r16 := r16
     let mut r17 := r17
     let mut r18 := r18
-    let v25 ← assert v4
+    let v25 ← «assert» v4
     let v26 ← Mont_new_Base v2
     let v27 := v26
     r0 := v27
@@ -4723,7 +4723,7 @@ def Mont_new_Bn254Base (v0 : UInt256) : FeM Mont_Bn254Base := do
   let v1 := v0
   let v2 ← Bn254Base_VALUE
   let v3 := decide (v1.toNat < v2.toNat)
-  let v4 ← assert v3
+  let v4 ← «assert» v3
   let v5 ← raw_Bn254Base v0
   r0 := v5
   let v6 ← Bn254Base_R2

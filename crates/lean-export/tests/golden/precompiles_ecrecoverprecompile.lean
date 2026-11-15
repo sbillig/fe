@@ -1,4 +1,4 @@
-export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data MemBuffer MemBuffer_drop MemBuffer_empty MemBuffer_new MemBuffer_span_ref MemBuffer_try_new MemBuffer_write_word Option_u256 Option_u256.None Option_u256.Some Range_Known_0_Unknown Range_Known_0_Unknown.mk Range_at_0 Range_has_0 Range_next_0 Range_start_0 assert downcast_truncate_u256_u64 downcast_unchecked_u256_usize downcast_unchecked_usize_u64)
+export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data MemBuffer MemBuffer_drop MemBuffer_empty MemBuffer_new MemBuffer_span_ref MemBuffer_try_new MemBuffer_write_word Option_u256 Option_u256.None Option_u256.Some Range_Known_0_Unknown Range_Known_0_Unknown.mk Range_at_0 Range_has_0 Range_next_0 Range_start_0 downcast_truncate_u256_u64 downcast_unchecked_u256_usize downcast_unchecked_usize_u64 «assert»)
 export Shared (N Output Output.mk SUCCESS host_allocation recover word_at_MemBuffer)
 
 structure Keccak256 where
@@ -774,7 +774,7 @@ def Keccak256_update_word (v0 : Keccak256) (v1 : UInt256) (v2 : UInt256) : FeM (
   let v6 := v2
   let v7 := (UInt256.ofNat 32)
   let v8 := decide (v6.toNat ≤ v7.toNat)
-  let v9 ← assert v8
+  let v9 ← «assert» v8
   let v10 := v2
   let v11 := (UInt256.ofNat 0)
   let v12 := decide (v10 ≠ v11)

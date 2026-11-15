@@ -17,7 +17,6 @@ core MemBuffer_write_be_u256 extern core::num::to_be<u256>
 core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
 core alloc_bytes extern core::panic_code
 core alloc_bytes extern core::ptr::alloc_raw
-core assert extern core::panic
 core dealloc_u8 unsafe-fn the whole body
 core dealloc_u8 extern core::ptr::dealloc_raw
 core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
@@ -29,6 +28,7 @@ core usize_from_word extern core::num::__bitcast<u256, usize>
 core usize_wrapping_add extern core::num::__add_usize
 core zero_bytes unsafe-fn the whole body
 core zero_bytes raw-memory core::ptr::zero_mem
+core «assert» extern core::panic
 std Evm_calldatacopy unsafe-block 1 of 2
 std Evm_calldatacopy unsafe-block 2 of 2
 std Evm_calldatacopy raw-memory std::evm::ops::calldatacopy

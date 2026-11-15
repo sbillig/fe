@@ -1,4 +1,4 @@
-export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data Evm_revert MemArray_as_slice_mut_u64 MemArray_as_slice_ref_u64 MemArray_drop_u64 MemArray_index_mut_u64 MemArray_index_ref_u64 MemArray_len_u64 MemArray_ptr_u64 MemArray_try_new_zeroed_u64 MemArray_u64 MemArray_zero_u64 MemBuffer MemBuffer_drop MemBuffer_empty MemBuffer_len MemBuffer_new MemBuffer_ptr MemBuffer_span_ref MemBuffer_try_new MemSlice_copy_from_u64 MemSlice_empty_u8 MemSlice_head_mut_u64 MemSlice_head_ref_u64 MemSlice_len_u64 MemSlice_ptr_u64 MemSlice_slice_mut_u64 MemSlice_slice_ref_u64 MemSlice_u64 Option_MemArray_u64 Option_MemArray_u64.None Option_MemArray_u64.Some Range_Known_0_Known_5 Range_Known_0_Known_5.mk Range_Known_0_Known_6 Range_Known_0_Known_6.mk Range_Known_0_Known_8 Range_Known_0_Known_8.mk Range_Known_0_Unknown Range_Known_0_Unknown.mk Range_Known_1_Unknown Range_Known_1_Unknown.mk Range_Unknown_Unknown Range_Unknown_Unknown.mk Range_Unknown_Unknown_at Range_Unknown_Unknown_has Range_Unknown_Unknown_next Range_Unknown_Unknown_start Range_at_0 Range_at_0_5 Range_at_0_6 Range_at_0_8 Range_at_1 Range_has_0 Range_has_0_5 Range_has_0_6 Range_has_0_8 Range_has_1 Range_next_0 Range_next_0_5 Range_next_0_6 Range_next_0_8 Range_next_1 Range_start_0 Range_start_0_5 Range_start_0_6 Range_start_0_8 Range_start_1 assert cast_u8_u64 downcast_truncate_u128_u64 downcast_truncate_u256_u64 downcast_truncate_u256_usize downcast_truncate_u64_u8 downcast_truncate_u64_usize downcast_truncate_usize_u64 downcast_truncate_usize_usize downcast_unchecked_u256_usize)
+export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data Evm_revert MemArray_as_slice_mut_u64 MemArray_as_slice_ref_u64 MemArray_drop_u64 MemArray_index_mut_u64 MemArray_index_ref_u64 MemArray_len_u64 MemArray_ptr_u64 MemArray_try_new_zeroed_u64 MemArray_u64 MemArray_zero_u64 MemBuffer MemBuffer_drop MemBuffer_empty MemBuffer_len MemBuffer_new MemBuffer_ptr MemBuffer_span_ref MemBuffer_try_new MemSlice_copy_from_u64 MemSlice_empty_u8 MemSlice_head_mut_u64 MemSlice_head_ref_u64 MemSlice_len_u64 MemSlice_ptr_u64 MemSlice_slice_mut_u64 MemSlice_slice_ref_u64 MemSlice_u64 Option_MemArray_u64 Option_MemArray_u64.None Option_MemArray_u64.Some Range_Known_0_Known_5 Range_Known_0_Known_5.mk Range_Known_0_Known_6 Range_Known_0_Known_6.mk Range_Known_0_Known_8 Range_Known_0_Known_8.mk Range_Known_0_Unknown Range_Known_0_Unknown.mk Range_Known_1_Unknown Range_Known_1_Unknown.mk Range_Unknown_Unknown Range_Unknown_Unknown.mk Range_Unknown_Unknown_at Range_Unknown_Unknown_has Range_Unknown_Unknown_next Range_Unknown_Unknown_start Range_at_0 Range_at_0_5 Range_at_0_6 Range_at_0_8 Range_at_1 Range_has_0 Range_has_0_5 Range_has_0_6 Range_has_0_8 Range_has_1 Range_next_0 Range_next_0_5 Range_next_0_6 Range_next_0_8 Range_next_1 Range_start_0 Range_start_0_5 Range_start_0_6 Range_start_0_8 Range_start_1 cast_u8_u64 downcast_truncate_u128_u64 downcast_truncate_u256_u64 downcast_truncate_u256_usize downcast_truncate_u64_u8 downcast_truncate_u64_usize downcast_truncate_usize_u64 downcast_truncate_usize_usize downcast_unchecked_u256_usize «assert»)
 export Shared (MemBuffer_byte_at MemBuffer_lane_at MemBuffer_len_1 Output Output.mk SUCCESS adc host_allocation sbb)
 
 structure Exponent where
@@ -809,7 +809,7 @@ def Modulus_try_new (v0 : MemArray_u64) (v1 : UInt256) : FeM Option_Modulus := d
   let b3 : MemArray_u64 → Range_Known_0_Unknown → Bool → FeM Option_Modulus := fun r0 r1 v2 => do
     let mut r0 := r0
     let mut r1 := r1
-    let v25 ← assert v2
+    let v25 ← «assert» v2
     let v26 := v1
     let v27 := (UInt256.ofNat 1)
     let v28 ← IntTy.sub (.u 64) v26 v27
@@ -7019,7 +7019,7 @@ def Modulus_reduce (v0 : Modulus) (v1 : MemArray_u64) (v2 : UInt256) : FeM (Unit
     let mut r10 := r10
     let mut r11 := r11
     let mut v1 := v1
-    let v30 ← assert v3
+    let v30 ← «assert» v3
     let v32 ← MemArray_ptr_u64 v1
     let v33 := v32
     let v36 ← MemArray_ptr_u64 v0.limbs
@@ -7694,7 +7694,7 @@ def Montgomery_mul (v0 : Montgomery) (v1 : MemSlice_u64) (v2 : MemSlice_u64) (v3
     let mut r9 := r9
     let mut r10 := r10
     let mut v3 := v3
-    let v29 ← assert v4
+    let v29 ← «assert» v4
     let v30 ← MemSlice_ptr_u64 v1
     let v31 := v30
     let v32 ← MemSlice_ptr_u64 v2
@@ -8151,7 +8151,7 @@ def Modulus_mul_mod (v0 : Modulus) (v1 : MemArray_u64) (v2 : MemArray_u64) (v3 :
     let mut r2 := r2
     let mut r3 := r3
     let mut v3 := v3
-    let v24 ← assert v4
+    let v24 ← «assert» v4
     let v25 ← MemArray_ptr_u64 v1
     let v26 := v25
     let v27 ← MemArray_ptr_u64 v2
@@ -9019,7 +9019,7 @@ def low_product (v0 : MemSlice_u64) (v1 : MemSlice_u64) (v2 : MemSlice_u64) : Fe
     let mut r5 := r5
     let mut r6 := r6
     let mut v2 := v2
-    let v19 ← assert v3
+    let v19 ← «assert» v3
     let v20 ← MemSlice_ptr_u64 v0
     let v21 := v20
     let v22 ← MemSlice_ptr_u64 v1

@@ -1,4 +1,4 @@
-export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data Evm_revert MemBuffer MemBuffer_index_ref MemBuffer_len MemBuffer_new MemBuffer_span_ref MemBuffer_write_le_u64 MemSlice_empty_u8 Range_Known_0_Known_16 Range_Known_0_Known_16.mk Range_Known_0_Known_8 Range_Known_0_Known_8.mk Range_at_0_16 Range_at_0_8 Range_has_0_16 Range_has_0_8 Range_next_0_16 Range_next_0_8 Range_start_0_16 Range_start_0_8 assert downcast_truncate_u64_usize downcast_unchecked_u256_usize u64_wrapping_add)
+export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data Evm_revert MemBuffer MemBuffer_index_ref MemBuffer_len MemBuffer_new MemBuffer_span_ref MemBuffer_write_le_u64 MemSlice_empty_u8 Range_Known_0_Known_16 Range_Known_0_Known_16.mk Range_Known_0_Known_8 Range_Known_0_Known_8.mk Range_at_0_16 Range_at_0_8 Range_has_0_16 Range_has_0_8 Range_next_0_16 Range_next_0_8 Range_start_0_16 Range_start_0_8 downcast_truncate_u64_usize downcast_unchecked_u256_usize u64_wrapping_add «assert»)
 export Shared (MemBuffer_byte_at MemBuffer_lane_at MemBuffer_len_1)
 
 def init : FeM Unit := do
@@ -39,7 +39,7 @@ def rounds_MemBuffer (v0 : MemBuffer) : FeM UInt256 := do
   let v1 ← MemBuffer_len_1 v0
   let v2 ← INPUT_LEN
   let v3 := decide (v1 = v2)
-  let v4 ← assert v3
+  let v4 ← «assert» v3
   let v5 := (UInt256.ofNat 0)
   let v6 ← MemBuffer_byte_at v0 v5
   let v7 := v6
@@ -1508,7 +1508,7 @@ def compress_MemBuffer (v0 : MemBuffer) : FeM (Vector UInt256 8) := do
     let mut r6 := r6
     let mut r7 := r7
     let mut r8 := r8
-    let v17 ← assert v1
+    let v17 ← «assert» v1
     let v18 := (UInt256.ofNat 0)
     let v19 := Vector.replicate 8 v18
     let v20 := v19
