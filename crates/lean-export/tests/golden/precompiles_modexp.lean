@@ -11881,7 +11881,7 @@ def encoded (v0 : MemArray_u64) (r0 : MemBuffer) : FeM MemBuffer := do
         b1 r0 r1 r2 v76
       partial_fixpoint
       if v27 then
-        let v28 := IntTy.swapBytes (.u 64) v22
+        let v28 := v22
         let v29 := (UInt256.ofNat 8)
         let v30 := v29 * v20
         let v31 := v5 - v30

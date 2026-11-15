@@ -1,4 +1,4 @@
-instances compared: 518
+instances compared: 519
 
 expected: drops opaque in the generic body: 17
   Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there
@@ -25,7 +25,7 @@ places of parameters in another space: 4
   immutables::capped<Config>: root 0 in code where the generic body has memory
   lib::bump<Store>: root 0 in storage where the generic body has memory
 
-unexpected: the first other difference: 80
+unexpected: the first other difference: 81
   (T0)::encode<Sol, u256>: v6 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 4 }, Some("Load"))
   (T0)::payload_size<u256>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Load"))
   (T0, T1)::decode_from_prechecked_head<Sol, u256, u256, CallData>: v18 (Statement { block: NBlockId(0), statement: 17 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 17 }, Some("AggregateMake"))
@@ -92,6 +92,7 @@ unexpected: the first other difference: 80
   core::num::swap_bytes<u32>: v0: type View u32 where the instance has u32
   core::num::swap_bytes<u64>: v0: type View u64 where the instance has u64
   core::num::to_be<u256>: v0: type View u256 where the instance has u256
+  core::num::to_be<u64>: v0: type View u64 where the instance has u64
   core::num::to_le<u64>: v0: type View u64 where the instance has u64
   core::num::trailing_zeros<u64>: v0: type View u64 where the instance has u64
   core::ptr::cast<u8, u8>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("PointerCast")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Forward"))

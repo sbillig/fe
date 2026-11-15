@@ -58,7 +58,7 @@ own encoded unsafe-block 1 of 2
 own encoded unsafe-block 2 of 2
 own encoded raw-memory store of u64 through *u64
 own encoded raw-memory store of u8 through *u8
-own encoded extern core::num::swap_bytes<u64>
+own encoded extern core::num::to_be<u64>
 own encoded extern core::ptr::offset_bytes<u8>
 own even_power extern core::num::trailing_zeros<u64>
 own input_limb_MemBuffer extern core::num::swap_bytes<u64>

@@ -1,7 +1,9 @@
 // fevm's precompiles as contracts, one for each. The other files of `src` are copied verbatim
 // from `ingots/precompiles/src` of fe-lang/fevm at commit
-// a631a777b7d1761bccfc8af4e7471643905b9354, and from its `lib.fe` so are `word_at` and the
-// definitions from `SUCCESS` to `ecrecover` below. `keccak/` is fe-lang/keccak at commit
+// a631a777b7d1761bccfc8af4e7471643905b9354, except `modexp.fe`, which is from commit
+// 0f5a423d5084715c00196a8ef2c8116c65e20da0 (branch `fix/modexp-byte-order`, not yet on
+// fevm's main), and from its `lib.fe` so are `word_at` and the definitions from `SUCCESS` to
+// `ecrecover` below. `keccak/` is fe-lang/keccak at commit
 // 345d5088de986fe54b23a6aaa3a33e1c349d0960, the dependency fevm's `fe.toml` pins, for its
 // `ByteSource` and `Keccak256`. The rest of this file is not fevm's.
 use core::{MemBuffer, MemSpan, Option}

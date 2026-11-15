@@ -1,5 +1,5 @@
 use core::{MemArray, MemBuffer, MemSlice, Option}
-use core::num::{leading_zeros, swap_bytes, trailing_zeros}
+use core::num::{leading_zeros, swap_bytes, to_be, trailing_zeros}
 use core::ptr::{cast, offset_bytes}
 use keccak::ByteSource
 use ingot::{FAILURE, Output, SUCCESS, host_allocation}
@@ -655,8 +655,9 @@ fn encoded(_ result: MemArray<u64>, _ output: own MemBuffer) -> MemBuffer {
     for i in 0..result.len() {
         let value = result[i]
         if 8 * i + 8 <= len {
-            // A whole limb is one big-endian lane.
-            unsafe { *cast<u8, u64>(offset_bytes(bytes, len - 8 * i - 8)) = swap_bytes(value) }
+            // A whole limb is one big-endian lane, written through the target's
+            // byte order.
+            unsafe { *cast<u8, u64>(offset_bytes(bytes, len - 8 * i - 8)) = to_be(value) }
         } else {
             for byte in 0..8 {
                 let position = 8 * i + byte
