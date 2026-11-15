@@ -310,11 +310,12 @@ fn compile_runtime_objects(
     Ok(artifacts)
 }
 
-/// A compiled module's objects, the trace facts of its optimized IR, and that IR when asked for.
+/// A compiled module's objects, the trace facts of its optimized IR, and that IR's text when
+/// asked for.
 type CompiledModule = (
     Vec<ObjectArtifact>,
     Vec<trace_facts::TraceFact>,
-    Option<sidecar::PostOptModule>,
+    Option<String>,
 );
 
 fn compile_runtime_objects_with_postopt_trace(
@@ -324,7 +325,8 @@ fn compile_runtime_objects_with_postopt_trace(
     postopt_trace_owner: Option<&str>,
     capture_ir: bool,
 ) -> Result<CompiledModule, LowerError> {
-    let mut compile = evm_compile(module, opt_level, emit_observability);
+    let mut compile =
+        evm_compile(module, opt_level, emit_observability).with_lowering_record(capture_ir);
     debug_ensure_module_sonatina_ir_valid(compile.optimize())?;
     if emit_observability && let Some(owner) = postopt_trace_owner {
         stamp_postopt_instruction_provenance(owner, &mut compile);
@@ -339,7 +341,7 @@ fn compile_runtime_objects_with_postopt_trace(
         Vec::new()
     };
     // The module the backend compiles is the optimized one, unchanged.
-    let post_opt = capture_ir.then(|| sidecar::PostOptModule::new(compile.optimize()));
+    let post_opt = capture_ir.then(|| ModuleWriter::new(compile.optimize()).dump_string());
     let artifacts = compile
         .compile()
         .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
@@ -1746,7 +1748,9 @@ fn compile_lowered_object(
         .into_iter()
         .find(|artifact| artifact.object.0.as_str() == name)
         .ok_or_else(|| LowerError::Internal(format!("compiled object `{name}` not found")))?;
-    let sidecar = post_opt.map(|post_opt| post_opt.sidecar(&name, &artifact));
+    let sidecar = post_opt
+        .map(|ir| SonatinaSidecar::new(ir, &name, &artifact))
+        .transpose()?;
     Ok((artifact, trace, sidecar))
 }
 
@@ -2472,6 +2476,7 @@ pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
             bytes: Vec::new(),
             symtab: Default::default(),
             observability: Some(test_embed_observability(0, &[])),
+            lowering: None,
         };
         let symbol_id = SymbolId::Embed(EmbedSymbol::from("embedded".to_string()));
         let err = required_embed_symbol(&section_artifact, &symbol_id, &embed_key, "embedded")
@@ -2518,6 +2523,7 @@ pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
             bytes: vec![0; 12],
             symtab,
             observability: Some(test_embed_observability(4, &[])),
+            lowering: None,
         };
         let err = required_embed_symbol_at(
             &artifact,
