@@ -652,7 +652,7 @@ def Name_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Name as Decode>::decode_from<CallData>` -/
-def Name_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Name := do
+def Name_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Name := do
   let v2 := (Name.mk)
   return v2
 
@@ -691,13 +691,13 @@ def Approve_HEAD_SIZE : FeM UInt256 := do
   return v4
 
 /-- `<Approve as Decode>::decode_from<CallData>` -/
-def Approve_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Approve := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def Approve_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Approve := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := __fe_msg_decode_base + v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
-  let v11 := (Approve.mk __fe_field_0 __fe_field_1)
+  let v8 := v1 + v7
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
+  let v11 := (Approve.mk v4 v9)
   return v11
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Approve, Sol, CallData>` -/
@@ -731,7 +731,7 @@ def TotalSupply_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<TotalSupply as Decode>::decode_from<CallData>` -/
-def TotalSupply_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM TotalSupply := do
+def TotalSupply_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM TotalSupply := do
   let v2 := (TotalSupply.mk)
   return v2
 
@@ -772,18 +772,18 @@ def TransferFrom_HEAD_SIZE : FeM UInt256 := do
   return v6
 
 /-- `<TransferFrom as Decode>::decode_from<CallData>` -/
-def TransferFrom_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM TransferFrom := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def TransferFrom_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM TransferFrom := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := __fe_msg_decode_base + v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
+  let v8 := v1 + v7
+  let v9 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v8 v2
   let v12 ← abi_field_head_size_Address
-  let v13 := __fe_msg_decode_base + v12
+  let v13 := v1 + v12
   let v14 ← abi_field_head_size_Address
   let v15 := v13 + v14
-  let __fe_field_2 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v15 __fe_msg_decode_input_len
-  let v18 := (TransferFrom.mk __fe_field_0 __fe_field_1 __fe_field_2)
+  let v16 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v15 v2
+  let v18 := (TransferFrom.mk v4 v9 v16)
   return v18
 
 /-- `core::abi::Decode::decode_from_prechecked_head<TransferFrom, Sol, CallData>` -/
@@ -819,10 +819,10 @@ def Withdraw_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<Withdraw as Decode>::decode_from<CallData>` -/
-def Withdraw_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Withdraw := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (Withdraw.mk __fe_field_0)
+def Withdraw_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Withdraw := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
+  let v6 := (Withdraw.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Withdraw, Sol, CallData>` -/
@@ -856,7 +856,7 @@ def Decimals_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Decimals as Decode>::decode_from<CallData>` -/
-def Decimals_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Decimals := do
+def Decimals_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Decimals := do
   let v2 := (Decimals.mk)
   return v2
 
@@ -893,10 +893,10 @@ def BalanceOf_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<BalanceOf as Decode>::decode_from<CallData>` -/
-def BalanceOf_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM BalanceOf := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (BalanceOf.mk __fe_field_0)
+def BalanceOf_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM BalanceOf := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
+  let v6 := (BalanceOf.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<BalanceOf, Sol, CallData>` -/
@@ -930,7 +930,7 @@ def Symbol_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Symbol as Decode>::decode_from<CallData>` -/
-def Symbol_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Symbol := do
+def Symbol_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Symbol := do
   let v2 := (Symbol.mk)
   return v2
 
@@ -969,13 +969,13 @@ def Transfer_HEAD_SIZE : FeM UInt256 := do
   return v4
 
 /-- `<Transfer as Decode>::decode_from<CallData>` -/
-def Transfer_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Transfer_1 := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def Transfer_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Transfer_1 := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := __fe_msg_decode_base + v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
-  let v11 := (Transfer_1.mk __fe_field_0 __fe_field_1)
+  let v8 := v1 + v7
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
+  let v11 := (Transfer_1.mk v4 v9)
   return v11
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Transfer, Sol, CallData>` -/
@@ -1009,7 +1009,7 @@ def Deposit_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Deposit as Decode>::decode_from<CallData>` -/
-def Deposit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Deposit_1 := do
+def Deposit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Deposit_1 := do
   let v2 := (Deposit_1.mk)
   return v2
 
@@ -1047,13 +1047,13 @@ def Allowance_HEAD_SIZE : FeM UInt256 := do
   return v4
 
 /-- `<Allowance as Decode>::decode_from<CallData>` -/
-def Allowance_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Allowance := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def Allowance_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Allowance := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := __fe_msg_decode_base + v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
-  let v11 := (Allowance.mk __fe_field_0 __fe_field_1)
+  let v8 := v1 + v7
+  let v9 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v8 v2
+  let v11 := (Allowance.mk v4 v9)
   return v11
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Allowance, Sol, CallData>` -/

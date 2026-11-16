@@ -54,16 +54,16 @@ def Sum_HEAD_SIZE : FeM UInt256 := do
   let v20 ← checkedAdd v18 v19
   return v20
 
-def Sum_decode_from_CallData_k5 (__fe_field_0 : UInt256) (__fe_field_1 : UInt256) (__fe_field_2 : UInt256) (__fe_field_3 : UInt256) (__fe_field_4 : UInt256) (__fe_field_5 : UInt256) (__fe_field_6 : UInt256) (__fe_field_7 : UInt256) (__fe_field_8 : UInt256) (__fe_field_9 : UInt256) : FeM Sum := do
-  let v123 := (Sum.mk __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3 __fe_field_4 __fe_field_5 __fe_field_6 __fe_field_7 __fe_field_8 __fe_field_9)
+def Sum_decode_from_CallData_k5 (v4 : UInt256) (v9 : UInt256) (v16 : UInt256) (v25 : UInt256) (v36 : UInt256) (v49 : UInt256) (v64 : UInt256) (v81 : UInt256) (v100 : UInt256) (v121 : UInt256) : FeM Sum := do
+  let v123 := (Sum.mk v4 v9 v16 v25 v36 v49 v64 v81 v100 v121)
   return v123
 
-def Sum_decode_from_CallData_k4 (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) (__fe_msg_decode_input_len : UInt256) (__fe_field_0 : UInt256) (__fe_field_1 : UInt256) (__fe_field_2 : UInt256) (__fe_field_3 : UInt256) (__fe_field_4 : UInt256) (__fe_field_5 : UInt256) (__fe_field_6 : UInt256) (__fe_field_7 : UInt256) (v97 : UInt256) : FeM Sum := do
+def Sum_decode_from_CallData_k4 (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v4 : UInt256) (v9 : UInt256) (v16 : UInt256) (v25 : UInt256) (v36 : UInt256) (v49 : UInt256) (v64 : UInt256) (v81 : UInt256) (v97 : UInt256) : FeM Sum := do
   let v98 ← abi_field_head_size_u256
   let v99 ← checkedAdd v97 v98
-  let __fe_field_8 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v99 __fe_msg_decode_input_len
+  let v100 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v99 v2
   let v103 ← abi_field_head_size_u256
-  let v104 ← checkedAdd __fe_msg_decode_base v103
+  let v104 ← checkedAdd v1 v103
   let v105 ← abi_field_head_size_u256
   let v106 ← checkedAdd v104 v105
   let v107 ← abi_field_head_size_u256
@@ -80,10 +80,10 @@ def Sum_decode_from_CallData_k4 (__fe_msg_decode_input : CallData) (__fe_msg_dec
   let v118 ← checkedAdd v116 v117
   let v119 ← abi_field_head_size_u256
   let v120 ← checkedAdd v118 v119
-  let __fe_field_9 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v120 __fe_msg_decode_input_len
-  Sum_decode_from_CallData_k5 __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3 __fe_field_4 __fe_field_5 __fe_field_6 __fe_field_7 __fe_field_8 __fe_field_9
+  let v121 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v120 v2
+  Sum_decode_from_CallData_k5 v4 v9 v16 v25 v36 v49 v64 v81 v100 v121
 
-def Sum_decode_from_CallData_k3 (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) (__fe_msg_decode_input_len : UInt256) (__fe_field_0 : UInt256) (__fe_field_1 : UInt256) (__fe_field_2 : UInt256) (__fe_field_3 : UInt256) (__fe_field_4 : UInt256) (__fe_field_5 : UInt256) (__fe_field_6 : UInt256) (v72 : UInt256) (v73 : UInt256) : FeM Sum := do
+def Sum_decode_from_CallData_k3 (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v4 : UInt256) (v9 : UInt256) (v16 : UInt256) (v25 : UInt256) (v36 : UInt256) (v49 : UInt256) (v64 : UInt256) (v72 : UInt256) (v73 : UInt256) : FeM Sum := do
   let v74 ← checkedAdd v72 v73
   let v75 ← abi_field_head_size_u256
   let v76 ← checkedAdd v74 v75
@@ -91,9 +91,9 @@ def Sum_decode_from_CallData_k3 (__fe_msg_decode_input : CallData) (__fe_msg_dec
   let v78 ← checkedAdd v76 v77
   let v79 ← abi_field_head_size_u256
   let v80 ← checkedAdd v78 v79
-  let __fe_field_7 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v80 __fe_msg_decode_input_len
+  let v81 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v80 v2
   let v84 ← abi_field_head_size_u256
-  let v85 ← checkedAdd __fe_msg_decode_base v84
+  let v85 ← checkedAdd v1 v84
   let v86 ← abi_field_head_size_u256
   let v87 ← checkedAdd v85 v86
   let v88 ← abi_field_head_size_u256
@@ -106,11 +106,11 @@ def Sum_decode_from_CallData_k3 (__fe_msg_decode_input : CallData) (__fe_msg_dec
   let v95 ← checkedAdd v93 v94
   let v96 ← abi_field_head_size_u256
   let v97 ← checkedAdd v95 v96
-  Sum_decode_from_CallData_k4 __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_input_len __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3 __fe_field_4 __fe_field_5 __fe_field_6 __fe_field_7 v97
+  Sum_decode_from_CallData_k4 v0 v1 v2 v4 v9 v16 v25 v36 v49 v64 v81 v97
 
-def Sum_decode_from_CallData_k2 (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) (__fe_msg_decode_input_len : UInt256) (__fe_field_0 : UInt256) (__fe_field_1 : UInt256) (__fe_field_2 : UInt256) (__fe_field_3 : UInt256) (__fe_field_4 : UInt256) (__fe_field_5 : UInt256) : FeM Sum := do
+def Sum_decode_from_CallData_k2 (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v4 : UInt256) (v9 : UInt256) (v16 : UInt256) (v25 : UInt256) (v36 : UInt256) (v49 : UInt256) : FeM Sum := do
   let v52 ← abi_field_head_size_u256
-  let v53 ← checkedAdd __fe_msg_decode_base v52
+  let v53 ← checkedAdd v1 v52
   let v54 ← abi_field_head_size_u256
   let v55 ← checkedAdd v53 v54
   let v56 ← abi_field_head_size_u256
@@ -121,28 +121,28 @@ def Sum_decode_from_CallData_k2 (__fe_msg_decode_input : CallData) (__fe_msg_dec
   let v61 ← checkedAdd v59 v60
   let v62 ← abi_field_head_size_u256
   let v63 ← checkedAdd v61 v62
-  let __fe_field_6 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v63 __fe_msg_decode_input_len
+  let v64 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v63 v2
   let v67 ← abi_field_head_size_u256
-  let v68 ← checkedAdd __fe_msg_decode_base v67
+  let v68 ← checkedAdd v1 v67
   let v69 ← abi_field_head_size_u256
   let v70 ← checkedAdd v68 v69
   let v71 ← abi_field_head_size_u256
   let v72 ← checkedAdd v70 v71
   let v73 ← abi_field_head_size_u256
-  Sum_decode_from_CallData_k3 __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_input_len __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3 __fe_field_4 __fe_field_5 __fe_field_6 v72 v73
+  Sum_decode_from_CallData_k3 v0 v1 v2 v4 v9 v16 v25 v36 v49 v64 v72 v73
 
-def Sum_decode_from_CallData_k1 (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) (__fe_msg_decode_input_len : UInt256) (__fe_field_0 : UInt256) (__fe_field_1 : UInt256) (__fe_field_2 : UInt256) (__fe_field_3 : UInt256) : FeM Sum := do
+def Sum_decode_from_CallData_k1 (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v4 : UInt256) (v9 : UInt256) (v16 : UInt256) (v25 : UInt256) : FeM Sum := do
   let v28 ← abi_field_head_size_u256
-  let v29 ← checkedAdd __fe_msg_decode_base v28
+  let v29 ← checkedAdd v1 v28
   let v30 ← abi_field_head_size_u256
   let v31 ← checkedAdd v29 v30
   let v32 ← abi_field_head_size_u256
   let v33 ← checkedAdd v31 v32
   let v34 ← abi_field_head_size_u256
   let v35 ← checkedAdd v33 v34
-  let __fe_field_4 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v35 __fe_msg_decode_input_len
+  let v36 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v35 v2
   let v39 ← abi_field_head_size_u256
-  let v40 ← checkedAdd __fe_msg_decode_base v39
+  let v40 ← checkedAdd v1 v39
   let v41 ← abi_field_head_size_u256
   let v42 ← checkedAdd v40 v41
   let v43 ← abi_field_head_size_u256
@@ -151,29 +151,29 @@ def Sum_decode_from_CallData_k1 (__fe_msg_decode_input : CallData) (__fe_msg_dec
   let v46 ← checkedAdd v44 v45
   let v47 ← abi_field_head_size_u256
   let v48 ← checkedAdd v46 v47
-  let __fe_field_5 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v48 __fe_msg_decode_input_len
-  Sum_decode_from_CallData_k2 __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_input_len __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3 __fe_field_4 __fe_field_5
+  let v49 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v48 v2
+  Sum_decode_from_CallData_k2 v0 v1 v2 v4 v9 v16 v25 v36 v49
 
 /-- `<Sum as Decode>::decode_from<CallData>` -/
-def Sum_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Sum := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def Sum_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Sum := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_u256
-  let v8 ← checkedAdd __fe_msg_decode_base v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
+  let v8 ← checkedAdd v1 v7
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
   let v12 ← abi_field_head_size_u256
-  let v13 ← checkedAdd __fe_msg_decode_base v12
+  let v13 ← checkedAdd v1 v12
   let v14 ← abi_field_head_size_u256
   let v15 ← checkedAdd v13 v14
-  let __fe_field_2 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v15 __fe_msg_decode_input_len
+  let v16 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v15 v2
   let v19 ← abi_field_head_size_u256
-  let v20 ← checkedAdd __fe_msg_decode_base v19
+  let v20 ← checkedAdd v1 v19
   let v21 ← abi_field_head_size_u256
   let v22 ← checkedAdd v20 v21
   let v23 ← abi_field_head_size_u256
   let v24 ← checkedAdd v22 v23
-  let __fe_field_3 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v24 __fe_msg_decode_input_len
-  Sum_decode_from_CallData_k1 __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_input_len __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3
+  let v25 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v24 v2
+  Sum_decode_from_CallData_k1 v0 v1 v2 v4 v9 v16 v25
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Sum, Sol, CallData>` -/
 def decode_from_prechecked_head_Sum_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Sum := do

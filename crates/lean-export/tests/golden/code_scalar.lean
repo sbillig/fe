@@ -20,7 +20,7 @@ def Get_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Get as Decode>::decode_from<CallData>` -/
-def Get_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Get := do
+def Get_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
   let v2 := (Get.mk)
   return v2
 

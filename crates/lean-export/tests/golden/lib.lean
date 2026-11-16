@@ -1917,17 +1917,17 @@ def MemBuffer_set_len (self : MemBuffer) (len_1 : UInt256) : FeM (Unit × MemBuf
     return ((), self)
 
 /-- `<Panic as Encode>::encode` -/
-def Panic_encode (self : Panic) (__fe_out : AbiFrame) : FeM Unit := do
-  let mut __fe_tails : AbiFrame := default
-  let mut __fe_head_pos : UInt256 := default
+def Panic_encode (self : Panic) (v1 : AbiFrame) : FeM Unit := do
+  let mut r0 : AbiFrame := default
+  let mut r1 : UInt256 := default
   let v2 ← Panic_HEAD_SIZE
-  let __fe_tails_3 ← AbiFrame_tail __fe_out v2
-  __fe_tails := __fe_tails_3
-  __fe_head_pos := (UInt256.ofNat 0)
+  let v3 ← AbiFrame_tail v1 v2
+  r0 := v3
+  r1 := (UInt256.ofNat 0)
   let v7 := self.code
-  let __fe_head_pos_8 := __fe_head_pos
-  let __fe_tails_10 := __fe_tails
-  let _ ← encode_field_Sol_u256 v7 __fe_out __fe_head_pos_8 __fe_tails_10
+  let v8 := r1
+  let v10 := r0
+  let _ ← encode_field_Sol_u256 v7 v1 v8 v10
   return ()
 
 /-- `std::evm::effects::encode_calldata<Panic>` -/

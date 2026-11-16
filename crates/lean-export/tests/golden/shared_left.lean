@@ -44,10 +44,10 @@ def Left_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<Left as Decode>::decode_from<CallData>` -/
-def Left_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Left := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (Left.mk __fe_field_0)
+def Left_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Left := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
+  let v6 := (Left.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Left, Sol, CallData>` -/

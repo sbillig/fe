@@ -53,13 +53,13 @@ def Credit_HEAD_SIZE : FeM UInt256 := do
   return v4
 
 /-- `<Credit as Decode>::decode_from<CallData>` -/
-def Credit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Credit := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def Credit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Credit := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 ← checkedAdd __fe_msg_decode_base v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
-  let v11 := (Credit.mk __fe_field_0 __fe_field_1)
+  let v8 ← checkedAdd v1 v7
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
+  let v11 := (Credit.mk v4 v9)
   return v11
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Credit, Sol, CallData>` -/

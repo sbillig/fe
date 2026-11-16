@@ -66,25 +66,25 @@ def Recover_HEAD_SIZE : FeM UInt256 := do
   return v8
 
 /-- `<Recover as Decode>::decode_from<CallData>` -/
-def Recover_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Recover := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def Recover_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Recover := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_u256
-  let v8 ← checkedAdd __fe_msg_decode_base v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
+  let v8 ← checkedAdd v1 v7
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
   let v12 ← abi_field_head_size_u256
-  let v13 ← checkedAdd __fe_msg_decode_base v12
+  let v13 ← checkedAdd v1 v12
   let v14 ← abi_field_head_size_u256
   let v15 ← checkedAdd v13 v14
-  let __fe_field_2 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v15 __fe_msg_decode_input_len
+  let v16 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v15 v2
   let v19 ← abi_field_head_size_u256
-  let v20 ← checkedAdd __fe_msg_decode_base v19
+  let v20 ← checkedAdd v1 v19
   let v21 ← abi_field_head_size_u256
   let v22 ← checkedAdd v20 v21
   let v23 ← abi_field_head_size_u256
   let v24 ← checkedAdd v22 v23
-  let __fe_field_3 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v24 __fe_msg_decode_input_len
-  let v27 := (Recover.mk __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3)
+  let v25 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v24 v2
+  let v27 := (Recover.mk v4 v9 v16 v25)
   return v27
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Recover, Sol, CallData>` -/

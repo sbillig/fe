@@ -65,7 +65,7 @@ def Get0_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Get0 as Decode>::decode_from<CallData>` -/
-def Get0_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Get0 := do
+def Get0_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get0 := do
   let v2 := (Get0.mk)
   return v2
 
@@ -100,7 +100,7 @@ def Get1_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Get1 as Decode>::decode_from<CallData>` -/
-def Get1_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Get1 := do
+def Get1_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get1 := do
   let v2 := (Get1.mk)
   return v2
 
@@ -137,10 +137,10 @@ def Set0_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<Set0 as Decode>::decode_from<CallData>` -/
-def Set0_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Set0 := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (Set0.mk __fe_field_0)
+def Set0_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Set0 := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
+  let v6 := (Set0.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Set0, Sol, CallData>` -/
@@ -176,10 +176,10 @@ def Set1_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<Set1 as Decode>::decode_from<CallData>` -/
-def Set1_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Set1 := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (Set1.mk __fe_field_0)
+def Set1_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Set1 := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
+  let v6 := (Set1.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Set1, Sol, CallData>` -/
@@ -217,13 +217,13 @@ def SetBoth_HEAD_SIZE : FeM UInt256 := do
   return v4
 
 /-- `<SetBoth as Decode>::decode_from<CallData>` -/
-def SetBoth_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM SetBoth := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+def SetBoth_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM SetBoth := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_u256
-  let v8 ← checkedAdd __fe_msg_decode_base v7
-  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
-  let v11 := (SetBoth.mk __fe_field_0 __fe_field_1)
+  let v8 ← checkedAdd v1 v7
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
+  let v11 := (SetBoth.mk v4 v9)
   return v11
 
 /-- `core::abi::Decode::decode_from_prechecked_head<SetBoth, Sol, CallData>` -/

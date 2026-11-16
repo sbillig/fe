@@ -104,7 +104,7 @@ def Limit_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Limit as Decode>::decode_from<CallData>` -/
-def Limit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Limit := do
+def Limit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Limit := do
   let v2 := (Limit.mk)
   return v2
 
@@ -139,7 +139,7 @@ def Sum_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Sum as Decode>::decode_from<CallData>` -/
-def Sum_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Sum := do
+def Sum_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Sum := do
   let v2 := (Sum.mk)
   return v2
 
@@ -176,10 +176,10 @@ def Bump_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<Bump as Decode>::decode_from<CallData>` -/
-def Bump_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Bump := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (Bump.mk __fe_field_0)
+def Bump_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Bump := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
+  let v6 := (Bump.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Bump, Sol, CallData>` -/

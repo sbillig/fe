@@ -116,7 +116,7 @@ def abi_payload_size_Get (value : Get) : FeM UInt256 := do
   return v1
 
 /-- `<Get as Encode>::encode` -/
-def Get_encode (self : Get) (__fe_out : AbiFrame) : FeM Unit := do
+def Get_encode (self : Get) (v1 : AbiFrame) : FeM Unit := do
   return ()
 
 /-- `std::evm::effects::encode_calldata<Get>` -/
@@ -253,7 +253,7 @@ def Deploy_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
 /-- `<Deploy as Decode>::decode_from<CallData>` -/
-def Deploy_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Deploy := do
+def Deploy_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Deploy := do
   let v2 := (Deploy.mk)
   return v2
 
@@ -290,10 +290,10 @@ def Ask_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<Ask as Decode>::decode_from<CallData>` -/
-def Ask_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Ask := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (Ask.mk __fe_field_0)
+def Ask_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Ask := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
+  let v6 := (Ask.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Ask, Sol, CallData>` -/
@@ -329,10 +329,10 @@ def Poke_HEAD_SIZE : FeM UInt256 := do
   return v2
 
 /-- `<Poke as Decode>::decode_from<CallData>` -/
-def Poke_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Poke := do
-  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
-  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let v6 := (Poke.mk __fe_field_0)
+def Poke_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Poke := do
+  let v2 ← len_CallData v0
+  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
+  let v6 := (Poke.mk v4)
   return v6
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Poke, Sol, CallData>` -/
