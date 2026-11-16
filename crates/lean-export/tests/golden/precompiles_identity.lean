@@ -28,7 +28,7 @@ def copied_MemBuffer (source : MemBuffer) (gas_used : UInt256) : FeM Output := d
     let output_7 := v4.Some_0
     output := output_7
     i := (UInt256.ofNat 0)
-    let rec b5 (output : MemBuffer) (i : UInt256) : FeM Output := do
+    let rec loop (output : MemBuffer) (i : UInt256) : FeM Output := do
       let mut output := output
       let mut i := i
       let i_10 := i
@@ -43,9 +43,9 @@ def copied_MemBuffer (source : MemBuffer) (gas_used : UInt256) : FeM Output := d
         let i_23 := i
         let i_24 ← checkedAdd i_23 (UInt256.ofNat 8)
         i := i_24
-        b5 output i
+        loop output i
       else
-        let rec b8 (output : MemBuffer) (i : UInt256) : FeM Output := do
+        let rec loop_1 (output : MemBuffer) (i : UInt256) : FeM Output := do
           let mut output := output
           let mut i := i
           let i_27 := i
@@ -61,16 +61,16 @@ def copied_MemBuffer (source : MemBuffer) (gas_used : UInt256) : FeM Output := d
             let i_39 := i
             let i_40 ← checkedAdd i_39 (UInt256.ofNat 1)
             i := i_40
-            b8 output i
+            loop_1 output i
           else
             let v43 ← SUCCESS
             let output_45 := output
             let v46 := (Output.mk v43 gas_used output_45)
             return v46
         partial_fixpoint
-        b8 output i
+        loop_1 output i
     partial_fixpoint
-    b5 output i
+    loop output i
   | _ =>
     let v47 ← host_allocation gas_used
     match (← pure v4) with

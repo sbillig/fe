@@ -57,7 +57,7 @@ def take (guard : Guard) : FeM UInt256 := do
 def recv_Moved (keep : Bool) : FeM UInt256 := do
   let mut f0 := true
   let guard := (Guard.mk (UInt256.ofNat 1))
-  let b3 : Bool → UInt256 → FeM UInt256 := fun f0 v1 => do
+  let join : Bool → UInt256 → FeM UInt256 := fun f0 v1 => do
     let mut f0 := f0
     if f0 then
       let _ ← Guard_drop guard
@@ -65,27 +65,27 @@ def recv_Moved (keep : Bool) : FeM UInt256 := do
     f0 := false
     return v1
   if keep then
-    b3 f0 (UInt256.ofNat 0)
+    join f0 (UInt256.ofNat 0)
   else
     f0 := false
     let v8 ← take guard
-    b3 f0 v8
+    join f0 v8
 
 /-- `Option<Guard>::is_some` -/
 def Option_is_some_Guard (self : Option_Guard) : FeM Bool := do
   let v2 := self
-  let b1 : Bool → FeM Bool := fun v1 => do
+  let join : Bool → FeM Bool := fun v1 => do
     return v1
   match v2 with
   | .Some .. =>
-    b1 true
+    join true
   | .None =>
-    b1 false
+    join false
 
 /-- `Payload { some } -> u256`, selector `0xacf03ddb` (`payload(bool)`) -/
 def recv_Payload (some : Bool) : FeM UInt256 := do
   let mut guard : Option_Guard := default
-  let b3 : Option_Guard → Option_Guard → FeM UInt256 := fun guard guard_1 => do
+  let join : Option_Guard → Option_Guard → FeM UInt256 := fun guard guard_1 => do
     let mut guard := guard
     guard := guard_1
     let v10 ← Option_is_some_Guard guard
@@ -99,10 +99,10 @@ def recv_Payload (some : Bool) : FeM UInt256 := do
   if some then
     let v3 := (Guard.mk (UInt256.ofNat 2))
     let v4 := Option_Guard.Some v3
-    b3 guard v4
+    join guard v4
   else
     let v6 := Option_Guard.None
-    b3 guard v6
+    join guard v6
 
 /-- `Stored { n } -> u256`, selector `0x8c396222` (`stored(uint256)`) -/
 def recv_Stored (n : UInt256) : FeM UInt256 := do

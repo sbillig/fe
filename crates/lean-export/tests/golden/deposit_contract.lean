@@ -55,7 +55,7 @@ def init : FeM Unit := do
   let v6 := (Range_Known_0_Unknown.mk () v4)
   r1 := v6
   let v8 ← Range_start_0 r1
-  let rec b1 (r1 : Range_Known_0_Unknown) (v0 : UInt256) : FeM Unit := do
+  let rec loop (r1 : Range_Known_0_Unknown) (v0 : UInt256) : FeM Unit := do
     let mut r1 := r1
     let v11 ← Range_has_0 r1 v0
     if v11 then
@@ -68,11 +68,11 @@ def init : FeM Unit := do
       checkIndex v19 32
       store (Field.store.zero_hashes.index 1 v19) v17
       let v22 ← Range_next_0 r1 v0
-      b1 r1 v22
+      loop r1 v22
     else
       return ()
   partial_fixpoint
-  b1 r1 v8
+  loop r1 v8
 
 /-- `deposit_contract::compute_deposit_data_root` -/
 def compute_deposit_data_root (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (amount_gwei : UInt256) : FeM UInt256 := do
@@ -201,7 +201,7 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                   let v81 := (Range_Known_0_Unknown.mk () v79)
                   r11 := v81
                   let v83 ← Range_start_0 r11
-                  let rec b25 (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (value : Wei) (node : UInt256) (size : UInt256) (r8 : Wei) (r9 : Wei) (r10 : Wei) (r11 : Range_Known_0_Unknown) (v1 : UInt256) : FeM Unit := do
+                  let rec loop (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (value : Wei) (node : UInt256) (size : UInt256) (r8 : Wei) (r9 : Wei) (r10 : Wei) (r11 : Range_Known_0_Unknown) (v1 : UInt256) : FeM Unit := do
                     let mut pubkey := pubkey
                     let mut withdrawal_credentials := withdrawal_credentials
                     let mut signature := signature
@@ -234,14 +234,14 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                         let size_110 ← checkedDiv size_107 (UInt256.ofNat 2)
                         size := size_110
                         let v114 ← Range_next_0 r11 v1
-                        b25 pubkey withdrawal_credentials signature value node size r8 r9 r10 r11 v114
+                        loop pubkey withdrawal_credentials signature value node size r8 r9 r10 r11 v114
                     else
                       if false then
                         return ()
                       else
                         M.panic 0x01
                   partial_fixpoint
-                  b25 pubkey withdrawal_credentials signature value node size r8 r9 r10 r11 v83
+                  loop pubkey withdrawal_credentials signature value node size r8 r9 r10 r11 v83
                 else
                   M.revert (assertData "DepositContract: merkle tree full")
               else
@@ -271,7 +271,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
   let v8 := (Range_Known_0_Unknown.mk () v6)
   r3 := v8
   let v10 ← Range_start_0 r3
-  let rec b1 (node : UInt256) (size : UInt256) (r3 : Range_Known_0_Unknown) (v0 : UInt256) : FeM UInt256 := do
+  let rec loop (node : UInt256) (size : UInt256) (r3 : Range_Known_0_Unknown) (v0 : UInt256) : FeM UInt256 := do
     let mut node := node
     let mut size := size
     let mut r3 := r3
@@ -282,7 +282,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
       let size_17 := size
       let v20 := size_17 &&& (UInt256.ofNat 1)
       let v22 := decide (v20 = (UInt256.ofNat 1))
-      let b7 : UInt256 → UInt256 → Range_Known_0_Unknown → FeM UInt256 := fun node size r3 => do
+      let join : UInt256 → UInt256 → Range_Known_0_Unknown → FeM UInt256 := fun node size r3 => do
         let mut node := node
         let mut size := size
         let mut r3 := r3
@@ -290,21 +290,21 @@ def recv_GetDepositRoot : FeM UInt256 := do
         let size_40 ← checkedDiv size_37 (UInt256.ofNat 2)
         size := size_40
         let v44 ← Range_next_0 r3 v0
-        b1 node size r3 v44
+        loop node size r3 v44
       if v22 then
         checkIndex height 32
         let v23 ← load (Field.store.branch.index 1 height)
         let node_24 := node
         let node_26 ← hash_pair v23 node_24
         node := node_26
-        b7 node size r3
+        join node size r3
       else
         let node_30 := node
         checkIndex height 32
         let v32 ← load (Field.store.zero_hashes.index 1 height)
         let node_33 ← hash_pair node_30 v32
         node := node_33
-        b7 node size r3
+        join node size r3
     else
       let node_46 := node
       let v48 ← load Field.store.deposit_count
@@ -312,7 +312,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
       let v50 ← mix_in_length node_46 v49
       return v50
   partial_fixpoint
-  b1 node size r3 v10
+  loop node size r3 v10
 
 /-- `GetDepositCount -> Bytes`, selector `0x621fd130` (`get_deposit_count()`) -/
 def recv_GetDepositCount : FeM Bytes := do
@@ -325,19 +325,19 @@ def recv_GetDepositCount : FeM Bytes := do
 def recv_SupportsInterface (interface_id : FixedBytes_4) : FeM Bool := do
   let v2 := interface_id.val
   let v4 := decide (v2 = (UInt256.ofNat 33540519))
-  let b3 : Bool → FeM Bool := fun v1 => do
+  let join : Bool → FeM Bool := fun v1 => do
     return v1
-  let b1 : FeM Bool := do
-    b3 true
+  let join_1 : FeM Bool := do
+    join true
   if v4 then
-    b1
+    join_1
   else
     let v5 := interface_id.val
     let v7 := decide (v5 = (UInt256.ofNat 2237925639))
     if v7 then
-      b1
+      join_1
     else
-      b3 false
+      join false
 
 /-- `<Deposit as AbiSize>::HEAD_SIZE` -/
 def Deposit_HEAD_SIZE : FeM UInt256 := do

@@ -30,12 +30,12 @@ def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
   let init_off ← initCodeOffset creation_Child
   let v6 ← tuple_IS_DYNAMIC
   let v7 := !v6
-  let b3 : MemBuffer → MemBuffer → MemBuffer → MemBuffer → FeM MemBuffer := fun init_code_r0 encoded init_code_r2 v1 => do
+  let join : MemBuffer → MemBuffer → MemBuffer → MemBuffer → FeM MemBuffer := fun init_code_r0 encoded init_code_r2 v1 => do
     let mut init_code_r0 := init_code_r0
     let mut encoded := encoded
     let mut init_code_r2 := init_code_r2
     return v1
-  let b2 : MemBuffer → MemBuffer → MemBuffer → FeM MemBuffer := fun init_code_r0 encoded init_code_r2 => do
+  let join_1 : MemBuffer → MemBuffer → MemBuffer → FeM MemBuffer := fun init_code_r0 encoded init_code_r2 => do
     let mut init_code_r0 := init_code_r0
     let mut encoded := encoded
     let mut init_code_r2 := init_code_r2
@@ -54,7 +54,7 @@ def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
     let _ ← copy v34 v36
     let _ ← MemBuffer_drop encoded
     let init_code_39 := init_code_r2
-    b3 init_code_r0 encoded init_code_r2 init_code_39
+    join init_code_r0 encoded init_code_r2 init_code_39
   if v7 then
     let v8 ← tuple_HEAD_SIZE
     let v10 := decide (v8 = (UInt256.ofNat 0))
@@ -65,11 +65,11 @@ def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
       let v15 ← MemBuffer_ptr init_code_r0
       let _ ← codecopy v15 init_off init_len
       let init_code_17 := init_code_r0
-      b3 init_code_r0 encoded init_code_r2 init_code_17
+      join init_code_r0 encoded init_code_r2 init_code_17
     else
-      b2 init_code_r0 encoded init_code_r2
+      join_1 init_code_r0 encoded init_code_r2
   else
-    b2 init_code_r0 encoded init_code_r2
+    join_1 init_code_r0 encoded init_code_r2
 
 /-- `std::evm::effects::Create::create2<Evm, Child>` -/
 def create2_Evm_Child (value : Wei) (args : Unit) (salt : UInt256) : FeM UInt256 := do
@@ -130,7 +130,7 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
   let len := selector_size + v7
   let v10 ← Get_HEAD_SIZE
   let v12 := decide (v10.toNat < (UInt256.ofNat 28).toNat)
-  let b3 : Get → MemBuffer → AbiFrame → UInt256 → FeM MemBuffer := fun message buffer r2 capacity => do
+  let join : Get → MemBuffer → AbiFrame → UInt256 → FeM MemBuffer := fun message buffer r2 capacity => do
     let mut message := message
     let mut buffer := buffer
     let mut r2 := r2
@@ -151,19 +151,19 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
     let _ ← Get_encode message r2
     let buffer_40 := buffer
     return buffer_40
-  let b2 : Get → MemBuffer → AbiFrame → FeM MemBuffer := fun message buffer r2 => do
+  let join_1 : Get → MemBuffer → AbiFrame → FeM MemBuffer := fun message buffer r2 => do
     let mut message := message
     let mut buffer := buffer
     let mut r2 := r2
-    b3 message buffer r2 len
+    join message buffer r2 len
   if v12 then
     let v14 := decide (len.toNat < (UInt256.ofNat 32).toNat)
     if v14 then
-      b3 message buffer r2 (UInt256.ofNat 32)
+      join message buffer r2 (UInt256.ofNat 32)
     else
-      b2 message buffer r2
+      join_1 message buffer r2
   else
-    b2 message buffer r2
+    join_1 message buffer r2
 
 /-- `std::evm::effects::Call::try_call<Evm, Get>` -/
 def try_call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message : Get) : FeM CallOutcome := do
@@ -233,10 +233,10 @@ def spare_Evm (slot : UInt256) : FeM Place := do
 
 /-- `Poke { key } -> u256`, selector `0x00000012` -/
 def recv_Poke (key : UInt256) : FeM UInt256 := do
-  let l0 ← Words_locate Field.words Field.words.slot key
-  store (Place.mk .storage l0.slot) (UInt256.ofNat 1)
-  let l1 ← Words_locate Field.words Field.words.slot key
-  let v3 ← load (Place.mk .storage l1.slot)
+  let words_key ← Words_locate Field.words Field.words.slot key
+  store (Place.mk .storage words_key.slot) (UInt256.ofNat 1)
+  let words_key_1 ← Words_locate Field.words Field.words.slot key
+  let v3 ← load (Place.mk .storage words_key_1.slot)
   let v4 ← read_transient_word_Evm key
   let before ← checkedAdd v3 v4
   let v8 ← checkedAdd key (UInt256.ofNat 1)

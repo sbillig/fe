@@ -53,16 +53,16 @@ def init (limit : UInt256) (config : Config) (words : (Vector UInt256 2)) : FeM 
 def recv_Limit : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
   let v1 := config.on
-  let b3 : UInt256 → FeM UInt256 := fun v0 => do
+  let join : UInt256 → FeM UInt256 := fun v0 => do
     return v0
   if v1 then
     let v2 := config.limit
     let v3 := config.small
     let v4 := v3
     let v5 ← checkedAdd v2 v4
-    b3 v5
+    join v5
   else
-    b3 (UInt256.ofNat 0)
+    join (UInt256.ofNat 0)
 
 /-- `Sum -> u256`, selector `0x853255cc` (`sum()`) -/
 def recv_Sum : FeM UInt256 := do
@@ -81,13 +81,13 @@ def capped_Config («by» : UInt256) : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
   let v3 := config.limit
   let v4 := decide (v3.toNat < «by».toNat)
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 := config.limit
-    b3 v5
+    join v5
   else
-    b3 «by»
+    join «by»
 
 /-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do

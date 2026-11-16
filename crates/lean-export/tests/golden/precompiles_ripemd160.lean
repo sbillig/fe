@@ -40,7 +40,7 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
   let v18 := (Range_Known_0_Known_64.mk () ())
   r1 := v18
   let v20 ← Range_start_0_64 r1
-  let rec b1 (block : (Vector UInt256 64)) (r1 : Range_Known_0_Known_64) (r2 : Range_Known_0_Known_8) (v5 : UInt256) : FeM (Vector UInt256 64) := do
+  let rec loop (block : (Vector UInt256 64)) (r1 : Range_Known_0_Known_64) (r2 : Range_Known_0_Known_8) (v5 : UInt256) : FeM (Vector UInt256 64) := do
     let mut block := block
     let mut r1 := r1
     let mut r2 := r2
@@ -50,35 +50,35 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
       let i_26 := v25
       let position := start + i_26
       let v30 := decide (position.toNat < len.toNat)
-      let b7 : (Vector UInt256 64) → Range_Known_0_Known_64 → Range_Known_0_Known_8 → FeM (Vector UInt256 64) := fun block r1 r2 => do
+      let join : (Vector UInt256 64) → Range_Known_0_Known_64 → Range_Known_0_Known_8 → FeM (Vector UInt256 64) := fun block r1 r2 => do
         let mut block := block
         let mut r1 := r1
         let mut r2 := r2
         let v45 ← Range_next_0_64 r1 v5
-        b1 block r1 r2 v45
+        loop block r1 r2 v45
       if v30 then
         let v32 := offset + position
         let v33 ← MemBuffer_byte_at input v32
         checkIndex i_26 64
         block := (block.set! i_26.toNat v33)
-        b7 block r1 r2
+        join block r1 r2
       else
         let v37 := decide (position = len)
-        let b10 : (Vector UInt256 64) → Range_Known_0_Known_64 → Range_Known_0_Known_8 → Unit → FeM (Vector UInt256 64) := fun block r1 r2 v6 => do
+        let join_1 : (Vector UInt256 64) → Range_Known_0_Known_64 → Range_Known_0_Known_8 → Unit → FeM (Vector UInt256 64) := fun block r1 r2 v6 => do
           let mut block := block
           let mut r1 := r1
           let mut r2 := r2
-          b7 block r1 r2
+          join block r1 r2
         if v37 then
           checkIndex i_26 64
           block := (block.set! i_26.toNat (UInt256.ofNat 128))
-          b10 block r1 r2 ()
+          join_1 block r1 r2 ()
         else
-          b10 block r1 r2 ()
+          join_1 block r1 r2 ()
     else
       let v50 := blocks - (UInt256.ofNat 1)
       let v51 := decide (block_index = v50)
-      let b13 : (Vector UInt256 64) → Range_Known_0_Known_64 → Range_Known_0_Known_8 → FeM (Vector UInt256 64) := fun block r1 r2 => do
+      let join_2 : (Vector UInt256 64) → Range_Known_0_Known_64 → Range_Known_0_Known_8 → FeM (Vector UInt256 64) := fun block r1 r2 => do
         let mut block := block
         let mut r1 := r1
         let mut r2 := r2
@@ -90,7 +90,7 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
         let v60 := (Range_Known_0_Known_8.mk () ())
         r2 := v60
         let v62 ← Range_start_0_8 r2
-        let rec b14 (block : (Vector UInt256 64)) (r1 : Range_Known_0_Known_64) (r2 : Range_Known_0_Known_8) (v7 : UInt256) : FeM (Vector UInt256 64) := do
+        let rec loop_1 (block : (Vector UInt256 64)) (r1 : Range_Known_0_Known_64) (r2 : Range_Known_0_Known_8) (v7 : UInt256) : FeM (Vector UInt256 64) := do
           let mut block := block
           let mut r1 := r1
           let mut r2 := r2
@@ -106,15 +106,15 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
             checkIndex v75 64
             block := (block.set! v75.toNat v73)
             let v78 ← Range_next_0_8 r2 v7
-            b14 block r1 r2 v78
+            loop_1 block r1 r2 v78
           else
-            b13 block r1 r2
+            join_2 block r1 r2
         partial_fixpoint
-        b14 block r1 r2 v62
+        loop_1 block r1 r2 v62
       else
-        b13 block r1 r2
+        join_2 block r1 r2
   partial_fixpoint
-  b1 block r1 r2 v20
+  loop block r1 r2 v20
 
 /-- `lib::hashes::f0` -/
 def f0 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
@@ -2061,7 +2061,7 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
   let v10 := (Range_Known_0_Unknown.mk () blocks)
   r2 := v10
   let v12 ← Range_start_0 r2
-  let rec b1 (state : (Vector UInt256 5)) (digest : UInt256) (r2 : Range_Known_0_Unknown) (r3 : (Vector UInt256 64)) (v1 : UInt256) : FeM UInt256 := do
+  let rec loop (state : (Vector UInt256 5)) (digest : UInt256) (r2 : Range_Known_0_Unknown) (r3 : (Vector UInt256 64)) (v1 : UInt256) : FeM UInt256 := do
     let mut state := state
     let mut digest := digest
     let mut r2 := r2
@@ -2076,11 +2076,11 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
       let (v24, v24_0) ← ripemd_compress state r3
       state := v24_0
       let v26 ← Range_next_0 r2 v1
-      b1 state digest r2 r3 v26
+      loop state digest r2 r3 v26
     else
       digest := (UInt256.ofNat 0)
       let v31 ← array_start_u32_5 state
-      let rec b5 (state : (Vector UInt256 5)) (digest : UInt256) (r2 : Range_Known_0_Unknown) (r3 : (Vector UInt256 64)) (v2 : UInt256) : FeM UInt256 := do
+      let rec loop_1 (state : (Vector UInt256 5)) (digest : UInt256) (r2 : Range_Known_0_Unknown) (r3 : (Vector UInt256 64)) (v2 : UInt256) : FeM UInt256 := do
         let mut state := state
         let mut digest := digest
         let mut r2 := r2
@@ -2096,14 +2096,14 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
           let digest_44 := v41 ||| v43
           digest := digest_44
           let v48 ← array_next_u32_5 state v2
-          b5 state digest r2 r3 v48
+          loop_1 state digest r2 r3 v48
         else
           let digest_50 := digest
           return digest_50
       partial_fixpoint
-      b5 state digest r2 r3 v31
+      loop_1 state digest r2 r3 v31
   partial_fixpoint
-  b1 state digest r2 r3 v12
+  loop state digest r2 r3 v12
 
 /-- `_`, for a call no other arm takes -/
 def recv_fallback : FeM Empty := do

@@ -89,8 +89,8 @@ def emit_Evm_Transfer (event : Transfer) : FeM Unit := do
 /-- `init(initial_supply: u256)` of contract `FeERC20` -/
 def init (initial_supply : UInt256) : FeM Unit := do
   let sender ← Evm_caller
-  let l0 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
-  store (Place.mk .storage l0.slot) initial_supply
+  let balances_sender ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
+  store (Place.mk .storage balances_sender.slot) initial_supply
   store Field.store.total_supply initial_supply
   let v8 ← Address_zero
   let v10 := (Transfer.mk v8 sender initial_supply)
@@ -100,20 +100,20 @@ def init (initial_supply : UInt256) : FeM Unit := do
 /-- `Transfer { to, value } -> bool`, selector `0xa9059cbb` (`transfer(address,uint256)`) -/
 def recv_Transfer («to» : UInt256) (value : UInt256) : FeM Bool := do
   let sender ← Evm_caller
-  let l0 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
-  let v5 ← load (Place.mk .storage l0.slot)
+  let balances_sender ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
+  let v5 ← load (Place.mk .storage balances_sender.slot)
   let v6 := decide (value.toNat ≤ v5.toNat)
   if v6 then
-    let l1 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
-    let v8 ← load (Place.mk .storage l1.slot)
+    let balances_sender_1 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
+    let v8 ← load (Place.mk .storage balances_sender_1.slot)
     let v9 ← checkedSub v8 value
-    let l2 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
-    store (Place.mk .storage l2.slot) v9
-    let l3 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
-    let v11 ← load (Place.mk .storage l3.slot)
+    let balances_sender_2 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot sender
+    store (Place.mk .storage balances_sender_2.slot) v9
+    let balances_to ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
+    let v11 ← load (Place.mk .storage balances_to.slot)
     let v12 ← checkedAdd v11 value
-    let l4 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
-    store (Place.mk .storage l4.slot) v12
+    let balances_to_1 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
+    store (Place.mk .storage balances_to_1.slot) v12
     let v14 := (Transfer.mk sender «to» value)
     let _ ← emit_Evm_Transfer v14
     return true
@@ -151,9 +151,9 @@ def emit_Evm_Approval (event : Approval) : FeM Unit := do
 /-- `Approve { spender, value } -> bool`, selector `0x095ea7b3` (`approve(address,uint256)`) -/
 def recv_Approve (spender : UInt256) (value : UInt256) : FeM Bool := do
   let owner ← Evm_caller
-  let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot owner
-  let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot spender
-  store (Place.mk .storage l1.slot) value
+  let allowances_owner ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot owner
+  let allowances_owner_spender ← StorageMap_locate_Address_u256 (Place.mk .storage allowances_owner.slot) (Place.mk .storage allowances_owner.slot).slot spender
+  store (Place.mk .storage allowances_owner_spender.slot) value
   let v6 := (Approval.mk owner spender value)
   let _ ← emit_Evm_Approval v6
   return true
@@ -161,29 +161,29 @@ def recv_Approve (spender : UInt256) (value : UInt256) : FeM Bool := do
 /-- `TransferFrom { from, to, value } -> bool`, selector `0x23b872dd` (`transferFrom(address,address,uint256)`) -/
 def recv_TransferFrom («from» : UInt256) («to» : UInt256) (value : UInt256) : FeM Bool := do
   let spender ← Evm_caller
-  let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot «from»
-  let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot spender
-  let current_allowance ← load (Place.mk .storage l1.slot)
+  let allowances_from ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot «from»
+  let allowances_from_spender ← StorageMap_locate_Address_u256 (Place.mk .storage allowances_from.slot) (Place.mk .storage allowances_from.slot).slot spender
+  let current_allowance ← load (Place.mk .storage allowances_from_spender.slot)
   let v8 := decide (value.toNat ≤ current_allowance.toNat)
   if v8 then
-    let l2 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «from»
-    let v10 ← load (Place.mk .storage l2.slot)
+    let balances_from ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «from»
+    let v10 ← load (Place.mk .storage balances_from.slot)
     let v11 := decide (value.toNat ≤ v10.toNat)
     if v11 then
       let v13 ← checkedSub current_allowance value
-      let l3 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot «from»
-      let l4 ← StorageMap_locate_Address_u256 (Place.mk .storage l3.slot) (Place.mk .storage l3.slot).slot spender
-      store (Place.mk .storage l4.slot) v13
-      let l5 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «from»
-      let v15 ← load (Place.mk .storage l5.slot)
+      let allowances_from_1 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot «from»
+      let allowances_from_spender_1 ← StorageMap_locate_Address_u256 (Place.mk .storage allowances_from_1.slot) (Place.mk .storage allowances_from_1.slot).slot spender
+      store (Place.mk .storage allowances_from_spender_1.slot) v13
+      let balances_from_1 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «from»
+      let v15 ← load (Place.mk .storage balances_from_1.slot)
       let v16 ← checkedSub v15 value
-      let l6 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «from»
-      store (Place.mk .storage l6.slot) v16
-      let l7 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
-      let v18 ← load (Place.mk .storage l7.slot)
+      let balances_from_2 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «from»
+      store (Place.mk .storage balances_from_2.slot) v16
+      let balances_to ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
+      let v18 ← load (Place.mk .storage balances_to.slot)
       let v19 ← checkedAdd v18 value
-      let l8 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
-      store (Place.mk .storage l8.slot) v19
+      let balances_to_1 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot «to»
+      store (Place.mk .storage balances_to_1.slot) v19
       let v21 := (Transfer.mk «from» «to» value)
       let _ ← emit_Evm_Transfer v21
       return true
@@ -194,15 +194,15 @@ def recv_TransferFrom («from» : UInt256) («to» : UInt256) (value : UInt256) 
 
 /-- `BalanceOf { owner } -> u256`, selector `0x70a08231` (`balanceOf(address)`) -/
 def recv_BalanceOf (owner : UInt256) : FeM UInt256 := do
-  let l0 ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot owner
-  let v1 ← load (Place.mk .storage l0.slot)
+  let balances_owner ← StorageMap_locate_Address_u256 Field.store.balances Field.store.balances.slot owner
+  let v1 ← load (Place.mk .storage balances_owner.slot)
   return v1
 
 /-- `Allowance { owner, spender } -> u256`, selector `0xdd62ed3e` (`allowance(address,address)`) -/
 def recv_Allowance (owner : UInt256) (spender : UInt256) : FeM UInt256 := do
-  let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot owner
-  let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot spender
-  let v2 ← load (Place.mk .storage l1.slot)
+  let allowances_owner ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowances Field.store.allowances.slot owner
+  let allowances_owner_spender ← StorageMap_locate_Address_u256 (Place.mk .storage allowances_owner.slot) (Place.mk .storage allowances_owner.slot).slot spender
+  let v2 ← load (Place.mk .storage allowances_owner_spender.slot)
   return v2
 
 /-- `TotalSupply -> u256`, selector `0x18160ddd` (`totalSupply()`) -/

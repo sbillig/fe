@@ -36,7 +36,7 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt25
   let mut f := f
   acc := init_1
   let v5 ← array_start_u256_2 self
-  let rec b1 (acc : UInt256) (f : UInt256) (v3 : UInt256) : FeM (UInt256 × UInt256) := do
+  let rec loop (acc : UInt256) (f : UInt256) (v3 : UInt256) : FeM (UInt256 × UInt256) := do
     let mut acc := acc
     let mut f := f
     let v7 ← array_has_u256_2 self v3
@@ -48,12 +48,12 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt25
       f := acc_13_0
       acc := acc_13
       let v16 ← array_next_u256_2 self v3
-      b1 acc f v16
+      loop acc f v16
     else
       let acc_18 := acc
       return (acc_18, f)
   partial_fixpoint
-  b1 acc f v5
+  loop acc f v5
 
 /-- `Scaled { a, b, by } -> u256`, selector `0x994a2044` (`scaled(uint256,uint256,uint256)`) -/
 def recv_Scaled (a : UInt256) (b : UInt256) («by» : UInt256) : FeM UInt256 := do
@@ -88,7 +88,7 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt
   let mut f := f
   acc := init_1
   let v5 ← array_start_u256_2 self
-  let rec b1 (acc : UInt256) (f : Unit) (v3 : UInt256) : FeM (UInt256 × Unit) := do
+  let rec loop (acc : UInt256) (f : Unit) (v3 : UInt256) : FeM (UInt256 × Unit) := do
     let mut acc := acc
     let mut f := f
     let v7 ← array_has_u256_2 self v3
@@ -101,12 +101,12 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt
       f := acc_14_0
       acc := acc_14
       let v17 ← array_next_u256_2 self v3
-      b1 acc f v17
+      loop acc f v17
     else
       let acc_19 := acc
       return (acc_19, f)
   partial_fixpoint
-  b1 acc f v5
+  loop acc f v5
 
 /-- `Tally { a, b } -> u256`, selector `0x97c3f4e7` (`tally(uint256,uint256)`) -/
 def recv_Tally (a : UInt256) (b : UInt256) : FeM UInt256 := do

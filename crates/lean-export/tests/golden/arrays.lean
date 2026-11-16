@@ -41,7 +41,7 @@ def recv_Weigh (values : (Vector UInt256 3)) : FeM UInt256 := do
   let mut i : UInt256 := default
   total := (UInt256.ofNat 0)
   i := (UInt256.ofNat 0)
-  let rec b1 (total : UInt256) (i : UInt256) : FeM UInt256 := do
+  let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
     let i_5 := i
@@ -61,10 +61,10 @@ def recv_Weigh (values : (Vector UInt256 3)) : FeM UInt256 := do
       let i_20 := i
       let i_21 ← checkedAdd i_20 (UInt256.ofNat 1)
       i := i_21
-      b1 total i
+      loop total i
     else
       let total_24 := total
       return total_24
   partial_fixpoint
-  b1 total i
+  loop total i
 

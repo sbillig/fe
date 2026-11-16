@@ -152,7 +152,7 @@ def recv_Lane (second : Bool) : FeM UInt256 := do
   let (v2_g, v2_k) ← Small_maybe v1 second
   v2 := v2_g
   let v3 := v2
-  let b3 : Option_mut_u8 → FeM UInt256 := fun v2 => do
+  let join : Option_mut_u8 → FeM UInt256 := fun v2 => do
     let mut v2 := v2
     let v13 ← loadIntAt (.u 8) Field.small.b ⟨1, 1, true⟩
     let v14 := v13
@@ -163,8 +163,8 @@ def recv_Lane (second : Bool) : FeM UInt256 := do
     let v8 ← IntTy.add (.u 8) v7 (UInt256.ofNat 40)
     v2 := (v2.set_Some_0 v8)
     let _ ← v2_k v2
-    b3 v2
+    join v2
   | _ =>
     let _ ← v2_k v2
-    b3 v2
+    join v2
 

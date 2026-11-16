@@ -46,8 +46,8 @@ def recv_Credit (who : UInt256) (amount : UInt256) : FeM UInt256 := do
   let v8 ← checkedAdd v7 amount
   store Field.ledger.total v8
   let who_10 := who
-  let l0 ← StorageMap_locate_Address_u256 Field.ledger.balances Field.ledger.balances.slot who_10
-  let v11 ← load (Place.mk .storage l0.slot)
+  let balances_who_10 ← StorageMap_locate_Address_u256 Field.ledger.balances Field.ledger.balances.slot who_10
+  let v11 ← load (Place.mk .storage balances_who_10.slot)
   let v12 ← load Field.ledger.total
   let v13 ← checkedAdd v11 v12
   return v13

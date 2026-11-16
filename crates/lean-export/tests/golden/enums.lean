@@ -45,89 +45,89 @@ def init : FeM Unit := do
 /-- `enums::shape` -/
 def shape (width : UInt256) (height : UInt256) : FeM Shape := do
   let v6 := decide (width = (UInt256.ofNat 0))
-  let b3 : Shape → FeM Shape := fun v2 => do
+  let join : Shape → FeM Shape := fun v2 => do
     return v2
   if v6 then
     let v7 := Shape.Empty
-    b3 v7
+    join v7
   else
     let v11 := decide (width = height)
-    let b6 : Shape → FeM Shape := fun v3 => do
-      b3 v3
+    let join_1 : Shape → FeM Shape := fun v3 => do
+      join v3
     if v11 then
       let v13 := Shape.Square width
-      b6 v13
+      join_1 v13
     else
       let v17 := Shape.Rect width height
-      b6 v17
+      join_1 v17
 
 /-- `Area { width, height } -> u256`, selector `0x15529a52` (`area(uint256,uint256)`) -/
 def recv_Area (width_0 : UInt256) (height_1 : UInt256) : FeM UInt256 := do
   let v3 ← shape width_0 height_1
-  let b1 : UInt256 → FeM UInt256 := fun v2 => do
+  let join : UInt256 → FeM UInt256 := fun v2 => do
     return v2
   match v3 with
   | .Empty =>
-    b1 (UInt256.ofNat 0)
+    join (UInt256.ofNat 0)
   | .Square .. =>
     let side := v3.Square_0
     let v8 ← checkedMul side side
-    b1 v8
+    join v8
   | .Rect .. =>
     let width_10 := v3.Rect_0
     let height_12 := v3.Rect_1
     let v14 ← checkedMul width_10 height_12
-    b1 v14
+    join v14
 
 /-- `enums::halve` -/
 def halve (value : UInt256) : FeM Option_u256 := do
   let v4 ← checkedRem value (UInt256.ofNat 2)
   let v6 := decide (v4 = (UInt256.ofNat 0))
-  let b3 : Option_u256 → FeM Option_u256 := fun v1 => do
+  let join : Option_u256 → FeM Option_u256 := fun v1 => do
     return v1
   if v6 then
     let v9 ← checkedDiv value (UInt256.ofNat 2)
     let v10 := Option_u256.Some v9
-    b3 v10
+    join v10
   else
     let v12 := Option_u256.None
-    b3 v12
+    join v12
 
 /-- `Half { value } -> u256`, selector `0xdee6088b` (`half(uint256)`) -/
 def recv_Half (value : UInt256) : FeM UInt256 := do
   let v2 ← halve value
-  let b1 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   match v2 with
   | .Some .. =>
     let half := v2.Some_0
-    b1 half
+    join half
   | _ =>
-    b1 value
+    join value
 
 /-- `Grow { side } -> u256`, selector `0x28531f06` (`grow(uint256)`) -/
 def recv_Grow (side_0 : UInt256) : FeM UInt256 := do
   let mut current : Shape := default
   let current_2 := Shape.Square side_0
   current := current_2
-  let b3 : Shape → FeM UInt256 := fun current => do
+  let join : Shape → FeM UInt256 := fun current => do
     let mut current := current
     let v13 := current
-    let b6 : Shape → UInt256 → FeM UInt256 := fun current v1 => do
+    let join_1 : Shape → UInt256 → FeM UInt256 := fun current v1 => do
       let mut current := current
       return v1
     match v13 with
     | .Square .. =>
       let side_14 := current.Square_0
-      b6 current side_14
+      join_1 current side_14
     | _ =>
-      b6 current (UInt256.ofNat 0)
+      join_1 current (UInt256.ofNat 0)
   match current with
   | .Square .. =>
     let v7 := current.Square_0
     let v8 ← checkedAdd v7 (UInt256.ofNat 1)
     current := (current.set_Square_0 v8)
-    b3 current
+    join current
   | _ =>
-    b3 current
+    join current
 

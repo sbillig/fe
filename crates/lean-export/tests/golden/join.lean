@@ -21,22 +21,22 @@ def init : FeM Unit := do
 /-- `join::add<Store>` -/
 def add_Store («by» : UInt256) : FeM UInt256 := do
   let v4 := decide ((UInt256.ofNat 10).toNat < «by».toNat)
-  let b3 : UInt256 → FeM UInt256 := fun next => do
+  let join : UInt256 → FeM UInt256 := fun next => do
     store Field.store.total next
-    let l0 ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
-    let v17 ← load (Place.mk .storage l0.slot)
+    let hits_by ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
+    let v17 ← load (Place.mk .storage hits_by.slot)
     let v18 ← checkedAdd v17 (UInt256.ofNat 1)
-    let l1 ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
-    store (Place.mk .storage l1.slot) v18
+    let hits_by_1 ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
+    store (Place.mk .storage hits_by_1.slot) v18
     return next
   if v4 then
     let v5 ← load Field.store.total
     let v7 ← checkedAdd v5 (UInt256.ofNat 10)
-    b3 v7
+    join v7
   else
     let v9 ← load Field.store.total
     let v11 ← checkedAdd v9 «by»
-    b3 v11
+    join v11
 
 /-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do

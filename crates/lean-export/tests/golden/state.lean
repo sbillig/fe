@@ -132,28 +132,28 @@ def recv_Replace (flag : Bool) (small : UInt256) (delta : UInt256) (owner : UInt
 /-- `Advance { by } -> u256`, selector `0x71d6ddd6` (`advance(uint256)`) -/
 def recv_Advance («by» : UInt256) : FeM UInt256 := do
   let v3 ← load_Phase Field.phase
-  let b1 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   match v3 with
   | .Idle =>
     let v5 := Phase.Running (UInt256.ofNat 1) «by»
     store_Phase Field.phase v5
-    b1 (UInt256.ofNat 0)
+    join (UInt256.ofNat 0)
   | .Running .. =>
     let count ← loadInt (.u 64) (Field.phase.offset 1)
     let sum ← load (Field.phase.offset 2)
     let v11 := decide («by».toNat < sum.toNat)
     let v12 := Phase.Done v11
     store_Phase Field.phase v12
-    b1 sum
+    join sum
   | .Done .. =>
     let ok ← loadBool (Field.phase.offset 1)
-    let b7 : UInt256 → FeM UInt256 := fun v2 => do
-      b1 v2
+    let join_1 : UInt256 → FeM UInt256 := fun v2 => do
+      join v2
     if ok then
-      b7 (UInt256.ofNat 1)
+      join_1 (UInt256.ofNat 1)
     else
-      b7 (UInt256.ofNat 2)
+      join_1 (UInt256.ofNat 2)
 
 /-- `Mark { at, level } -> u8`, selector `0x0a774e1e` (`mark(uint256,uint8)`) -/
 def recv_Mark («at» : UInt256) (level : UInt256) : FeM UInt256 := do

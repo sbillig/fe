@@ -22,7 +22,7 @@ def recv_Swap (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let v10 ← checkedAdd v8 (UInt256.ofNat 1)
   pair := { pair with snd := { pair.snd with fst := v10 } }
   let v12 := pair.snd.snd
-  let b3 : (UInt256 × UInt256 × Bool) → (UInt256 × UInt256 × Bool) → UInt256 → FeM UInt256 := fun pair r1 v2 => do
+  let join : (UInt256 × UInt256 × Bool) → (UInt256 × UInt256 × Bool) → UInt256 → FeM UInt256 := fun pair r1 v2 => do
     let mut pair := pair
     let mut r1 := r1
     return v2
@@ -30,7 +30,7 @@ def recv_Swap (a : UInt256) (b : UInt256) : FeM UInt256 := do
     let v13 := pair.fst
     let v14 := pair.snd.fst
     let v15 ← checkedSub v13 v14
-    b3 pair r1 v15
+    join pair r1 v15
   else
-    b3 pair r1 (UInt256.ofNat 0)
+    join pair r1 (UInt256.ofNat 0)
 

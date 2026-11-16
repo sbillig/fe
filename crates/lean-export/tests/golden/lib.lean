@@ -75,15 +75,15 @@ def sign_extend (word : UInt256) (mask : UInt256) (sign_bit : UInt256) : FeM UIn
   let value := word &&& mask
   let v9 := value &&& sign_bit
   let v11 := decide (v9 ≠ (UInt256.ofNat 0))
-  let b3 : UInt256 → FeM UInt256 := fun v3 => do
+  let join : UInt256 → FeM UInt256 := fun v3 => do
     return v3
   if v11 then
     let v12 ← U256_MASK
     let v14 := v12 ^^^ mask
     let v15 := value ||| v14
-    b3 v15
+    join v15
   else
-    b3 value
+    join value
 
 /-- `<u64 as IntWord>::from_word` -/
 def u64_from_word (word : UInt256) : FeM UInt256 := do
@@ -94,34 +94,34 @@ def u64_from_word (word : UInt256) : FeM UInt256 := do
 def downcast_truncate_u256_u64 (self : UInt256) : FeM UInt256 := do
   let word ← u256_to_word self
   let v4 ← u64_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u64_MASK
     let v6 ← u64_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← u64_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← u64_MASK
     let v11 := word &&& v10
     let v12 ← u64_from_word v11
-    b3 v12
+    join v12
 
 /-- `<CallData as ByteSource>::size` -/
 def CallData_size (self : CallData) : FeM UInt256 := do
   let total ← calldatasize
   let v4 := self.base
   let v5 := decide (total.toNat < v4.toNat)
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v5 then
-    b3 (UInt256.ofNat 0)
+    join (UInt256.ofNat 0)
   else
     let v8 := self.base
     let v9 ← checkedSub total v8
     let v10 ← downcast_truncate_u256_u64 v9
-    b3 v10
+    join v10
 
 /-- `<CallData as ByteInput>::len` -/
 def len_CallData (self : CallData) : FeM UInt256 := do
@@ -137,7 +137,7 @@ def i256_from_word (word : UInt256) : FeM UInt256 := do
 /-- `<Sol as Abi>::validate_runtime_head` -/
 def Sol_validate_runtime_head (input_len : UInt256) (base : UInt256) (head_size : UInt256) : FeM Unit := do
   let v5 := decide (head_size ≠ (UInt256.ofNat 0))
-  let b3 : FeM Unit := do
+  let join : FeM Unit := do
     return ()
   if v5 then
     let v8 := input_len - base
@@ -148,9 +148,9 @@ def Sol_validate_runtime_head (input_len : UInt256) (base : UInt256) (head_size 
       let v13 ← revertEmpty
       nomatch v13
     else
-      b3
+      join
   else
-    b3
+    join
 
 /-- `<u256 as AbiSize>::IS_DYNAMIC` -/
 def u256_IS_DYNAMIC : FeM Bool := do
@@ -198,42 +198,42 @@ def downcast_saturate_u64_usize (self : UInt256) : FeM UInt256 := do
   let word ← u64_to_word self
   let v10 ← usize_IS_SIGNED
   let v11 := !v10
-  let b3 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v1 => do
+  let join : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v1 => do
     let mut unsigned_word := unsigned_word
     return v1
   if v11 then
     unsigned_word := word
     let v13 ← u64_IS_SIGNED
-    let b6 : UInt256 → FeM UInt256 := fun unsigned_word => do
+    let join_1 : UInt256 → FeM UInt256 := fun unsigned_word => do
       let mut unsigned_word := unsigned_word
       let unsigned_word_24 := unsigned_word
       let v26 ← usize_MASK
       let v27 := decide (v26.toNat < unsigned_word_24.toNat)
-      let b10 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v2 => do
+      let join_2 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v2 => do
         let mut unsigned_word := unsigned_word
-        b3 unsigned_word v2
+        join unsigned_word v2
       if v27 then
         let v28 ← usize_MASK
         let v29 ← usize_from_word v28
-        b10 unsigned_word v29
+        join_2 unsigned_word v29
       else
         let unsigned_word_31 := unsigned_word
         let v33 ← usize_from_word unsigned_word_31
-        b10 unsigned_word v33
-    let b5 : UInt256 → FeM UInt256 := fun unsigned_word => do
+        join_2 unsigned_word v33
+    let join_3 : UInt256 → FeM UInt256 := fun unsigned_word => do
       let mut unsigned_word := unsigned_word
-      b6 unsigned_word
+      join_1 unsigned_word
     if v13 then
       let v14 ← I256_SIGN_BIT
       let v15 := word &&& v14
       let v17 := decide (v15 ≠ (UInt256.ofNat 0))
       if v17 then
         unsigned_word := (UInt256.ofNat 0)
-        b6 unsigned_word
+        join_1 unsigned_word
       else
-        b5 unsigned_word
+        join_3 unsigned_word
     else
-      b5 unsigned_word
+      join_3 unsigned_word
   else
     let v36 ← usize_SIGN_BIT
     let v37 ← usize_MASK
@@ -244,51 +244,51 @@ def downcast_saturate_u64_usize (self : UInt256) : FeM UInt256 := do
     let t_min := t_min_word
     let t_max := t_max_word
     let v49 ← u64_IS_SIGNED
-    let b13 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v3 => do
+    let join_4 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v3 => do
       let mut unsigned_word := unsigned_word
-      b3 unsigned_word v3
+      join unsigned_word v3
     if v49 then
       let x_50 := word
       let v52 := UInt256.sltBool x_50 t_min
-      let b16 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v4 => do
+      let join_5 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v4 => do
         let mut unsigned_word := unsigned_word
-        b13 unsigned_word v4
+        join_4 unsigned_word v4
       if v52 then
         let v53 ← usize_from_word t_min_word
-        b16 unsigned_word v53
+        join_5 unsigned_word v53
       else
         let v55 := UInt256.sgtBool x_50 t_max
-        let b19 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v5 => do
+        let join_6 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v5 => do
           let mut unsigned_word := unsigned_word
-          b16 unsigned_word v5
+          join_5 unsigned_word v5
         if v55 then
           let v56 ← usize_from_word t_max_word
-          b19 unsigned_word v56
+          join_6 unsigned_word v56
         else
           let v58 ← usize_from_word word
-          b19 unsigned_word v58
+          join_6 unsigned_word v58
     else
       let v62 ← I256_SIGN_BIT
       let v63 := word &&& v62
       let v65 := decide (v63 ≠ (UInt256.ofNat 0))
-      let b22 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v6 => do
+      let join_7 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v6 => do
         let mut unsigned_word := unsigned_word
-        b13 unsigned_word v6
+        join_4 unsigned_word v6
       if v65 then
         let v66 ← usize_from_word t_max_word
-        b22 unsigned_word v66
+        join_7 unsigned_word v66
       else
         let x_68 := word
         let v70 := UInt256.sgtBool x_68 t_max
-        let b25 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v7 => do
+        let join_8 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v7 => do
           let mut unsigned_word := unsigned_word
-          b22 unsigned_word v7
+          join_7 unsigned_word v7
         if v70 then
           let v71 ← usize_from_word t_max_word
-          b25 unsigned_word v71
+          join_8 unsigned_word v71
         else
           let v73 ← usize_from_word word
-          b25 unsigned_word v73
+          join_8 unsigned_word v73
 
 /-- `core::ptr::MAX_ALLOCATION` -/
 def MAX_ALLOCATION : FeM UInt256 := do
@@ -365,17 +365,17 @@ def ptr_offset (ptr : UInt256) (offset : UInt256) : FeM UInt256 := do
 def AbiFrame_slice (self : AbiFrame) (offset : UInt256) (len : UInt256) : FeM AbiFrame := do
   let v4 := self.len
   let v5 := decide (v4.toNat < offset.toNat)
-  let b1 : FeM AbiFrame := do
+  let join : FeM AbiFrame := do
     let v17 ← index_out_of_bounds
     nomatch v17
   if v5 then
-    b1
+    join
   else
     let v7 := self.len
     let v9 := v7 - offset
     let v10 := decide (v9.toNat < len.toNat)
     if v10 then
-      b1
+      join
     else
       let v13 := self.ptr
       let v14 ← ptr_offset v13 offset
@@ -725,16 +725,16 @@ def checked_tail_Sol (base : UInt256) (tail_rel : UInt256) : FeM UInt256 := do
 /-- `core::abi::checked_frame_end<Sol>` -/
 def checked_frame_end_Sol (pos : UInt256) (head_size : UInt256) (input_len : UInt256) : FeM UInt256 := do
   let v5 := decide (input_len.toNat < pos.toNat)
-  let b1 : FeM UInt256 := do
+  let join : FeM UInt256 := do
     let v16 ← Sol_decode_error
     nomatch v16
   if v5 then
-    b1
+    join
   else
     let v9 := input_len - pos
     let v10 := decide (v9.toNat < head_size.toNat)
     if v10 then
-      b1
+      join
     else
       let v15 := pos + head_size
       return v15
@@ -804,19 +804,19 @@ def usize_to_word (self : UInt256) : FeM UInt256 := do
 def downcast_truncate_usize_u64 (self : UInt256) : FeM UInt256 := do
   let word ← usize_to_word self
   let v4 ← u64_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u64_MASK
     let v6 ← u64_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← u64_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← u64_MASK
     let v11 := word &&& v10
     let v12 ← u64_from_word v11
-    b3 v12
+    join v12
 
 /-- `<MemSlice<u8> as ByteSource>::size` -/
 def MemSlice_u8_size (self : MemSlice_u8) : FeM UInt256 := do
@@ -853,17 +853,17 @@ def SolDecoder_read_word_MemSlice_u8 (self : SolDecoder) (input : MemSlice_u8) :
   let new_pos ← checkedAdd v2 (UInt256.ofNat 32)
   let v6 := self.pos
   let v7 := decide (new_pos.toNat < v6.toNat)
-  let b1 : SolDecoder → FeM (UInt256 × SolDecoder) := fun self => do
+  let join : SolDecoder → FeM (UInt256 × SolDecoder) := fun self => do
     let mut self := self
     let v16 ← revertEmpty
     nomatch v16
   if v7 then
-    b1 self
+    join self
   else
     let v8 ← len_MemSlice_u8 input
     let v9 := decide (v8.toNat < new_pos.toNat)
     if v9 then
-      b1 self
+      join self
     else
       let v12 := self.pos
       let w ← MemSlice_u8_word_at input v12
@@ -961,42 +961,42 @@ def downcast_saturate_u256_usize (self : UInt256) : FeM UInt256 := do
   let word ← u256_to_word self
   let v10 ← usize_IS_SIGNED
   let v11 := !v10
-  let b3 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v1 => do
+  let join : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v1 => do
     let mut unsigned_word := unsigned_word
     return v1
   if v11 then
     unsigned_word := word
     let v13 ← u256_IS_SIGNED
-    let b6 : UInt256 → FeM UInt256 := fun unsigned_word => do
+    let join_1 : UInt256 → FeM UInt256 := fun unsigned_word => do
       let mut unsigned_word := unsigned_word
       let unsigned_word_24 := unsigned_word
       let v26 ← usize_MASK
       let v27 := decide (v26.toNat < unsigned_word_24.toNat)
-      let b10 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v2 => do
+      let join_2 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v2 => do
         let mut unsigned_word := unsigned_word
-        b3 unsigned_word v2
+        join unsigned_word v2
       if v27 then
         let v28 ← usize_MASK
         let v29 ← usize_from_word v28
-        b10 unsigned_word v29
+        join_2 unsigned_word v29
       else
         let unsigned_word_31 := unsigned_word
         let v33 ← usize_from_word unsigned_word_31
-        b10 unsigned_word v33
-    let b5 : UInt256 → FeM UInt256 := fun unsigned_word => do
+        join_2 unsigned_word v33
+    let join_3 : UInt256 → FeM UInt256 := fun unsigned_word => do
       let mut unsigned_word := unsigned_word
-      b6 unsigned_word
+      join_1 unsigned_word
     if v13 then
       let v14 ← I256_SIGN_BIT
       let v15 := word &&& v14
       let v17 := decide (v15 ≠ (UInt256.ofNat 0))
       if v17 then
         unsigned_word := (UInt256.ofNat 0)
-        b6 unsigned_word
+        join_1 unsigned_word
       else
-        b5 unsigned_word
+        join_3 unsigned_word
     else
-      b5 unsigned_word
+      join_3 unsigned_word
   else
     let v36 ← usize_SIGN_BIT
     let v37 ← usize_MASK
@@ -1007,51 +1007,51 @@ def downcast_saturate_u256_usize (self : UInt256) : FeM UInt256 := do
     let t_min := t_min_word
     let t_max := t_max_word
     let v49 ← u256_IS_SIGNED
-    let b13 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v3 => do
+    let join_4 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v3 => do
       let mut unsigned_word := unsigned_word
-      b3 unsigned_word v3
+      join unsigned_word v3
     if v49 then
       let x_50 := word
       let v52 := UInt256.sltBool x_50 t_min
-      let b16 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v4 => do
+      let join_5 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v4 => do
         let mut unsigned_word := unsigned_word
-        b13 unsigned_word v4
+        join_4 unsigned_word v4
       if v52 then
         let v53 ← usize_from_word t_min_word
-        b16 unsigned_word v53
+        join_5 unsigned_word v53
       else
         let v55 := UInt256.sgtBool x_50 t_max
-        let b19 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v5 => do
+        let join_6 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v5 => do
           let mut unsigned_word := unsigned_word
-          b16 unsigned_word v5
+          join_5 unsigned_word v5
         if v55 then
           let v56 ← usize_from_word t_max_word
-          b19 unsigned_word v56
+          join_6 unsigned_word v56
         else
           let v58 ← usize_from_word word
-          b19 unsigned_word v58
+          join_6 unsigned_word v58
     else
       let v62 ← I256_SIGN_BIT
       let v63 := word &&& v62
       let v65 := decide (v63 ≠ (UInt256.ofNat 0))
-      let b22 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v6 => do
+      let join_7 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v6 => do
         let mut unsigned_word := unsigned_word
-        b13 unsigned_word v6
+        join_4 unsigned_word v6
       if v65 then
         let v66 ← usize_from_word t_max_word
-        b22 unsigned_word v66
+        join_7 unsigned_word v66
       else
         let x_68 := word
         let v70 := UInt256.sgtBool x_68 t_max
-        let b25 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v7 => do
+        let join_8 : UInt256 → UInt256 → FeM UInt256 := fun unsigned_word v7 => do
           let mut unsigned_word := unsigned_word
-          b22 unsigned_word v7
+          join_7 unsigned_word v7
         if v70 then
           let v71 ← usize_from_word t_max_word
-          b25 unsigned_word v71
+          join_8 unsigned_word v71
         else
           let v73 ← usize_from_word word
-          b25 unsigned_word v73
+          join_8 unsigned_word v73
 
 /-- `<u256 as StorageKey>::write_key` -/
 def u256_write_key (ptr : UInt256) (self : UInt256) : FeM Unit := do
@@ -1633,19 +1633,19 @@ def i8_from_word (word : UInt256) : FeM UInt256 := do
 def downcast_truncate_i256_i8 (self : UInt256) : FeM UInt256 := do
   let word ← i256_to_word self
   let v4 ← i8_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← i8_MASK
     let v6 ← i8_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← i8_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← i8_MASK
     let v11 := word &&& v10
     let v12 ← i8_from_word v11
-    b3 v12
+    join v12
 
 /-- `<u256 as IntDowncast>::downcast_unchecked` -/
 def downcast_unchecked_u256_i256 (self : UInt256) : FeM UInt256 := do
@@ -1765,13 +1765,13 @@ def bool_encoded_len (self : Bool) : FeM UInt256 := do
 
 /-- `<bool as StorageKey>::write_key` -/
 def bool_write_key (ptr : UInt256) (self : Bool) : FeM Unit := do
-  let b3 : UInt256 → FeM Unit := fun v2 => do
+  let join : UInt256 → FeM Unit := fun v2 => do
     let _ ← u256_write_key ptr v2
     return ()
   if self then
-    b3 (UInt256.ofNat 1)
+    join (UInt256.ofNat 1)
   else
-    b3 (UInt256.ofNat 0)
+    join (UInt256.ofNat 0)
 
 /-- `std::evm::layout::mapping_slot<bool>` -/
 def mapping_slot_bool (root : UInt256) (key : Bool) : FeM UInt256 := do
@@ -1941,7 +1941,7 @@ def encode_calldata_Panic (selector : UInt256) (message : Panic) : FeM MemBuffer
   let len := selector_size + v7
   let v10 ← Panic_HEAD_SIZE
   let v12 := decide (v10.toNat < (UInt256.ofNat 28).toNat)
-  let b3 : Panic → MemBuffer → AbiFrame → UInt256 → FeM MemBuffer := fun message buffer r2 capacity => do
+  let join : Panic → MemBuffer → AbiFrame → UInt256 → FeM MemBuffer := fun message buffer r2 capacity => do
     let mut message := message
     let mut buffer := buffer
     let mut r2 := r2
@@ -1962,19 +1962,19 @@ def encode_calldata_Panic (selector : UInt256) (message : Panic) : FeM MemBuffer
     let _ ← Panic_encode message r2
     let buffer_40 := buffer
     return buffer_40
-  let b2 : Panic → MemBuffer → AbiFrame → FeM MemBuffer := fun message buffer r2 => do
+  let join_1 : Panic → MemBuffer → AbiFrame → FeM MemBuffer := fun message buffer r2 => do
     let mut message := message
     let mut buffer := buffer
     let mut r2 := r2
-    b3 message buffer r2 len
+    join message buffer r2 len
   if v12 then
     let v14 := decide (len.toNat < (UInt256.ofNat 32).toNat)
     if v14 then
-      b3 message buffer r2 (UInt256.ofNat 32)
+      join message buffer r2 (UInt256.ofNat 32)
     else
-      b2 message buffer r2
+      join_1 message buffer r2
   else
-    b2 message buffer r2
+    join_1 message buffer r2
 
 /-- `std::evm::effects::encode_error<Panic>` -/
 def encode_error_Panic (error : Panic) : FeM MemBuffer := do
@@ -2028,17 +2028,17 @@ def u8_BITS : FeM UInt256 := do
 /-- `std::evm::sol_slot::field_shift` -/
 def field_shift (offset : UInt256) (bits : UInt256) : FeM UInt256 := do
   let v4 := decide ((UInt256.ofNat 32).toNat ≤ offset.toNat)
-  let b1 : FeM UInt256 := do
+  let join : FeM UInt256 := do
     let v17 ← revertEmpty
     nomatch v17
   if v4 then
-    b1
+    join
   else
     let v9 ← checkedMul offset (UInt256.ofNat 8)
     let v10 ← checkedSub (UInt256.ofNat 256) v9
     let v11 := decide (v10.toNat < bits.toNat)
     if v11 then
-      b1
+      join
     else
       let v16 ← checkedMul offset (UInt256.ofNat 8)
       return v16
@@ -2051,15 +2051,15 @@ def u8_to_packed (self : UInt256) : FeM UInt256 := do
 /-- `std::evm::sol_slot::field_mask` -/
 def field_mask (bits : UInt256) : FeM UInt256 := do
   let v4 := decide ((UInt256.ofNat 256).toNat ≤ bits.toNat)
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u256_max
-    b3 v5
+    join v5
   else
     let v10 := (UInt256.ofNat 1) <<< bits
     let v12 ← checkedSub v10 (UInt256.ofNat 1)
-    b3 v12
+    join v12
 
 /-- `SolWord::set<u8>` -/
 def SolWord_set_u8 (self : SolWord) (offset : UInt256) (value : UInt256) : FeM (Unit × SolWord) := do
@@ -2111,17 +2111,17 @@ def DynString_from_abi_tail (data : UInt256) (len : UInt256) (size : UInt256) : 
   let v6 ← round_up_words v5
   let expected_size ← checkedAdd (UInt256.ofNat 32) v6
   let v10 := decide (size ≠ expected_size)
-  let b1 : FeM DynString := do
+  let join : FeM DynString := do
     let v19 ← trap
     nomatch v19
   if v10 then
-    b1
+    join
   else
     let v12 ← mem_word_at data (UInt256.ofNat 0)
     let v14 := len
     let v15 := decide (v12 ≠ v14)
     if v15 then
-      b1
+      join
     else
       let v18 ← DynString_from_validated_abi_tail data len size
       return v18
@@ -2175,7 +2175,7 @@ def finish_raw_call (success : Bool) (ret_1 : MemBuffer) : FeM (RawCallOutcome �
   let v6 ← MemBuffer_capacity ret_1
   let v7 := v6
   let v8 := decide (returndata_len.toNat < v7.toNat)
-  let b3 : MemBuffer → UInt256 → FeM (RawCallOutcome × MemBuffer) := fun ret_1 written => do
+  let join : MemBuffer → UInt256 → FeM (RawCallOutcome × MemBuffer) := fun ret_1 written => do
     let mut ret_1 := ret_1
     let (v15, v15_0) ← MemBuffer_set_len ret_1 written
     ret_1 := v15_0
@@ -2183,10 +2183,10 @@ def finish_raw_call (success : Bool) (ret_1 : MemBuffer) : FeM (RawCallOutcome �
     return (v17, ret_1)
   if v8 then
     let v9 ← downcast_unchecked_u256_usize returndata_len
-    b3 ret_1 v9
+    join ret_1 v9
   else
     let v12 ← MemBuffer_capacity ret_1
-    b3 ret_1 v12
+    join ret_1 v12
 
 /-- `std::evm::effects::Call::raw_call<Evm>` -/
 def raw_call_Evm (addr : UInt256) (gas_1 : UInt256) (value : Wei) (args : MemSlice_u8) (ret_5 : MemBuffer) : FeM (RawCallOutcome × MemBuffer) := do
@@ -2253,19 +2253,19 @@ def u8_from_word (word : UInt256) : FeM UInt256 := do
 def downcast_truncate_u256_u8 (self : UInt256) : FeM UInt256 := do
   let word ← u256_to_word self
   let v4 ← u8_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u8_MASK
     let v6 ← u8_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← u8_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← u8_MASK
     let v11 := word &&& v10
     let v12 ← u8_from_word v11
-    b3 v12
+    join v12
 
 /-- `<u8 as SolPacked>::from_packed` -/
 def u8_from_packed (bits : UInt256) : FeM UInt256 := do
@@ -3103,19 +3103,19 @@ def u128_to_word (self : UInt256) : FeM UInt256 := do
 def downcast_truncate_u128_u64 (self : UInt256) : FeM UInt256 := do
   let word ← u128_to_word self
   let v4 ← u64_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u64_MASK
     let v6 ← u64_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← u64_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← u64_MASK
     let v11 := word &&& v10
     let v12 ← u64_from_word v11
-    b3 v12
+    join v12
 
 /-- `<u64 as WrappingMul>::wrapping_mul` -/
 def u64_wrapping_mul (self : UInt256) (other : UInt256) : FeM UInt256 := do
@@ -3154,19 +3154,19 @@ def i64_from_word (word : UInt256) : FeM UInt256 := do
 def downcast_truncate_u64_i64 (self : UInt256) : FeM UInt256 := do
   let word ← u64_to_word self
   let v4 ← i64_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← i64_MASK
     let v6 ← i64_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← i64_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← i64_MASK
     let v11 := word &&& v10
     let v12 ← i64_from_word v11
-    b3 v12
+    join v12
 
 /-- `<i64 as IntWord>::to_word` -/
 def i64_to_word (self : UInt256) : FeM UInt256 := do
@@ -3178,19 +3178,19 @@ def i64_to_word (self : UInt256) : FeM UInt256 := do
 def downcast_truncate_i64_u64 (self : UInt256) : FeM UInt256 := do
   let word ← i64_to_word self
   let v4 ← u64_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u64_MASK
     let v6 ← u64_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← u64_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← u64_MASK
     let v11 := word &&& v10
     let v12 ← u64_from_word v11
-    b3 v12
+    join v12
 
 /-- `<i128 as IntWord>::to_word` -/
 def i128_to_word (self : UInt256) : FeM UInt256 := do
@@ -3202,37 +3202,37 @@ def i128_to_word (self : UInt256) : FeM UInt256 := do
 def downcast_truncate_i128_u64 (self : UInt256) : FeM UInt256 := do
   let word ← i128_to_word self
   let v4 ← u64_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u64_MASK
     let v6 ← u64_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← u64_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← u64_MASK
     let v11 := word &&& v10
     let v12 ← u64_from_word v11
-    b3 v12
+    join v12
 
 /-- `<i128 as IntDowncast>::downcast_truncate` -/
 def downcast_truncate_i128_i64 (self : UInt256) : FeM UInt256 := do
   let word ← i128_to_word self
   let v4 ← i64_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← i64_MASK
     let v6 ← i64_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← i64_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← i64_MASK
     let v11 := word &&& v10
     let v12 ← i64_from_word v11
-    b3 v12
+    join v12
 
 /-- `<[usize; 3] as Collection>::start` -/
 def array_start_usize_3 (self : (Vector UInt256 3)) : FeM UInt256 := do
@@ -3255,18 +3255,18 @@ def Range_start_1_4 (self : Range_Known_1_Known_4) : FeM UInt256 := do
 /-- `core::range::range_has` -/
 def range_has (c : UInt256) (lo : UInt256) (hi : UInt256) : FeM Bool := do
   let v6 := decide (lo.toNat ≤ c.toNat)
-  let b3 : Bool → FeM Bool := fun v3 => do
+  let join : Bool → FeM Bool := fun v3 => do
     return v3
-  let b2 : FeM Bool := do
-    b3 false
+  let join_1 : FeM Bool := do
+    join false
   if v6 then
     let v9 := decide (c.toNat < hi.toNat)
     if v9 then
-      b3 true
+      join true
     else
-      b2
+      join_1
   else
-    b2
+    join_1
 
 /-- `<Range<Known<1>, Known<4>> as Collection>::has` -/
 def Range_has_1_4 (self : Range_Known_1_Known_4) (c : UInt256) : FeM Bool := do
@@ -3311,39 +3311,39 @@ def Range_next_1_16 (self : Range_Known_1_Known_16) (c : UInt256) : FeM UInt256 
 def downcast_truncate_u256_usize (self : UInt256) : FeM UInt256 := do
   let word ← u256_to_word self
   let v4 ← usize_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← usize_MASK
     let v6 ← usize_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← usize_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← usize_MASK
     let v11 := word &&& v10
     let v12 ← usize_from_word v11
-    b3 v12
+    join v12
 
 /-- `<(bool, u256, u256) as AbiSize>::IS_DYNAMIC` -/
 def tuple_IS_DYNAMIC_bool_u256_u256 : FeM Bool := do
   let v1 ← bool_IS_DYNAMIC
-  let b3 : Bool → FeM Bool := fun v0 => do
+  let join : Bool → FeM Bool := fun v0 => do
     return v0
-  let b1 : FeM Bool := do
-    b3 true
+  let join_1 : FeM Bool := do
+    join true
   if v1 then
-    b1
+    join_1
   else
     let v2 ← u256_IS_DYNAMIC
     if v2 then
-      b1
+      join_1
     else
       let v3 ← u256_IS_DYNAMIC
       if v3 then
-        b1
+        join_1
       else
-        b3 false
+        join false
 
 /-- `<(bool, u256, u256) as AbiSize>::HEAD_SIZE` -/
 def tuple_HEAD_SIZE_bool_u256_u256 : FeM UInt256 := do
@@ -3607,30 +3607,30 @@ def prepare_copy_destination (dest_0 : MemBuffer) (dest_offset : UInt256) (len :
   let v5 ← MemBuffer_capacity dest_0
   let v6 := v5
   let v7 := decide (v6.toNat < dest_offset.toNat)
-  let b1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun dest_0 => do
+  let join : MemBuffer → FeM (UInt256 × MemBuffer) := fun dest_0 => do
     let mut dest_0 := dest_0
     let v44 ← trap
     nomatch v44
   if v7 then
-    b1 dest_0
+    join dest_0
   else
     let v10 ← MemBuffer_capacity dest_0
     let v11 := v10
     let v13 ← checkedSub v11 dest_offset
     let v14 := decide (v13.toNat < len.toNat)
     if v14 then
-      b1 dest_0
+      join dest_0
     else
       let v19 := decide (len ≠ (UInt256.ofNat 0))
-      let b7 : MemBuffer → FeM (UInt256 × MemBuffer) := fun dest_0 => do
+      let join_1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun dest_0 => do
         let mut dest_0 := dest_0
         let v41 ← MemBuffer_ptr dest_0
         let v42 ← downcast_unchecked_u256_usize dest_offset
         let v43 := v41 + v42
         return (v43, dest_0)
-      let b6 : MemBuffer → FeM (UInt256 × MemBuffer) := fun dest_0 => do
+      let join_2 : MemBuffer → FeM (UInt256 × MemBuffer) := fun dest_0 => do
         let mut dest_0 := dest_0
-        b7 dest_0
+        join_1 dest_0
       if v19 then
         let v22 ← MemBuffer_len dest_0
         let v23 := v22
@@ -3644,11 +3644,11 @@ def prepare_copy_destination (dest_0 : MemBuffer) (dest_offset : UInt256) (len :
           let v34 ← checkedSub dest_offset v33
           let v35 ← downcast_unchecked_u256_usize v34
           let _ ← zero_bytes v29 v35
-          b7 dest_0
+          join_1 dest_0
         else
-          b6 dest_0
+          join_2 dest_0
       else
-        b6 dest_0
+        join_2 dest_0
 
 /-- `<Evm as RawOps>::calldatacopy` -/
 def Evm_calldatacopy (dest_1 : MemBuffer) (dest_offset : UInt256) (src_offset : UInt256) (len : UInt256) : FeM (Unit × MemBuffer) := do
@@ -3664,31 +3664,31 @@ def Evm_calldatacopy (dest_1 : MemBuffer) (dest_offset : UInt256) (src_offset : 
     let «end» ← downcast_unchecked_u256_usize v16
     let v20 ← MemBuffer_len dest_1
     let v21 := decide (v20.toNat < «end».toNat)
-    let b6 : MemBuffer → FeM (Unit × MemBuffer) := fun dest_1 => do
+    let join : MemBuffer → FeM (Unit × MemBuffer) := fun dest_1 => do
       let mut dest_1 := dest_1
       return ((), dest_1)
     if v21 then
       let (v22, v22_0) ← MemBuffer_set_len dest_1 «end»
       dest_1 := v22_0
-      b6 dest_1
+      join dest_1
     else
-      b6 dest_1
+      join dest_1
 
 /-- `MemSlice<u8>::value_ptr<u64>` -/
 def MemSlice_u8_value_ptr_u64 (self : MemSlice_u8) (offset : UInt256) : FeM UInt256 := do
   let v3 := self.len
   let v4 := decide (v3.toNat < offset.toNat)
-  let b1 : FeM UInt256 := do
+  let join : FeM UInt256 := do
     let v14 ← index_out_of_bounds
     nomatch v14
   if v4 then
-    b1
+    join
   else
     let v6 := self.len
     let v8 ← checkedSub v6 offset
     let v9 := decide (v8.toNat < (UInt256.ofNat 8).toNat)
     if v9 then
-      b1
+      join
     else
       let v12 := self.ptr
       let v13 := v12 + offset
@@ -3754,27 +3754,27 @@ def MemBuffer_extend_over_u256 (self : MemBuffer) (offset : UInt256) : FeM (UInt
   let size := (UInt256.ofNat 32)
   let v5 := self.capacity
   let v6 := decide (v5.toNat < offset.toNat)
-  let b1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
+  let join : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
     let mut self := self
     let v38 ← index_out_of_bounds
     nomatch v38
   if v6 then
-    b1 self
+    join self
   else
     let v7 := self.capacity
     let v9 := v7 - offset
     let v10 := decide (v9.toNat < size.toNat)
     if v10 then
-      b1 self
+      join self
     else
       let v14 := self.len
       let v15 := decide (v14.toNat < offset.toNat)
-      let b7 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
+      let join_1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
         let mut self := self
         let v27 := offset + size
         let v28 := self.len
         let v29 := decide (v28.toNat < v27.toNat)
-        let b10 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
+        let join_2 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
           let mut self := self
           let v36 := self.ptr
           let v37 := v36 + offset
@@ -3782,9 +3782,9 @@ def MemBuffer_extend_over_u256 (self : MemBuffer) (offset : UInt256) : FeM (UInt
         if v29 then
           let v31 := offset + size
           self := { self with len := v31 }
-          b10 self
+          join_2 self
         else
-          b10 self
+          join_2 self
       if v15 then
         let v16 := self.ptr
         let v17 := self.len
@@ -3792,9 +3792,9 @@ def MemBuffer_extend_over_u256 (self : MemBuffer) (offset : UInt256) : FeM (UInt
         let v20 := self.len
         let v21 := offset - v20
         let _ ← zero_bytes v18 v21
-        b7 self
+        join_1 self
       else
-        b7 self
+        join_1 self
 
 /-- `MemBuffer::write_be<u256>` -/
 def MemBuffer_write_be_u256 (self : MemBuffer) (offset : UInt256) (value : UInt256) : FeM (Unit × MemBuffer) := do
@@ -3878,19 +3878,19 @@ def u64_wrapping_add (self : UInt256) (other : UInt256) : FeM UInt256 := do
 def downcast_truncate_u64_usize (self : UInt256) : FeM UInt256 := do
   let word ← u64_to_word self
   let v4 ← usize_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← usize_MASK
     let v6 ← usize_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← usize_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← usize_MASK
     let v11 := word &&& v10
     let v12 ← usize_from_word v11
-    b3 v12
+    join v12
 
 /-- `MemBuffer::extend_over<u64>` -/
 def MemBuffer_extend_over_u64 (self : MemBuffer) (offset : UInt256) : FeM (UInt256 × MemBuffer) := do
@@ -3898,27 +3898,27 @@ def MemBuffer_extend_over_u64 (self : MemBuffer) (offset : UInt256) : FeM (UInt2
   let size := (UInt256.ofNat 8)
   let v5 := self.capacity
   let v6 := decide (v5.toNat < offset.toNat)
-  let b1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
+  let join : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
     let mut self := self
     let v38 ← index_out_of_bounds
     nomatch v38
   if v6 then
-    b1 self
+    join self
   else
     let v7 := self.capacity
     let v9 := v7 - offset
     let v10 := decide (v9.toNat < size.toNat)
     if v10 then
-      b1 self
+      join self
     else
       let v14 := self.len
       let v15 := decide (v14.toNat < offset.toNat)
-      let b7 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
+      let join_1 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
         let mut self := self
         let v27 := offset + size
         let v28 := self.len
         let v29 := decide (v28.toNat < v27.toNat)
-        let b10 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
+        let join_2 : MemBuffer → FeM (UInt256 × MemBuffer) := fun self => do
           let mut self := self
           let v36 := self.ptr
           let v37 := v36 + offset
@@ -3926,9 +3926,9 @@ def MemBuffer_extend_over_u64 (self : MemBuffer) (offset : UInt256) : FeM (UInt2
         if v29 then
           let v31 := offset + size
           self := { self with len := v31 }
-          b10 self
+          join_2 self
         else
-          b10 self
+          join_2 self
       if v15 then
         let v16 := self.ptr
         let v17 := self.len
@@ -3936,9 +3936,9 @@ def MemBuffer_extend_over_u64 (self : MemBuffer) (offset : UInt256) : FeM (UInt2
         let v20 := self.len
         let v21 := offset - v20
         let _ ← zero_bytes v18 v21
-        b7 self
+        join_1 self
       else
-        b7 self
+        join_1 self
 
 /-- `MemBuffer::write_le<u64>` -/
 def MemBuffer_write_le_u64 (self : MemBuffer) (offset : UInt256) (value : UInt256) : FeM (Unit × MemBuffer) := do
@@ -4004,19 +4004,19 @@ def downcast_unchecked_usize_u64 (self : UInt256) : FeM UInt256 := do
 def downcast_truncate_u64_u8 (self : UInt256) : FeM UInt256 := do
   let word ← u64_to_word self
   let v4 ← u8_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← u8_MASK
     let v6 ← u8_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← u8_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← u8_MASK
     let v11 := word &&& v10
     let v12 ← u8_from_word v11
-    b3 v12
+    join v12
 
 /-- `<Range<Known<0>, Unknown> as Collection>::next` -/
 def Range_next_0 (self : Range_Known_0_Unknown) (c : UInt256) : FeM UInt256 := do
@@ -4094,14 +4094,14 @@ def try_alloc_bytes (len : UInt256) : FeM Option_u8 := do
     let ptr ← alloc len
     let v10 := ptr
     let v12 := decide (v10 = (UInt256.ofNat 0))
-    let b6 : Option_u8 → FeM Option_u8 := fun v1 => do
+    let join : Option_u8 → FeM Option_u8 := fun v1 => do
       return v1
     if v12 then
       let v13 := Option_u8.None
-      b6 v13
+      join v13
     else
       let v15 := Option_u8.Some ptr
-      b6 v15
+      join v15
 
 /-- `MemBuffer::try_new` -/
 def MemBuffer_try_new (len : UInt256) : FeM Option_MemBuffer := do
@@ -4199,7 +4199,7 @@ deriving Inhabited
 def try_alloc_elems_u64 (len : UInt256) : FeM Option_u64 := do
   let size := (UInt256.ofNat 8)
   let v4 := decide (size ≠ (UInt256.ofNat 0))
-  let b2 : FeM Option_u64 := do
+  let join : FeM Option_u64 := do
     let v13 ← checkedMul len size
     let v14 ← try_alloc_bytes v13
     let v15 := match v14 with | .Some .. => true | _ => false
@@ -4219,9 +4219,9 @@ def try_alloc_elems_u64 (len : UInt256) : FeM Option_u64 := do
       let v9 := Option_u64.None
       return v9
     else
-      b2
+      join
   else
-    b2
+    join
 
 /-- `MemArray<u64>::try_new_uninit` -/
 def MemArray_try_new_uninit_u64 (len : UInt256) : FeM Option_MemArray_u64 := do
@@ -4272,14 +4272,14 @@ def drop_in_place_u64 (ptr : UInt256) : FeM Unit := do
 def drop_range_u64 (ptr : UInt256) (start : UInt256) («end» : UInt256) : FeM Unit := do
   let mut r0 : Range_Unknown_Unknown := default
   let v4 := false
-  let b3 : Range_Unknown_Unknown → FeM Unit := fun r0 => do
+  let join : Range_Unknown_Unknown → FeM Unit := fun r0 => do
     let mut r0 := r0
     return ()
   if v4 then
     let v8 := (Range_Unknown_Unknown.mk start «end»)
     r0 := v8
     let v10 ← Range_Unknown_Unknown_start r0
-    let rec b4 (r0 : Range_Unknown_Unknown) (v3 : UInt256) : FeM Unit := do
+    let rec loop (r0 : Range_Unknown_Unknown) (v3 : UInt256) : FeM Unit := do
       let mut r0 := r0
       let v13 ← Range_Unknown_Unknown_has r0 v3
       if v13 then
@@ -4288,13 +4288,13 @@ def drop_range_u64 (ptr : UInt256) (start : UInt256) («end» : UInt256) : FeM U
         let v17 ← elem_u64 ptr i
         let _ ← drop_in_place_u64 v17
         let v20 ← Range_Unknown_Unknown_next r0 v3
-        b4 r0 v20
+        loop r0 v20
       else
-        b3 r0
+        join r0
     partial_fixpoint
-    b4 r0 v10
+    loop r0 v10
   else
-    b3 r0
+    join r0
 
 /-- `core::ptr::drop_in_place_n<u64>` -/
 def drop_in_place_n_u64 (ptr : UInt256) (len : UInt256) : FeM Unit := do
@@ -4396,19 +4396,19 @@ def Range_next_0_5 (self : Range_Known_0_Known_5) (c : UInt256) : FeM UInt256 :=
 def downcast_truncate_usize_usize (self : UInt256) : FeM UInt256 := do
   let word ← usize_to_word self
   let v4 ← usize_IS_SIGNED
-  let b3 : UInt256 → FeM UInt256 := fun v1 => do
+  let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 ← usize_MASK
     let v6 ← usize_SIGN_BIT
     let v7 ← sign_extend word v5 v6
     let v8 ← usize_from_word v7
-    b3 v8
+    join v8
   else
     let v10 ← usize_MASK
     let v11 := word &&& v10
     let v12 ← usize_from_word v11
-    b3 v12
+    join v12
 
 /-- `<Range<Known<0>, Known<6>> as Collection>::start` -/
 def Range_start_0_6 (self : Range_Known_0_Known_6) : FeM UInt256 := do
@@ -4472,17 +4472,17 @@ def MemArray_as_slice_ref_u64 (self : MemArray_u64) : FeM MemSlice_u64 := do
 def MemSlice_slice_ref_u64 (self : MemSlice_u64) (offset : UInt256) (len : UInt256) : FeM MemSlice_u64 := do
   let v3 := self.len
   let v4 := decide (v3.toNat < offset.toNat)
-  let b1 : FeM MemSlice_u64 := do
+  let join : FeM MemSlice_u64 := do
     let v13 ← index_out_of_bounds
     nomatch v13
   if v4 then
-    b1
+    join
   else
     let v5 := self.len
     let v6 ← checkedSub v5 offset
     let v7 := decide (v6.toNat < len.toNat)
     if v7 then
-      b1
+      join
     else
       let v10 := self.ptr
       let v11 ← elem_u64 v10 offset
@@ -4527,19 +4527,19 @@ def MemSlice_slice_mut_u64 (self : MemSlice_u64) (offset : UInt256) (len : UInt2
   let mut v12 : MemSlice_u64 := default
   let v3 := self.len
   let v4 := decide (v3.toNat < offset.toNat)
-  let b1 : MemSlice_u64 → MemSlice_u64 → FeM (MemSlice_u64 × (MemSlice_u64 → FeM MemSlice_u64)) := fun self v12 => do
+  let join : MemSlice_u64 → MemSlice_u64 → FeM (MemSlice_u64 × (MemSlice_u64 → FeM MemSlice_u64)) := fun self v12 => do
     let mut self := self
     let mut v12 := v12
     let v13 ← index_out_of_bounds
     nomatch v13
   if v4 then
-    b1 self v12
+    join self v12
   else
     let v5 := self.len
     let v6 ← checkedSub v5 offset
     let v7 := decide (v6.toNat < len.toNat)
     if v7 then
-      b1 self v12
+      join self v12
     else
       let v10 := self.ptr
       let v11 ← elem_u64 v10 offset
@@ -4788,17 +4788,17 @@ def elem_u8 (ptr : UInt256) (index : UInt256) : FeM UInt256 := do
 def MemSlice_slice_ref_u8 (self : MemSlice_u8) (offset : UInt256) (len : UInt256) : FeM MemSlice_u8 := do
   let v3 := self.len
   let v4 := decide (v3.toNat < offset.toNat)
-  let b1 : FeM MemSlice_u8 := do
+  let join : FeM MemSlice_u8 := do
     let v13 ← index_out_of_bounds
     nomatch v13
   if v4 then
-    b1
+    join
   else
     let v5 := self.len
     let v6 ← checkedSub v5 offset
     let v7 := decide (v6.toNat < len.toNat)
     if v7 then
-      b1
+      join
     else
       let v10 := self.ptr
       let v11 ← elem_u8 v10 offset
@@ -5182,17 +5182,17 @@ def checked_dynamic_payload_after_head_Sol_CallData (input : CallData) (pos : UI
   let v8 ← checkedAdd pos (UInt256.ofNat 32)
   let v9 ← checkedSub input_len v8
   let v10 := decide (v9.toNat < data_len.toNat)
-  let b1 : FeM (UInt256 × UInt256) := do
+  let join : FeM (UInt256 × UInt256) := do
     let v23 ← Sol_decode_error
     nomatch v23
   if v10 then
-    b1
+    join
   else
     let v11 ← MAX_PAYLOAD_LEN
     let v13 ← checkedSub v11 (UInt256.ofNat 32)
     let v14 := decide (v13.toNat < data_len.toNat)
     if v14 then
-      b1
+      join
     else
       let v18 ← checkedAdd data_len (UInt256.ofNat 63)
       let payload_size := v18 &&& (UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007913129639904)
@@ -5305,15 +5305,15 @@ def decode_msg_field_from_Sol_Bytes_CallData (input : CallData) (base : UInt256)
 /-- `std::abi::sol::types::decode_fixed_bytes_word` -/
 def decode_fixed_bytes_word (word : UInt256) (len : UInt256) : FeM UInt256 := do
   let v4 := decide (len = (UInt256.ofNat 0))
-  let b1 : FeM UInt256 := do
+  let join : FeM UInt256 := do
     let v33 ← revertEmpty
     nomatch v33
   if v4 then
-    b1
+    join
   else
     let v7 := decide ((UInt256.ofNat 32).toNat < len.toNat)
     if v7 then
-      b1
+      join
     else
       let v12 := decide (len = (UInt256.ofNat 32))
       if v12 then
@@ -5592,18 +5592,18 @@ def decode_msg_field_from_Sol_FixedBytes_4_CallData (input : CallData) (base : U
 /-- `<(u256, u256) as AbiSize>::IS_DYNAMIC` -/
 def tuple_IS_DYNAMIC_u256_u256 : FeM Bool := do
   let v1 ← u256_IS_DYNAMIC
-  let b3 : Bool → FeM Bool := fun v0 => do
+  let join : Bool → FeM Bool := fun v0 => do
     return v0
-  let b1 : FeM Bool := do
-    b3 true
+  let join_1 : FeM Bool := do
+    join true
   if v1 then
-    b1
+    join_1
   else
     let v2 ← u256_IS_DYNAMIC
     if v2 then
-      b1
+      join_1
     else
-      b3 false
+      join false
 
 /-- `core::abi::abi_field_head_size<(u256, u256)>` -/
 def abi_field_head_size_tuple_u256_u256 : FeM UInt256 := do

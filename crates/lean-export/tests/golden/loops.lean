@@ -10,7 +10,7 @@ def recv_Triangle (n : UInt256) : FeM UInt256 := do
   let mut i : UInt256 := default
   total := (UInt256.ofNat 0)
   i := (UInt256.ofNat 0)
-  let rec b1 (total : UInt256) (i : UInt256) : FeM UInt256 := do
+  let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
     let i_5 := i
@@ -23,35 +23,35 @@ def recv_Triangle (n : UInt256) : FeM UInt256 := do
       let total_15 := total
       let total_16 ← checkedAdd total_15 i_13
       total := total_16
-      b1 total i
+      loop total i
     else
       let total_19 := total
       return total_19
   partial_fixpoint
-  b1 total i
+  loop total i
 
 /-- `loops::step` -/
 def step (value : UInt256) : FeM Option_u256 := do
   let v5 := decide (value = (UInt256.ofNat 1))
-  let b3 : Option_u256 → FeM Option_u256 := fun v1 => do
+  let join : Option_u256 → FeM Option_u256 := fun v1 => do
     return v1
   if v5 then
     let v6 := Option_u256.None
-    b3 v6
+    join v6
   else
     let v10 ← checkedRem value (UInt256.ofNat 2)
     let v12 := decide (v10 = (UInt256.ofNat 0))
-    let b6 : Option_u256 → FeM Option_u256 := fun v2 => do
-      b3 v2
+    let join_1 : Option_u256 → FeM Option_u256 := fun v2 => do
+      join v2
     if v12 then
       let v15 ← checkedDiv value (UInt256.ofNat 2)
       let v16 := Option_u256.Some v15
-      b6 v16
+      join_1 v16
     else
       let v20 ← checkedMul (UInt256.ofNat 3) value
       let v22 ← checkedAdd v20 (UInt256.ofNat 1)
       let v23 := Option_u256.Some v22
-      b6 v23
+      join_1 v23
 
 /-- `Collatz { start, limit } -> u256`, selector `0xea732925` (`collatz(uint256,uint256)`) -/
 def recv_Collatz (start : UInt256) (limit : UInt256) : FeM UInt256 := do
@@ -59,7 +59,7 @@ def recv_Collatz (start : UInt256) (limit : UInt256) : FeM UInt256 := do
   let mut steps : UInt256 := default
   value := start
   steps := (UInt256.ofNat 0)
-  let rec b1 (value : UInt256) (steps : UInt256) : FeM UInt256 := do
+  let rec loop (value : UInt256) (steps : UInt256) : FeM UInt256 := do
     let mut value := value
     let mut steps := steps
     let steps_5 := steps
@@ -76,10 +76,10 @@ def recv_Collatz (start : UInt256) (limit : UInt256) : FeM UInt256 := do
         let steps_18 := steps
         let steps_19 ← checkedAdd steps_18 (UInt256.ofNat 1)
         steps := steps_19
-        b1 value steps
+        loop value steps
       | .None =>
         let steps_23 := steps
         return steps_23
   partial_fixpoint
-  b1 value steps
+  loop value steps
 

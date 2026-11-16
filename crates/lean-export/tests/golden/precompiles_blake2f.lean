@@ -965,7 +965,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
   let v6 ← MemBuffer_len_1 input
   let v7 ← INPUT_LEN
   let v8 := decide (v6 = v7)
-  let b3 : (Vector UInt256 8) → (Vector UInt256 16) → (Vector UInt256 16) → UInt256 → Range_Known_0_Known_8 → Range_Known_0_Known_16 → Range_Known_0_Known_8 → (Vector UInt256 16) → Range_Known_0_Known_8 → Bool → FeM (Vector UInt256 8) := fun h m v round r4 r5 r6 r7 r8 v1 => do
+  let join : (Vector UInt256 8) → (Vector UInt256 16) → (Vector UInt256 16) → UInt256 → Range_Known_0_Known_8 → Range_Known_0_Known_16 → Range_Known_0_Known_8 → (Vector UInt256 16) → Range_Known_0_Known_8 → Bool → FeM (Vector UInt256 8) := fun h m v round r4 r5 r6 r7 r8 v1 => do
     let mut h := h
     let mut m := m
     let mut v := v
@@ -983,7 +983,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
     let v27 := (Range_Known_0_Known_8.mk () ())
     r4 := v27
     let v29 ← Range_start_0_8 r4
-    let rec b5 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v2 : UInt256) : FeM (Vector UInt256 8) := do
+    let rec loop (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v2 : UInt256) : FeM (Vector UInt256 8) := do
       let mut h := h
       let mut m := m
       let mut v := v
@@ -1003,12 +1003,12 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
         checkIndex i_35 8
         h := (h.set! i_35.toNat v40)
         let v43 ← Range_next_0_8 r4 v2
-        b5 h m v round r4 r5 r6 r7 r8 v43
+        loop h m v round r4 r5 r6 r7 r8 v43
       else
         let v48 := (Range_Known_0_Known_16.mk () ())
         r5 := v48
         let v50 ← Range_start_0_16 r5
-        let rec b9 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v3 : UInt256) : FeM (Vector UInt256 8) := do
+        let rec loop_1 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v3 : UInt256) : FeM (Vector UInt256 8) := do
           let mut h := h
           let mut m := m
           let mut v := v
@@ -1028,14 +1028,14 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
             checkIndex i_56 16
             m := (m.set! i_56.toNat v61)
             let v64 ← Range_next_0_16 r5 v3
-            b9 h m v round r4 r5 r6 r7 r8 v64
+            loop_1 h m v round r4 r5 r6 r7 r8 v64
           else
             let v_67 := Vector.replicate 16 (UInt256.ofNat 0)
             v := v_67
             let v72 := (Range_Known_0_Known_8.mk () ())
             r6 := v72
             let v74 ← Range_start_0_8 r6
-            let rec b13 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v4 : UInt256) : FeM (Vector UInt256 8) := do
+            let rec loop_2 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v4 : UInt256) : FeM (Vector UInt256 8) := do
               let mut h := h
               let mut m := m
               let mut v := v
@@ -1060,7 +1060,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                 checkIndex v86 16
                 v := (v.set! v86.toNat v84)
                 let v89 ← Range_next_0_8 r6 v4
-                b13 h m v round r4 r5 r6 r7 r8 v89
+                loop_2 h m v round r4 r5 r6 r7 r8 v89
               else
                 let v92 ← MemBuffer_lane_at input (UInt256.ofNat 196)
                 let v93 := (UInt256.ofNat 12)
@@ -1078,7 +1078,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                 v := (v.set! v99.toNat v101)
                 let v104 ← MemBuffer_byte_at input (UInt256.ofNat 212)
                 let v106 := decide (v104 = (UInt256.ofNat 1))
-                let b19 : (Vector UInt256 8) → (Vector UInt256 16) → (Vector UInt256 16) → UInt256 → Range_Known_0_Known_8 → Range_Known_0_Known_16 → Range_Known_0_Known_8 → (Vector UInt256 16) → Range_Known_0_Known_8 → FeM (Vector UInt256 8) := fun h m v round r4 r5 r6 r7 r8 => do
+                let join_1 : (Vector UInt256 8) → (Vector UInt256 16) → (Vector UInt256 16) → UInt256 → Range_Known_0_Known_8 → Range_Known_0_Known_16 → Range_Known_0_Known_8 → (Vector UInt256 16) → Range_Known_0_Known_8 → FeM (Vector UInt256 8) := fun h m v round r4 r5 r6 r7 r8 => do
                   let mut h := h
                   let mut m := m
                   let mut v := v
@@ -1090,7 +1090,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                   let mut r8 := r8
                   let total ← rounds_MemBuffer input
                   round := (UInt256.ofNat 0)
-                  let rec b20 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) : FeM (Vector UInt256 8) := do
+                  let rec loop_3 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) : FeM (Vector UInt256 8) := do
                     let mut h := h
                     let mut m := m
                     let mut v := v
@@ -1111,9 +1111,9 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                       let round_129 := round
                       let round_130 ← IntTy.add (.u 64) round_129 (UInt256.ofNat 10)
                       round := round_130
-                      b20 h m v round r4 r5 r6 r7 r8
+                      loop_3 h m v round r4 r5 r6 r7 r8
                     else
-                      let rec b23 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) : FeM (Vector UInt256 8) := do
+                      let rec loop_4 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) : FeM (Vector UInt256 8) := do
                         let mut h := h
                         let mut m := m
                         let mut v := v
@@ -1260,12 +1260,12 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                           let round_287 := round
                           let round_288 ← IntTy.add (.u 64) round_287 (UInt256.ofNat 1)
                           round := round_288
-                          b23 h m v round r4 r5 r6 r7 r8
+                          loop_4 h m v round r4 r5 r6 r7 r8
                         else
                           let v294 := (Range_Known_0_Known_8.mk () ())
                           r8 := v294
                           let v296 ← Range_start_0_8 r8
-                          let rec b26 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v5 : UInt256) : FeM (Vector UInt256 8) := do
+                          let rec loop_5 (h : (Vector UInt256 8)) (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) (round : UInt256) (r4 : Range_Known_0_Known_8) (r5 : Range_Known_0_Known_16) (r6 : Range_Known_0_Known_8) (r7 : (Vector UInt256 16)) (r8 : Range_Known_0_Known_8) (v5 : UInt256) : FeM (Vector UInt256 8) := do
                             let mut h := h
                             let mut m := m
                             let mut v := v
@@ -1291,16 +1291,16 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                               checkIndex i_302 8
                               h := (h.set! i_302.toNat v309)
                               let v312 ← Range_next_0_8 r8 v5
-                              b26 h m v round r4 r5 r6 r7 r8 v312
+                              loop_5 h m v round r4 r5 r6 r7 r8 v312
                             else
                               let h_314 := h
                               return h_314
                           partial_fixpoint
-                          b26 h m v round r4 r5 r6 r7 r8 v296
+                          loop_5 h m v round r4 r5 r6 r7 r8 v296
                       partial_fixpoint
-                      b23 h m v round r4 r5 r6 r7 r8
+                      loop_4 h m v round r4 r5 r6 r7 r8
                   partial_fixpoint
-                  b20 h m v round r4 r5 r6 r7 r8
+                  loop_3 h m v round r4 r5 r6 r7 r8
                 if v106 then
                   let v107 := (UInt256.ofNat 14)
                   checkIndex v107 16
@@ -1309,16 +1309,16 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                   let v110 := (UInt256.ofNat 14)
                   checkIndex v110 16
                   v := (v.set! v110.toNat v109)
-                  b19 h m v round r4 r5 r6 r7 r8
+                  join_1 h m v round r4 r5 r6 r7 r8
                 else
-                  b19 h m v round r4 r5 r6 r7 r8
+                  join_1 h m v round r4 r5 r6 r7 r8
             partial_fixpoint
-            b13 h m v round r4 r5 r6 r7 r8 v74
+            loop_2 h m v round r4 r5 r6 r7 r8 v74
         partial_fixpoint
-        b9 h m v round r4 r5 r6 r7 r8 v50
+        loop_1 h m v round r4 r5 r6 r7 r8 v50
     partial_fixpoint
-    b5 h m v round r4 r5 r6 r7 r8 v29
-  let b2 : (Vector UInt256 8) → (Vector UInt256 16) → (Vector UInt256 16) → UInt256 → Range_Known_0_Known_8 → Range_Known_0_Known_16 → Range_Known_0_Known_8 → (Vector UInt256 16) → Range_Known_0_Known_8 → FeM (Vector UInt256 8) := fun h m v round r4 r5 r6 r7 r8 => do
+    loop h m v round r4 r5 r6 r7 r8 v29
+  let join_2 : (Vector UInt256 8) → (Vector UInt256 16) → (Vector UInt256 16) → UInt256 → Range_Known_0_Known_8 → Range_Known_0_Known_16 → Range_Known_0_Known_8 → (Vector UInt256 16) → Range_Known_0_Known_8 → FeM (Vector UInt256 8) := fun h m v round r4 r5 r6 r7 r8 => do
     let mut h := h
     let mut m := m
     let mut v := v
@@ -1328,16 +1328,16 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
     let mut r6 := r6
     let mut r7 := r7
     let mut r8 := r8
-    b3 h m v round r4 r5 r6 r7 r8 false
+    join h m v round r4 r5 r6 r7 r8 false
   if v8 then
     let v10 ← MemBuffer_byte_at input (UInt256.ofNat 212)
     let v12 := decide (v10.toNat ≤ (UInt256.ofNat 1).toNat)
     if v12 then
-      b3 h m v round r4 r5 r6 r7 r8 true
+      join h m v round r4 r5 r6 r7 r8 true
     else
-      b2 h m v round r4 r5 r6 r7 r8
+      join_2 h m v round r4 r5 r6 r7 r8
   else
-    b2 h m v round r4 r5 r6 r7 r8
+    join_2 h m v round r4 r5 r6 r7 r8
 
 /-- `_`, for a call no other arm takes -/
 def recv_fallback : FeM Empty := do
@@ -1349,7 +1349,7 @@ def recv_fallback : FeM Empty := do
   let v4 ← MemBuffer_len input
   let v5 ← INPUT_LEN
   let v6 := decide (v4 ≠ v5)
-  let b1 : MemBuffer → MemBuffer → Range_Known_0_Known_8 → FeM Empty := fun input output r3 => do
+  let join : MemBuffer → MemBuffer → Range_Known_0_Known_8 → FeM Empty := fun input output r3 => do
     let mut input := input
     let mut output := output
     let mut r3 := r3
@@ -1357,13 +1357,13 @@ def recv_fallback : FeM Empty := do
     let v49 ← Evm_revert v46
     nomatch v49
   if v6 then
-    b1 input output r3
+    join input output r3
   else
     let v9 ← MemBuffer_index_ref input (UInt256.ofNat 212)
     let v10 ← mloadInt (.u 8) v9
     let v12 := decide ((UInt256.ofNat 1).toNat < v10.toNat)
     if v12 then
-      b1 input output r3
+      join input output r3
     else
       let state ← compress_MemBuffer input
       let output_19 ← MemBuffer_new (UInt256.ofNat 64)
@@ -1371,7 +1371,7 @@ def recv_fallback : FeM Empty := do
       let v24 := (Range_Known_0_Known_8.mk () ())
       r3 := v24
       let v26 ← Range_start_0_8 r3
-      let rec b5 (input : MemBuffer) (output : MemBuffer) (r3 : Range_Known_0_Known_8) (v0 : UInt256) : FeM Empty := do
+      let rec loop (input : MemBuffer) (output : MemBuffer) (r3 : Range_Known_0_Known_8) (v0 : UInt256) : FeM Empty := do
         let mut input := input
         let mut output := output
         let mut r3 := r3
@@ -1385,13 +1385,13 @@ def recv_fallback : FeM Empty := do
           let (v37, v37_0) ← MemBuffer_write_le_u64 output v34 v35
           output := v37_0
           let v39 ← Range_next_0_8 r3 v0
-          b5 input output r3 v39
+          loop input output r3 v39
         else
           let v42 ← MemBuffer_span_ref output
           let v45 ← Evm_return_data v42
           nomatch v45
       partial_fixpoint
-      b5 input output r3 v26
+      loop input output r3 v26
 
 /-- The entry of `recv_fallback`, for a call no other arm takes -/
 def recv_fallback_entry : FeM Empty := do

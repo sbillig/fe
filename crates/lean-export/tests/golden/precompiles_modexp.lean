@@ -111,7 +111,7 @@ def input_word_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
   let mut i : UInt256 := default
   let «end» ← MemBuffer_len_1 input
   let v8 := decide («end».toNat ≤ offset.toNat)
-  let b3 : UInt256 → UInt256 → UInt256 → FeM UInt256 := fun value i present => do
+  let join : UInt256 → UInt256 → UInt256 → FeM UInt256 := fun value i present => do
     let mut value := value
     let mut i := i
     let v23 := decide (present = (UInt256.ofNat 0))
@@ -120,7 +120,7 @@ def input_word_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
     else
       value := (UInt256.ofNat 0)
       i := (UInt256.ofNat 0)
-      let rec b10 (value : UInt256) (i : UInt256) : FeM UInt256 := do
+      let rec loop (value : UInt256) (i : UInt256) : FeM UInt256 := do
         let mut value := value
         let mut i := i
         let i_31 := i
@@ -139,9 +139,9 @@ def input_word_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
           let i_50 := i
           let i_51 := i_50 + (UInt256.ofNat 8)
           i := i_51
-          b10 value i
+          loop value i
         else
-          let rec b13 (value : UInt256) (i : UInt256) : FeM UInt256 := do
+          let rec loop_1 (value : UInt256) (i : UInt256) : FeM UInt256 := do
             let mut value := value
             let mut i := i
             let i_54 := i
@@ -158,7 +158,7 @@ def input_word_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
               let i_70 := i
               let i_71 := i_70 + (UInt256.ofNat 1)
               i := i_71
-              b13 value i
+              loop_1 value i
             else
               let value_74 := value
               let v77 := len - present
@@ -167,23 +167,23 @@ def input_word_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
               let v81 := value_74 <<< v80
               return v81
           partial_fixpoint
-          b13 value i
+          loop_1 value i
       partial_fixpoint
-      b10 value i
+      loop value i
   if v8 then
-    b3 value i (UInt256.ofNat 0)
+    join value i (UInt256.ofNat 0)
   else
     let v12 := «end» - offset
     let v14 := decide (v12.toNat < len.toNat)
-    let b6 : UInt256 → UInt256 → UInt256 → FeM UInt256 := fun value i v4 => do
+    let join_1 : UInt256 → UInt256 → UInt256 → FeM UInt256 := fun value i v4 => do
       let mut value := value
       let mut i := i
-      b3 value i v4
+      join value i v4
     if v14 then
       let v16 := «end» - offset
-      b6 value i v16
+      join_1 value i v16
     else
-      b6 value i len
+      join_1 value i len
 
 /-- `lib::modexp::MAX_LENGTH` -/
 def MAX_LENGTH : FeM UInt256 := do
@@ -203,74 +203,74 @@ def bit_length (value : UInt256) : FeM UInt256 := do
 /-- `lib::modexp::gas_cost<MemBuffer>` -/
 def gas_cost_MemBuffer (input : MemBuffer) (base : UInt256) (exponent : UInt256) (modulus : UInt256) : FeM UInt256 := do
   let v13 := decide (modulus.toNat < base.toNat)
-  let b3 : UInt256 → FeM UInt256 := fun v4 => do
+  let join : UInt256 → FeM UInt256 := fun v4 => do
     let longest ← downcast_truncate_usize_u64 v4
     let v21 ← IntTy.add (.u 64) longest (UInt256.ofNat 7)
     let words ← checkedDiv v21 (UInt256.ofNat 8)
     let v26 := decide ((UInt256.ofNat 32).toNat < longest.toNat)
-    let b6 : UInt256 → FeM UInt256 := fun complexity => do
+    let join_1 : UInt256 → FeM UInt256 := fun complexity => do
       let v36 ← checkedAdd (UInt256.ofNat 96) base
       let v39 := decide (exponent.toNat < (UInt256.ofNat 32).toNat)
-      let b9 : UInt256 → FeM UInt256 := fun v6 => do
+      let join_2 : UInt256 → FeM UInt256 := fun v6 => do
         let head ← input_word_MemBuffer input v36 v6
         let head_bits ← bit_length head
         let v49 := decide ((UInt256.ofNat 0).toNat < head_bits.toNat)
-        let b12 : UInt256 → FeM UInt256 := fun top_bits => do
+        let join_3 : UInt256 → FeM UInt256 := fun top_bits => do
           let v58 := decide ((UInt256.ofNat 32).toNat < exponent.toNat)
-          let b15 : UInt256 → FeM UInt256 := fun extra => do
+          let join_4 : UInt256 → FeM UInt256 := fun extra => do
             let v68 ← IntTy.mul (.u 64) (UInt256.ofNat 16) extra
             let count ← IntTy.add (.u 64) v68 top_bits
             let v72 := decide (count = (UInt256.ofNat 0))
-            let b18 : UInt256 → FeM UInt256 := fun v9 => do
+            let join_5 : UInt256 → FeM UInt256 := fun v9 => do
               let cost ← IntTy.mul (.u 64) complexity v9
               let v79 := decide (cost.toNat < (UInt256.ofNat 500).toNat)
-              let b21 : UInt256 → FeM UInt256 := fun v10 => do
+              let join_6 : UInt256 → FeM UInt256 := fun v10 => do
                 return v10
               if v79 then
-                b21 (UInt256.ofNat 500)
+                join_6 (UInt256.ofNat 500)
               else
-                b21 cost
+                join_6 cost
             if v72 then
-              b18 (UInt256.ofNat 1)
+              join_5 (UInt256.ofNat 1)
             else
-              b18 count
+              join_5 count
           if v58 then
             let v61 ← checkedSub exponent (UInt256.ofNat 32)
             let v62 ← downcast_truncate_usize_u64 v61
-            b15 v62
+            join_4 v62
           else
-            b15 (UInt256.ofNat 0)
+            join_4 (UInt256.ofNat 0)
         if v49 then
           let v51 ← IntTy.sub (.u 64) head_bits (UInt256.ofNat 1)
-          b12 v51
+          join_3 v51
         else
-          b12 (UInt256.ofNat 0)
+          join_3 (UInt256.ofNat 0)
       if v39 then
-        b9 exponent
+        join_2 exponent
       else
-        b9 (UInt256.ofNat 32)
+        join_2 (UInt256.ofNat 32)
     if v26 then
       let v28 ← IntTy.mul (.u 64) (UInt256.ofNat 2) words
       let v29 ← IntTy.mul (.u 64) v28 words
-      b6 v29
+      join_1 v29
     else
-      b6 (UInt256.ofNat 16)
+      join_1 (UInt256.ofNat 16)
   if v13 then
-    b3 base
+    join base
   else
-    b3 modulus
+    join modulus
 
 /-- `lib::modexp::input_byte<MemBuffer>` -/
 def input_byte_MemBuffer (input : MemBuffer) (index : UInt256) : FeM UInt256 := do
   let v4 ← MemBuffer_len_1 input
   let v5 := decide (index.toNat < v4.toNat)
-  let b3 : UInt256 → FeM UInt256 := fun v2 => do
+  let join : UInt256 → FeM UInt256 := fun v2 => do
     return v2
   if v5 then
     let v6 ← MemBuffer_byte_at input index
-    b3 v6
+    join v6
   else
-    b3 (UInt256.ofNat 0)
+    join (UInt256.ofNat 0)
 
 /-- `lib::modexp::input_limb<MemBuffer>` -/
 def input_limb_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) (index : UInt256) : FeM UInt256 := do
@@ -282,12 +282,12 @@ def input_limb_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
   let v14 := index * (UInt256.ofNat 8)
   let v16 := v14 + (UInt256.ofNat 8)
   let v18 := decide (v16.toNat ≤ len.toNat)
-  let b2 : UInt256 → UInt256 → FeM UInt256 := fun value byte => do
+  let join : UInt256 → UInt256 → FeM UInt256 := fun value byte => do
     let mut value := value
     let mut byte := byte
     value := (UInt256.ofNat 0)
     byte := (UInt256.ofNat 8)
-    let rec b5 (value : UInt256) (byte : UInt256) : FeM UInt256 := do
+    let rec loop (value : UInt256) (byte : UInt256) : FeM UInt256 := do
       let mut value := value
       let mut byte := byte
       let byte_31 := byte
@@ -303,10 +303,10 @@ def input_limb_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
         let value_49 := IntTy.shl (.u 64) value_46 (UInt256.ofNat 8)
         value := value_49
         let v53 := decide (position.toNat < len.toNat)
-        let b10 : UInt256 → UInt256 → FeM UInt256 := fun value byte => do
+        let join_1 : UInt256 → UInt256 → FeM UInt256 := fun value byte => do
           let mut value := value
           let mut byte := byte
-          b5 value byte
+          loop value byte
         if v53 then
           let v56 := offset + len
           let v58 := v56 - (UInt256.ofNat 1)
@@ -316,14 +316,14 @@ def input_limb_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
           let value_62 := value
           let value_63 := value_62 ||| v61
           value := value_63
-          b10 value byte
+          join_1 value byte
         else
-          b10 value byte
+          join_1 value byte
       else
         let value_69 := value
         return value_69
     partial_fixpoint
-    b5 value byte
+    loop value byte
   if v18 then
     let v19 ← MemBuffer_len_1 input
     let v20 := decide («end».toNat ≤ v19.toNat)
@@ -333,9 +333,9 @@ def input_limb_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
       let v24 := IntTy.swapBytes (.u 64) v23
       return v24
     else
-      b2 value byte
+      join value byte
   else
-    b2 value byte
+    join value byte
 
 /-- `lib::modexp::input_limbs<MemBuffer>` -/
 def input_limbs_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) (count : UInt256) : FeM Option_MemArray_u64 := do
@@ -349,13 +349,13 @@ def input_limbs_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256)
     let v12 ← checkedAdd len (UInt256.ofNat 7)
     let present ← checkedDiv v12 (UInt256.ofNat 8)
     let v17 := decide (present.toNat < count.toNat)
-    let b5 : MemArray_u64 → Range_Known_0_Unknown → UInt256 → FeM Option_MemArray_u64 := fun limbs r1 read => do
+    let join : MemArray_u64 → Range_Known_0_Unknown → UInt256 → FeM Option_MemArray_u64 := fun limbs r1 read => do
       let mut limbs := limbs
       let mut r1 := r1
       let v24 := (Range_Known_0_Unknown.mk () read)
       r1 := v24
       let v26 ← Range_start_0 r1
-      let rec b6 (limbs : MemArray_u64) (r1 : Range_Known_0_Unknown) (v5 : UInt256) : FeM Option_MemArray_u64 := do
+      let rec loop (limbs : MemArray_u64) (r1 : Range_Known_0_Unknown) (v5 : UInt256) : FeM Option_MemArray_u64 := do
         let mut limbs := limbs
         let mut r1 := r1
         let v29 ← Range_has_0 r1 v5
@@ -368,17 +368,17 @@ def input_limbs_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256)
           let v35_0 ← v35_k v35
           limbs := v35_0
           let v38 ← Range_next_0 r1 v5
-          b6 limbs r1 v38
+          loop limbs r1 v38
         else
           let limbs_40 := limbs
           let v42 := Option_MemArray_u64.Some limbs_40
           return v42
       partial_fixpoint
-      b6 limbs r1 v26
+      loop limbs r1 v26
     if v17 then
-      b5 limbs r1 present
+      join limbs r1 present
     else
-      b5 limbs r1 count
+      join limbs r1 count
   else
     let v43 := Option_MemArray_u64.None
     match (← pure v6) with
@@ -402,17 +402,17 @@ def Exponent_try_read_MemBuffer (input : MemBuffer) (start : UInt256) (len : UIn
     limbs := limbs_15
     let count_18 ← MemArray_len_u64 limbs
     count := count_18
-    let rec b3 (limbs : MemArray_u64) (count : UInt256) : FeM Option_Exponent := do
+    let rec loop (limbs : MemArray_u64) (count : UInt256) : FeM Option_Exponent := do
       let mut limbs := limbs
       let mut count := count
       let count_20 := count
       let v23 := decide ((UInt256.ofNat 0).toNat < count_20.toNat)
-      let b5 : MemArray_u64 → UInt256 → FeM Option_Exponent := fun limbs count => do
+      let join : MemArray_u64 → UInt256 → FeM Option_Exponent := fun limbs count => do
         let mut limbs := limbs
         let mut count := count
         let count_38 := count
         let v41 := decide (count_38 = (UInt256.ofNat 0))
-        let b9 : MemArray_u64 → UInt256 → UInt256 → FeM Option_Exponent := fun limbs count top => do
+        let join_1 : MemArray_u64 → UInt256 → UInt256 → FeM Option_Exponent := fun limbs count top => do
           let mut limbs := limbs
           let mut count := count
           let limbs_68 := limbs
@@ -420,7 +420,7 @@ def Exponent_try_read_MemBuffer (input : MemBuffer) (start : UInt256) (len : UIn
           let v71 := Option_Exponent.Some v70
           return v71
         if v41 then
-          b9 limbs count total
+          join_1 limbs count total
         else
           let count_44 := count
           let v47 ← checkedSub count_44 (UInt256.ofNat 1)
@@ -436,7 +436,7 @@ def Exponent_try_read_MemBuffer (input : MemBuffer) (start : UInt256) (len : UIn
           let v63 ← checkedMul v61 (UInt256.ofNat 64)
           let v64 ← checkedAdd v63 highest
           let v65 ← checkedSub v57 v64
-          b9 limbs count v65
+          join_1 limbs count v65
       if v23 then
         let count_24 := count
         let v27 ← checkedSub count_24 (UInt256.ofNat 1)
@@ -447,13 +447,13 @@ def Exponent_try_read_MemBuffer (input : MemBuffer) (start : UInt256) (len : UIn
           let count_34 := count
           let count_35 ← checkedSub count_34 (UInt256.ofNat 1)
           count := count_35
-          b3 limbs count
+          loop limbs count
         else
-          b5 limbs count
+          join limbs count
       else
-        b5 limbs count
+        join limbs count
     partial_fixpoint
-    b3 limbs count
+    loop limbs count
   else
     let v72 := Option_Exponent.None
     match (← pure v13) with
@@ -488,7 +488,7 @@ def reciprocal_3by2 (d1 : UInt256) (d0 : UInt256) : FeM UInt256 := do
   p := p_9
   let p_11 := p
   let v14 := decide (p_11.toNat < d0.toNat)
-  let b3 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
+  let join : UInt256 → UInt256 → FeM UInt256 := fun v p => do
     let mut v := v
     let mut p := p
     let v_45 := v
@@ -503,7 +503,7 @@ def reciprocal_3by2 (d1 : UInt256) (d0 : UInt256) : FeM UInt256 := do
     p := p_58
     let p_61 := p
     let v63 := decide (p_61.toNat < t1.toNat)
-    let b9 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
+    let join_1 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
       let mut v := v
       let mut p := p
       let v_90 := v
@@ -514,49 +514,49 @@ def reciprocal_3by2 (d1 : UInt256) (d0 : UInt256) : FeM UInt256 := do
       v := v_66
       let p_69 := p
       let v72 := decide (d1.toNat < p_69.toNat)
-      let b12 : UInt256 → UInt256 → Unit → FeM UInt256 := fun v p v2 => do
+      let join_2 : UInt256 → UInt256 → Unit → FeM UInt256 := fun v p v2 => do
         let mut v := v
         let mut p := p
-        b9 v p
-      let b10 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
+        join_1 v p
+      let join_3 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
         let mut v := v
         let mut p := p
         let v_82 := v
         let v_83 := IntTy.subW (.u 64) v_82 (UInt256.ofNat 1)
         v := v_83
-        b12 v p ()
+        join_2 v p ()
       if v72 then
-        b10 v p
+        join_3 v p
       else
         let p_73 := p
         let v76 := decide (p_73 = d1)
-        let b11 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
+        let join_4 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
           let mut v := v
           let mut p := p
-          b12 v p ()
+          join_2 v p ()
         if v76 then
           let v78 := decide (d0.toNat ≤ t0.toNat)
           if v78 then
-            b10 v p
+            join_3 v p
           else
-            b11 v p
+            join_4 v p
         else
-          b11 v p
+          join_4 v p
     else
-      b9 v p
+      join_1 v p
   if v14 then
     let v_16 := v
     let v_17 := IntTy.subW (.u 64) v_16 (UInt256.ofNat 1)
     v := v_17
     let p_20 := p
     let v23 := decide (d1.toNat ≤ p_20.toNat)
-    let b6 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
+    let join_5 : UInt256 → UInt256 → FeM UInt256 := fun v p => do
       let mut v := v
       let mut p := p
       let p_38 := p
       let p_39 := IntTy.subW (.u 64) p_38 d1
       p := p_39
-      b3 v p
+      join v p
     if v23 then
       let v_25 := v
       let v_26 := IntTy.subW (.u 64) v_25 (UInt256.ofNat 1)
@@ -564,11 +564,11 @@ def reciprocal_3by2 (d1 : UInt256) (d0 : UInt256) : FeM UInt256 := do
       let p_30 := p
       let p_31 := IntTy.subW (.u 64) p_30 d1
       p := p_31
-      b6 v p
+      join_5 v p
     else
-      b6 v p
+      join_5 v p
   else
-    b3 v p
+    join v p
 
 /-- `Modulus::try_new` -/
 def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus := do
@@ -576,7 +576,7 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
   let mut r1 : Range_Known_0_Unknown := default
   let count ← downcast_truncate_u64_usize len
   let v10 := decide ((UInt256.ofNat 0).toNat < len.toNat)
-  let b3 : MemArray_u64 → Range_Known_0_Unknown → Bool → FeM Option_Modulus := fun limbs r1 v2 => do
+  let join : MemArray_u64 → Range_Known_0_Unknown → Bool → FeM Option_Modulus := fun limbs r1 v2 => do
     let mut limbs := limbs
     let mut r1 := r1
     let _ ← «assert» v2
@@ -598,7 +598,7 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
       let v46 := (Range_Known_0_Unknown.mk () v44)
       r1 := v46
       let v48 ← Range_start_0 r1
-      let rec b8 (limbs : MemArray_u64) (r1 : Range_Known_0_Unknown) (v3 : UInt256) : FeM Option_Modulus := do
+      let rec loop (limbs : MemArray_u64) (r1 : Range_Known_0_Unknown) (v3 : UInt256) : FeM Option_Modulus := do
         let mut limbs := limbs
         let mut r1 := r1
         let v51 ← Range_has_0 r1 v3
@@ -609,7 +609,7 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
           let v56 ← mloadInt (.u 64) v55
           let high := IntTy.shl (.u 64) v56 shift
           let v60 := decide (shift = (UInt256.ofNat 0))
-          let b14 : MemArray_u64 → Range_Known_0_Unknown → UInt256 → FeM Option_Modulus := fun limbs r1 low => do
+          let join_1 : MemArray_u64 → Range_Known_0_Unknown → UInt256 → FeM Option_Modulus := fun limbs r1 low => do
             let mut limbs := limbs
             let mut r1 := r1
             let v74 := high ||| low
@@ -618,27 +618,27 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
             let v76_0 ← v76_k v76
             limbs := v76_0
             let v79 ← Range_next_0 r1 v3
-            b8 limbs r1 v79
-          let b12 : MemArray_u64 → Range_Known_0_Unknown → FeM Option_Modulus := fun limbs r1 => do
+            loop limbs r1 v79
+          let join_2 : MemArray_u64 → Range_Known_0_Unknown → FeM Option_Modulus := fun limbs r1 => do
             let mut limbs := limbs
             let mut r1 := r1
-            b14 limbs r1 (UInt256.ofNat 0)
+            join_1 limbs r1 (UInt256.ofNat 0)
           if v60 then
-            b12 limbs r1
+            join_2 limbs r1
           else
             let v62 := decide (i = (UInt256.ofNat 0))
             if v62 then
-              b12 limbs r1
+              join_2 limbs r1
             else
               let v64 ← checkedSub i (UInt256.ofNat 1)
               let v65 ← MemArray_index_ref_u64 value v64
               let v66 ← mloadInt (.u 64) v65
               let v68 ← IntTy.sub (.u 64) (UInt256.ofNat 64) shift
               let v69 := v66 >>> v68
-              b14 limbs r1 v69
+              join_1 limbs r1 v69
         else
           let v82 := decide (count = (UInt256.ofNat 1))
-          let b18 : MemArray_u64 → Range_Known_0_Unknown → UInt256 → FeM Option_Modulus := fun limbs r1 reciprocal => do
+          let join_3 : MemArray_u64 → Range_Known_0_Unknown → UInt256 → FeM Option_Modulus := fun limbs r1 reciprocal => do
             let mut limbs := limbs
             let mut r1 := r1
             let limbs_102 := limbs
@@ -649,7 +649,7 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
             let v85 ← MemArray_index_ref_u64 limbs (UInt256.ofNat 0)
             let v86 ← mloadInt (.u 64) v85
             let v87 ← reciprocal_2by1 v86
-            b18 limbs r1 v87
+            join_3 limbs r1 v87
           else
             let v90 ← checkedSub count (UInt256.ofNat 1)
             let v92 ← MemArray_index_ref_u64 limbs v90
@@ -658,9 +658,9 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
             let v97 ← mloadInt (.u 64) v92
             let v98 ← mloadInt (.u 64) v96
             let v99 ← reciprocal_3by2 v97 v98
-            b18 limbs r1 v99
+            join_3 limbs r1 v99
       partial_fixpoint
-      b8 limbs r1 v48
+      loop limbs r1 v48
     else
       let v107 := Option_Modulus.None
       match (← pure v39) with
@@ -669,10 +669,10 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
         pure ()
       | _ => pure ()
       return v107
-  let b2 : MemArray_u64 → Range_Known_0_Unknown → FeM Option_Modulus := fun limbs r1 => do
+  let join_4 : MemArray_u64 → Range_Known_0_Unknown → FeM Option_Modulus := fun limbs r1 => do
     let mut limbs := limbs
     let mut r1 := r1
-    b3 limbs r1 false
+    join limbs r1 false
   if v10 then
     let v11 ← MemArray_len_u64 value
     let v12 := decide (count.toNat ≤ v11.toNat)
@@ -683,44 +683,44 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
       let v18 ← mloadInt (.u 64) v17
       let v20 := decide (v18 ≠ (UInt256.ofNat 0))
       if v20 then
-        b3 limbs r1 true
+        join limbs r1 true
       else
-        b2 limbs r1
+        join_4 limbs r1
     else
-      b2 limbs r1
+      join_4 limbs r1
   else
-    b2 limbs r1
+    join_4 limbs r1
 
 /-- `Wide::of` -/
 def Wide_of (limbs : MemArray_u64) (n : UInt256) : FeM Wide := do
   let v6 ← MemArray_index_ref_u64 limbs (UInt256.ofNat 0)
   let v7 ← mloadInt (.u 64) v6
   let v10 := decide ((UInt256.ofNat 1).toNat < n.toNat)
-  let b3 : UInt256 → FeM Wide := fun v2 => do
+  let join : UInt256 → FeM Wide := fun v2 => do
     let v19 := decide ((UInt256.ofNat 2).toNat < n.toNat)
-    let b6 : UInt256 → FeM Wide := fun v3 => do
+    let join_1 : UInt256 → FeM Wide := fun v3 => do
       let v28 := decide ((UInt256.ofNat 3).toNat < n.toNat)
-      let b9 : UInt256 → FeM Wide := fun v4 => do
+      let join_2 : UInt256 → FeM Wide := fun v4 => do
         let v35 := (Wide.mk v7 v2 v3 v4)
         return v35
       if v28 then
         let v30 ← MemArray_index_ref_u64 limbs (UInt256.ofNat 3)
         let v31 ← mloadInt (.u 64) v30
-        b9 v31
+        join_2 v31
       else
-        b9 (UInt256.ofNat 0)
+        join_2 (UInt256.ofNat 0)
     if v19 then
       let v21 ← MemArray_index_ref_u64 limbs (UInt256.ofNat 2)
       let v22 ← mloadInt (.u 64) v21
-      b6 v22
+      join_1 v22
     else
-      b6 (UInt256.ofNat 0)
+      join_1 (UInt256.ofNat 0)
   if v10 then
     let v12 ← MemArray_index_ref_u64 limbs (UInt256.ofNat 1)
     let v13 ← mloadInt (.u 64) v12
-    b3 v13
+    join v13
   else
-    b3 (UInt256.ofNat 0)
+    join (UInt256.ofNat 0)
 
 /-- `lib::modexp::window_width` -/
 def window_width (bits : UInt256) : FeM UInt256 := do
@@ -731,7 +731,7 @@ def window_width (bits : UInt256) : FeM UInt256 := do
   let best_cost_5 ← checkedDiv bits (UInt256.ofNat 2)
   best_cost := best_cost_5
   w := (UInt256.ofNat 2)
-  let rec b1 (best : UInt256) (best_cost : UInt256) (w : UInt256) : FeM UInt256 := do
+  let rec loop (best : UInt256) (best_cost : UInt256) (w : UInt256) : FeM UInt256 := do
     let mut best := best
     let mut best_cost := best_cost
     let mut w := w
@@ -747,26 +747,26 @@ def window_width (bits : UInt256) : FeM UInt256 := do
       let cost ← checkedAdd v18 v24
       let best_cost_27 := best_cost
       let v28 := decide (cost.toNat < best_cost_27.toNat)
-      let b6 : UInt256 → UInt256 → UInt256 → FeM UInt256 := fun best best_cost w => do
+      let join : UInt256 → UInt256 → UInt256 → FeM UInt256 := fun best best_cost w => do
         let mut best := best
         let mut best_cost := best_cost
         let mut w := w
         let w_39 := w
         let w_40 ← checkedAdd w_39 (UInt256.ofNat 1)
         w := w_40
-        b1 best best_cost w
+        loop best best_cost w
       if v28 then
         let w_29 := w
         best := w_29
         best_cost := cost
-        b6 best best_cost w
+        join best best_cost w
       else
-        b6 best best_cost w
+        join best best_cost w
     else
       let best_43 := best
       return best_43
   partial_fixpoint
-  b1 best best_cost w
+  loop best best_cost w
 
 def Small_double_1_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
   let v51 ← sbb s3 v50 borrow_48
@@ -777,14 +777,14 @@ def Small_double_1_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s
   let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
   let borrow_61 := v60.snd
   let v64 := decide (borrow_61 = (UInt256.ofNat 1))
-  let b3 : Wide → FeM Wide := fun v2 => do
+  let join : Wide → FeM Wide := fun v2 => do
     return v2
   if v64 then
     let v65 := (Wide.mk s0 s1 s2 s3)
-    b3 v65
+    join v65
   else
     let v67 := (Wide.mk d0 d1 d2 d3)
-    b3 v67
+    join v67
 
 def Small_double_1_k1 (self : Small_1) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
   let v28 := v26 >>> (UInt256.ofNat 63)
@@ -1005,7 +1005,7 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
     let v36 := product >>> (UInt256.ofNat 64)
     let v37 := IntTy.addW (.u 128) v34 v36
     let v39 := decide (low ≠ (UInt256.ofNat 0))
-    let b6 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
+    let join : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
       let mut zero := zero
       let mut t_r1 := t_r1
       let mut t_r2 := t_r2
@@ -1017,7 +1017,7 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
       let v46 := self.m.l0
       let v47 := v46
       let v48 := decide (v47.toNat ≤ sum.toNat)
-      let b9 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
+      let join_1 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -1032,13 +1032,13 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
         let v49 := self.m.l0
         let v50 := v49
         let v51 := IntTy.subW (.u 128) sum v50
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
       else
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
     if v39 then
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
     else
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
   else
     let v64 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 2))
     if v64 then
@@ -1064,7 +1064,7 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
       let v96 ← sbb top_78 (UInt256.ofNat 0) borrow_93
       let borrow_97 := v96.snd
       let v100 := decide (borrow_97 = (UInt256.ofNat 1))
-      let b15 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
+      let join_2 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -1074,10 +1074,10 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
         let mut t_r6 := t_r6
         return v5
       if v100 then
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
       else
         let v104 := (Wide.mk d0_84 d1_91 (UInt256.ofNat 0) (UInt256.ofNat 0))
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
     else
       let v110 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 3))
       if v110 then
@@ -1113,7 +1113,7 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
         let v156 ← sbb top_131 (UInt256.ofNat 0) borrow_153
         let borrow_157 := v156.snd
         let v160 := decide (borrow_157 = (UInt256.ofNat 1))
-        let b21 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
+        let join_3 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -1123,10 +1123,10 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v6
         if v160 then
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
         else
           let v163 := (Wide.mk d0_137 d1_144 d2_151 (UInt256.ofNat 0))
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
       else
         let v167 := b.l0
         let v170 ← Small_row4_1 self a v167 zero (UInt256.ofNat 0)
@@ -1170,7 +1170,7 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
         let v226 ← sbb top_194 (UInt256.ofNat 0) borrow_223
         let borrow_227 := v226.snd
         let v230 := decide (borrow_227 = (UInt256.ofNat 1))
-        let b24 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
+        let join_4 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -1180,10 +1180,10 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v7
         if v230 then
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
         else
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
 /-- `Small<1>::r2` -/
 def Small_r2_1 (self : Small_1) : FeM Wide := do
@@ -1194,7 +1194,7 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
   let mut r4 : Wide := default
   let mut r5 : Wide := default
   let v12 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 1))
-  let b3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
+  let join : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
     let mut x := x
     let mut r1 := r1
     let mut r2 := r2
@@ -1207,7 +1207,7 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
     let shift ← downcast_truncate_u256_u64 v33
     let bit := IntTy.shl (.u 64) (UInt256.ofNat 1) shift
     let v41 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 1))
-    let b12 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
+    let join_1 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
@@ -1215,7 +1215,7 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
       let mut r4 := r4
       let mut r5 := r5
       let v47 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 2))
-      let b15 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
+      let join_2 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
@@ -1223,7 +1223,7 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
         let mut r4 := r4
         let mut r5 := r5
         let v53 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 3))
-        let b18 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
+        let join_3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
           let mut x := x
           let mut r1 := r1
           let mut r2 := r2
@@ -1231,7 +1231,7 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
           let mut r4 := r4
           let mut r5 := r5
           let v59 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 4))
-          let b21 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
+          let join_4 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
             let mut x := x
             let mut r1 := r1
             let mut r2 := r2
@@ -1246,7 +1246,7 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
             let v73 := (Range_Known_0_Unknown.mk () v71)
             r1 := v73
             let v75 ← Range_start_0 r1
-            let rec b22 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
+            let rec loop (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
               let mut x := x
               let mut r1 := r1
               let mut r2 := r2
@@ -1261,12 +1261,12 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
                 let x_84 ← Small_double_1 self r2
                 x := x_84
                 let v88 ← Range_next_0 r1 v8
-                b22 x r1 r2 r3 r4 r5 v88
+                loop x r1 r2 r3 r4 r5 v88
               else
                 let v93 := (Range_Known_0_Known_6.mk () ())
                 r3 := v93
                 let v95 ← Range_start_0_6 r3
-                let rec b26 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
+                let rec loop_1 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
                   let mut x := x
                   let mut r1 := r1
                   let mut r2 := r2
@@ -1283,62 +1283,62 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
                     let x_107 ← Small_mul_1 self r4 r5
                     x := x_107
                     let v111 ← Range_next_0_6 r3 v9
-                    b26 x r1 r2 r3 r4 r5 v111
+                    loop_1 x r1 r2 r3 r4 r5 v111
                   else
                     let x_113 := x
                     return x_113
                 partial_fixpoint
-                b26 x r1 r2 r3 r4 r5 v95
+                loop_1 x r1 r2 r3 r4 r5 v95
             partial_fixpoint
-            b22 x r1 r2 r3 r4 r5 v75
+            loop x r1 r2 r3 r4 r5 v75
           if v59 then
-            b21 x r1 r2 r3 r4 r5 bit
+            join_4 x r1 r2 r3 r4 r5 bit
           else
-            b21 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+            join_4 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
         if v53 then
-          b18 x r1 r2 r3 r4 r5 bit
+          join_3 x r1 r2 r3 r4 r5 bit
         else
-          b18 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+          join_3 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
       if v47 then
-        b15 x r1 r2 r3 r4 r5 bit
+        join_2 x r1 r2 r3 r4 r5 bit
       else
-        b15 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+        join_2 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
     if v41 then
-      b12 x r1 r2 r3 r4 r5 bit
+      join_1 x r1 r2 r3 r4 r5 bit
     else
-      b12 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+      join_1 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
   if v12 then
     let v13 := self.m.l0
-    b3 x r1 r2 r3 r4 r5 v13
+    join x r1 r2 r3 r4 r5 v13
   else
     let v17 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 2))
-    let b6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
+    let join_5 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
       let mut r3 := r3
       let mut r4 := r4
       let mut r5 := r5
-      b3 x r1 r2 r3 r4 r5 v2
+      join x r1 r2 r3 r4 r5 v2
     if v17 then
       let v18 := self.m.l1
-      b6 x r1 r2 r3 r4 r5 v18
+      join_5 x r1 r2 r3 r4 r5 v18
     else
       let v22 := decide ((UInt256.ofNat 1) = (UInt256.ofNat 3))
-      let b9 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
+      let join_6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
         let mut r3 := r3
         let mut r4 := r4
         let mut r5 := r5
-        b6 x r1 r2 r3 r4 r5 v3
+        join_5 x r1 r2 r3 r4 r5 v3
       if v22 then
         let v23 := self.m.l2
-        b9 x r1 r2 r3 r4 r5 v23
+        join_6 x r1 r2 r3 r4 r5 v23
       else
         let v25 := self.m.l3
-        b9 x r1 r2 r3 r4 r5 v25
+        join_6 x r1 r2 r3 r4 r5 v25
 
 /-- `lib::bignum::limb` -/
 def limb (limbs : UInt256) (index : UInt256) : FeM UInt256 := do
@@ -1377,12 +1377,12 @@ def Exponent_window (self : Exponent) (index : UInt256) (width : UInt256) : FeM 
     let v16 := self.total
     let v18 := v16 - index
     let v20 := decide (v18.toNat < width.toNat)
-    let b6 : UInt256 → UInt256 → Range_Unknown_Unknown → UInt256 → FeM Window := fun «end» digit r2 end_3 => do
+    let join : UInt256 → UInt256 → Range_Unknown_Unknown → UInt256 → FeM Window := fun «end» digit r2 end_3 => do
       let mut «end» := «end»
       let mut digit := digit
       let mut r2 := r2
       «end» := end_3
-      let rec b7 («end» : UInt256) (digit : UInt256) (r2 : Range_Unknown_Unknown) : FeM Window := do
+      let rec loop («end» : UInt256) (digit : UInt256) (r2 : Range_Unknown_Unknown) : FeM Window := do
         let mut «end» := «end»
         let mut digit := digit
         let mut r2 := r2
@@ -1394,14 +1394,14 @@ def Exponent_window (self : Exponent) (index : UInt256) (width : UInt256) : FeM 
           let end_36 := «end»
           let end_37 := end_36 - (UInt256.ofNat 1)
           «end» := end_37
-          b7 «end» digit r2
+          loop «end» digit r2
         else
           digit := (UInt256.ofNat 0)
           let end_44 := «end»
           let v45 := (Range_Unknown_Unknown.mk index end_44)
           r2 := v45
           let v47 ← Range_Unknown_Unknown_start r2
-          let rec b10 («end» : UInt256) (digit : UInt256) (r2 : Range_Unknown_Unknown) (v4 : UInt256) : FeM Window := do
+          let rec loop_1 («end» : UInt256) (digit : UInt256) (r2 : Range_Unknown_Unknown) (v4 : UInt256) : FeM Window := do
             let mut «end» := «end»
             let mut digit := digit
             let mut r2 := r2
@@ -1415,7 +1415,7 @@ def Exponent_window (self : Exponent) (index : UInt256) (width : UInt256) : FeM 
               let digit_59 := v57 ||| v58
               digit := digit_59
               let v63 ← Range_Unknown_Unknown_next r2 v4
-              b10 «end» digit r2 v63
+              loop_1 «end» digit r2 v63
             else
               let end_65 := «end»
               let digit_67 := digit
@@ -1424,15 +1424,15 @@ def Exponent_window (self : Exponent) (index : UInt256) (width : UInt256) : FeM 
               let v74 := (Window.mk end_65 v72 true)
               return v74
           partial_fixpoint
-          b10 «end» digit r2 v47
+          loop_1 «end» digit r2 v47
       partial_fixpoint
-      b7 «end» digit r2
+      loop «end» digit r2
     if v20 then
       let v21 := self.total
-      b6 «end» digit r2 v21
+      join «end» digit r2 v21
     else
       let v25 := index + width
-      b6 «end» digit r2 v25
+      join «end» digit r2 v25
 
 /-- `lib::modexp::small_power<1>` -/
 def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
@@ -1464,7 +1464,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   let v14 := (Range_Known_0_Known_5.mk () ())
   r8 := v14
   let v16 ← Range_start_0_5 r8
-  let rec b1 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
+  let rec loop (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
     let mut inverse := inverse
     let mut small := small
     let mut table := table
@@ -1497,7 +1497,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       let inverse_28 := IntTy.mulW (.u 64) inverse_22 v27
       inverse := inverse_28
       let v32 ← Range_next_0_5 r8 v3
-      b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
+      loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
     else
       let v35 ← Wide_of value (UInt256.ofNat 1)
       let inverse_37 := inverse
@@ -1523,7 +1523,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       checkIndex v67 64
       table := (table.set! v67.toNat v66)
       let v70 := decide ((UInt256.ofNat 1).toNat < entries.toNat)
-      let b7 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+      let join : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
         let mut inverse := inverse
         let mut small := small
         let mut table := table
@@ -1553,7 +1553,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let index_109 := exponent.top
         index := index_109
         started := false
-        let rec b12 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+        let rec loop_1 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -1583,7 +1583,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             let index_117 := index
             let window ← Exponent_window exponent index_117 width
             let started_121 := started
-            let rec b17 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+            let rec loop_2 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
               let mut inverse := inverse
               let mut small := small
               let mut table := table
@@ -1607,7 +1607,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let mut r20 := r20
               let mut r21 := r21
               let v151 := window.odd
-              let b24 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_1 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -1632,10 +1632,10 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r21 := r21
                 let index_173 := window.«end»
                 index := index_173
-                b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v151 then
                 let started_152 := started
-                let b27 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
+                let join_2 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -1660,7 +1660,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r21 := r21
                   power := power_6
                   started := true
-                  b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if started_152 then
                   let power_153 := power
                   r18 := power_153
@@ -1669,14 +1669,14 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let v156 := table[v155.toNat]!
                   r19 := v156
                   let v160 ← Small_mul_1 small r18 r19
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
                 else
                   let v162 := window.entry
                   checkIndex v162 64
                   let v163 := table[v162.toNat]!
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
               else
-                b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             partial_fixpoint
             if started_121 then
               let index_122 := index
@@ -1684,7 +1684,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v126 := (Range_Unknown_Unknown.mk index_122 v124)
               r15 := v126
               let v128 ← Range_Unknown_Unknown_start r15
-              let rec b18 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
+              let rec loop_3 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -1717,13 +1717,13 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let power_141 ← Small_mul_1 small r16 r17
                   power := power_141
                   let v145 ← Range_Unknown_Unknown_next r15 v5
-                  b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
+                  loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
                 else
-                  b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               partial_fixpoint
-              b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
+              loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
             else
-              b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+              loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
           else
             let power_176 := power
             r20 := power_176
@@ -1741,7 +1741,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v196_0 ← v196_k v196
               result := v196_0
               let v200 := decide ((UInt256.ofNat 1).toNat < (UInt256.ofNat 1).toNat)
-              let b32 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_3 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -1765,7 +1765,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r20 := r20
                 let mut r21 := r21
                 let v211 := decide ((UInt256.ofNat 2).toNat < (UInt256.ofNat 1).toNat)
-                let b35 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                let join_4 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -1789,7 +1789,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r20 := r20
                   let mut r21 := r21
                   let v222 := decide ((UInt256.ofNat 3).toNat < (UInt256.ofNat 1).toNat)
-                  let b38 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                  let join_5 : UInt256 → Small_1 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                     let mut inverse := inverse
                     let mut small := small
                     let mut table := table
@@ -1821,27 +1821,27 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                     mstoreInt (.u 64) v226 v223
                     let v226_0 ← v226_k v226
                     result := v226_0
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                   else
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if v211 then
                   let v212 := out.l2
                   let (v215, v215_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 2)
                   mstoreInt (.u 64) v215 v212
                   let v215_0 ← v215_k v215
                   result := v215_0
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 else
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v200 then
                 let v201 := out.l1
                 let (v204, v204_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 1)
                 mstoreInt (.u 64) v204 v201
                 let v204_0 ← v204_k v204
                 result := v204_0
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               else
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             else
               let v234 := Option_MemArray_u64.None
               match (← pure v189) with
@@ -1851,7 +1851,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               | _ => pure ()
               return v234
         partial_fixpoint
-        b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
       if v70 then
         let v71 := (UInt256.ofNat 0)
         checkIndex v71 64
@@ -1866,7 +1866,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let v82 := (Range_Known_1_Unknown.mk () entries)
         r13 := v82
         let v84 ← Range_start_1 r13
-        let rec b8 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
+        let rec loop_4 (inverse : UInt256) (small : Small_1) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -1901,15 +1901,15 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             checkIndex k 64
             table := (table.set! k.toNat v97)
             let v100 ← Range_next_1 r13 v4
-            b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
+            loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
           else
-            b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+            join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
         partial_fixpoint
-        b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
+        loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
       else
-        b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
   partial_fixpoint
-  b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
+  loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
 def Small_double_2_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
   let v51 ← sbb s3 v50 borrow_48
@@ -1920,14 +1920,14 @@ def Small_double_2_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s
   let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
   let borrow_61 := v60.snd
   let v64 := decide (borrow_61 = (UInt256.ofNat 1))
-  let b3 : Wide → FeM Wide := fun v2 => do
+  let join : Wide → FeM Wide := fun v2 => do
     return v2
   if v64 then
     let v65 := (Wide.mk s0 s1 s2 s3)
-    b3 v65
+    join v65
   else
     let v67 := (Wide.mk d0 d1 d2 d3)
-    b3 v67
+    join v67
 
 def Small_double_2_k1 (self : Small_2) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
   let v28 := v26 >>> (UInt256.ofNat 63)
@@ -2133,7 +2133,7 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
     let v36 := product >>> (UInt256.ofNat 64)
     let v37 := IntTy.addW (.u 128) v34 v36
     let v39 := decide (low ≠ (UInt256.ofNat 0))
-    let b6 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
+    let join : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
       let mut zero := zero
       let mut t_r1 := t_r1
       let mut t_r2 := t_r2
@@ -2145,7 +2145,7 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
       let v46 := self.m.l0
       let v47 := v46
       let v48 := decide (v47.toNat ≤ sum.toNat)
-      let b9 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
+      let join_1 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -2160,13 +2160,13 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
         let v49 := self.m.l0
         let v50 := v49
         let v51 := IntTy.subW (.u 128) sum v50
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
       else
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
     if v39 then
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
     else
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
   else
     let v64 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 2))
     if v64 then
@@ -2192,7 +2192,7 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
       let v96 ← sbb top_78 (UInt256.ofNat 0) borrow_93
       let borrow_97 := v96.snd
       let v100 := decide (borrow_97 = (UInt256.ofNat 1))
-      let b15 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
+      let join_2 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -2202,10 +2202,10 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
         let mut t_r6 := t_r6
         return v5
       if v100 then
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
       else
         let v104 := (Wide.mk d0_84 d1_91 (UInt256.ofNat 0) (UInt256.ofNat 0))
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
     else
       let v110 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 3))
       if v110 then
@@ -2241,7 +2241,7 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
         let v156 ← sbb top_131 (UInt256.ofNat 0) borrow_153
         let borrow_157 := v156.snd
         let v160 := decide (borrow_157 = (UInt256.ofNat 1))
-        let b21 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
+        let join_3 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -2251,10 +2251,10 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v6
         if v160 then
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
         else
           let v163 := (Wide.mk d0_137 d1_144 d2_151 (UInt256.ofNat 0))
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
       else
         let v167 := b.l0
         let v170 ← Small_row4_2 self a v167 zero (UInt256.ofNat 0)
@@ -2298,7 +2298,7 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
         let v226 ← sbb top_194 (UInt256.ofNat 0) borrow_223
         let borrow_227 := v226.snd
         let v230 := decide (borrow_227 = (UInt256.ofNat 1))
-        let b24 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
+        let join_4 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -2308,10 +2308,10 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v7
         if v230 then
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
         else
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
 /-- `Small<2>::r2` -/
 def Small_r2_2 (self : Small_2) : FeM Wide := do
@@ -2322,7 +2322,7 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
   let mut r4 : Wide := default
   let mut r5 : Wide := default
   let v12 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 1))
-  let b3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
+  let join : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
     let mut x := x
     let mut r1 := r1
     let mut r2 := r2
@@ -2335,7 +2335,7 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
     let shift ← downcast_truncate_u256_u64 v33
     let bit := IntTy.shl (.u 64) (UInt256.ofNat 1) shift
     let v41 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 1))
-    let b12 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
+    let join_1 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
@@ -2343,7 +2343,7 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
       let mut r4 := r4
       let mut r5 := r5
       let v47 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 2))
-      let b15 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
+      let join_2 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
@@ -2351,7 +2351,7 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
         let mut r4 := r4
         let mut r5 := r5
         let v53 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 3))
-        let b18 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
+        let join_3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
           let mut x := x
           let mut r1 := r1
           let mut r2 := r2
@@ -2359,7 +2359,7 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
           let mut r4 := r4
           let mut r5 := r5
           let v59 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 4))
-          let b21 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
+          let join_4 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
             let mut x := x
             let mut r1 := r1
             let mut r2 := r2
@@ -2374,7 +2374,7 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
             let v73 := (Range_Known_0_Unknown.mk () v71)
             r1 := v73
             let v75 ← Range_start_0 r1
-            let rec b22 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
+            let rec loop (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
               let mut x := x
               let mut r1 := r1
               let mut r2 := r2
@@ -2389,12 +2389,12 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
                 let x_84 ← Small_double_2 self r2
                 x := x_84
                 let v88 ← Range_next_0 r1 v8
-                b22 x r1 r2 r3 r4 r5 v88
+                loop x r1 r2 r3 r4 r5 v88
               else
                 let v93 := (Range_Known_0_Known_6.mk () ())
                 r3 := v93
                 let v95 ← Range_start_0_6 r3
-                let rec b26 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
+                let rec loop_1 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
                   let mut x := x
                   let mut r1 := r1
                   let mut r2 := r2
@@ -2411,62 +2411,62 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
                     let x_107 ← Small_mul_2 self r4 r5
                     x := x_107
                     let v111 ← Range_next_0_6 r3 v9
-                    b26 x r1 r2 r3 r4 r5 v111
+                    loop_1 x r1 r2 r3 r4 r5 v111
                   else
                     let x_113 := x
                     return x_113
                 partial_fixpoint
-                b26 x r1 r2 r3 r4 r5 v95
+                loop_1 x r1 r2 r3 r4 r5 v95
             partial_fixpoint
-            b22 x r1 r2 r3 r4 r5 v75
+            loop x r1 r2 r3 r4 r5 v75
           if v59 then
-            b21 x r1 r2 r3 r4 r5 bit
+            join_4 x r1 r2 r3 r4 r5 bit
           else
-            b21 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+            join_4 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
         if v53 then
-          b18 x r1 r2 r3 r4 r5 bit
+          join_3 x r1 r2 r3 r4 r5 bit
         else
-          b18 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+          join_3 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
       if v47 then
-        b15 x r1 r2 r3 r4 r5 bit
+        join_2 x r1 r2 r3 r4 r5 bit
       else
-        b15 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+        join_2 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
     if v41 then
-      b12 x r1 r2 r3 r4 r5 bit
+      join_1 x r1 r2 r3 r4 r5 bit
     else
-      b12 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+      join_1 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
   if v12 then
     let v13 := self.m.l0
-    b3 x r1 r2 r3 r4 r5 v13
+    join x r1 r2 r3 r4 r5 v13
   else
     let v17 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 2))
-    let b6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
+    let join_5 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
       let mut r3 := r3
       let mut r4 := r4
       let mut r5 := r5
-      b3 x r1 r2 r3 r4 r5 v2
+      join x r1 r2 r3 r4 r5 v2
     if v17 then
       let v18 := self.m.l1
-      b6 x r1 r2 r3 r4 r5 v18
+      join_5 x r1 r2 r3 r4 r5 v18
     else
       let v22 := decide ((UInt256.ofNat 2) = (UInt256.ofNat 3))
-      let b9 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
+      let join_6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
         let mut r3 := r3
         let mut r4 := r4
         let mut r5 := r5
-        b6 x r1 r2 r3 r4 r5 v3
+        join_5 x r1 r2 r3 r4 r5 v3
       if v22 then
         let v23 := self.m.l2
-        b9 x r1 r2 r3 r4 r5 v23
+        join_6 x r1 r2 r3 r4 r5 v23
       else
         let v25 := self.m.l3
-        b9 x r1 r2 r3 r4 r5 v25
+        join_6 x r1 r2 r3 r4 r5 v25
 
 /-- `lib::modexp::small_power<2>` -/
 def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
@@ -2498,7 +2498,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   let v14 := (Range_Known_0_Known_5.mk () ())
   r8 := v14
   let v16 ← Range_start_0_5 r8
-  let rec b1 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
+  let rec loop (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
     let mut inverse := inverse
     let mut small := small
     let mut table := table
@@ -2531,7 +2531,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       let inverse_28 := IntTy.mulW (.u 64) inverse_22 v27
       inverse := inverse_28
       let v32 ← Range_next_0_5 r8 v3
-      b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
+      loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
     else
       let v35 ← Wide_of value (UInt256.ofNat 2)
       let inverse_37 := inverse
@@ -2557,7 +2557,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       checkIndex v67 64
       table := (table.set! v67.toNat v66)
       let v70 := decide ((UInt256.ofNat 1).toNat < entries.toNat)
-      let b7 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+      let join : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
         let mut inverse := inverse
         let mut small := small
         let mut table := table
@@ -2587,7 +2587,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let index_109 := exponent.top
         index := index_109
         started := false
-        let rec b12 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+        let rec loop_1 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -2617,7 +2617,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             let index_117 := index
             let window ← Exponent_window exponent index_117 width
             let started_121 := started
-            let rec b17 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+            let rec loop_2 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
               let mut inverse := inverse
               let mut small := small
               let mut table := table
@@ -2641,7 +2641,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let mut r20 := r20
               let mut r21 := r21
               let v151 := window.odd
-              let b24 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_1 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -2666,10 +2666,10 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r21 := r21
                 let index_173 := window.«end»
                 index := index_173
-                b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v151 then
                 let started_152 := started
-                let b27 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
+                let join_2 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -2694,7 +2694,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r21 := r21
                   power := power_6
                   started := true
-                  b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if started_152 then
                   let power_153 := power
                   r18 := power_153
@@ -2703,14 +2703,14 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let v156 := table[v155.toNat]!
                   r19 := v156
                   let v160 ← Small_mul_2 small r18 r19
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
                 else
                   let v162 := window.entry
                   checkIndex v162 64
                   let v163 := table[v162.toNat]!
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
               else
-                b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             partial_fixpoint
             if started_121 then
               let index_122 := index
@@ -2718,7 +2718,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v126 := (Range_Unknown_Unknown.mk index_122 v124)
               r15 := v126
               let v128 ← Range_Unknown_Unknown_start r15
-              let rec b18 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
+              let rec loop_3 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -2751,13 +2751,13 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let power_141 ← Small_mul_2 small r16 r17
                   power := power_141
                   let v145 ← Range_Unknown_Unknown_next r15 v5
-                  b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
+                  loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
                 else
-                  b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               partial_fixpoint
-              b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
+              loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
             else
-              b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+              loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
           else
             let power_176 := power
             r20 := power_176
@@ -2775,7 +2775,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v196_0 ← v196_k v196
               result := v196_0
               let v200 := decide ((UInt256.ofNat 1).toNat < (UInt256.ofNat 2).toNat)
-              let b32 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_3 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -2799,7 +2799,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r20 := r20
                 let mut r21 := r21
                 let v211 := decide ((UInt256.ofNat 2).toNat < (UInt256.ofNat 2).toNat)
-                let b35 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                let join_4 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -2823,7 +2823,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r20 := r20
                   let mut r21 := r21
                   let v222 := decide ((UInt256.ofNat 3).toNat < (UInt256.ofNat 2).toNat)
-                  let b38 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                  let join_5 : UInt256 → Small_2 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                     let mut inverse := inverse
                     let mut small := small
                     let mut table := table
@@ -2855,27 +2855,27 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                     mstoreInt (.u 64) v226 v223
                     let v226_0 ← v226_k v226
                     result := v226_0
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                   else
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if v211 then
                   let v212 := out.l2
                   let (v215, v215_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 2)
                   mstoreInt (.u 64) v215 v212
                   let v215_0 ← v215_k v215
                   result := v215_0
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 else
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v200 then
                 let v201 := out.l1
                 let (v204, v204_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 1)
                 mstoreInt (.u 64) v204 v201
                 let v204_0 ← v204_k v204
                 result := v204_0
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               else
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             else
               let v234 := Option_MemArray_u64.None
               match (← pure v189) with
@@ -2885,7 +2885,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               | _ => pure ()
               return v234
         partial_fixpoint
-        b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
       if v70 then
         let v71 := (UInt256.ofNat 0)
         checkIndex v71 64
@@ -2900,7 +2900,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let v82 := (Range_Known_1_Unknown.mk () entries)
         r13 := v82
         let v84 ← Range_start_1 r13
-        let rec b8 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
+        let rec loop_4 (inverse : UInt256) (small : Small_2) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -2935,15 +2935,15 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             checkIndex k 64
             table := (table.set! k.toNat v97)
             let v100 ← Range_next_1 r13 v4
-            b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
+            loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
           else
-            b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+            join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
         partial_fixpoint
-        b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
+        loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
       else
-        b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
   partial_fixpoint
-  b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
+  loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
 def Small_double_3_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
   let v51 ← sbb s3 v50 borrow_48
@@ -2954,14 +2954,14 @@ def Small_double_3_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s
   let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
   let borrow_61 := v60.snd
   let v64 := decide (borrow_61 = (UInt256.ofNat 1))
-  let b3 : Wide → FeM Wide := fun v2 => do
+  let join : Wide → FeM Wide := fun v2 => do
     return v2
   if v64 then
     let v65 := (Wide.mk s0 s1 s2 s3)
-    b3 v65
+    join v65
   else
     let v67 := (Wide.mk d0 d1 d2 d3)
-    b3 v67
+    join v67
 
 def Small_double_3_k1 (self : Small_3) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
   let v28 := v26 >>> (UInt256.ofNat 63)
@@ -3167,7 +3167,7 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
     let v36 := product >>> (UInt256.ofNat 64)
     let v37 := IntTy.addW (.u 128) v34 v36
     let v39 := decide (low ≠ (UInt256.ofNat 0))
-    let b6 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
+    let join : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
       let mut zero := zero
       let mut t_r1 := t_r1
       let mut t_r2 := t_r2
@@ -3179,7 +3179,7 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
       let v46 := self.m.l0
       let v47 := v46
       let v48 := decide (v47.toNat ≤ sum.toNat)
-      let b9 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
+      let join_1 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -3194,13 +3194,13 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
         let v49 := self.m.l0
         let v50 := v49
         let v51 := IntTy.subW (.u 128) sum v50
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
       else
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
     if v39 then
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
     else
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
   else
     let v64 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 2))
     if v64 then
@@ -3226,7 +3226,7 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
       let v96 ← sbb top_78 (UInt256.ofNat 0) borrow_93
       let borrow_97 := v96.snd
       let v100 := decide (borrow_97 = (UInt256.ofNat 1))
-      let b15 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
+      let join_2 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -3236,10 +3236,10 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
         let mut t_r6 := t_r6
         return v5
       if v100 then
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
       else
         let v104 := (Wide.mk d0_84 d1_91 (UInt256.ofNat 0) (UInt256.ofNat 0))
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
     else
       let v110 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 3))
       if v110 then
@@ -3275,7 +3275,7 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
         let v156 ← sbb top_131 (UInt256.ofNat 0) borrow_153
         let borrow_157 := v156.snd
         let v160 := decide (borrow_157 = (UInt256.ofNat 1))
-        let b21 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
+        let join_3 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -3285,10 +3285,10 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v6
         if v160 then
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
         else
           let v163 := (Wide.mk d0_137 d1_144 d2_151 (UInt256.ofNat 0))
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
       else
         let v167 := b.l0
         let v170 ← Small_row4_3 self a v167 zero (UInt256.ofNat 0)
@@ -3332,7 +3332,7 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
         let v226 ← sbb top_194 (UInt256.ofNat 0) borrow_223
         let borrow_227 := v226.snd
         let v230 := decide (borrow_227 = (UInt256.ofNat 1))
-        let b24 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
+        let join_4 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -3342,10 +3342,10 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v7
         if v230 then
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
         else
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
 /-- `Small<3>::r2` -/
 def Small_r2_3 (self : Small_3) : FeM Wide := do
@@ -3356,7 +3356,7 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
   let mut r4 : Wide := default
   let mut r5 : Wide := default
   let v12 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 1))
-  let b3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
+  let join : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
     let mut x := x
     let mut r1 := r1
     let mut r2 := r2
@@ -3369,7 +3369,7 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
     let shift ← downcast_truncate_u256_u64 v33
     let bit := IntTy.shl (.u 64) (UInt256.ofNat 1) shift
     let v41 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 1))
-    let b12 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
+    let join_1 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
@@ -3377,7 +3377,7 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
       let mut r4 := r4
       let mut r5 := r5
       let v47 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 2))
-      let b15 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
+      let join_2 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
@@ -3385,7 +3385,7 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
         let mut r4 := r4
         let mut r5 := r5
         let v53 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 3))
-        let b18 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
+        let join_3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
           let mut x := x
           let mut r1 := r1
           let mut r2 := r2
@@ -3393,7 +3393,7 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
           let mut r4 := r4
           let mut r5 := r5
           let v59 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 4))
-          let b21 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
+          let join_4 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
             let mut x := x
             let mut r1 := r1
             let mut r2 := r2
@@ -3408,7 +3408,7 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
             let v73 := (Range_Known_0_Unknown.mk () v71)
             r1 := v73
             let v75 ← Range_start_0 r1
-            let rec b22 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
+            let rec loop (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
               let mut x := x
               let mut r1 := r1
               let mut r2 := r2
@@ -3423,12 +3423,12 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
                 let x_84 ← Small_double_3 self r2
                 x := x_84
                 let v88 ← Range_next_0 r1 v8
-                b22 x r1 r2 r3 r4 r5 v88
+                loop x r1 r2 r3 r4 r5 v88
               else
                 let v93 := (Range_Known_0_Known_6.mk () ())
                 r3 := v93
                 let v95 ← Range_start_0_6 r3
-                let rec b26 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
+                let rec loop_1 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
                   let mut x := x
                   let mut r1 := r1
                   let mut r2 := r2
@@ -3445,62 +3445,62 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
                     let x_107 ← Small_mul_3 self r4 r5
                     x := x_107
                     let v111 ← Range_next_0_6 r3 v9
-                    b26 x r1 r2 r3 r4 r5 v111
+                    loop_1 x r1 r2 r3 r4 r5 v111
                   else
                     let x_113 := x
                     return x_113
                 partial_fixpoint
-                b26 x r1 r2 r3 r4 r5 v95
+                loop_1 x r1 r2 r3 r4 r5 v95
             partial_fixpoint
-            b22 x r1 r2 r3 r4 r5 v75
+            loop x r1 r2 r3 r4 r5 v75
           if v59 then
-            b21 x r1 r2 r3 r4 r5 bit
+            join_4 x r1 r2 r3 r4 r5 bit
           else
-            b21 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+            join_4 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
         if v53 then
-          b18 x r1 r2 r3 r4 r5 bit
+          join_3 x r1 r2 r3 r4 r5 bit
         else
-          b18 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+          join_3 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
       if v47 then
-        b15 x r1 r2 r3 r4 r5 bit
+        join_2 x r1 r2 r3 r4 r5 bit
       else
-        b15 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+        join_2 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
     if v41 then
-      b12 x r1 r2 r3 r4 r5 bit
+      join_1 x r1 r2 r3 r4 r5 bit
     else
-      b12 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+      join_1 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
   if v12 then
     let v13 := self.m.l0
-    b3 x r1 r2 r3 r4 r5 v13
+    join x r1 r2 r3 r4 r5 v13
   else
     let v17 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 2))
-    let b6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
+    let join_5 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
       let mut r3 := r3
       let mut r4 := r4
       let mut r5 := r5
-      b3 x r1 r2 r3 r4 r5 v2
+      join x r1 r2 r3 r4 r5 v2
     if v17 then
       let v18 := self.m.l1
-      b6 x r1 r2 r3 r4 r5 v18
+      join_5 x r1 r2 r3 r4 r5 v18
     else
       let v22 := decide ((UInt256.ofNat 3) = (UInt256.ofNat 3))
-      let b9 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
+      let join_6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
         let mut r3 := r3
         let mut r4 := r4
         let mut r5 := r5
-        b6 x r1 r2 r3 r4 r5 v3
+        join_5 x r1 r2 r3 r4 r5 v3
       if v22 then
         let v23 := self.m.l2
-        b9 x r1 r2 r3 r4 r5 v23
+        join_6 x r1 r2 r3 r4 r5 v23
       else
         let v25 := self.m.l3
-        b9 x r1 r2 r3 r4 r5 v25
+        join_6 x r1 r2 r3 r4 r5 v25
 
 /-- `lib::modexp::small_power<3>` -/
 def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
@@ -3532,7 +3532,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   let v14 := (Range_Known_0_Known_5.mk () ())
   r8 := v14
   let v16 ← Range_start_0_5 r8
-  let rec b1 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
+  let rec loop (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
     let mut inverse := inverse
     let mut small := small
     let mut table := table
@@ -3565,7 +3565,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       let inverse_28 := IntTy.mulW (.u 64) inverse_22 v27
       inverse := inverse_28
       let v32 ← Range_next_0_5 r8 v3
-      b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
+      loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
     else
       let v35 ← Wide_of value (UInt256.ofNat 3)
       let inverse_37 := inverse
@@ -3591,7 +3591,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       checkIndex v67 64
       table := (table.set! v67.toNat v66)
       let v70 := decide ((UInt256.ofNat 1).toNat < entries.toNat)
-      let b7 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+      let join : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
         let mut inverse := inverse
         let mut small := small
         let mut table := table
@@ -3621,7 +3621,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let index_109 := exponent.top
         index := index_109
         started := false
-        let rec b12 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+        let rec loop_1 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -3651,7 +3651,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             let index_117 := index
             let window ← Exponent_window exponent index_117 width
             let started_121 := started
-            let rec b17 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+            let rec loop_2 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
               let mut inverse := inverse
               let mut small := small
               let mut table := table
@@ -3675,7 +3675,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let mut r20 := r20
               let mut r21 := r21
               let v151 := window.odd
-              let b24 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_1 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -3700,10 +3700,10 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r21 := r21
                 let index_173 := window.«end»
                 index := index_173
-                b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v151 then
                 let started_152 := started
-                let b27 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
+                let join_2 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -3728,7 +3728,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r21 := r21
                   power := power_6
                   started := true
-                  b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if started_152 then
                   let power_153 := power
                   r18 := power_153
@@ -3737,14 +3737,14 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let v156 := table[v155.toNat]!
                   r19 := v156
                   let v160 ← Small_mul_3 small r18 r19
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
                 else
                   let v162 := window.entry
                   checkIndex v162 64
                   let v163 := table[v162.toNat]!
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
               else
-                b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             partial_fixpoint
             if started_121 then
               let index_122 := index
@@ -3752,7 +3752,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v126 := (Range_Unknown_Unknown.mk index_122 v124)
               r15 := v126
               let v128 ← Range_Unknown_Unknown_start r15
-              let rec b18 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
+              let rec loop_3 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -3785,13 +3785,13 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let power_141 ← Small_mul_3 small r16 r17
                   power := power_141
                   let v145 ← Range_Unknown_Unknown_next r15 v5
-                  b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
+                  loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
                 else
-                  b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               partial_fixpoint
-              b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
+              loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
             else
-              b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+              loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
           else
             let power_176 := power
             r20 := power_176
@@ -3809,7 +3809,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v196_0 ← v196_k v196
               result := v196_0
               let v200 := decide ((UInt256.ofNat 1).toNat < (UInt256.ofNat 3).toNat)
-              let b32 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_3 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -3833,7 +3833,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r20 := r20
                 let mut r21 := r21
                 let v211 := decide ((UInt256.ofNat 2).toNat < (UInt256.ofNat 3).toNat)
-                let b35 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                let join_4 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -3857,7 +3857,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r20 := r20
                   let mut r21 := r21
                   let v222 := decide ((UInt256.ofNat 3).toNat < (UInt256.ofNat 3).toNat)
-                  let b38 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                  let join_5 : UInt256 → Small_3 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                     let mut inverse := inverse
                     let mut small := small
                     let mut table := table
@@ -3889,27 +3889,27 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                     mstoreInt (.u 64) v226 v223
                     let v226_0 ← v226_k v226
                     result := v226_0
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                   else
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if v211 then
                   let v212 := out.l2
                   let (v215, v215_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 2)
                   mstoreInt (.u 64) v215 v212
                   let v215_0 ← v215_k v215
                   result := v215_0
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 else
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v200 then
                 let v201 := out.l1
                 let (v204, v204_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 1)
                 mstoreInt (.u 64) v204 v201
                 let v204_0 ← v204_k v204
                 result := v204_0
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               else
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             else
               let v234 := Option_MemArray_u64.None
               match (← pure v189) with
@@ -3919,7 +3919,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               | _ => pure ()
               return v234
         partial_fixpoint
-        b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
       if v70 then
         let v71 := (UInt256.ofNat 0)
         checkIndex v71 64
@@ -3934,7 +3934,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let v82 := (Range_Known_1_Unknown.mk () entries)
         r13 := v82
         let v84 ← Range_start_1 r13
-        let rec b8 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
+        let rec loop_4 (inverse : UInt256) (small : Small_3) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -3969,15 +3969,15 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             checkIndex k 64
             table := (table.set! k.toNat v97)
             let v100 ← Range_next_1 r13 v4
-            b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
+            loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
           else
-            b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+            join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
         partial_fixpoint
-        b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
+        loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
       else
-        b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
   partial_fixpoint
-  b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
+  loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
 def Small_double_4_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
   let v51 ← sbb s3 v50 borrow_48
@@ -3988,14 +3988,14 @@ def Small_double_4_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s
   let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
   let borrow_61 := v60.snd
   let v64 := decide (borrow_61 = (UInt256.ofNat 1))
-  let b3 : Wide → FeM Wide := fun v2 => do
+  let join : Wide → FeM Wide := fun v2 => do
     return v2
   if v64 then
     let v65 := (Wide.mk s0 s1 s2 s3)
-    b3 v65
+    join v65
   else
     let v67 := (Wide.mk d0 d1 d2 d3)
-    b3 v67
+    join v67
 
 def Small_double_4_k1 (self : Small_4) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
   let v28 := v26 >>> (UInt256.ofNat 63)
@@ -4201,7 +4201,7 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
     let v36 := product >>> (UInt256.ofNat 64)
     let v37 := IntTy.addW (.u 128) v34 v36
     let v39 := decide (low ≠ (UInt256.ofNat 0))
-    let b6 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
+    let join : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v3 => do
       let mut zero := zero
       let mut t_r1 := t_r1
       let mut t_r2 := t_r2
@@ -4213,7 +4213,7 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
       let v46 := self.m.l0
       let v47 := v46
       let v48 := decide (v47.toNat ≤ sum.toNat)
-      let b9 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
+      let join_1 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → UInt256 → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 reduced => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -4228,13 +4228,13 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
         let v49 := self.m.l0
         let v50 := v49
         let v51 := IntTy.subW (.u 128) sum v50
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v51
       else
-        b9 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
+        join_1 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 sum
     if v39 then
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 1)
     else
-      b6 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
+      join zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 (UInt256.ofNat 0)
   else
     let v64 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 2))
     if v64 then
@@ -4260,7 +4260,7 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
       let v96 ← sbb top_78 (UInt256.ofNat 0) borrow_93
       let borrow_97 := v96.snd
       let v100 := decide (borrow_97 = (UInt256.ofNat 1))
-      let b15 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
+      let join_2 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v5 => do
         let mut zero := zero
         let mut t_r1 := t_r1
         let mut t_r2 := t_r2
@@ -4270,10 +4270,10 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
         let mut t_r6 := t_r6
         return v5
       if v100 then
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_76
       else
         let v104 := (Wide.mk d0_84 d1_91 (UInt256.ofNat 0) (UInt256.ofNat 0))
-        b15 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
+        join_2 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v104
     else
       let v110 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 3))
       if v110 then
@@ -4309,7 +4309,7 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
         let v156 ← sbb top_131 (UInt256.ofNat 0) borrow_153
         let borrow_157 := v156.snd
         let v160 := decide (borrow_157 = (UInt256.ofNat 1))
-        let b21 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
+        let join_3 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v6 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -4319,10 +4319,10 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v6
         if v160 then
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_129
         else
           let v163 := (Wide.mk d0_137 d1_144 d2_151 (UInt256.ofNat 0))
-          b21 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
+          join_3 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v163
       else
         let v167 := b.l0
         let v170 ← Small_row4_4 self a v167 zero (UInt256.ofNat 0)
@@ -4366,7 +4366,7 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
         let v226 ← sbb top_194 (UInt256.ofNat 0) borrow_223
         let borrow_227 := v226.snd
         let v230 := decide (borrow_227 = (UInt256.ofNat 1))
-        let b24 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
+        let join_4 : Wide → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Wide := fun zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v7 => do
           let mut zero := zero
           let mut t_r1 := t_r1
           let mut t_r2 := t_r2
@@ -4376,10 +4376,10 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
           let mut t_r6 := t_r6
           return v7
         if v230 then
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 t_192
         else
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
-          b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
+          join_4 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
 /-- `Small<4>::r2` -/
 def Small_r2_4 (self : Small_4) : FeM Wide := do
@@ -4390,7 +4390,7 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
   let mut r4 : Wide := default
   let mut r5 : Wide := default
   let v12 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 1))
-  let b3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
+  let join : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 top => do
     let mut x := x
     let mut r1 := r1
     let mut r2 := r2
@@ -4403,7 +4403,7 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
     let shift ← downcast_truncate_u256_u64 v33
     let bit := IntTy.shl (.u 64) (UInt256.ofNat 1) shift
     let v41 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 1))
-    let b12 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
+    let join_1 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v4 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
@@ -4411,7 +4411,7 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
       let mut r4 := r4
       let mut r5 := r5
       let v47 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 2))
-      let b15 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
+      let join_2 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v5 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
@@ -4419,7 +4419,7 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
         let mut r4 := r4
         let mut r5 := r5
         let v53 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 3))
-        let b18 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
+        let join_3 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v6 => do
           let mut x := x
           let mut r1 := r1
           let mut r2 := r2
@@ -4427,7 +4427,7 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
           let mut r4 := r4
           let mut r5 := r5
           let v59 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 4))
-          let b21 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
+          let join_4 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v7 => do
             let mut x := x
             let mut r1 := r1
             let mut r2 := r2
@@ -4442,7 +4442,7 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
             let v73 := (Range_Known_0_Unknown.mk () v71)
             r1 := v73
             let v75 ← Range_start_0 r1
-            let rec b22 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
+            let rec loop (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v8 : UInt256) : FeM Wide := do
               let mut x := x
               let mut r1 := r1
               let mut r2 := r2
@@ -4457,12 +4457,12 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
                 let x_84 ← Small_double_4 self r2
                 x := x_84
                 let v88 ← Range_next_0 r1 v8
-                b22 x r1 r2 r3 r4 r5 v88
+                loop x r1 r2 r3 r4 r5 v88
               else
                 let v93 := (Range_Known_0_Known_6.mk () ())
                 r3 := v93
                 let v95 ← Range_start_0_6 r3
-                let rec b26 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
+                let rec loop_1 (x : Wide) (r1 : Range_Known_0_Unknown) (r2 : Wide) (r3 : Range_Known_0_Known_6) (r4 : Wide) (r5 : Wide) (v9 : UInt256) : FeM Wide := do
                   let mut x := x
                   let mut r1 := r1
                   let mut r2 := r2
@@ -4479,62 +4479,62 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
                     let x_107 ← Small_mul_4 self r4 r5
                     x := x_107
                     let v111 ← Range_next_0_6 r3 v9
-                    b26 x r1 r2 r3 r4 r5 v111
+                    loop_1 x r1 r2 r3 r4 r5 v111
                   else
                     let x_113 := x
                     return x_113
                 partial_fixpoint
-                b26 x r1 r2 r3 r4 r5 v95
+                loop_1 x r1 r2 r3 r4 r5 v95
             partial_fixpoint
-            b22 x r1 r2 r3 r4 r5 v75
+            loop x r1 r2 r3 r4 r5 v75
           if v59 then
-            b21 x r1 r2 r3 r4 r5 bit
+            join_4 x r1 r2 r3 r4 r5 bit
           else
-            b21 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+            join_4 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
         if v53 then
-          b18 x r1 r2 r3 r4 r5 bit
+          join_3 x r1 r2 r3 r4 r5 bit
         else
-          b18 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+          join_3 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
       if v47 then
-        b15 x r1 r2 r3 r4 r5 bit
+        join_2 x r1 r2 r3 r4 r5 bit
       else
-        b15 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+        join_2 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
     if v41 then
-      b12 x r1 r2 r3 r4 r5 bit
+      join_1 x r1 r2 r3 r4 r5 bit
     else
-      b12 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
+      join_1 x r1 r2 r3 r4 r5 (UInt256.ofNat 0)
   if v12 then
     let v13 := self.m.l0
-    b3 x r1 r2 r3 r4 r5 v13
+    join x r1 r2 r3 r4 r5 v13
   else
     let v17 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 2))
-    let b6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
+    let join_5 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v2 => do
       let mut x := x
       let mut r1 := r1
       let mut r2 := r2
       let mut r3 := r3
       let mut r4 := r4
       let mut r5 := r5
-      b3 x r1 r2 r3 r4 r5 v2
+      join x r1 r2 r3 r4 r5 v2
     if v17 then
       let v18 := self.m.l1
-      b6 x r1 r2 r3 r4 r5 v18
+      join_5 x r1 r2 r3 r4 r5 v18
     else
       let v22 := decide ((UInt256.ofNat 4) = (UInt256.ofNat 3))
-      let b9 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
+      let join_6 : Wide → Range_Known_0_Unknown → Wide → Range_Known_0_Known_6 → Wide → Wide → UInt256 → FeM Wide := fun x r1 r2 r3 r4 r5 v3 => do
         let mut x := x
         let mut r1 := r1
         let mut r2 := r2
         let mut r3 := r3
         let mut r4 := r4
         let mut r5 := r5
-        b6 x r1 r2 r3 r4 r5 v3
+        join_5 x r1 r2 r3 r4 r5 v3
       if v22 then
         let v23 := self.m.l2
-        b9 x r1 r2 r3 r4 r5 v23
+        join_6 x r1 r2 r3 r4 r5 v23
       else
         let v25 := self.m.l3
-        b9 x r1 r2 r3 r4 r5 v25
+        join_6 x r1 r2 r3 r4 r5 v25
 
 /-- `lib::modexp::small_power<4>` -/
 def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
@@ -4566,7 +4566,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   let v14 := (Range_Known_0_Known_5.mk () ())
   r8 := v14
   let v16 ← Range_start_0_5 r8
-  let rec b1 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
+  let rec loop (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v3 : UInt256) : FeM Option_MemArray_u64 := do
     let mut inverse := inverse
     let mut small := small
     let mut table := table
@@ -4599,7 +4599,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       let inverse_28 := IntTy.mulW (.u 64) inverse_22 v27
       inverse := inverse_28
       let v32 ← Range_next_0_5 r8 v3
-      b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
+      loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v32
     else
       let v35 ← Wide_of value (UInt256.ofNat 4)
       let inverse_37 := inverse
@@ -4625,7 +4625,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
       checkIndex v67 64
       table := (table.set! v67.toNat v66)
       let v70 := decide ((UInt256.ofNat 1).toNat < entries.toNat)
-      let b7 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+      let join : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
         let mut inverse := inverse
         let mut small := small
         let mut table := table
@@ -4655,7 +4655,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let index_109 := exponent.top
         index := index_109
         started := false
-        let rec b12 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+        let rec loop_1 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -4685,7 +4685,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             let index_117 := index
             let window ← Exponent_window exponent index_117 width
             let started_121 := started
-            let rec b17 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
+            let rec loop_2 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) : FeM Option_MemArray_u64 := do
               let mut inverse := inverse
               let mut small := small
               let mut table := table
@@ -4709,7 +4709,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let mut r20 := r20
               let mut r21 := r21
               let v151 := window.odd
-              let b24 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_1 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -4734,10 +4734,10 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r21 := r21
                 let index_173 := window.«end»
                 index := index_173
-                b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v151 then
                 let started_152 := started
-                let b27 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
+                let join_2 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 power_6 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -4762,7 +4762,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r21 := r21
                   power := power_6
                   started := true
-                  b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if started_152 then
                   let power_153 := power
                   r18 := power_153
@@ -4771,14 +4771,14 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let v156 := table[v155.toNat]!
                   r19 := v156
                   let v160 ← Small_mul_4 small r18 r19
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v160
                 else
                   let v162 := window.entry
                   checkIndex v162 64
                   let v163 := table[v162.toNat]!
-                  b27 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
+                  join_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v163
               else
-                b24 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             partial_fixpoint
             if started_121 then
               let index_122 := index
@@ -4786,7 +4786,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v126 := (Range_Unknown_Unknown.mk index_122 v124)
               r15 := v126
               let v128 ← Range_Unknown_Unknown_start r15
-              let rec b18 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
+              let rec loop_3 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v5 : UInt256) : FeM Option_MemArray_u64 := do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -4819,13 +4819,13 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let power_141 ← Small_mul_4 small r16 r17
                   power := power_141
                   let v145 ← Range_Unknown_Unknown_next r15 v5
-                  b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
+                  loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v145
                 else
-                  b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               partial_fixpoint
-              b18 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
+              loop_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v128
             else
-              b17 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+              loop_2 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
           else
             let power_176 := power
             r20 := power_176
@@ -4843,7 +4843,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               let v196_0 ← v196_k v196
               result := v196_0
               let v200 := decide ((UInt256.ofNat 1).toNat < (UInt256.ofNat 4).toNat)
-              let b32 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+              let join_3 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                 let mut inverse := inverse
                 let mut small := small
                 let mut table := table
@@ -4867,7 +4867,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                 let mut r20 := r20
                 let mut r21 := r21
                 let v211 := decide ((UInt256.ofNat 2).toNat < (UInt256.ofNat 4).toNat)
-                let b35 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                let join_4 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                   let mut inverse := inverse
                   let mut small := small
                   let mut table := table
@@ -4891,7 +4891,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                   let mut r20 := r20
                   let mut r21 := r21
                   let v222 := decide ((UInt256.ofNat 3).toNat < (UInt256.ofNat 4).toNat)
-                  let b38 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
+                  let join_5 : UInt256 → Small_4 → (Vector Wide 64) → Wide → Wide → UInt256 → Bool → MemArray_u64 → Range_Known_0_Known_5 → Wide → Wide → Wide → Wide → Range_Known_1_Unknown → Wide → Range_Unknown_Unknown → Wide → Wide → Wide → Wide → Wide → Wide → FeM Option_MemArray_u64 := fun inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 => do
                     let mut inverse := inverse
                     let mut small := small
                     let mut table := table
@@ -4923,27 +4923,27 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
                     mstoreInt (.u 64) v226 v223
                     let v226_0 ← v226_k v226
                     result := v226_0
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                   else
-                    b38 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                    join_5 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 if v211 then
                   let v212 := out.l2
                   let (v215, v215_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 2)
                   mstoreInt (.u 64) v215 v212
                   let v215_0 ← v215_k v215
                   result := v215_0
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
                 else
-                  b35 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                  join_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               if v200 then
                 let v201 := out.l1
                 let (v204, v204_k) ← MemArray_index_mut_u64 result (UInt256.ofNat 1)
                 mstoreInt (.u 64) v204 v201
                 let v204_0 ← v204_k v204
                 result := v204_0
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
               else
-                b32 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+                join_3 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
             else
               let v234 := Option_MemArray_u64.None
               match (← pure v189) with
@@ -4953,7 +4953,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
               | _ => pure ()
               return v234
         partial_fixpoint
-        b12 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        loop_1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
       if v70 then
         let v71 := (UInt256.ofNat 0)
         checkIndex v71 64
@@ -4968,7 +4968,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
         let v82 := (Range_Known_1_Unknown.mk () entries)
         r13 := v82
         let v84 ← Range_start_1 r13
-        let rec b8 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
+        let rec loop_4 (inverse : UInt256) (small : Small_4) (table : (Vector Wide 64)) (squared : Wide) (power : Wide) (index : UInt256) (started : Bool) (result : MemArray_u64) (r8 : Range_Known_0_Known_5) (r9 : Wide) (r10 : Wide) (r11 : Wide) (r12 : Wide) (r13 : Range_Known_1_Unknown) (r14 : Wide) (r15 : Range_Unknown_Unknown) (r16 : Wide) (r17 : Wide) (r18 : Wide) (r19 : Wide) (r20 : Wide) (r21 : Wide) (v4 : UInt256) : FeM Option_MemArray_u64 := do
           let mut inverse := inverse
           let mut small := small
           let mut table := table
@@ -5003,41 +5003,41 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
             checkIndex k 64
             table := (table.set! k.toNat v97)
             let v100 ← Range_next_1 r13 v4
-            b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
+            loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v100
           else
-            b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+            join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
         partial_fixpoint
-        b8 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
+        loop_4 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v84
       else
-        b7 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+        join inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
   partial_fixpoint
-  b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
+  loop inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
 /-- `lib::modexp::small_power_of` -/
 def small_power_of (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) (n : UInt256) : FeM Option_MemArray_u64 := do
   let v9 := decide (n = (UInt256.ofNat 1))
-  let b3 : Option_MemArray_u64 → FeM Option_MemArray_u64 := fun v4 => do
+  let join : Option_MemArray_u64 → FeM Option_MemArray_u64 := fun v4 => do
     return v4
   if v9 then
     let v10 ← small_power_1 exponent base value
-    b3 v10
+    join v10
   else
     let v14 := decide (n = (UInt256.ofNat 2))
-    let b6 : Option_MemArray_u64 → FeM Option_MemArray_u64 := fun v5 => do
-      b3 v5
+    let join_1 : Option_MemArray_u64 → FeM Option_MemArray_u64 := fun v5 => do
+      join v5
     if v14 then
       let v15 ← small_power_2 exponent base value
-      b6 v15
+      join_1 v15
     else
       let v19 := decide (n = (UInt256.ofNat 3))
-      let b9 : Option_MemArray_u64 → FeM Option_MemArray_u64 := fun v6 => do
-        b6 v6
+      let join_2 : Option_MemArray_u64 → FeM Option_MemArray_u64 := fun v6 => do
+        join_1 v6
       if v19 then
         let v20 ← small_power_3 exponent base value
-        b9 v20
+        join_2 v20
       else
         let v22 ← small_power_4 exponent base value
-        b9 v22
+        join_2 v22
 
 /-- `Montgomery::new` -/
 def Montgomery_new (value : MemArray_u64) (len : UInt256) : FeM Montgomery := do
@@ -5050,7 +5050,7 @@ def Montgomery_new (value : MemArray_u64) (len : UInt256) : FeM Montgomery := do
   let v10 := (Range_Known_0_Known_5.mk () ())
   r2 := v10
   let v12 ← Range_start_0_5 r2
-  let rec b1 (value : MemArray_u64) (inverse : UInt256) (r2 : Range_Known_0_Known_5) (v1 : UInt256) : FeM Montgomery := do
+  let rec loop (value : MemArray_u64) (inverse : UInt256) (r2 : Range_Known_0_Known_5) (v1 : UInt256) : FeM Montgomery := do
     let mut value := value
     let mut inverse := inverse
     let mut r2 := r2
@@ -5064,7 +5064,7 @@ def Montgomery_new (value : MemArray_u64) (len : UInt256) : FeM Montgomery := do
       let inverse_24 := IntTy.mulW (.u 64) inverse_18 v23
       inverse := inverse_24
       let v28 ← Range_next_0_5 r2 v1
-      b1 value inverse r2 v28
+      loop value inverse r2 v28
     else
       let value_30 := value
       let inverse_34 := inverse
@@ -5072,7 +5072,7 @@ def Montgomery_new (value : MemArray_u64) (len : UInt256) : FeM Montgomery := do
       let v36 := (Montgomery.mk value_30 len v35)
       return v36
   partial_fixpoint
-  b1 value inverse r2 v12
+  loop value inverse r2 v12
 
 /-- `lib::bignum::rem_2by1` -/
 def rem_2by1 (u1 : UInt256) (u0 : UInt256) (d : UInt256) (v : UInt256) : FeM UInt256 := do
@@ -5094,11 +5094,11 @@ def rem_2by1 (u1 : UInt256) (u0 : UInt256) (d : UInt256) (v : UInt256) : FeM UIn
   r := r_30
   let r_32 := r
   let v34 := decide (q0.toNat < r_32.toNat)
-  let b3 : UInt256 → FeM UInt256 := fun r => do
+  let join : UInt256 → FeM UInt256 := fun r => do
     let mut r := r
     let r_43 := r
     let v46 := decide (d.toNat ≤ r_43.toNat)
-    let b6 : UInt256 → FeM UInt256 := fun r => do
+    let join_1 : UInt256 → FeM UInt256 := fun r => do
       let mut r := r
       let r_55 := r
       return r_55
@@ -5106,16 +5106,16 @@ def rem_2by1 (u1 : UInt256) (u0 : UInt256) (d : UInt256) (v : UInt256) : FeM UIn
       let r_48 := r
       let r_49 := IntTy.subW (.u 64) r_48 d
       r := r_49
-      b6 r
+      join_1 r
     else
-      b6 r
+      join_1 r
   if v34 then
     let r_36 := r
     let r_37 := IntTy.addW (.u 64) r_36 d
     r := r_37
-    b3 r
+    join r
   else
-    b3 r
+    join r
 
 def div_3by2_k2 (q0 : UInt256) (d : UInt256) (v52 : UInt256) (q1 : UInt256) (r : UInt256) : FeM UInt256 := do
   let mut q1 := q1
@@ -5129,12 +5129,12 @@ def div_3by2_k2 (q0 : UInt256) (d : UInt256) (v52 : UInt256) (q1 : UInt256) (r :
   let v63 := r_60 >>> (UInt256.ofNat 64)
   let high ← downcast_truncate_u128_u64 v63
   let v66 := decide (q0.toNat ≤ high.toNat)
-  let b3 : UInt256 → UInt256 → FeM UInt256 := fun q1 r => do
+  let join : UInt256 → UInt256 → FeM UInt256 := fun q1 r => do
     let mut q1 := q1
     let mut r := r
     let r_79 := r
     let v81 := decide (d.toNat ≤ r_79.toNat)
-    let b6 : UInt256 → UInt256 → FeM UInt256 := fun q1 r => do
+    let join_1 : UInt256 → UInt256 → FeM UInt256 := fun q1 r => do
       let mut q1 := q1
       let mut r := r
       let q1_90 := q1
@@ -5143,9 +5143,9 @@ def div_3by2_k2 (q0 : UInt256) (d : UInt256) (v52 : UInt256) (q1 : UInt256) (r :
       let q1_83 := q1
       let q1_84 := IntTy.addW (.u 64) q1_83 (UInt256.ofNat 1)
       q1 := q1_84
-      b6 q1 r
+      join_1 q1 r
     else
-      b6 q1 r
+      join_1 q1 r
   if v66 then
     let q1_68 := q1
     let q1_69 := IntTy.subW (.u 64) q1_68 (UInt256.ofNat 1)
@@ -5153,9 +5153,9 @@ def div_3by2_k2 (q0 : UInt256) (d : UInt256) (v52 : UInt256) (q1 : UInt256) (r :
     let r_72 := r
     let r_73 := IntTy.addW (.u 128) r_72 d
     r := r_73
-    b3 q1 r
+    join q1 r
   else
-    b3 q1 r
+    join q1 r
 
 def div_3by2_k1 (u1 : UInt256) (u0 : UInt256) (d1 : UInt256) (d0 : UInt256) (q0 : UInt256) (q1_27 : UInt256) (q1 : UInt256) (r : UInt256) : FeM UInt256 := do
   let mut q1 := q1
@@ -5216,7 +5216,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
   let n ← downcast_truncate_u64_usize v13
   let v17 ← MemArray_len_u64 work_1
   let v18 := decide (count.toNat < v17.toNat)
-  let b3 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → Bool → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v3 => do
+  let join : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → Bool → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v3 => do
     let mut i_r0 := i_r0
     let mut r := r
     let mut i_r2 := i_r2
@@ -5239,7 +5239,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
       let v42 := (Range_Unknown_Unknown.mk count v40)
       r7 := v42
       let v44 ← Range_Unknown_Unknown_start r7
-      let rec b9 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v4 : UInt256) : FeM (Unit × MemArray_u64) := do
+      let rec loop (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v4 : UInt256) : FeM (Unit × MemArray_u64) := do
         let mut i_r0 := i_r0
         let mut r := r
         let mut i_r2 := i_r2
@@ -5260,17 +5260,17 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
           let v52 ← limb wp i_50
           mstoreInt (.u 64) v52 (UInt256.ofNat 0)
           let v55 ← Range_Unknown_Unknown_next r7 v4
-          b9 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v55
+          loop i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v55
         else
           return ((), work_1)
       partial_fixpoint
-      b9 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v44
+      loop i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v44
     else
       let shift := self.shift
       let v62 ← limb wp count
       mstoreInt (.u 64) v62 (UInt256.ofNat 0)
       let v65 := decide (shift ≠ (UInt256.ofNat 0))
-      let b15 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 => do
+      let join_1 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 => do
         let mut i_r0 := i_r0
         let mut r := r
         let mut i_r2 := i_r2
@@ -5290,7 +5290,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
           r := (UInt256.ofNat 0)
           let i_118 := count + (UInt256.ofNat 1)
           i_r2 := i_118
-          let rec b22 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
+          let rec loop_1 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
             let mut i_r0 := i_r0
             let mut r := r
             let mut i_r2 := i_r2
@@ -5320,14 +5320,14 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
               let i_140 := i_r2
               let v142 ← limb wp i_140
               mstoreInt (.u 64) v142 (UInt256.ofNat 0)
-              b22 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+              loop_1 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
             else
               let r_144 := r
               let v146 := r_144 >>> shift
               mstoreInt (.u 64) wp v146
               return ((), work_1)
           partial_fixpoint
-          b22 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+          loop_1 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
         else
           let v151 := n - (UInt256.ofNat 1)
           let v152 ← limb mp v151
@@ -5338,7 +5338,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
           let v161 := count + (UInt256.ofNat 1)
           let j_162 := v161 - n
           j := j_162
-          let rec b25 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
+          let rec loop_2 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
             let mut i_r0 := i_r0
             let mut r := r
             let mut i_r2 := i_r2
@@ -5368,7 +5368,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
               let v184 ← limb wp v183
               let next ← mloadInt (.u 64) v184
               let v187 := decide (high_177 = d1)
-              let b30 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → UInt256 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 qhat => do
+              let join_2 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → UInt256 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 qhat => do
                 let mut i_r0 := i_r0
                 let mut r := r
                 let mut i_r2 := i_r2
@@ -5387,7 +5387,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                 let v208 := (Range_Known_0_Unknown.mk () n)
                 r8 := v208
                 let v210 ← Range_start_0 r8
-                let rec b32 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v6 : UInt256) : FeM (Unit × MemArray_u64) := do
+                let rec loop_3 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v6 : UInt256) : FeM (Unit × MemArray_u64) := do
                   let mut i_r0 := i_r0
                   let mut r := r
                   let mut i_r2 := i_r2
@@ -5436,7 +5436,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                     let borrow_251 ← downcast_truncate_u128_u64 v250
                     borrow := borrow_251
                     let v255 ← Range_next_0 r8 v6
-                    b32 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v255
+                    loop_3 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v255
                   else
                     let v257 := high_177
                     let carry_258 := carry
@@ -5452,7 +5452,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                     mstoreInt (.u 64) v269 v265
                     let v272 := difference_263 >>> (UInt256.ofNat 127)
                     let v274 := decide (v272 ≠ (UInt256.ofNat 0))
-                    let rec b38 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
+                    let rec loop_4 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
                       let mut i_r0 := i_r0
                       let mut r := r
                       let mut i_r2 := i_r2
@@ -5466,14 +5466,14 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                       let mut r10 := r10
                       let mut r11 := r11
                       let mut work_1 := work_1
-                      b25 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+                      loop_2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
                     partial_fixpoint
                     if v274 then
                       add := (UInt256.ofNat 0)
                       let v279 := (Range_Known_0_Unknown.mk () n)
                       r9 := v279
                       let v281 ← Range_start_0 r9
-                      let rec b39 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v7 : UInt256) : FeM (Unit × MemArray_u64) := do
+                      let rec loop_5 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v7 : UInt256) : FeM (Unit × MemArray_u64) := do
                         let mut i_r0 := i_r0
                         let mut r := r
                         let mut i_r2 := i_r2
@@ -5512,7 +5512,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                           let add_308 ← downcast_truncate_u128_u64 v307
                           add := add_308
                           let v312 ← Range_next_0 r9 v7
-                          b39 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v312
+                          loop_5 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v312
                         else
                           let j_314 := j
                           let v316 := j_314 + n
@@ -5524,14 +5524,14 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                           let v323 := j_321 + n
                           let v324 ← limb wp v323
                           mstoreInt (.u 64) v324 v320
-                          b38 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+                          loop_4 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
                       partial_fixpoint
-                      b39 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v281
+                      loop_5 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v281
                     else
-                      b38 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+                      loop_4 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
                 partial_fixpoint
-                b32 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v210
-              let b29 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 => do
+                loop_3 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v210
+              let join_3 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 => do
                 let mut i_r0 := i_r0
                 let mut r := r
                 let mut i_r2 := i_r2
@@ -5552,20 +5552,20 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                 let v197 ← mloadInt (.u 64) v196
                 let v198 := self.reciprocal
                 let v199 ← div_3by2 high_177 next v197 d1 d0 v198
-                b30 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v199
+                join_2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v199
               if v187 then
                 let v188 := decide (next = d0)
                 if v188 then
-                  b30 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 (UInt256.ofNat 18446744073709551615)
+                  join_2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 (UInt256.ofNat 18446744073709551615)
                 else
-                  b29 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+                  join_3 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
               else
-                b29 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+                join_3 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
             else
               let v331 := (Range_Known_0_Unknown.mk () n)
               r10 := v331
               let v333 ← Range_start_0 r10
-              let rec b43 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v8 : UInt256) : FeM (Unit × MemArray_u64) := do
+              let rec loop_6 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v8 : UInt256) : FeM (Unit × MemArray_u64) := do
                 let mut i_r0 := i_r0
                 let mut r := r
                 let mut i_r2 := i_r2
@@ -5587,7 +5587,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                   let v341 ← mloadInt (.u 64) v340
                   let low_342 := v341 >>> shift
                   let v345 := decide (shift = (UInt256.ofNat 0))
-                  let b49 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → UInt256 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 high_9 => do
+                  let join_4 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → UInt256 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 high_9 => do
                     let mut i_r0 := i_r0
                     let mut r := r
                     let mut i_r2 := i_r2
@@ -5605,22 +5605,22 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                     let v358 ← limb wp i_339
                     mstoreInt (.u 64) v358 v357
                     let v361 ← Range_next_0 r10 v8
-                    b43 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v361
+                    loop_6 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v361
                   if v345 then
-                    b49 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 (UInt256.ofNat 0)
+                    join_4 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 (UInt256.ofNat 0)
                   else
                     let v349 := i_339 + (UInt256.ofNat 1)
                     let v350 ← limb wp v349
                     let v351 ← mloadInt (.u 64) v350
                     let v353 := IntTy.subW (.u 64) (UInt256.ofNat 64) shift
                     let v354 := IntTy.shl (.u 64) v351 v353
-                    b49 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v354
+                    join_4 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v354
                 else
                   let v364 := count + (UInt256.ofNat 1)
                   let v366 := (Range_Unknown_Unknown.mk n v364)
                   r11 := v366
                   let v368 ← Range_Unknown_Unknown_start r11
-                  let rec b50 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v10 : UInt256) : FeM (Unit × MemArray_u64) := do
+                  let rec loop_7 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) (v10 : UInt256) : FeM (Unit × MemArray_u64) := do
                     let mut i_r0 := i_r0
                     let mut r := r
                     let mut i_r2 := i_r2
@@ -5641,18 +5641,18 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
                       let v376 ← limb wp i_374
                       mstoreInt (.u 64) v376 (UInt256.ofNat 0)
                       let v379 ← Range_Unknown_Unknown_next r11 v10
-                      b50 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v379
+                      loop_7 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v379
                     else
                       return ((), work_1)
                   partial_fixpoint
-                  b50 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v368
+                  loop_7 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v368
               partial_fixpoint
-              b43 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v333
+              loop_6 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 v333
           partial_fixpoint
-          b25 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+          loop_2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
       if v65 then
         i_r0 := count
-        let rec b16 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
+        let rec loop_8 (i_r0 : UInt256) (r : UInt256) (i_r2 : UInt256) (j : UInt256) (carry : UInt256) (borrow : UInt256) (add : UInt256) (r7 : Range_Unknown_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_0_Unknown) (r10 : Range_Known_0_Unknown) (r11 : Range_Unknown_Unknown) (work_1 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
           let mut i_r0 := i_r0
           let mut r := r
           let mut i_r2 := i_r2
@@ -5694,14 +5694,14 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
             let i_103 := i_r0
             let i_104 := i_103 - (UInt256.ofNat 1)
             i_r0 := i_104
-            b16 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+            loop_8 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
           else
-            b15 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+            join_1 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
         partial_fixpoint
-        b16 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+        loop_8 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
       else
-        b15 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
-  let b2 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 => do
+        join_1 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+  let join_5 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → Range_Unknown_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Unknown_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 => do
     let mut i_r0 := i_r0
     let mut r := r
     let mut i_r2 := i_r2
@@ -5715,7 +5715,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
     let mut r10 := r10
     let mut r11 := r11
     let mut work_1 := work_1
-    b3 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 false
+    join i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 false
   if v18 then
     let v20 ← MemArray_len_u64 work_1
     let v21 := decide (n.toNat < v20.toNat)
@@ -5723,13 +5723,13 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
       let v24 ← MemArray_len_u64 self.limbs
       let v25 := decide (n.toNat ≤ v24.toNat)
       if v25 then
-        b3 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 true
+        join i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1 true
       else
-        b2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+        join_5 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
     else
-      b2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+      join_5 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
   else
-    b2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
+    join_5 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
 
 /-- `Montgomery::mul` -/
 def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_3 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
@@ -5749,7 +5749,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
   let n ← downcast_truncate_u64_usize v9
   let v12 ← MemSlice_len_u64 a
   let v13 := decide (n.toNat ≤ v12.toNat)
-  let b3 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → Bool → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v4 => do
+  let join : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → Bool → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v4 => do
     let mut sum := sum
     let mut carry := carry
     let mut reduced := reduced
@@ -5771,7 +5771,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
     let v45 := (Range_Known_0_Unknown.mk () v43)
     r7 := v45
     let v47 ← Range_start_0 r7
-    let rec b7 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v5 : UInt256) : FeM (Unit × MemArray_u64) := do
+    let rec loop (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v5 : UInt256) : FeM (Unit × MemArray_u64) := do
       let mut sum := sum
       let mut carry := carry
       let mut reduced := reduced
@@ -5791,12 +5791,12 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
         let v55 ← limb tp j_53
         mstoreInt (.u 64) v55 (UInt256.ofNat 0)
         let v58 ← Range_next_0 r7 v5
-        b7 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v58
+        loop sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v58
       else
         let v62 := (Range_Known_0_Unknown.mk () n)
         r8 := v62
         let v64 ← Range_start_0 r8
-        let rec b11 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v6 : UInt256) : FeM (Unit × MemArray_u64) := do
+        let rec loop_1 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v6 : UInt256) : FeM (Unit × MemArray_u64) := do
           let mut sum := sum
           let mut carry := carry
           let mut reduced := reduced
@@ -5845,7 +5845,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
             let v110 := (Range_Known_1_Unknown.mk () n)
             r9 := v110
             let v112 ← Range_start_1 r9
-            let rec b15 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v7 : UInt256) : FeM (Unit × MemArray_u64) := do
+            let rec loop_2 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v7 : UInt256) : FeM (Unit × MemArray_u64) := do
               let mut sum := sum
               let mut carry := carry
               let mut reduced := reduced
@@ -5900,7 +5900,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
                 let v166 ← limb tp v165
                 mstoreInt (.u 64) v166 v163
                 let v169 ← Range_next_1 r9 v7
-                b15 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v169
+                loop_2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v169
               else
                 let v171 ← limb tp n
                 let v172 ← mloadInt (.u 64) v171
@@ -5920,9 +5920,9 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
                 let v189 ← limb tp n
                 mstoreInt (.u 64) v189 v188
                 let v192 ← Range_next_0 r8 v6
-                b11 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v192
+                loop_1 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v192
             partial_fixpoint
-            b15 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v112
+            loop_2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v112
           else
             let v195 ← MemArray_index_ref_u64 t_3 n
             let v196 ← mloadInt (.u 64) v195
@@ -5930,7 +5930,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
             at_least := at_least_198
             let at_least_200 := at_least
             let v201 := !at_least_200
-            let b21 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
+            let join_1 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
               let mut sum := sum
               let mut carry := carry
               let mut reduced := reduced
@@ -5944,7 +5944,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
               let mut r10 := r10
               let mut t_3 := t_3
               let at_least_247 := at_least
-              let b30 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
+              let join_2 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
                 let mut sum := sum
                 let mut carry := carry
                 let mut reduced := reduced
@@ -5963,7 +5963,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
                 let v252 := (Range_Known_0_Unknown.mk () n)
                 r10 := v252
                 let v254 ← Range_start_0 r10
-                let rec b31 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v8 : UInt256) : FeM (Unit × MemArray_u64) := do
+                let rec loop_3 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) (v8 : UInt256) : FeM (Unit × MemArray_u64) := do
                   let mut sum := sum
                   let mut carry := carry
                   let mut reduced := reduced
@@ -5999,17 +5999,17 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
                     let borrow_280 ← downcast_truncate_u128_u64 v279
                     borrow := borrow_280
                     let v284 ← Range_next_0 r10 v8
-                    b31 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v284
+                    loop_3 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v284
                   else
-                    b30 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+                    join_2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
                 partial_fixpoint
-                b31 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v254
+                loop_3 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v254
               else
-                b30 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+                join_2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
             if v201 then
               at_least := true
               j := n
-              let rec b22 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
+              let rec loop_4 (sum : UInt256) (carry : UInt256) (reduced : UInt256) (reduced_carry : UInt256) (at_least : Bool) (j : UInt256) (borrow : UInt256) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (r9 : Range_Known_1_Unknown) (r10 : Range_Known_0_Unknown) (t_3 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
                 let mut sum := sum
                 let mut carry := carry
                 let mut reduced := reduced
@@ -6024,7 +6024,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
                 let mut t_3 := t_3
                 let j_206 := j
                 let v209 := decide ((UInt256.ofNat 0).toNat < j_206.toNat)
-                let b24 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
+                let join_3 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
                   let mut sum := sum
                   let mut carry := carry
                   let mut reduced := reduced
@@ -6037,7 +6037,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
                   let mut r9 := r9
                   let mut r10 := r10
                   let mut t_3 := t_3
-                  b21 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+                  join_1 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
                 if v209 then
                   let j_211 := j
                   let j_212 := j_211 - (UInt256.ofNat 1)
@@ -6058,20 +6058,20 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
                     let v237 ← mloadInt (.u 64) v236
                     let at_least_238 := decide (v237.toNat < v231.toNat)
                     at_least := at_least_238
-                    b24 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+                    join_3 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
                   else
-                    b22 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+                    loop_4 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
                 else
-                  b24 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+                  join_3 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
               partial_fixpoint
-              b22 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+              loop_4 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
             else
-              b21 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+              join_1 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
         partial_fixpoint
-        b11 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v64
+        loop_1 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v64
     partial_fixpoint
-    b7 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v47
-  let b2 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
+    loop sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 v47
+  let join_4 : UInt256 → UInt256 → UInt256 → UInt256 → Bool → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 => do
     let mut sum := sum
     let mut carry := carry
     let mut reduced := reduced
@@ -6084,7 +6084,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
     let mut r9 := r9
     let mut r10 := r10
     let mut t_3 := t_3
-    b3 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 false
+    join sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 false
   if v13 then
     let v14 ← MemSlice_len_u64 b
     let v15 := decide (n.toNat ≤ v14.toNat)
@@ -6096,15 +6096,15 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
         let v23 := n + (UInt256.ofNat 2)
         let v24 := decide (v23.toNat ≤ v21.toNat)
         if v24 then
-          b3 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 true
+          join sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3 true
         else
-          b2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+          join_4 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
       else
-        b2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+        join_4 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
     else
-      b2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+      join_4 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
   else
-    b2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
+    join_4 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
 
 /-- `Modulus::mul_mod` -/
 def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work_3 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
@@ -6117,7 +6117,7 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
   let n ← downcast_truncate_u64_usize v8
   let v11 ← MemArray_len_u64 a
   let v12 := decide (n.toNat ≤ v11.toNat)
-  let b3 : UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → Bool → FeM (Unit × MemArray_u64) := fun carry r1 r2 r3 work_3 v4 => do
+  let join : UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → Bool → FeM (Unit × MemArray_u64) := fun carry r1 r2 r3 work_3 v4 => do
     let mut carry := carry
     let mut r1 := r1
     let mut r2 := r2
@@ -6131,7 +6131,7 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
     let v36 := (Range_Known_0_Unknown.mk () v34)
     r1 := v36
     let v38 ← Range_start_0 r1
-    let rec b6 (carry : UInt256) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (work_3 : MemArray_u64) (v5 : UInt256) : FeM (Unit × MemArray_u64) := do
+    let rec loop (carry : UInt256) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (work_3 : MemArray_u64) (v5 : UInt256) : FeM (Unit × MemArray_u64) := do
       let mut carry := carry
       let mut r1 := r1
       let mut r2 := r2
@@ -6144,12 +6144,12 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
         let v46 ← limb wp i_44
         mstoreInt (.u 64) v46 (UInt256.ofNat 0)
         let v49 ← Range_next_0 r1 v5
-        b6 carry r1 r2 r3 work_3 v49
+        loop carry r1 r2 r3 work_3 v49
       else
         let v53 := (Range_Known_0_Unknown.mk () n)
         r2 := v53
         let v55 ← Range_start_0 r2
-        let rec b10 (carry : UInt256) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (work_3 : MemArray_u64) (v6 : UInt256) : FeM (Unit × MemArray_u64) := do
+        let rec loop_1 (carry : UInt256) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (work_3 : MemArray_u64) (v6 : UInt256) : FeM (Unit × MemArray_u64) := do
           let mut carry := carry
           let mut r1 := r1
           let mut r2 := r2
@@ -6166,7 +6166,7 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
             let v70 := (Range_Known_0_Unknown.mk () n)
             r3 := v70
             let v72 ← Range_start_0 r3
-            let rec b14 (carry : UInt256) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (work_3 : MemArray_u64) (v7 : UInt256) : FeM (Unit × MemArray_u64) := do
+            let rec loop_2 (carry : UInt256) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (work_3 : MemArray_u64) (v7 : UInt256) : FeM (Unit × MemArray_u64) := do
               let mut carry := carry
               let mut r1 := r1
               let mut r2 := r2
@@ -6196,16 +6196,16 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
                 let carry_98 ← downcast_truncate_u128_u64 v97
                 carry := carry_98
                 let v102 ← Range_next_0 r3 v7
-                b14 carry r1 r2 r3 work_3 v102
+                loop_2 carry r1 r2 r3 work_3 v102
               else
                 let carry_104 := carry
                 let v106 := i_61 + n
                 let v107 ← limb wp v106
                 mstoreInt (.u 64) v107 carry_104
                 let v110 ← Range_next_0 r2 v6
-                b10 carry r1 r2 r3 work_3 v110
+                loop_1 carry r1 r2 r3 work_3 v110
             partial_fixpoint
-            b14 carry r1 r2 r3 work_3 v72
+            loop_2 carry r1 r2 r3 work_3 v72
           else
             let v114 := self.len
             let v115 := IntTy.mulW (.u 64) (UInt256.ofNat 2) v114
@@ -6213,16 +6213,16 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
             work_3 := v116_0
             return ((), work_3)
         partial_fixpoint
-        b10 carry r1 r2 r3 work_3 v55
+        loop_1 carry r1 r2 r3 work_3 v55
     partial_fixpoint
-    b6 carry r1 r2 r3 work_3 v38
-  let b2 : UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun carry r1 r2 r3 work_3 => do
+    loop carry r1 r2 r3 work_3 v38
+  let join_1 : UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → FeM (Unit × MemArray_u64) := fun carry r1 r2 r3 work_3 => do
     let mut carry := carry
     let mut r1 := r1
     let mut r2 := r2
     let mut r3 := r3
     let mut work_3 := work_3
-    b3 carry r1 r2 r3 work_3 false
+    join carry r1 r2 r3 work_3 false
   if v12 then
     let v13 ← MemArray_len_u64 b
     let v14 := decide (n.toNat ≤ v13.toNat)
@@ -6231,13 +6231,13 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
       let v18 := (UInt256.ofNat 2) * n
       let v19 := decide (v18.toNat < v16.toNat)
       if v19 then
-        b3 carry r1 r2 r3 work_3 true
+        join carry r1 r2 r3 work_3 true
       else
-        b2 carry r1 r2 r3 work_3
+        join_1 carry r1 r2 r3 work_3
     else
-      b2 carry r1 r2 r3 work_3
+      join_1 carry r1 r2 r3 work_3
   else
-    b2 carry r1 r2 r3 work_3
+    join_1 carry r1 r2 r3 work_3
 
 /-- `lib::modexp::large_power` -/
 def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) (value : MemArray_u64) (size : UInt256) : FeM Option_MemArray_u64 := do
@@ -6277,7 +6277,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
       let v24 := exponent.top
       let v25 ← checkedSub total v24
       let v27 := decide (v25 = (UInt256.ofNat 2))
-      let b6 : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 => do
+      let join : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 => do
         let mut result := result
         let mut work := work
         let mut montgomery := montgomery
@@ -6317,7 +6317,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
           let v73 := (Range_Known_0_Unknown.mk () size)
           r7 := v73
           let v75 ← Range_start_0 r7
-          let rec b11 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) (v5 : UInt256) : FeM Option_MemArray_u64 := do
+          let rec loop (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) (v5 : UInt256) : FeM Option_MemArray_u64 := do
             let mut result := result
             let mut work := work
             let mut montgomery := montgomery
@@ -6354,7 +6354,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
               let v91_0 ← v91_k v91
               work := v91_0
               let v94 ← Range_next_0 r7 v5
-              b11 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v94
+              loop result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v94
             else
               let v98 ← IntTy.mul (.u 64) (UInt256.ofNat 2) n
               let (v99, v99_0) ← Modulus_reduce modulus work v98
@@ -6377,7 +6377,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                 let squared_111 := v109.Some_0
                 squared := squared_111
                 let v114 := decide ((UInt256.ofNat 1).toNat < entries.toNat)
-                let b19 : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 => do
+                let join_1 : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 => do
                   let mut result := result
                   let mut work := work
                   let mut montgomery := montgomery
@@ -6401,7 +6401,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                   let v141 := (Range_Known_1_Unknown.mk () entries)
                   r8 := v141
                   let v143 ← Range_start_1 r8
-                  let rec b20 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) (v6 : UInt256) : FeM Option_MemArray_u64 := do
+                  let rec loop_1 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) (v6 : UInt256) : FeM Option_MemArray_u64 := do
                     let mut result := result
                     let mut work := work
                     let mut montgomery := montgomery
@@ -6447,12 +6447,12 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                       let v172_0 ← v172_k v172
                       table := v172_0
                       let v177 ← Range_next_1 r8 v6
-                      b20 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v177
+                      loop_1 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v177
                     else
                       let index_179 := exponent.top
                       index := index_179
                       started := false
-                      let rec b24 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) : FeM Option_MemArray_u64 := do
+                      let rec loop_2 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) : FeM Option_MemArray_u64 := do
                         let mut result := result
                         let mut work := work
                         let mut montgomery := montgomery
@@ -6479,7 +6479,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                           let index_186 := index
                           let window ← Exponent_window exponent index_186 width
                           let started_190 := started
-                          let rec b29 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) : FeM Option_MemArray_u64 := do
+                          let rec loop_3 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) : FeM Option_MemArray_u64 := do
                             let mut result := result
                             let mut work := work
                             let mut montgomery := montgomery
@@ -6501,7 +6501,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                             let mut v249 := v249
                             let mut v254 := v254
                             let v227 := window.odd
-                            let b36 : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 => do
+                            let join_2 : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 => do
                               let mut result := result
                               let mut work := work
                               let mut montgomery := montgomery
@@ -6524,14 +6524,14 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                               let mut v254 := v254
                               let index_264 := window.«end»
                               index := index_264
-                              b24 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                              loop_2 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
                             if v227 then
                               let v228 := window.entry
                               let v230 ← checkedMul v228 size
                               let v232 ← MemArray_as_slice_ref_u64 table
                               let v234 ← MemSlice_slice_ref_u64 v232 v230 size
                               let started_236 := started
-                              let b39 : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → Unit → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v8 => do
+                              let join_3 : MemArray_u64 → MemArray_u64 → Montgomery → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_1_Unknown → Range_Unknown_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → Unit → FeM Option_MemArray_u64 := fun result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v8 => do
                                 let mut result := result
                                 let mut work := work
                                 let mut montgomery := montgomery
@@ -6552,7 +6552,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                                 let mut v217 := v217
                                 let mut v249 := v249
                                 let mut v254 := v254
-                                b36 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                                join_2 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
                               if started_236 then
                                 let v238 ← MemArray_as_slice_ref_u64 result
                                 let (v243, v243_0) ← Montgomery_mul montgomery v238 v234 work
@@ -6565,7 +6565,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                                 v249 := v251_0
                                 let v249_0 ← v249_k v249
                                 result := v249_0
-                                b39 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v251
+                                join_3 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v251
                               else
                                 let (v254_g, v254_k) ← MemArray_as_slice_mut_u64 result
                                 v254 := v254_g
@@ -6574,9 +6574,9 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                                 let v254_0 ← v254_k v254
                                 result := v254_0
                                 started := true
-                                b39 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 ()
+                                join_3 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 ()
                             else
-                              b36 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                              join_2 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
                           partial_fixpoint
                           if started_190 then
                             let index_191 := index
@@ -6584,7 +6584,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                             let v195 := (Range_Unknown_Unknown.mk index_191 v193)
                             r9 := v195
                             let v197 ← Range_Unknown_Unknown_start r9
-                            let rec b30 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) (v7 : UInt256) : FeM Option_MemArray_u64 := do
+                            let rec loop_4 (result : MemArray_u64) (work : MemArray_u64) (montgomery : Montgomery) (table : MemArray_u64) (squared : MemArray_u64) (index : UInt256) (started : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_1_Unknown) (r9 : Range_Unknown_Unknown) (v40 : MemSlice_u64) (v105 : MemSlice_u64) (v106 : MemSlice_u64) (v133 : MemSlice_u64) (v172 : MemSlice_u64) (v173 : MemSlice_u64) (v288 : MemSlice_u64) (v217 : MemSlice_u64) (v249 : MemSlice_u64) (v254 : MemSlice_u64) (v7 : UInt256) : FeM Option_MemArray_u64 := do
                               let mut result := result
                               let mut work := work
                               let mut montgomery := montgomery
@@ -6621,13 +6621,13 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                                 let v217_0 ← v217_k v217
                                 result := v217_0
                                 let v221 ← Range_Unknown_Unknown_next r9 v7
-                                b30 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v221
+                                loop_4 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v221
                               else
-                                b29 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                                loop_3 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
                             partial_fixpoint
-                            b30 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v197
+                            loop_4 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v197
                           else
-                            b29 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                            loop_3 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
                         else
                           let (v268, v268_0) ← MemArray_zero_u64 squared
                           squared := v268_0
@@ -6655,9 +6655,9 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                           let _ ← MemArray_drop_u64 work
                           return v293
                       partial_fixpoint
-                      b24 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                      loop_2 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
                   partial_fixpoint
-                  b20 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v143
+                  loop_1 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v143
                 if v114 then
                   let v116 ← MemArray_as_slice_ref_u64 table
                   let v118 ← MemSlice_head_ref_u64 v116 size
@@ -6673,9 +6673,9 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                   v133 := v135_0
                   let v133_0 ← v133_k v133
                   squared := v133_0
-                  b19 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                  join_1 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
                 else
-                  b19 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+                  join_1 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
               else
                 let v294 := Option_MemArray_u64.None
                 match (← pure v109) with
@@ -6689,7 +6689,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
                 let _ ← MemArray_drop_u64 result
                 return v294
           partial_fixpoint
-          b11 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v75
+          loop result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254 v75
         else
           let v295 := Option_MemArray_u64.None
           match (← pure v66) with
@@ -6722,9 +6722,9 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
           let _ ← MemArray_drop_u64 value
           return v45
         else
-          b6 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+          join result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
       else
-        b6 result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
+        join result work montgomery table squared index started r7 r8 r9 v40 v105 v106 v133 v172 v173 v288 v217 v249 v254
     else
       let v296 := Option_MemArray_u64.None
       match (← pure v20) with
@@ -6752,7 +6752,7 @@ def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) 
   let mut r2 : Range_Known_0_Unknown := default
   let mut base := base
   let v8 := decide (n.toNat ≤ (UInt256.ofNat 4).toNat)
-  let b2 : Modulus → MemArray_u64 → Range_Known_0_Unknown → MemArray_u64 → FeM (Option_MemArray_u64 × MemArray_u64) := fun modulus limbs r2 base => do
+  let join : Modulus → MemArray_u64 → Range_Known_0_Unknown → MemArray_u64 → FeM (Option_MemArray_u64 × MemArray_u64) := fun modulus limbs r2 base => do
     let mut modulus := modulus
     let mut limbs := limbs
     let mut r2 := r2
@@ -6764,7 +6764,7 @@ def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) 
       let modulus_20 := v18.Some_0
       modulus := modulus_20
       let v24 := decide (n.toNat < base_size.toNat)
-      let b9 : Modulus → MemArray_u64 → Range_Known_0_Unknown → MemArray_u64 → FeM (Option_MemArray_u64 × MemArray_u64) := fun modulus limbs r2 base => do
+      let join_1 : Modulus → MemArray_u64 → Range_Known_0_Unknown → MemArray_u64 → FeM (Option_MemArray_u64 × MemArray_u64) := fun modulus limbs r2 base => do
         let mut modulus := modulus
         let mut limbs := limbs
         let mut r2 := r2
@@ -6783,7 +6783,7 @@ def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) 
             let v47 := (Range_Known_0_Unknown.mk () n)
             r2 := v47
             let v49 ← Range_start_0 r2
-            let rec b15 (modulus : Modulus) (limbs : MemArray_u64) (r2 : Range_Known_0_Unknown) (base : MemArray_u64) (v5 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+            let rec loop (modulus : Modulus) (limbs : MemArray_u64) (r2 : Range_Known_0_Unknown) (base : MemArray_u64) (v5 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
               let mut modulus := modulus
               let mut limbs := limbs
               let mut r2 := r2
@@ -6799,14 +6799,14 @@ def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) 
                 let v59_0 ← v59_k v59
                 limbs := v59_0
                 let v62 ← Range_next_0 r2 v5
-                b15 modulus limbs r2 base v62
+                loop modulus limbs r2 base v62
               else
                 let limbs_65 := limbs
                 let v69 ← large_power exponent base modulus limbs_65 n
                 let _ ← MemArray_drop_u64 modulus.limbs
                 return (v69, base)
             partial_fixpoint
-            b15 modulus limbs r2 base v49
+            loop modulus limbs r2 base v49
           else
             let v70 := Option_MemArray_u64.None
             match (← pure v40) with
@@ -6820,9 +6820,9 @@ def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) 
         let v26 ← downcast_truncate_usize_u64 base_size
         let (v28, v28_0) ← Modulus_reduce modulus base v26
         base := v28_0
-        b9 modulus limbs r2 base
+        join_1 modulus limbs r2 base
       else
-        b9 modulus limbs r2 base
+        join_1 modulus limbs r2 base
     else
       let v71 := Option_MemArray_u64.None
       match (← pure v18) with
@@ -6837,9 +6837,9 @@ def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) 
       let v14 ← small_power_of exponent base value n
       return (v14, base)
     else
-      b2 modulus limbs r2 base
+      join modulus limbs r2 base
   else
-    b2 modulus limbs r2 base
+    join modulus limbs r2 base
 
 /-- `lib::modexp::low_product` -/
 def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
@@ -6854,7 +6854,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
   let len ← MemSlice_len_u64 out_2
   let v11 ← MemSlice_len_u64 a
   let v12 := decide (len.toNat ≤ v11.toNat)
-  let b3 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → Bool → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 v3 => do
+  let join : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → Bool → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 v3 => do
     let mut a_len := a_len
     let mut b_len := b_len
     let mut carry := carry
@@ -6870,7 +6870,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
     let v29 := (Range_Known_0_Unknown.mk () len)
     r4 := v29
     let v31 ← Range_start_0 r4
-    let rec b5 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) (v4 : UInt256) : FeM (Unit × MemSlice_u64) := do
+    let rec loop (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) (v4 : UInt256) : FeM (Unit × MemSlice_u64) := do
       let mut a_len := a_len
       let mut b_len := b_len
       let mut carry := carry
@@ -6886,10 +6886,10 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
         let v39 ← limb op j_37
         mstoreInt (.u 64) v39 (UInt256.ofNat 0)
         let v42 ← Range_next_0 r4 v4
-        b5 a_len b_len carry «at» r4 r5 r6 out_2 v42
+        loop a_len b_len carry «at» r4 r5 r6 out_2 v42
       else
         a_len := len
-        let rec b9 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
+        let rec loop_1 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
           let mut a_len := a_len
           let mut b_len := b_len
           let mut carry := carry
@@ -6900,7 +6900,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
           let mut out_2 := out_2
           let a_len_45 := a_len
           let v48 := decide ((UInt256.ofNat 0).toNat < a_len_45.toNat)
-          let b11 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
+          let join_1 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
             let mut a_len := a_len
             let mut b_len := b_len
             let mut carry := carry
@@ -6910,7 +6910,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
             let mut r6 := r6
             let mut out_2 := out_2
             b_len := len
-            let rec b13 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
+            let rec loop_2 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
               let mut a_len := a_len
               let mut b_len := b_len
               let mut carry := carry
@@ -6921,7 +6921,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
               let mut out_2 := out_2
               let b_len_63 := b_len
               let v66 := decide ((UInt256.ofNat 0).toNat < b_len_63.toNat)
-              let b15 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
+              let join_2 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
                 let mut a_len := a_len
                 let mut b_len := b_len
                 let mut carry := carry
@@ -6934,7 +6934,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                 let v83 := (Range_Known_0_Unknown.mk () a_len_82)
                 r5 := v83
                 let v85 ← Range_start_0 r5
-                let rec b17 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) (v5 : UInt256) : FeM (Unit × MemSlice_u64) := do
+                let rec loop_3 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) (v5 : UInt256) : FeM (Unit × MemSlice_u64) := do
                   let mut a_len := a_len
                   let mut b_len := b_len
                   let mut carry := carry
@@ -6954,7 +6954,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                     let v98 := len - i
                     let b_len_99 := b_len
                     let v100 := decide (v98.toNat < b_len_99.toNat)
-                    let b23 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → UInt256 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 «end» => do
+                    let join_3 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → UInt256 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 «end» => do
                       let mut a_len := a_len
                       let mut b_len := b_len
                       let mut carry := carry
@@ -6966,7 +6966,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                       let v109 := (Range_Known_0_Unknown.mk () «end»)
                       r6 := v109
                       let v111 ← Range_start_0 r6
-                      let rec b24 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) (v7 : UInt256) : FeM (Unit × MemSlice_u64) := do
+                      let rec loop_4 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) (v7 : UInt256) : FeM (Unit × MemSlice_u64) := do
                         let mut a_len := a_len
                         let mut b_len := b_len
                         let mut carry := carry
@@ -6999,11 +6999,11 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                           let carry_137 ← downcast_truncate_u128_u64 v136
                           carry := carry_137
                           let v141 ← Range_next_0 r6 v7
-                          b24 a_len b_len carry «at» r4 r5 r6 out_2 v141
+                          loop_4 a_len b_len carry «at» r4 r5 r6 out_2 v141
                         else
                           let at_143 := i + «end»
                           «at» := at_143
-                          let rec b28 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
+                          let rec loop_5 (a_len : UInt256) (b_len : UInt256) (carry : UInt256) («at» : UInt256) (r4 : Range_Known_0_Unknown) (r5 : Range_Known_0_Unknown) (r6 : Range_Known_0_Unknown) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
                             let mut a_len := a_len
                             let mut b_len := b_len
                             let mut carry := carry
@@ -7014,7 +7014,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                             let mut out_2 := out_2
                             let carry_145 := carry
                             let v148 := decide (carry_145 ≠ (UInt256.ofNat 0))
-                            let b30 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
+                            let join_4 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
                               let mut a_len := a_len
                               let mut b_len := b_len
                               let mut carry := carry
@@ -7024,7 +7024,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                               let mut r6 := r6
                               let mut out_2 := out_2
                               let v178 ← Range_next_0 r5 v5
-                              b17 a_len b_len carry «at» r4 r5 r6 out_2 v178
+                              loop_3 a_len b_len carry «at» r4 r5 r6 out_2 v178
                             if v148 then
                               let at_149 := «at»
                               let v151 := decide (at_149.toNat < len.toNat)
@@ -7046,25 +7046,25 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                                 let at_172 := «at»
                                 let at_173 := at_172 + (UInt256.ofNat 1)
                                 «at» := at_173
-                                b28 a_len b_len carry «at» r4 r5 r6 out_2
+                                loop_5 a_len b_len carry «at» r4 r5 r6 out_2
                               else
-                                b30 a_len b_len carry «at» r4 r5 r6 out_2
+                                join_4 a_len b_len carry «at» r4 r5 r6 out_2
                             else
-                              b30 a_len b_len carry «at» r4 r5 r6 out_2
+                              join_4 a_len b_len carry «at» r4 r5 r6 out_2
                           partial_fixpoint
-                          b28 a_len b_len carry «at» r4 r5 r6 out_2
+                          loop_5 a_len b_len carry «at» r4 r5 r6 out_2
                       partial_fixpoint
-                      b24 a_len b_len carry «at» r4 r5 r6 out_2 v111
+                      loop_4 a_len b_len carry «at» r4 r5 r6 out_2 v111
                     if v100 then
                       let v101 := len - i
-                      b23 a_len b_len carry «at» r4 r5 r6 out_2 v101
+                      join_3 a_len b_len carry «at» r4 r5 r6 out_2 v101
                     else
                       let b_len_103 := b_len
-                      b23 a_len b_len carry «at» r4 r5 r6 out_2 b_len_103
+                      join_3 a_len b_len carry «at» r4 r5 r6 out_2 b_len_103
                   else
                     return ((), out_2)
                 partial_fixpoint
-                b17 a_len b_len carry «at» r4 r5 r6 out_2 v85
+                loop_3 a_len b_len carry «at» r4 r5 r6 out_2 v85
               if v66 then
                 let b_len_67 := b_len
                 let v70 := b_len_67 - (UInt256.ofNat 1)
@@ -7075,13 +7075,13 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
                   let b_len_76 := b_len
                   let b_len_77 := b_len_76 - (UInt256.ofNat 1)
                   b_len := b_len_77
-                  b13 a_len b_len carry «at» r4 r5 r6 out_2
+                  loop_2 a_len b_len carry «at» r4 r5 r6 out_2
                 else
-                  b15 a_len b_len carry «at» r4 r5 r6 out_2
+                  join_2 a_len b_len carry «at» r4 r5 r6 out_2
               else
-                b15 a_len b_len carry «at» r4 r5 r6 out_2
+                join_2 a_len b_len carry «at» r4 r5 r6 out_2
             partial_fixpoint
-            b13 a_len b_len carry «at» r4 r5 r6 out_2
+            loop_2 a_len b_len carry «at» r4 r5 r6 out_2
           if v48 then
             let a_len_49 := a_len
             let v52 := a_len_49 - (UInt256.ofNat 1)
@@ -7092,16 +7092,16 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
               let a_len_58 := a_len
               let a_len_59 := a_len_58 - (UInt256.ofNat 1)
               a_len := a_len_59
-              b9 a_len b_len carry «at» r4 r5 r6 out_2
+              loop_1 a_len b_len carry «at» r4 r5 r6 out_2
             else
-              b11 a_len b_len carry «at» r4 r5 r6 out_2
+              join_1 a_len b_len carry «at» r4 r5 r6 out_2
           else
-            b11 a_len b_len carry «at» r4 r5 r6 out_2
+            join_1 a_len b_len carry «at» r4 r5 r6 out_2
         partial_fixpoint
-        b9 a_len b_len carry «at» r4 r5 r6 out_2
+        loop_1 a_len b_len carry «at» r4 r5 r6 out_2
     partial_fixpoint
-    b5 a_len b_len carry «at» r4 r5 r6 out_2 v31
-  let b2 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
+    loop a_len b_len carry «at» r4 r5 r6 out_2 v31
+  let join_5 : UInt256 → UInt256 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → FeM (Unit × MemSlice_u64) := fun a_len b_len carry «at» r4 r5 r6 out_2 => do
     let mut a_len := a_len
     let mut b_len := b_len
     let mut carry := carry
@@ -7110,16 +7110,16 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
     let mut r5 := r5
     let mut r6 := r6
     let mut out_2 := out_2
-    b3 a_len b_len carry «at» r4 r5 r6 out_2 false
+    join a_len b_len carry «at» r4 r5 r6 out_2 false
   if v12 then
     let v13 ← MemSlice_len_u64 b
     let v14 := decide (len.toNat ≤ v13.toNat)
     if v14 then
-      b3 a_len b_len carry «at» r4 r5 r6 out_2 true
+      join a_len b_len carry «at» r4 r5 r6 out_2 true
     else
-      b2 a_len b_len carry «at» r4 r5 r6 out_2
+      join_5 a_len b_len carry «at» r4 r5 r6 out_2
   else
-    b2 a_len b_len carry «at» r4 r5 r6 out_2
+    join_5 a_len b_len carry «at» r4 r5 r6 out_2
 
 /-- `lib::modexp::low_power` -/
 def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Option_MemArray_u64 := do
@@ -7140,7 +7140,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
   let v17 ← checkedRem k (UInt256.ofNat 64)
   let bits ← downcast_truncate_usize_u64 v17
   let v21 := decide (bits = (UInt256.ofNat 0))
-  let b3 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 mask => do
+  let join : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 mask => do
     let mut result := result
     let mut power := power
     let mut index_r2 := index_r2
@@ -7162,7 +7162,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
       let v36 ← mloadInt (.u 64) v35
       let v38 := v36 &&& (UInt256.ofNat 1)
       let v40 := decide (v38 = (UInt256.ofNat 1))
-      let b8 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 start => do
+      let join_1 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 start => do
         let mut result := result
         let mut power := power
         let mut index_r2 := index_r2
@@ -7178,7 +7178,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
         let v54 := decide (low.toNat ≤ (UInt256.ofNat 2).toNat)
         if v54 then
           let v56 := decide (low = (UInt256.ofNat 1))
-          let b15 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 wide_mask => do
+          let join_2 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 wide_mask => do
             let mut result := result
             let mut power := power
             let mut index_r2 := index_r2
@@ -7202,7 +7202,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
             let factor_77 := v76 &&& wide_mask
             power := (UInt256.ofNat 1)
             index_r2 := start
-            let rec b16 (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) : FeM Option_MemArray_u64 := do
+            let rec loop (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) : FeM Option_MemArray_u64 := do
               let mut result := result
               let mut power := power
               let mut index_r2 := index_r2
@@ -7218,7 +7218,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
               let index_82 := index_r2
               let v84 := exponent.total
               let v85 := decide (index_82.toNat < v84.toNat)
-              let b18 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
+              let join_3 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
                 let mut result := result
                 let mut power := power
                 let mut index_r2 := index_r2
@@ -7238,7 +7238,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                 let v123_0 ← v123_k v123
                 result := v123_0
                 let v126 := decide (low = (UInt256.ofNat 2))
-                let b25 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
+                let join_4 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
                   let mut result := result
                   let mut power := power
                   let mut index_r2 := index_r2
@@ -7262,9 +7262,9 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                   mstoreInt (.u 64) v134 v131
                   let v134_0 ← v134_k v134
                   result := v134_0
-                  b25 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                  join_4 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                 else
-                  b25 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                  join_4 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
               if v85 then
                 let power_86 := power
                 let v89 := decide (power_86 ≠ (UInt256.ofNat 0))
@@ -7276,7 +7276,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                   let index_96 := index_r2
                   let v98 ← Exponent_bit exponent index_96
                   let v100 := decide (v98 = (UInt256.ofNat 1))
-                  let b22 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
+                  let join_5 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
                     let mut result := result
                     let mut power := power
                     let mut index_r2 := index_r2
@@ -7295,28 +7295,28 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                     let index_114 := index_r2
                     let index_115 := index_114 + (UInt256.ofNat 1)
                     index_r2 := index_115
-                    b16 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                    loop result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                   if v100 then
                     let power_101 := power
                     let power_103 := IntTy.mulW (.u 128) power_101 factor_77
                     power := power_103
-                    b22 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                    join_5 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                   else
-                    b22 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                    join_5 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                 else
-                  b18 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                  join_3 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
               else
-                b18 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                join_3 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
             partial_fixpoint
-            b16 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+            loop result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
           if v56 then
             let v57 := mask
-            b15 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v57
+            join_2 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v57
           else
             let v59 := mask
             let v61 := IntTy.shl (.u 128) v59 (UInt256.ofNat 64)
             let v63 := v61 ||| (UInt256.ofNat 18446744073709551615)
-            b15 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v63
+            join_2 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v63
         else
           let v144 ← MemArray_try_new_zeroed_u64 low
           let v145 := match v144 with | .Some .. => true | _ => false
@@ -7331,7 +7331,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
               let v154 := (Range_Known_0_Unknown.mk () low)
               r7 := v154
               let v156 ← Range_start_0 r7
-              let rec b30 (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) (v6 : UInt256) : FeM Option_MemArray_u64 := do
+              let rec loop_1 (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) (v6 : UInt256) : FeM Option_MemArray_u64 := do
                 let mut result := result
                 let mut power := power
                 let mut index_r2 := index_r2
@@ -7355,7 +7355,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                   let v166_0 ← v166_k v166
                   factor := v166_0
                   let v169 ← Range_next_0 r7 v6
-                  b30 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v169
+                  loop_1 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v169
                 else
                   let v172 := low - (UInt256.ofNat 1)
                   let (v174, v174_k) ← MemArray_index_mut_u64 factor v172
@@ -7369,7 +7369,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                   let v181_0 ← v181_k v181
                   result := v181_0
                   index_r5 := start
-                  let rec b34 (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) : FeM Option_MemArray_u64 := do
+                  let rec loop_2 (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) : FeM Option_MemArray_u64 := do
                     let mut result := result
                     let mut power := power
                     let mut index_r2 := index_r2
@@ -7385,7 +7385,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                     let index_184 := index_r5
                     let v186 := exponent.total
                     let v187 := decide (index_184.toNat < v186.toNat)
-                    let b36 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
+                    let join_6 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
                       let mut result := result
                       let mut power := power
                       let mut index_r2 := index_r2
@@ -7415,7 +7415,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                       let index_198 := index_r5
                       let v200 ← Exponent_bit exponent index_198
                       let v202 := decide (v200 = (UInt256.ofNat 1))
-                      let b39 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
+                      let join_7 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
                         let mut result := result
                         let mut power := power
                         let mut index_r2 := index_r2
@@ -7439,7 +7439,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                         let v232 := (Range_Known_0_Unknown.mk () low)
                         r8 := v232
                         let v234 ← Range_start_0 r8
-                        let rec b40 (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) (v7 : UInt256) : FeM Option_MemArray_u64 := do
+                        let rec loop_3 (result : MemArray_u64) (power : UInt256) (index_r2 : UInt256) (factor : MemArray_u64) (work : MemArray_u64) (index_r5 : UInt256) (zero : Bool) (r7 : Range_Known_0_Unknown) (r8 : Range_Known_0_Unknown) (v193 : MemSlice_u64) (v208 : MemSlice_u64) (v217 : MemSlice_u64) (v7 : UInt256) : FeM Option_MemArray_u64 := do
                           let mut result := result
                           let mut power := power
                           let mut index_r2 := index_r2
@@ -7457,7 +7457,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                             let v239 ← Range_at_0 r8 v7
                             let i_240 := v239
                             let zero_241 := zero
-                            let b46 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → Bool → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 zero_8 => do
+                            let join_8 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → Bool → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 zero_8 => do
                               let mut result := result
                               let mut power := power
                               let mut index_r2 := index_r2
@@ -7472,8 +7472,8 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                               let mut v217 := v217
                               zero := zero_8
                               let v254 ← Range_next_0 r8 v7
-                              b40 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v254
-                            let b45 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
+                              loop_3 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v254
+                            let join_9 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
                               let mut result := result
                               let mut power := power
                               let mut index_r2 := index_r2
@@ -7486,28 +7486,28 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                               let mut v193 := v193
                               let mut v208 := v208
                               let mut v217 := v217
-                              b46 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 false
+                              join_8 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 false
                             if zero_241 then
                               let v243 ← MemArray_index_ref_u64 result i_240
                               let v244 ← mloadInt (.u 64) v243
                               let v246 := decide (v244 = (UInt256.ofNat 0))
                               if v246 then
-                                b46 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 true
+                                join_8 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 true
                               else
-                                b45 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                                join_9 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                             else
-                              b45 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                              join_9 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                           else
                             let zero_256 := zero
                             if zero_256 then
-                              b36 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                              join_6 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                             else
                               let index_260 := index_r5
                               let index_261 := index_260 + (UInt256.ofNat 1)
                               index_r5 := index_261
-                              b34 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                              loop_2 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                         partial_fixpoint
-                        b40 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v234
+                        loop_3 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v234
                       if v202 then
                         let v204 ← MemArray_as_slice_ref_u64 work
                         let v206 ← MemArray_as_slice_ref_u64 factor
@@ -7517,7 +7517,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                         v208 := v212_0
                         let v208_0 ← v208_k v208
                         result := v208_0
-                        b39 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                        join_7 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                       else
                         let v215 ← MemArray_as_slice_ref_u64 work
                         let (v217_g, v217_k) ← MemArray_as_slice_mut_u64 result
@@ -7526,13 +7526,13 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
                         v217 := v219_0
                         let v217_0 ← v217_k v217
                         result := v217_0
-                        b39 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                        join_7 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                     else
-                      b36 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                      join_6 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
                   partial_fixpoint
-                  b34 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+                  loop_2 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
               partial_fixpoint
-              b30 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v156
+              loop_1 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v156
             else
               let v267 := Option_MemArray_u64.None
               match (← pure v148) with
@@ -7552,7 +7552,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
             | _ => pure ()
             let _ ← MemArray_drop_u64 result
             return v268
-      let b7 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
+      let join_10 : MemArray_u64 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → Bool → Range_Known_0_Unknown → Range_Known_0_Unknown → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM Option_MemArray_u64 := fun result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 => do
         let mut result := result
         let mut power := power
         let mut index_r2 := index_r2
@@ -7566,7 +7566,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
         let mut v208 := v208
         let mut v217 := v217
         let v50 := exponent.top
-        b8 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v50
+        join_1 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v50
       if v40 then
         let v41 := exponent.total
         let v42 := exponent.top
@@ -7575,11 +7575,11 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
         if v45 then
           let v46 := exponent.total
           let v48 := v46 - k
-          b8 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v48
+          join_1 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v48
         else
-          b7 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+          join_10 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
       else
-        b7 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
+        join_10 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217
     else
       let v269 := Option_MemArray_u64.None
       match (← pure v30) with
@@ -7589,11 +7589,11 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
       | _ => pure ()
       return v269
   if v21 then
-    b3 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 (UInt256.ofNat 18446744073709551615)
+    join result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 (UInt256.ofNat 18446744073709551615)
   else
     let v25 := IntTy.shl (.u 64) (UInt256.ofNat 1) bits
     let v27 := IntTy.subW (.u 64) v25 (UInt256.ofNat 1)
-    b3 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v27
+    join result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v27
 
 /-- `lib::modexp::even_power` -/
 def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) (value : MemArray_u64) (size : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
@@ -7635,7 +7635,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
   let mut v410 : MemSlice_u64 := default
   let mut v424 : MemSlice_u64 := default
   zero_limbs := (UInt256.ofNat 0)
-  let rec b1 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+  let rec loop (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
     let mut zero_limbs := zero_limbs
     let mut result := result
     let mut y := y
@@ -7681,7 +7681,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
       let zero_limbs_29 := zero_limbs
       let zero_limbs_30 := zero_limbs_29 + (UInt256.ofNat 1)
       zero_limbs := zero_limbs_30
-      b1 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+      loop zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
     else
       let zero_limbs_33 := zero_limbs
       let v36 := zero_limbs_33 * (UInt256.ofNat 64)
@@ -7696,7 +7696,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
       let v51 ← checkedRem k (UInt256.ofNat 64)
       let bits ← downcast_truncate_usize_u64 v51
       let v55 := decide (bits = (UInt256.ofNat 0))
-      let b6 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 mask => do
+      let join : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 mask => do
         let mut zero_limbs := zero_limbs
         let mut result := result
         let mut y := y
@@ -7754,7 +7754,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
               let v84 := (Range_Known_0_Unknown.mk () v82)
               r19 := v84
               let v86 ← Range_start_0 r19
-              let rec b13 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v6 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+              let rec loop_1 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v6 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                 let mut zero_limbs := zero_limbs
                 let mut result := result
                 let mut y := y
@@ -7800,7 +7800,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                   let v95 := i_92 + v94
                   let v97 := v95 + (UInt256.ofNat 1)
                   let v99 := decide (v97.toNat < size.toNat)
-                  let b19 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 next_7 => do
+                  let join_1 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 next_7 => do
                     let mut zero_limbs := zero_limbs
                     let mut result := result
                     let mut y := y
@@ -7839,7 +7839,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                     let mut v410 := v410
                     let mut v424 := v424
                     let v112 := decide (bits = (UInt256.ofNat 0))
-                    let b22 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v8 => do
+                    let join_2 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v8 => do
                       let mut zero_limbs := zero_limbs
                       let mut result := result
                       let mut y := y
@@ -7882,13 +7882,13 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                       let v131_0 ← v131_k v131
                       q := v131_0
                       let v134 ← Range_next_0 r19 v6
-                      b13 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v134
+                      loop_1 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v134
                     if v112 then
                       let v114 ← checkedDiv k (UInt256.ofNat 64)
                       let v115 := i_92 + v114
                       let v116 ← MemArray_index_ref_u64 value v115
                       let v117 ← mloadInt (.u 64) v116
-                      b22 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v117
+                      join_2 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v117
                     else
                       let v120 ← checkedDiv k (UInt256.ofNat 64)
                       let v121 := i_92 + v120
@@ -7898,19 +7898,19 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                       let v126 := IntTy.subW (.u 64) (UInt256.ofNat 64) bits
                       let v127 := IntTy.shl (.u 64) next_7 v126
                       let v128 := v124 ||| v127
-                      b22 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v128
+                      join_2 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v128
                   if v99 then
                     let v101 ← checkedDiv k (UInt256.ofNat 64)
                     let v102 := i_92 + v101
                     let v104 := v102 + (UInt256.ofNat 1)
                     let v105 ← MemArray_index_ref_u64 value v104
                     let v106 ← mloadInt (.u 64) v105
-                    b19 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v106
+                    join_1 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v106
                   else
-                    b19 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 (UInt256.ofNat 0)
+                    join_1 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 (UInt256.ofNat 0)
                 else
                   q_len := size
-                  let rec b23 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                  let rec loop_2 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                     let mut zero_limbs := zero_limbs
                     let mut result := result
                     let mut y := y
@@ -7957,11 +7957,11 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                       let q_len_148 := q_len
                       let q_len_149 := q_len_148 - (UInt256.ofNat 1)
                       q_len := q_len_149
-                      b23 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                      loop_2 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
                     else
                       let q_len_152 := q_len
                       let v155 := decide (q_len_152 = (UInt256.ofNat 1))
-                      let b27 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 => do
+                      let join_3 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 => do
                         let mut zero_limbs := zero_limbs
                         let mut result := result
                         let mut y := y
@@ -8015,7 +8015,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                             let v204 := (Range_Known_0_Unknown.mk () low)
                             r21 := v204
                             let v206 ← Range_start_0 r21
-                            let rec b38 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v10 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                            let rec loop_3 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v10 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                               let mut zero_limbs := zero_limbs
                               let mut result := result
                               let mut y := y
@@ -8059,7 +8059,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                 let i_212 := v211
                                 let q_len_213 := q_len
                                 let v214 := decide (i_212.toNat < q_len_213.toNat)
-                                let b44 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 x_limb => do
+                                let join_4 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 x_limb => do
                                   let mut zero_limbs := zero_limbs
                                   let mut result := result
                                   let mut y := y
@@ -8114,13 +8114,13 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                   let borrow_238 ← downcast_truncate_u128_u64 v237
                                   borrow := borrow_238
                                   let v242 ← Range_next_0 r21 v10
-                                  b38 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v242
+                                  loop_3 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v242
                                 if v214 then
                                   let v216 ← MemArray_index_ref_u64 x i_212
                                   let v217 ← mloadInt (.u 64) v216
-                                  b44 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v217
+                                  join_4 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v217
                                 else
-                                  b44 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 (UInt256.ofNat 0)
+                                  join_4 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 (UInt256.ofNat 0)
                               else
                                 let v245 := low - (UInt256.ofNat 1)
                                 let (v247, v247_k) ← MemArray_index_mut_u64 t v245
@@ -8140,7 +8140,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                   let v262 := (Range_Known_0_Known_5.mk () ())
                                   r22 := v262
                                   let v264 ← Range_start_0_5 r22
-                                  let rec b47 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v12 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                  let rec loop_4 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v12 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                     let mut zero_limbs := zero_limbs
                                     let mut result := result
                                     let mut y := y
@@ -8190,7 +8190,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                       let guess_280 := IntTy.mulW (.u 64) guess_270 v279
                                       guess := guess_280
                                       let v284 ← Range_next_0_5 r22 v12
-                                      b47 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v284
+                                      loop_4 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v284
                                     else
                                       let guess_286 := guess
                                       let (v290, v290_k) ← MemArray_index_mut_u64 inverse (UInt256.ofNat 0)
@@ -8208,7 +8208,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                           let correction_298 := v296.Some_0
                                           correction := correction_298
                                           correct := (UInt256.ofNat 1)
-                                          let rec b55 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                          let rec loop_5 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                             let mut zero_limbs := zero_limbs
                                             let mut result := result
                                             let mut y := y
@@ -8252,7 +8252,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                               let correct_306 := correct
                                               let v307 := (UInt256.ofNat 2) * correct_306
                                               let v308 := decide (v307.toNat < low.toNat)
-                                              let b60 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 next_13 => do
+                                              let join_5 : UInt256 → MemArray_u64 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → MemArray_u64 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → UInt256 → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Known_5 → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → Range_Known_0_Unknown → MemArray_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → MemSlice_u64 → UInt256 → FeM (Option_MemArray_u64 × MemArray_u64) := fun zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 next_13 => do
                                                 let mut zero_limbs := zero_limbs
                                                 let mut result := result
                                                 let mut y := y
@@ -8306,7 +8306,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                 let v330 := (Range_Known_0_Unknown.mk () next_13)
                                                 r23 := v330
                                                 let v332 ← Range_start_0 r23
-                                                let rec b61 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v14 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                                let rec loop_6 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v14 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                                   let mut zero_limbs := zero_limbs
                                                   let mut result := result
                                                   let mut y := y
@@ -8364,13 +8364,13 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                     let carry_354 ← downcast_truncate_u128_u64 v353
                                                     carry_r13 := carry_354
                                                     let v358 ← Range_next_0 r23 v14
-                                                    b61 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v358
+                                                    loop_6 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v358
                                                   else
                                                     add := (UInt256.ofNat 2)
                                                     let v364 := (Range_Known_0_Unknown.mk () next_13)
                                                     r24 := v364
                                                     let v366 ← Range_start_0 r24
-                                                    let rec b65 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v15 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                                    let rec loop_7 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v15 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                                       let mut zero_limbs := zero_limbs
                                                       let mut result := result
                                                       let mut y := y
@@ -8427,7 +8427,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                         let add_387 ← downcast_truncate_u128_u64 v386
                                                         add := add_387
                                                         let v391 ← Range_next_0 r24 v15
-                                                        b65 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v391
+                                                        loop_7 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v391
                                                       else
                                                         let v394 ← MemArray_as_slice_ref_u64 inverse
                                                         let v396 ← MemArray_as_slice_ref_u64 correction
@@ -8454,17 +8454,17 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                         let v409_0 ← v409_k v409
                                                         inverse := v409_0
                                                         correct := next_13
-                                                        b55 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                                                        loop_5 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
                                                     partial_fixpoint
-                                                    b65 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v366
+                                                    loop_7 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v366
                                                 partial_fixpoint
-                                                b61 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v332
+                                                loop_6 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v332
                                               if v308 then
                                                 let correct_310 := correct
                                                 let v311 := (UInt256.ofNat 2) * correct_310
-                                                b60 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v311
+                                                join_5 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v311
                                               else
-                                                b60 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 low
+                                                join_5 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 low
                                             else
                                               let v415 ← MemArray_try_new_zeroed_u64 low
                                               let v416 := match v415 with | .Some .. => true | _ => false
@@ -8498,7 +8498,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                   let v448 := (Range_Known_0_Unknown.mk () q_len_447)
                                                   r25 := v448
                                                   let v450 ← Range_start_0 r25
-                                                  let rec b73 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v16 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                                  let rec loop_8 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v16 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                                     let mut zero_limbs := zero_limbs
                                                     let mut result := result
                                                     let mut y := y
@@ -8547,13 +8547,13 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                       let v461_0 ← v461_k v461
                                                       work := v461_0
                                                       let v464 ← Range_next_0 r25 v16
-                                                      b73 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v464
+                                                      loop_8 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v464
                                                     else
                                                       let q_len_468 := q_len
                                                       let v469 := (Range_Known_0_Unknown.mk () q_len_468)
                                                       r26 := v469
                                                       let v471 ← Range_start_0 r26
-                                                      let rec b77 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v17 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                                      let rec loop_9 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v17 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                                         let mut zero_limbs := zero_limbs
                                                         let mut result := result
                                                         let mut y := y
@@ -8599,7 +8599,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                           let v482 := (Range_Known_0_Unknown.mk () low)
                                                           r27 := v482
                                                           let v484 ← Range_start_0 r27
-                                                          let rec b81 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v18 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                                          let rec loop_10 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v18 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                                             let mut zero_limbs := zero_limbs
                                                             let mut result := result
                                                             let mut y := y
@@ -8666,11 +8666,11 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                               let carry_517 ← downcast_truncate_u128_u64 v516
                                                               carry_r17 := carry_517
                                                               let v521 ← Range_next_0 r27 v18
-                                                              b81 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v521
+                                                              loop_10 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v521
                                                             else
                                                               let at_523 := i_477 + low
                                                               «at» := at_523
-                                                              let rec b85 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                                              let rec loop_11 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                                                 let mut zero_limbs := zero_limbs
                                                                 let mut result := result
                                                                 let mut y := y
@@ -8730,19 +8730,19 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                                   let at_551 := «at»
                                                                   let at_552 := at_551 + (UInt256.ofNat 1)
                                                                   «at» := at_552
-                                                                  b85 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                                                                  loop_11 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
                                                                 else
                                                                   let v557 ← Range_next_0 r26 v17
-                                                                  b77 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v557
+                                                                  loop_9 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v557
                                                               partial_fixpoint
-                                                              b85 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                                                              loop_11 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
                                                           partial_fixpoint
-                                                          b81 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v484
+                                                          loop_10 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v484
                                                         else
                                                           let v562 := (Range_Known_0_Unknown.mk () size)
                                                           r28 := v562
                                                           let v564 ← Range_start_0 r28
-                                                          let rec b88 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v19 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                                                          let rec loop_12 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v19 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                                                             let mut zero_limbs := zero_limbs
                                                             let mut result := result
                                                             let mut y := y
@@ -8791,7 +8791,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                               let v575_0 ← v575_k v575
                                                               result := v575_0
                                                               let v578 ← Range_next_0 r28 v19
-                                                              b88 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v578
+                                                              loop_12 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v578
                                                             else
                                                               let result_580 := result
                                                               let v582 := Option_MemArray_u64.Some result_580
@@ -8806,11 +8806,11 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                               let _ ← MemArray_drop_u64 y
                                                               return (v582, base)
                                                           partial_fixpoint
-                                                          b88 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v564
+                                                          loop_12 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v564
                                                       partial_fixpoint
-                                                      b77 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v471
+                                                      loop_9 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v471
                                                   partial_fixpoint
-                                                  b73 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v450
+                                                  loop_8 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v450
                                                 else
                                                   let v583 := Option_MemArray_u64.None
                                                   match (← pure v441) with
@@ -8845,7 +8845,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                                 let _ ← MemArray_drop_u64 result
                                                 return (v584, base)
                                           partial_fixpoint
-                                          b55 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                                          loop_5 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
                                         else
                                           let v585 := Option_MemArray_u64.None
                                           match (← pure v296) with
@@ -8876,7 +8876,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                         let _ ← MemArray_drop_u64 result
                                         return (v586, base)
                                   partial_fixpoint
-                                  b47 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v264
+                                  loop_4 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v264
                                 else
                                   let v587 := Option_MemArray_u64.None
                                   match (← pure v251) with
@@ -8891,7 +8891,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                                   let _ ← MemArray_drop_u64 result
                                   return (v587, base)
                             partial_fixpoint
-                            b38 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v206
+                            loop_3 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v206
                           else
                             let v588 := Option_MemArray_u64.None
                             match (← pure v196) with
@@ -8923,7 +8923,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                           let v164 := (Range_Known_0_Unknown.mk () low)
                           r20 := v164
                           let v166 ← Range_start_0 r20
-                          let rec b30 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v9 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
+                          let rec loop_13 (zero_limbs : UInt256) (result : MemArray_u64) (y : MemArray_u64) (q : MemArray_u64) (q_len : UInt256) (x : MemArray_u64) (t : MemArray_u64) (borrow : UInt256) (inverse : MemArray_u64) (guess : UInt256) (scratch : MemArray_u64) (correction : MemArray_u64) (correct : UInt256) (carry_r13 : UInt256) (add : UInt256) (h : MemArray_u64) (work : MemArray_u64) (carry_r17 : UInt256) («at» : UInt256) (r19 : Range_Known_0_Unknown) (r20 : Range_Known_0_Unknown) (r21 : Range_Known_0_Unknown) (r22 : Range_Known_0_Known_5) (r23 : Range_Known_0_Unknown) (r24 : Range_Known_0_Unknown) (r25 : Range_Known_0_Unknown) (r26 : Range_Known_0_Unknown) (r27 : Range_Known_0_Unknown) (r28 : Range_Known_0_Unknown) (base : MemArray_u64) (v320 : MemSlice_u64) (v321 : MemSlice_u64) (v398 : MemSlice_u64) (v399 : MemSlice_u64) (v409 : MemSlice_u64) (v410 : MemSlice_u64) (v424 : MemSlice_u64) (v9 : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
                             let mut zero_limbs := zero_limbs
                             let mut result := result
                             let mut y := y
@@ -8972,7 +8972,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                               let v177_0 ← v177_k v177
                               result := v177_0
                               let v180 ← Range_next_0 r20 v9
-                              b30 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v180
+                              loop_13 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v180
                             else
                               let result_182 := result
                               let v184 := Option_MemArray_u64.Some result_182
@@ -8980,15 +8980,15 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
                               let _ ← MemArray_drop_u64 y
                               return (v184, base)
                           partial_fixpoint
-                          b30 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v166
+                          loop_13 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v166
                         else
-                          b27 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                          join_3 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
                       else
-                        b27 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                        join_3 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
                   partial_fixpoint
-                  b23 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+                  loop_2 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
               partial_fixpoint
-              b13 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v86
+              loop_1 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v86
             else
               let v590 := Option_MemArray_u64.None
               match (← pure v74) with
@@ -9017,13 +9017,13 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
           | _ => pure ()
           return (v592, base)
       if v55 then
-        b6 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 (UInt256.ofNat 18446744073709551615)
+        join zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 (UInt256.ofNat 18446744073709551615)
       else
         let v59 := IntTy.shl (.u 64) (UInt256.ofNat 1) bits
         let v61 := IntTy.subW (.u 64) v59 (UInt256.ofNat 1)
-        b6 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v61
+        join zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424 v61
   partial_fixpoint
-  b1 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
+  loop zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
 
 /-- `lib::modexp::power<MemBuffer>` -/
 def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UInt256) (modulus_len : UInt256) : FeM Option_MemArray_u64 := do
@@ -9044,7 +9044,7 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
     value := value_19
     let n_22 ← MemArray_len_u64 value
     n := n_22
-    let rec b3 (value : MemArray_u64) (n : UInt256) (exponent : Exponent) (one : MemArray_u64) (base : MemArray_u64) (base_size : UInt256) : FeM Option_MemArray_u64 := do
+    let rec loop (value : MemArray_u64) (n : UInt256) (exponent : Exponent) (one : MemArray_u64) (base : MemArray_u64) (base_size : UInt256) : FeM Option_MemArray_u64 := do
       let mut value := value
       let mut n := n
       let mut exponent := exponent
@@ -9053,7 +9053,7 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
       let mut base_size := base_size
       let n_24 := n
       let v27 := decide ((UInt256.ofNat 0).toNat < n_24.toNat)
-      let b5 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
+      let join : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
         let mut value := value
         let mut n := n
         let mut exponent := exponent
@@ -9062,7 +9062,7 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
         let mut base_size := base_size
         let n_42 := n
         let v45 := decide (n_42 = (UInt256.ofNat 0))
-        let b7 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
+        let join_1 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
           let mut value := value
           let mut n := n
           let mut exponent := exponent
@@ -9073,11 +9073,11 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
           let _ ← MemArray_drop_u64 value
           return v156
         if v45 then
-          b7 value n exponent one base base_size
+          join_1 value n exponent one base base_size
         else
           let n_46 := n
           let v49 := decide (n_46 = (UInt256.ofNat 1))
-          let b8 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
+          let join_2 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
             let mut value := value
             let mut n := n
             let mut exponent := exponent
@@ -9122,7 +9122,7 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
                 let base_limbs ← checkedDiv v83 (UInt256.ofNat 8)
                 let n_88 := n
                 let v89 := decide (n_88.toNat < base_limbs.toNat)
-                let b21 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size v4 => do
+                let join_3 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size v4 => do
                   let mut value := value
                   let mut n := n
                   let mut exponent := exponent
@@ -9136,7 +9136,7 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
                     let base_98 := v96.Some_0
                     base := base_98
                     base_size := base_limbs
-                    let rec b24 (value : MemArray_u64) (n : UInt256) (exponent : Exponent) (one : MemArray_u64) (base : MemArray_u64) (base_size : UInt256) : FeM Option_MemArray_u64 := do
+                    let rec loop_1 (value : MemArray_u64) (n : UInt256) (exponent : Exponent) (one : MemArray_u64) (base : MemArray_u64) (base_size : UInt256) : FeM Option_MemArray_u64 := do
                       let mut value := value
                       let mut n := n
                       let mut exponent := exponent
@@ -9145,7 +9145,7 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
                       let mut base_size := base_size
                       let base_size_101 := base_size
                       let v104 := decide ((UInt256.ofNat 0).toNat < base_size_101.toNat)
-                      let b26 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
+                      let join_4 : MemArray_u64 → UInt256 → Exponent → MemArray_u64 → MemArray_u64 → UInt256 → FeM Option_MemArray_u64 := fun value n exponent one base base_size => do
                         let mut value := value
                         let mut n := n
                         let mut exponent := exponent
@@ -9193,13 +9193,13 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
                           let base_size_115 := base_size
                           let base_size_116 ← checkedSub base_size_115 (UInt256.ofNat 1)
                           base_size := base_size_116
-                          b24 value n exponent one base base_size
+                          loop_1 value n exponent one base base_size
                         else
-                          b26 value n exponent one base base_size
+                          join_4 value n exponent one base base_size
                       else
-                        b26 value n exponent one base base_size
+                        join_4 value n exponent one base base_size
                     partial_fixpoint
-                    b24 value n exponent one base base_size
+                    loop_1 value n exponent one base base_size
                   else
                     let v153 := Option_MemArray_u64.None
                     match (← pure v96) with
@@ -9211,10 +9211,10 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
                     let _ ← MemArray_drop_u64 value
                     return v153
                 if v89 then
-                  b21 value n exponent one base base_size base_limbs
+                  join_3 value n exponent one base base_size base_limbs
                 else
                   let n_91 := n
-                  b21 value n exponent one base base_size n_91
+                  join_3 value n exponent one base base_size n_91
             else
               let v154 := Option_MemArray_u64.None
               match (← pure v58) with
@@ -9229,11 +9229,11 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
             let v53 ← mloadInt (.u 64) v52
             let v55 := decide (v53 = (UInt256.ofNat 1))
             if v55 then
-              b7 value n exponent one base base_size
+              join_1 value n exponent one base base_size
             else
-              b8 value n exponent one base base_size
+              join_2 value n exponent one base base_size
           else
-            b8 value n exponent one base base_size
+            join_2 value n exponent one base base_size
       if v27 then
         let n_28 := n
         let v31 ← checkedSub n_28 (UInt256.ofNat 1)
@@ -9244,13 +9244,13 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
           let n_38 := n
           let n_39 ← checkedSub n_38 (UInt256.ofNat 1)
           n := n_39
-          b3 value n exponent one base base_size
+          loop value n exponent one base base_size
         else
-          b5 value n exponent one base base_size
+          join value n exponent one base base_size
       else
-        b5 value n exponent one base base_size
+        join value n exponent one base base_size
     partial_fixpoint
-    b3 value n exponent one base base_size
+    loop value n exponent one base base_size
   else
     let v157 := Option_MemArray_u64.None
     match (← pure v17) with
@@ -9271,7 +9271,7 @@ def encoded (result : MemArray_u64) (output : MemBuffer) : FeM MemBuffer := do
   let v12 := (Range_Known_0_Unknown.mk () v10)
   r1 := v12
   let v14 ← Range_start_0 r1
-  let rec b1 (output : MemBuffer) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Known_8) (v1 : UInt256) : FeM MemBuffer := do
+  let rec loop (output : MemBuffer) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Known_8) (v1 : UInt256) : FeM MemBuffer := do
     let mut output := output
     let mut r1 := r1
     let mut r2 := r2
@@ -9284,12 +9284,12 @@ def encoded (result : MemArray_u64) (output : MemBuffer) : FeM MemBuffer := do
       let v24 := (UInt256.ofNat 8) * i
       let v26 := v24 + (UInt256.ofNat 8)
       let v27 := decide (v26.toNat ≤ len.toNat)
-      let rec b7 (output : MemBuffer) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Known_8) : FeM MemBuffer := do
+      let rec loop_1 (output : MemBuffer) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Known_8) : FeM MemBuffer := do
         let mut output := output
         let mut r1 := r1
         let mut r2 := r2
         let v75 ← Range_next_0 r1 v1
-        b1 output r1 r2 v75
+        loop output r1 r2 v75
       partial_fixpoint
       if v27 then
         let v28 := value
@@ -9299,12 +9299,12 @@ def encoded (result : MemArray_u64) (output : MemBuffer) : FeM MemBuffer := do
         let v34 := bytes + v33
         let v35 ← cast_u8_u64 v34
         mstoreInt (.u 64) v35 v28
-        b7 output r1 r2
+        loop_1 output r1 r2
       else
         let v41 := (Range_Known_0_Known_8.mk () ())
         r2 := v41
         let v43 ← Range_start_0_8 r2
-        let rec b8 (output : MemBuffer) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Known_8) (v2 : UInt256) : FeM MemBuffer := do
+        let rec loop_2 (output : MemBuffer) (r1 : Range_Known_0_Unknown) (r2 : Range_Known_0_Known_8) (v2 : UInt256) : FeM MemBuffer := do
           let mut output := output
           let mut r1 := r1
           let mut r2 := r2
@@ -9315,12 +9315,12 @@ def encoded (result : MemArray_u64) (output : MemBuffer) : FeM MemBuffer := do
             let v51 := (UInt256.ofNat 8) * i
             let position := v51 + byte
             let v54 := decide (position.toNat < len.toNat)
-            let b14 : MemBuffer → Range_Known_0_Unknown → Range_Known_0_Known_8 → FeM MemBuffer := fun output r1 r2 => do
+            let join : MemBuffer → Range_Known_0_Unknown → Range_Known_0_Known_8 → FeM MemBuffer := fun output r1 r2 => do
               let mut output := output
               let mut r1 := r1
               let mut r2 := r2
               let v70 ← Range_next_0_8 r2 v2
-              b8 output r1 r2 v70
+              loop_2 output r1 r2 v70
             if v54 then
               let v56 := (UInt256.ofNat 8) * byte
               let shift ← downcast_truncate_usize_u64 v56
@@ -9330,18 +9330,18 @@ def encoded (result : MemArray_u64) (output : MemBuffer) : FeM MemBuffer := do
               let v63 := v62 - position
               let v64 := bytes + v63
               mstoreInt (.u 8) v64 v60
-              b14 output r1 r2
+              join output r1 r2
             else
-              b14 output r1 r2
+              join output r1 r2
           else
-            b7 output r1 r2
+            loop_1 output r1 r2
         partial_fixpoint
-        b8 output r1 r2 v43
+        loop_2 output r1 r2 v43
     else
       let output_77 := output
       return output_77
   partial_fixpoint
-  b1 output r1 r2 v14
+  loop output r1 r2 v14
 
 /-- `lib::modexp::run<MemBuffer>` -/
 def run_MemBuffer (input : MemBuffer) (gas_1 : UInt256) : FeM Output := do
@@ -9351,24 +9351,24 @@ def run_MemBuffer (input : MemBuffer) (gas_1 : UInt256) : FeM Output := do
   let modulus_word ← input_word_MemBuffer input (UInt256.ofNat 64) (UInt256.ofNat 32)
   let v14 ← MAX_LENGTH
   let v15 := decide (v14.toNat < base_word.toNat)
-  let b1 : MemArray_u64 → FeM Output := fun result => do
+  let join : MemArray_u64 → FeM Output := fun result => do
     let mut result := result
     let v60 ← FAILURE
     let v62 ← MemBuffer_empty
     let v63 := (Output.mk v60 gas_1 v62)
     return v63
   if v15 then
-    b1 result
+    join result
   else
     let v16 ← MAX_LENGTH
     let v17 := decide (v16.toNat < exponent_word.toNat)
     if v17 then
-      b1 result
+      join result
     else
       let v18 ← MAX_LENGTH
       let v19 := decide (v18.toNat < modulus_word.toNat)
       if v19 then
-        b1 result
+        join result
       else
         let base_len ← downcast_unchecked_u256_usize base_word
         let exponent_len ← downcast_unchecked_u256_usize exponent_word

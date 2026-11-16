@@ -30,7 +30,7 @@ def Cursor_advance (self : Cursor) («by» : UInt256) : FeM (UInt256 × Cursor) 
 def Cursor_skip (self : Cursor) («by» : UInt256) : FeM (Unit × Cursor) := do
   let mut self := self
   let v4 := decide ((UInt256.ofNat 32).toNat < «by».toNat)
-  let b3 : Cursor → FeM (Unit × Cursor) := fun self => do
+  let join : Cursor → FeM (Unit × Cursor) := fun self => do
     let mut self := self
     let v10 := self.pos
     self := { self with base := v10 }
@@ -38,11 +38,11 @@ def Cursor_skip (self : Cursor) («by» : UInt256) : FeM (Unit × Cursor) := do
   if v4 then
     let (v6, v6_0) ← Cursor_advance self (UInt256.ofNat 32)
     self := v6_0
-    b3 self
+    join self
   else
     let (v8, v8_0) ← Cursor_advance self «by»
     self := v8_0
-    b3 self
+    join self
 
 /-- `Cursor::end` -/
 def Cursor_end (self : Cursor) : FeM UInt256 := do

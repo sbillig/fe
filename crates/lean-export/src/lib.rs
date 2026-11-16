@@ -3162,6 +3162,7 @@ impl<'db> BodyExporter<'_, 'db> {
         for (index, original) in copied.into_iter().enumerate() {
             if let Some(original) = original {
                 self.names[index] = self.names[original.index()].clone();
+                self.bases[index] = self.bases[original.index()].clone();
                 self.dropped.insert(NValueId::new(index));
             }
         }
@@ -3356,7 +3357,12 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             if self.held(*result).is_none() {
                 let ty = self.module.value_ty(place.ty)?;
-                writeln!(state, "  let mut {} : {ty} := default", held_var(*result)).unwrap();
+                writeln!(
+                    state,
+                    "  let mut {} : {ty} := default",
+                    self.held_var(*result)
+                )
+                .unwrap();
             }
             self.helds.push((*result, place.clone(), mutable));
         }
@@ -3445,7 +3451,7 @@ impl<'db> BodyExporter<'_, 'db> {
             .map(|root| self.roots[root.index()].clone());
         let helds = self.helds.iter().filter_map(|(held, ..)| {
             let (var, _) = self.held(*held)?;
-            (var == *held).then(|| held_var(*held))
+            (var == *held).then(|| self.held_var(*held))
         });
         slots
             .chain(self.outs.iter().copied().map(|value| self.value(value)))
@@ -3806,7 +3812,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 writeln!(
                     out,
                     "{pad}let rec {}{binders} : FeM {result} := do",
-                    join(target)
+                    self.join(target)
                 )
                 .unwrap();
             } else {
@@ -3820,7 +3826,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 writeln!(
                     out,
                     "{pad}let {} : {ty}FeM {result} := {binder}do",
-                    join(target)
+                    self.join(target)
                 )
                 .unwrap();
             }
@@ -4040,7 +4046,13 @@ impl<'db> BodyExporter<'_, 'db> {
             self.holds_places(arg.value)?;
             write!(args, " {}", self.operand(arg)?).unwrap();
         }
-        writeln!(out, "{}{}{args}", "  ".repeat(depth), join(target.block)).unwrap();
+        writeln!(
+            out,
+            "{}{}{args}",
+            "  ".repeat(depth),
+            self.join(target.block)
+        )
+        .unwrap();
         Ok(())
     }
 
@@ -4064,7 +4076,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         let (var, _) = self.held(*result).unwrap();
                         let (lean, lane) = self.place(place)?;
                         let load = self.load(place.ty, &lean, lane)?;
-                        Some(format!("{} := (← {load})", held_var(var)))
+                        Some(format!("{} := (← {load})", self.held_var(var)))
                     }
                     // An access to a local is read and written through the
                     // local's variable, where it is used; one to the root
@@ -4362,7 +4374,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     Some((held, place, _)) => {
                         let (var, _) = self.held(held).unwrap();
                         let (lean, lane) = self.place(&place)?;
-                        let value = held_var(var);
+                        let value = self.held_var(var);
                         Some(self.store(place.ty, &lean, lane, &value)?)
                     }
                     None => None,
@@ -4743,7 +4755,7 @@ impl<'db> BodyExporter<'_, 'db> {
             let (_, place, mutable) = self.helds.iter().find(|(lane, ..)| *lane == held).unwrap();
             let (place, mutable) = (place.clone(), *mutable);
             let (lean, lane) = self.place(&place)?;
-            let var = held_var(held);
+            let var = self.held_var(held);
             if mutable {
                 let store = self.store(place.ty, &lean, lane, &var)?;
                 self.located.push(store);
@@ -5083,6 +5095,31 @@ impl<'db> BodyExporter<'_, 'db> {
         Ok(self.value(operand.value))
     }
 
+    /// Whether the source names `value`.
+    fn sourced(&self, value: NValueId) -> bool {
+        self.bases[value.index()] != format!("v{}", value.index())
+    }
+
+    /// The variable that holds the lane the borrow `borrow` holds: named
+    /// after the borrow, if the source names it.
+    fn held_var(&self, borrow: NValueId) -> String {
+        let id = format!("h{}", borrow.index());
+        match self.sourced(borrow) {
+            true => binder(&self.bases[borrow.index()], id),
+            false => var(&id),
+        }
+    }
+
+    /// The local function of the join `block`: `loop` for the head of a
+    /// loop, or a join on a loop's recursion, and `join` for another.
+    fn join(&self, block: NBlockId) -> String {
+        let name = match self.recursive.contains(&block) {
+            true => "loop",
+            false => "join",
+        };
+        binder(name, format!("b{}", block.index()))
+    }
+
     /// The variable of effect `provider`, named as the body names it.
     fn effect(&self, provider: u32) -> String {
         effect(
@@ -5391,7 +5428,7 @@ impl<'db> BodyExporter<'_, 'db> {
         if let Some((held, path)) = self.held_at(value, component) {
             let place = self.helds.iter().find(|(borrow, ..)| *borrow == held);
             return Ok(ValueTarget {
-                var: held_var(held),
+                var: self.held_var(held),
                 ty: place.unwrap().1.ty,
                 path: field_path(&path)?,
             });
@@ -5961,7 +5998,28 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         let locate = self.module.instance(entry.callee, carriers.into())?;
-        let location = var(&format!("l{}", self.entries));
+        // The location is named after the collection, a field of the
+        // contract's or an entry located before, and after the key if the
+        // source names it.
+        let id = format!("l{}", self.entries);
+        let field = collection
+            .strip_prefix("Field.")
+            .filter(|name| !name.contains([' ', '(']));
+        let entry_of = collection
+            .strip_prefix(&format!("(Place.mk .{space} {BINDER}"))
+            .and_then(|token| token.split_once(BINDER_ID))
+            .filter(|(_, rest)| rest.starts_with('l'))
+            .map(|(name, _)| name);
+        let location = match field.and_then(|name| name.rsplit('.').next()).or(entry_of) {
+            Some(within) => {
+                let within = within.trim_matches(['«', '»']);
+                match self.sourced(key) {
+                    true => binder(&format!("{within}_{}", self.bases[key.index()]), &id),
+                    false => binder(&format!("{within}_entry"), &id),
+                }
+            }
+            None => var(&id),
+        };
         self.entries += 1;
         self.located.push(format!(
             "let {location} ← {locate} {collection} {collection}.slot {}",
@@ -6636,19 +6694,9 @@ fn lean_ident(text: impl AsRef<str>) -> String {
         .join("_")
 }
 
-/// The variable that holds the lane the borrow `borrow` holds.
-fn held_var(borrow: NValueId) -> String {
-    var(&format!("h{}", borrow.index()))
-}
-
 /// The variable of drop flag `flag`.
 fn flag(flag: u32) -> String {
     var(&format!("f{flag}"))
-}
-
-/// The local function of the join `block`.
-fn join(block: NBlockId) -> String {
-    var(&format!("b{}", block.index()))
 }
 
 /// The place of `binding` among the patterns `pats`, if it is one of them.

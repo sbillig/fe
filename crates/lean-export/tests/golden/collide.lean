@@ -66,7 +66,7 @@ def recv_Spin (n : UInt256) : FeM UInt256 := do
   let mut i : UInt256 := default
   total := (UInt256.ofNat 0)
   i := (UInt256.ofNat 0)
-  let rec b1_1 (total : UInt256) (i : UInt256) : FeM UInt256 := do
+  let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
     let i_5 := i
@@ -79,12 +79,12 @@ def recv_Spin (n : UInt256) : FeM UInt256 := do
       let i_15 := i
       let total_17 ← b1 total_13 i_15
       total := total_17
-      b1_1 total i
+      loop total i
     else
       let total_20 := total
       return total_20
   partial_fixpoint
-  b1_1 total i
+  loop total i
 
 /-- `Run { x } -> u256`, selector `0xeb034fa7` (`rerun(uint256)`) -/
 def recv_OtherMsg_Run (x : UInt256) : FeM UInt256 := do

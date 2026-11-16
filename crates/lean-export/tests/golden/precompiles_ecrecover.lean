@@ -15,32 +15,32 @@ def init : FeM Unit := do
 /-- `Recover { hash, recovery_id, r, s } -> (bool, u256, u256)`, selector `0x2aa6d351` (`recover(uint256,uint256,uint256,uint256)`) -/
 def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256) : FeM (Bool × UInt256 × UInt256) := do
   let v6 := decide ((UInt256.ofNat 1).toNat < recovery_id.toNat)
-  let b1 : FeM (Bool × UInt256 × UInt256) := do
+  let join : FeM (Bool × UInt256 × UInt256) := do
     let v33 := (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
     return v33
   if v6 then
-    b1
+    join
   else
     let v8 := decide (r = (UInt256.ofNat 0))
     if v8 then
-      b1
+      join
     else
       let v9 ← N
       let v10 := decide (v9.toNat ≤ r.toNat)
       if v10 then
-        b1
+        join
       else
         let v12 := decide (s = (UInt256.ofNat 0))
         if v12 then
-          b1
+          join
         else
           let v13 ← N
           let v14 := decide (v13.toNat ≤ s.toNat)
           if v14 then
-            b1
+            join
           else
             let v17 ← recover hash recovery_id r s
-            let b8 : (Bool × UInt256 × UInt256) → FeM (Bool × UInt256 × UInt256) := fun v4 => do
+            let join_1 : (Bool × UInt256 × UInt256) → FeM (Bool × UInt256 × UInt256) := fun v4 => do
               return v4
             match v17 with
             | .Some .. =>
@@ -48,10 +48,10 @@ def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UIn
               let v21 := key.x
               let v22 := key.y
               let v23 := (true, v21, v22)
-              b8 v23
+              join_1 v23
             | .None =>
               let v28 := (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
-              b8 v28
+              join_1 v28
 
 /-- `<Recover as AbiSize>::HEAD_SIZE` -/
 def Recover_HEAD_SIZE : FeM UInt256 := do
