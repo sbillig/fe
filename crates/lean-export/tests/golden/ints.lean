@@ -7,9 +7,7 @@ def init : FeM Unit := do
 /-- `Narrow { a, b } -> u8`, selector `0x741ef9d5` (`narrow(uint8,uint8)`) -/
 def recv_Narrow (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let sum ← IntTy.add (.u 8) a b
-  let v5 := sum >>> (UInt256.ofNat 1)
-  let low := v5 &&& (UInt256.ofNat 15)
-  let v9 ← IntTy.sub (.u 8) sum low
+  let v9 ← IntTy.sub (.u 8) sum ((sum >>> (UInt256.ofNat 1)) &&& (UInt256.ofNat 15))
   let v11 ← IntTy.mul (.u 8) v9 (UInt256.ofNat 2)
   let v12 ← checkedDiv v11 b
   let v14 ← checkedRem v12 (UInt256.ofNat 7)
@@ -17,14 +15,12 @@ def recv_Narrow (a : UInt256) (b : UInt256) : FeM UInt256 := do
 
 /-- `ints::wrapping` -/
 def wrapping (a : UInt256) (b : UInt256) : FeM UInt256 := do
-  let v4 := IntTy.mulW (.i 32) a b
-  let v6 := IntTy.shl (.i 32) v4 (UInt256.ofNat 3)
+  let v6 := IntTy.shl (.i 32) (IntTy.mulW (.i 32) a b) (UInt256.ofNat 3)
   return v6
 
 /-- `Signed { a, b } -> i32`, selector `0x6effafad` (`signed(int32,int32)`) -/
 def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
-  let v2 := UInt256.sltBool a b
-  if v2 then
+  if UInt256.sltBool a b then
     let v3 ← IntTy.neg (.i 32) a
     return v3
   else
@@ -38,15 +34,12 @@ def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
 
 /-- `Mixed { a, b } -> i256`, selector `0x728ac8e2` (`mixed(int256,uint16)`) -/
 def recv_Mixed (a : UInt256) (b : UInt256) : FeM UInt256 := do
-  let wide := b
   let small ← downcast_truncate_i256_i8 a
-  let bits ← downcast_unchecked_u256_i256 wide
-  let v9 := IntTy.shr (.i 256) a (UInt256.ofNat 2)
-  let v11 ← IntTy.pow (.i 256) v9 (UInt256.ofNat 2)
+  let bits ← downcast_unchecked_u256_i256 b
+  let v11 ← IntTy.pow (.i 256) (IntTy.shr (.i 256) a (UInt256.ofNat 2)) (UInt256.ofNat 2)
   let v13 ← IntTy.add (.i 256) v11 small
   let v14 ← IntTy.add (.i 256) v13 bits
-  let v15 := IntTy.not (.i 256) a
-  let v16 ← IntTy.add (.i 256) v14 v15
+  let v16 ← IntTy.add (.i 256) v14 (IntTy.not (.i 256) a)
   return v16
 
 /-- `Context -> u256`, selector `0xd0496d6a` (`context()`) -/
@@ -62,13 +55,10 @@ def recv_Context : FeM UInt256 := do
   r2 := v5
   let v6 := r2
   let v7 ← Wei_as_wei v6
-  let v8 := v3 ^^^ v7
   let v10 ← Evm_origin
   r3 := v10
   let v11 := r3
   let v12 ← Address_word v11
-  let v13 := v8 ^^^ v12
   let v15 ← Evm_block_number
-  let v16 := v13 ^^^ v15
-  return v16
+  return ((v3 ^^^ v7) ^^^ v12) ^^^ v15
 

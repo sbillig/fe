@@ -16,27 +16,22 @@ def init : FeM Unit := do
 def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256) : FeM (Bool × UInt256 × UInt256) := do
   let v6 := decide ((UInt256.ofNat 1).toNat < recovery_id.toNat)
   let join : FeM (Bool × UInt256 × UInt256) := do
-    let v33 := (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
-    return v33
+    return (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
   if v6 then
     join
   else
-    let v8 := decide (r = (UInt256.ofNat 0))
-    if v8 then
+    if decide (r = (UInt256.ofNat 0)) then
       join
     else
       let v9 ← N
-      let v10 := decide (v9.toNat ≤ r.toNat)
-      if v10 then
+      if decide (v9.toNat ≤ r.toNat) then
         join
       else
-        let v12 := decide (s = (UInt256.ofNat 0))
-        if v12 then
+        if decide (s = (UInt256.ofNat 0)) then
           join
         else
           let v13 ← N
-          let v14 := decide (v13.toNat ≤ s.toNat)
-          if v14 then
+          if decide (v13.toNat ≤ s.toNat) then
             join
           else
             let v17 ← recover hash recovery_id r s
@@ -45,13 +40,9 @@ def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UIn
             match v17 with
             | .Some .. =>
               let key := v17.Some_0
-              let v21 := key.x
-              let v22 := key.y
-              let v23 := (true, v21, v22)
-              join_1 v23
+              join_1 (true, key.x, key.y)
             | .None =>
-              let v28 := (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
-              join_1 v28
+              join_1 (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
 
 /-- `<Recover as AbiSize>::HEAD_SIZE` -/
 def Recover_HEAD_SIZE : FeM UInt256 := do
@@ -84,8 +75,7 @@ def Recover_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Recover :=
   let v23 ← abi_field_head_size_u256
   let v24 ← checkedAdd v22 v23
   let v25 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v24 v2
-  let v27 := (Recover.mk v4 v9 v16 v25)
-  return v27
+  return Recover.mk v4 v9 v16 v25
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Recover, Sol, CallData>` -/
 def decode_from_prechecked_head_Recover_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Recover := do

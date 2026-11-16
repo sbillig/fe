@@ -45,15 +45,14 @@ deriving Inhabited
 
 /-- `deposit_contract::DEPOSIT_CONTRACT_TREE_DEPTH` -/
 def DEPOSIT_CONTRACT_TREE_DEPTH : FeM UInt256 := do
-  return (UInt256.ofNat 32)
+  return UInt256.ofNat 32
 
 /-- `init()` of contract `DepositContract` -/
 def init : FeM Unit := do
   let mut r1 : Range_Known_0_Unknown := default
   let v2 ← DEPOSIT_CONTRACT_TREE_DEPTH
   let v4 ← checkedSub v2 (UInt256.ofNat 1)
-  let v6 := (Range_Known_0_Unknown.mk () v4)
-  r1 := v6
+  r1 := (Range_Known_0_Unknown.mk () v4)
   let v8 ← Range_start_0 r1
   let rec loop (r1 : Range_Known_0_Unknown) (v0 : UInt256) : FeM Unit := do
     let mut r1 := r1
@@ -78,8 +77,7 @@ def init : FeM Unit := do
 def compute_deposit_data_root (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (amount_gwei : UInt256) : FeM UInt256 := do
   let mut r0 : (UInt256 × UInt256 × UInt256 × UInt256) := default
   let v4 ← Bytes_len withdrawal_credentials
-  let v6 := decide (v4 = (UInt256.ofNat 32))
-  if v6 then
+  if decide (v4 = (UInt256.ofNat 32)) then
     let v8 ← Bytes_span_ref pubkey
     let v10 ← Bytes_len pubkey
     let v13 ← hash_tree_root_ByteVector_48 v8 (UInt256.ofNat 0) v10
@@ -88,8 +86,7 @@ def compute_deposit_data_root (pubkey : Bytes) (withdrawal_credentials : Bytes) 
     let v17 ← Bytes_span_ref signature
     let v19 ← Bytes_len signature
     let v22 ← hash_tree_root_ByteVector_96 v17 (UInt256.ofNat 0) v19
-    let v23 := (v13, v15, v16, v22)
-    r0 := v23
+    r0 := (v13, v15, v16, v22)
     let v25 ← tuple_u256_u256_u256_u256_merkleize r0
     return v25
   else
@@ -137,14 +134,11 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
   let mut r10 : Wei := default
   let mut r11 : Range_Known_0_Unknown := default
   let v3 ← Bytes_len pubkey
-  let v5 := decide (v3 = (UInt256.ofNat 48))
-  if v5 then
+  if decide (v3 = (UInt256.ofNat 48)) then
     let v8 ← Bytes_len withdrawal_credentials
-    let v10 := decide (v8 = (UInt256.ofNat 32))
-    if v10 then
+    if decide (v8 = (UInt256.ofNat 32)) then
       let v13 ← Bytes_len signature
-      let v15 := decide (v13 = (UInt256.ofNat 96))
-      if v15 then
+      if decide (v13 = (UInt256.ofNat 96)) then
         let value_18 ← Evm_value
         value := value_18
         let v21 ← ether (UInt256.ofNat 1)
@@ -167,15 +161,12 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
             let value_37 := value
             let deposit_amount ← Wei_div value_37 v36
             let v40 ← u64_MASK
-            let v41 := decide (deposit_amount.toNat ≤ v40.toNat)
-            if v41 then
+            if decide (deposit_amount.toNat ≤ v40.toNat) then
               let amount_gwei ← downcast_truncate_u256_u64 deposit_amount
               let node_48 ← compute_deposit_data_root pubkey withdrawal_credentials signature amount_gwei
               node := node_48
               let node_50 := node
-              let v52 := deposit_data_root.val
-              let v53 := decide (node_50 = v52)
-              if v53 then
+              if decide (node_50 = deposit_data_root.val) then
                 let pubkey_55 := pubkey
                 let withdrawal_credentials_57 := withdrawal_credentials
                 let v59 ← serialize_u64 amount_gwei
@@ -187,16 +178,14 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                 let _ ← emit_Evm_DepositEvent v65
                 let v68 ← load Field.store.deposit_count
                 let v69 ← MAX_DEPOSIT_COUNT
-                let v70 := decide (v68.toNat < v69.toNat)
-                if v70 then
+                if decide (v68.toNat < v69.toNat) then
                   let v73 ← load Field.store.deposit_count
                   let v74 ← checkedAdd v73 (UInt256.ofNat 1)
                   store Field.store.deposit_count v74
                   let size_76 ← load Field.store.deposit_count
                   size := size_76
                   let v79 ← DEPOSIT_CONTRACT_TREE_DEPTH
-                  let v81 := (Range_Known_0_Unknown.mk () v79)
-                  r11 := v81
+                  r11 := (Range_Known_0_Unknown.mk () v79)
                   let v83 ← Range_start_0 r11
                   let rec loop (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (value : Wei) (node : UInt256) (size : UInt256) (r8 : Wei) (r9 : Wei) (r10 : Wei) (r11 : Range_Known_0_Unknown) (v1 : UInt256) : FeM Unit := do
                     let mut pubkey := pubkey
@@ -214,8 +203,7 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                       let v88 ← Range_at_0 r11 v1
                       let height := v88
                       let size_90 := size
-                      let v93 := size_90 &&& (UInt256.ofNat 1)
-                      let v95 := decide (v93 = (UInt256.ofNat 1))
+                      let v95 := decide ((size_90 &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
                       if v95 then
                         let node_96 := node
                         checkIndex height 32
@@ -265,8 +253,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
   let size_3 ← load Field.store.deposit_count
   size := size_3
   let v6 ← DEPOSIT_CONTRACT_TREE_DEPTH
-  let v8 := (Range_Known_0_Unknown.mk () v6)
-  r3 := v8
+  r3 := (Range_Known_0_Unknown.mk () v6)
   let v10 ← Range_start_0 r3
   let rec loop (node : UInt256) (size : UInt256) (r3 : Range_Known_0_Unknown) (v0 : UInt256) : FeM UInt256 := do
     let mut node := node
@@ -277,8 +264,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
       let v15 ← Range_at_0 r3 v0
       let height := v15
       let size_17 := size
-      let v20 := size_17 &&& (UInt256.ofNat 1)
-      let v22 := decide (v20 = (UInt256.ofNat 1))
+      let v22 := decide ((size_17 &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
       let join : UInt256 → UInt256 → Range_Known_0_Unknown → FeM UInt256 := fun node size r3 => do
         let mut node := node
         let mut size := size
@@ -320,8 +306,7 @@ def recv_GetDepositCount : FeM Bytes := do
 
 /-- `SupportsInterface { interface_id } -> bool`, selector `0x01ffc9a7` (`supportsInterface(bytes4)`) -/
 def recv_SupportsInterface (interface_id : FixedBytes_4) : FeM Bool := do
-  let v2 := interface_id.val
-  let v4 := decide (v2 = (UInt256.ofNat 33540519))
+  let v4 := decide (interface_id.val = (UInt256.ofNat 33540519))
   let join : Bool → FeM Bool := fun v1 => do
     return v1
   let join_1 : FeM Bool := do
@@ -329,8 +314,7 @@ def recv_SupportsInterface (interface_id : FixedBytes_4) : FeM Bool := do
   if v4 then
     join_1
   else
-    let v5 := interface_id.val
-    let v7 := decide (v5 = (UInt256.ofNat 2237925639))
+    let v7 := decide (interface_id.val = (UInt256.ofNat 2237925639))
     if v7 then
       join_1
     else
@@ -367,8 +351,7 @@ def Deposit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Deposit :=
   let v23 ← abi_field_head_size_Bytes
   let v24 ← checkedAdd v22 v23
   let v25 ← decode_msg_field_from_Sol_FixedBytes_32_CallData v0 v1 v24 v2
-  let v30 := (Deposit.mk v4 v9 v16 v25)
-  return v30
+  return Deposit.mk v4 v9 v16 v25
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Deposit, Sol, CallData>` -/
 def decode_from_prechecked_head_Deposit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Deposit := do
@@ -397,12 +380,11 @@ def recv_Deposit_entry : FeM Empty := do
 
 /-- `<GetDepositRoot as AbiSize>::HEAD_SIZE` -/
 def GetDepositRoot_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<GetDepositRoot as Decode>::decode_from<CallData>` -/
 def GetDepositRoot_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM GetDepositRoot := do
-  let v2 := (GetDepositRoot.mk)
-  return v2
+  return GetDepositRoot.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<GetDepositRoot, Sol, CallData>` -/
 def decode_from_prechecked_head_GetDepositRoot_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM GetDepositRoot := do
@@ -432,12 +414,11 @@ def recv_GetDepositRoot_entry : FeM Empty := do
 
 /-- `<GetDepositCount as AbiSize>::HEAD_SIZE` -/
 def GetDepositCount_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<GetDepositCount as Decode>::decode_from<CallData>` -/
 def GetDepositCount_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM GetDepositCount := do
-  let v2 := (GetDepositCount.mk)
-  return v2
+  return GetDepositCount.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<GetDepositCount, Sol, CallData>` -/
 def decode_from_prechecked_head_GetDepositCount_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM GetDepositCount := do
@@ -475,8 +456,7 @@ def SupportsInterface_HEAD_SIZE : FeM UInt256 := do
 def SupportsInterface_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM SupportsInterface := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_FixedBytes_4_CallData v0 v1 v1 v2
-  let v6 := (SupportsInterface.mk v4)
-  return v6
+  return SupportsInterface.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<SupportsInterface, Sol, CallData>` -/
 def decode_from_prechecked_head_SupportsInterface_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM SupportsInterface := do

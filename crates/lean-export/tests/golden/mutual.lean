@@ -5,17 +5,15 @@ def init : FeM Unit := do
 mutual
 /-- `mutual::left` -/
 def left (n : UInt256) : FeM UInt256 := do
-  let v5 := decide (n = (UInt256.ofNat 0))
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
-  if v5 then
+  if decide (n = (UInt256.ofNat 0)) then
     join (UInt256.ofNat 0)
   else
     let v10 ← checkedRem n (UInt256.ofNat 2)
-    let v12 := decide (v10 = (UInt256.ofNat 1))
     let join_1 : UInt256 → FeM UInt256 := fun v2 => do
       join v2
-    if v12 then
+    if decide (v10 = (UInt256.ofNat 1)) then
       let v15 ← checkedSub n (UInt256.ofNat 1)
       let v16 ← step v15
       join_1 v16
@@ -27,10 +25,9 @@ partial_fixpoint
 
 /-- `mutual::step` -/
 def step (n : UInt256) : FeM UInt256 := do
-  let v4 := decide (n = (UInt256.ofNat 0))
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
-  if v4 then
+  if decide (n = (UInt256.ofNat 0)) then
     join (UInt256.ofNat 1)
   else
     let v9 ← checkedSub n (UInt256.ofNat 1)
@@ -40,10 +37,9 @@ partial_fixpoint
 
 /-- `mutual::right` -/
 def right (n : UInt256) : FeM UInt256 := do
-  let v4 := decide (n = (UInt256.ofNat 0))
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
-  if v4 then
+  if decide (n = (UInt256.ofNat 0)) then
     join (UInt256.ofNat 2)
   else
     let v9 ← checkedSub n (UInt256.ofNat 1)

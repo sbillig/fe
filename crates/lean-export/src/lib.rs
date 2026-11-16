@@ -189,6 +189,10 @@ const PIECE: usize = 24;
 /// What stands for a definition's own name in its text until it has one.
 const SELF: char = '\u{1}';
 
+/// The longest term, in characters, that a value's single use is printed
+/// with in place of the value (`fold`).
+const INLINE: usize = 50;
+
 /// What separates a definition's text from each piece cut from it.
 const CUT: char = '\u{2}';
 
@@ -3697,7 +3701,9 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         for statement in &data.statements {
             let text = match (&statement.kind, self.statement(statement)?) {
-                (NStatementKind::Define { result, .. }, Some(text)) => self.fold(*result, text),
+                (NStatementKind::Define { result, .. }, Some(text)) => {
+                    self.fold(*result, text, block)
+                }
                 (_, text) => text,
             };
             let located = std::mem::take(&mut self.located);
@@ -3897,7 +3903,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     .map(|out| format!(", {out}"))
                     .collect();
                 if outs.is_empty() {
-                    writeln!(out, "{pad}return {result}").unwrap();
+                    writeln!(out, "{pad}return {}", bare(&result)).unwrap();
                 } else {
                     writeln!(out, "{pad}return ({result}{outs})").unwrap();
                 }
@@ -3908,7 +3914,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 then_target,
                 else_target,
             } => {
-                writeln!(out, "{pad}if {} then", self.value(cond.value)).unwrap();
+                writeln!(out, "{pad}if {} then", bare(&self.value(cond.value))).unwrap();
                 self.jump(then_target, depth + 1, out)?;
                 writeln!(out, "{pad}else").unwrap();
                 self.jump(else_target, depth + 1, out)?;
@@ -4093,15 +4099,45 @@ impl<'db> BodyExporter<'_, 'db> {
         Ok(())
     }
 
-    /// `text`, the definition of `value`, unless the definition binds a
-    /// pure term in one line and nothing uses the value.
-    fn fold(&mut self, value: NValueId, text: String) -> Option<String> {
-        let pure = text
+    /// `text`, the definition of `value` in `block`, unless the
+    /// definition binds a pure term in one line: then nothing if nothing
+    /// uses the value, and the term where the value is used if one use, in
+    /// the block, does, the term is at most `INLINE` characters long and
+    /// reads no mutable variable.
+    fn fold(&mut self, value: NValueId, text: String, block: NBlockId) -> Option<String> {
+        let term = text
             .strip_prefix(&format!("let {} := ", self.value(value)))
-            .is_some_and(|term| !term.contains(['\n', '←']) && !term.contains("--"));
-        if !pure || self.held_values.contains(&value) || self.uses[value.index()].0 > 0 {
+            .filter(|term| !term.contains(['\n', '←']) && !term.contains("--"))
+            .filter(|_| !self.held_values.contains(&value));
+        let Some(term) = term else {
+            return Some(text);
+        };
+        let width: usize = term
+            .split(BINDER)
+            .enumerate()
+            .map(|(at, part)| match at % 2 {
+                0 => part.chars().count(),
+                _ => part
+                    .split(BINDER_ID)
+                    .next()
+                    .map_or(0, |name| name.chars().count()),
+            })
+            .sum();
+        let movable = match self.uses[value.index()] {
+            (0, _) => true,
+            (1, Some((used, _))) if used == block && width <= INLINE => {
+                let state = self.state();
+                !state.iter().any(|var| term.contains(var.as_str()))
+            }
+            _ => false,
+        };
+        if !movable {
             return Some(text);
         }
+        self.names[value.index()] = match term.contains(' ') && !enclosed(term) {
+            true => format!("({term})"),
+            false => term.to_string(),
+        };
         self.dropped.insert(value);
         None
     }
@@ -6715,6 +6751,43 @@ fn resolve(text: &str, known: &FxHashSet<String>) -> String {
         resolved.push_str(after);
     }
     resolved
+}
+
+/// Whether `term` is enclosed in one pair of parentheses.
+fn enclosed(term: &str) -> bool {
+    let mut depth = 0;
+    term.starts_with('(')
+        && term.char_indices().all(|(at, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth > 0 || at == term.len() - 1
+        })
+}
+
+/// `term` without the one pair of parentheses that encloses it, if one
+/// does and they group rather than make a tuple or the unit: as a condition
+/// or a result, where it needs none.
+fn bare(term: &str) -> &str {
+    if !enclosed(term) {
+        return term;
+    }
+    let inner = &term[1..term.len() - 1];
+    let mut depth = 0;
+    let tuple = inner.chars().any(|c| {
+        match c {
+            '(' | '[' | '⟨' | '{' => depth += 1,
+            ')' | ']' | '⟩' | '}' => depth -= 1,
+            _ => {}
+        }
+        depth == 0 && c == ','
+    });
+    match tuple || inner.is_empty() {
+        true => term,
+        false => inner,
+    }
 }
 
 /// The doc comment that says `doc`, on a line of its own, or nothing if

@@ -100,11 +100,9 @@ deriving Inhabited
 
 /-- `lib::sol_string::stored_len` -/
 def stored_len (head : UInt256) : FeM UInt256 := do
-  let v4 := head &&& (UInt256.ofNat 1)
-  let long := decide (v4 = (UInt256.ofNat 1))
+  let long := decide ((head &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
   let join : UInt256 → FeM UInt256 := fun len => do
-    let v20 := decide (len.toNat < (UInt256.ofNat 32).toNat)
-    let v21 := long == v20
+    let v21 := long == (decide (len.toNat < (UInt256.ofNat 32).toNat))
     if v21 then
       let v22 ← PANIC_STORAGE_ENCODING
       let v23 ← Panic_from v22
@@ -116,48 +114,38 @@ def stored_len (head : UInt256) : FeM UInt256 := do
     let v10 ← checkedDiv head (UInt256.ofNat 2)
     join v10
   else
-    let v14 := head &&& (UInt256.ofNat 255)
-    let v16 ← checkedDiv v14 (UInt256.ofNat 2)
+    let v16 ← checkedDiv (head &&& (UInt256.ofNat 255)) (UInt256.ofNat 2)
     join v16
 
 /-- `<Payload as StateIndex>::locate` -/
 def Payload_locate (self : Place) (root : UInt256) (word : UInt256) : FeM Location := do
   let v3 ← array_data_slot root
   let v5 ← u256_wrapping_add v3 word
-  let v7 := (Location.mk v5 (UInt256.ofNat 0))
-  return v7
+  return Location.mk v5 (UInt256.ofNat 0)
 
 /-- `lib::sol_string::leading_bytes` -/
 def leading_bytes (word : UInt256) (count : UInt256) : FeM UInt256 := do
-  let v5 := decide ((UInt256.ofNat 32).toNat ≤ count.toNat)
   let join : UInt256 → FeM UInt256 := fun v2 => do
     return v2
-  if v5 then
+  if decide ((UInt256.ofNat 32).toNat ≤ count.toNat) then
     join word
   else
     let v9 ← u256_max
-    let v12 := count * (UInt256.ofNat 8)
-    let v13 := v9 >>> v12
-    let v14 := ~~~v13
-    let v15 := word &&& v14
-    join v15
+    join (word &&& (~~~(v9 >>> (count * (UInt256.ofNat 8)))))
 
 /-- `lib::sol_string::payload_word` -/
 def payload_word (payload : MemSlice_u8) (offset : UInt256) : FeM UInt256 := do
   let len ← MemSlice_len_u8 payload
-  let v6 := decide (len.toNat ≤ offset.toNat)
-  if v6 then
-    return (UInt256.ofNat 0)
+  if decide (len.toNat ≤ offset.toNat) then
+    return UInt256.ofNat 0
   else
     let v10 ← MemSlice_u8_word_at payload offset
-    let v12 := len - offset
-    let v13 ← leading_bytes v10 v12
+    let v13 ← leading_bytes v10 (len - offset)
     return v13
 
 /-- `lib::sol_string::word_count` -/
 def word_count (len : UInt256) : FeM UInt256 := do
-  let v3 := len + (UInt256.ofNat 31)
-  let v5 ← checkedDiv v3 (UInt256.ofNat 32)
+  let v5 ← checkedDiv (len + (UInt256.ofNat 31)) (UInt256.ofNat 32)
   return v5
 
 /-- `SolString::store` -/
@@ -168,15 +156,13 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
   let v3 ← DynString_span_ref value
   let old ← load ((self.field Layout.SolString 0).field Layout.Payload 0)
   let old_len ← stored_len old
-  let v10 := old &&& (UInt256.ofNat 1)
-  let v12 := decide (v10 = (UInt256.ofNat 0))
+  let v12 := decide ((old &&& (UInt256.ofNat 1)) = (UInt256.ofNat 0))
   let join : UInt256 → UInt256 → UInt256 → UInt256 → FeM Unit := fun words i_r1 i_r2 old_words => do
     let mut words := words
     let mut i_r1 := i_r1
     let mut i_r2 := i_r2
     let len ← MemSlice_len_u8 v3
     words := (UInt256.ofNat 0)
-    let v25 := decide (len.toNat < (UInt256.ofNat 32).toNat)
     let join_1 : UInt256 → UInt256 → UInt256 → FeM Unit := fun words i_r1 i_r2 => do
       let mut words := words
       let mut i_r1 := i_r1
@@ -188,29 +174,23 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
         let mut i_r1 := i_r1
         let mut i_r2 := i_r2
         let i_65 := i_r2
-        let v67 := decide (i_65.toNat < old_words.toNat)
-        if v67 then
+        if decide (i_65.toNat < old_words.toNat) then
           let i_69 := i_r2
           let l0 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_69
           store (Place.mk .storage l0.slot) (UInt256.ofNat 0)
           let i_72 := i_r2
-          let i_73 := i_72 + (UInt256.ofNat 1)
-          i_r2 := i_73
+          i_r2 := (i_72 + (UInt256.ofNat 1))
           loop words i_r1 i_r2
         else
           return ()
       partial_fixpoint
       loop words i_r1 i_r2
-    if v25 then
+    if decide (len.toNat < (UInt256.ofNat 32).toNat) then
       let v28 ← payload_word v3 (UInt256.ofNat 0)
-      let v30 := len * (UInt256.ofNat 2)
-      let v31 := v28 ||| v30
-      store ((self.field Layout.SolString 0).field Layout.Payload 0) v31
+      store ((self.field Layout.SolString 0).field Layout.Payload 0) (v28 ||| (len * (UInt256.ofNat 2)))
       join_1 words i_r1 i_r2
     else
-      let v35 := len * (UInt256.ofNat 2)
-      let v37 := v35 + (UInt256.ofNat 1)
-      store ((self.field Layout.SolString 0).field Layout.Payload 0) v37
+      store ((self.field Layout.SolString 0).field Layout.Payload 0) ((len * (UInt256.ofNat 2)) + (UInt256.ofNat 1))
       let words_39 ← word_count len
       words := words_39
       i_r1 := (UInt256.ofNat 0)
@@ -220,17 +200,14 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
         let mut i_r2 := i_r2
         let i_44 := i_r1
         let words_46 := words
-        let v47 := decide (i_44.toNat < words_46.toNat)
-        if v47 then
+        if decide (i_44.toNat < words_46.toNat) then
           let i_48 := i_r1
-          let v51 := i_48 * (UInt256.ofNat 32)
-          let v53 ← payload_word v3 v51
+          let v53 ← payload_word v3 (i_48 * (UInt256.ofNat 32))
           let i_54 := i_r1
           let l1 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_54
           store (Place.mk .storage l1.slot) v53
           let i_57 := i_r1
-          let i_58 := i_57 + (UInt256.ofNat 1)
-          i_r1 := i_58
+          i_r1 := (i_57 + (UInt256.ofNat 1))
           loop_1 words i_r1 i_r2
         else
           join_1 words i_r1 i_r2
@@ -246,11 +223,10 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
 def SolSlot_write_u8 (self : Place) (offset : UInt256) (value : UInt256) : FeM Unit := do
   let mut word : SolWord := default
   let v3 ← u8_BITS
-  let v5 := decide (v3 = (UInt256.ofNat 256))
   let join : SolWord → FeM Unit := fun word => do
     let mut word := word
     return ()
-  if v5 then
+  if decide (v3 = (UInt256.ofNat 256)) then
     let v6 ← u8_BITS
     let _ ← field_shift offset v6
     let v8 ← u8_to_packed value
@@ -258,8 +234,7 @@ def SolSlot_write_u8 (self : Place) (offset : UInt256) (value : UInt256) : FeM U
     join word
   else
     let v11 ← load ((self.field Layout.SolSlot 0).field Layout.Payload 0)
-    let word_12 := (SolWord.mk v11)
-    word := word_12
+    word := (SolWord.mk v11)
     let (v15, v15_0) ← SolWord_set_u8 word offset value
     word := v15_0
     let v16 := word.word
@@ -292,27 +267,23 @@ def SolString_load (self : Place) : FeM DynString := do
   let head ← load ((self.field Layout.SolString 0).field Layout.Payload 0)
   let len ← stored_len head
   let v7 ← word_count len
-  let v9 := v7 * (UInt256.ofNat 32)
-  let size := (UInt256.ofNat 32) + v9
+  let size := (UInt256.ofNat 32) + (v7 * (UInt256.ofNat 32))
   let v12 ← downcast_saturate_u256_usize size
   let data ← alloc_bytes v12
   let _ ← store_word data len
-  let v17 := head &&& (UInt256.ofNat 1)
-  let v19 := decide (v17 = (UInt256.ofNat 0))
+  let v19 := decide ((head &&& (UInt256.ofNat 1)) = (UInt256.ofNat 0))
   let join : UInt256 → FeM DynString := fun i => do
     let mut i := i
     let v61 ← downcast_unchecked_u256_usize len
     let v62 ← DynString_from_abi_tail data v61 size
     return v62
   if v19 then
-    let v21 := decide (len ≠ (UInt256.ofNat 0))
     let join_1 : UInt256 → Unit → FeM DynString := fun i v1 => do
       let mut i := i
       join i
-    if v21 then
-      let v23 := data + (UInt256.ofNat 32)
+    if decide (len ≠ (UInt256.ofNat 0)) then
       let v24 ← leading_bytes head len
-      let v25 ← store_word v23 v24
+      let v25 ← store_word (data + (UInt256.ofNat 32)) v24
       join_1 i v25
     else
       join_1 i ()
@@ -322,24 +293,17 @@ def SolString_load (self : Place) : FeM DynString := do
       let mut i := i
       let i_32 := i
       let v34 ← word_count len
-      let v35 := decide (i_32.toNat < v34.toNat)
-      if v35 then
+      if decide (i_32.toNat < v34.toNat) then
         let i_36 := i
         let l0 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_36
         let v37 ← load (Place.mk .storage l0.slot)
         let i_38 := i
-        let v41 := i_38 * (UInt256.ofNat 32)
-        let v42 := len - v41
-        let word ← leading_bytes v37 v42
+        let word ← leading_bytes v37 (len - (i_38 * (UInt256.ofNat 32)))
         let i_46 := i
-        let v49 := i_46 * (UInt256.ofNat 32)
-        let v50 := (UInt256.ofNat 32) + v49
-        let v51 ← downcast_unchecked_u256_usize v50
-        let v52 := data + v51
-        let _ ← store_word v52 word
+        let v51 ← downcast_unchecked_u256_usize ((UInt256.ofNat 32) + (i_46 * (UInt256.ofNat 32)))
+        let _ ← store_word (data + v51) word
         let i_55 := i
-        let i_56 := i_55 + (UInt256.ofNat 1)
-        i := i_56
+        i := (i_55 + (UInt256.ofNat 1))
         loop i
       else
         join i
@@ -349,8 +313,7 @@ def SolString_load (self : Place) : FeM DynString := do
 /-- `Name -> DynString`, selector `0x06fdde03` (`name()`) -/
 def recv_Name : FeM DynString := do
   let v0 := Field.store.name
-  let v1 := v0
-  let v2 ← SolString_load v1
+  let v2 ← SolString_load v0
   return v2
 
 /-- `<Approval as Event>::emit<Evm>` -/
@@ -358,18 +321,14 @@ def Approval_emit_Evm (self : Approval) : FeM Unit := do
   let mut r0 : MemBuffer := default
   let mut r1 : UInt256 := default
   let mut r2 : UInt256 := default
-  let v2 := self.wad
-  let v3 := v2
-  let v4 ← encode_abi_payload_tuple_u256 v3
+  let v4 ← encode_abi_payload_tuple_u256 self.wad
   r0 := v4
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 63486140976153616755203102783360879283472101686154884697241723088393386309925) -- a constant, as the compiler evaluates it
-  let v8 := self.src
-  r1 := v8
+  r1 := self.src
   let v9 := r1
   let v10 ← Address_as_topic v9
-  let v11 := self.guy
-  r2 := v11
+  r2 := self.guy
   let v12 := r2
   let v13 ← Address_as_topic v12
   let _ ← Evm_log3 v6 v7 v10 v13
@@ -387,8 +346,7 @@ def recv_Approve (guy : UInt256) (wad : UInt256) : FeM Bool := do
   let allowance_src ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot src
   let allowance_src_guy ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_src.slot) (Place.mk .storage allowance_src.slot).slot guy
   store (Place.mk .storage allowance_src_guy.slot) wad
-  let v6 := (Approval.mk src guy wad)
-  let _ ← emit_Evm_Approval v6
+  let _ ← emit_Evm_Approval (Approval.mk src guy wad)
   return true
 
 /-- `TotalSupply -> u256`, selector `0x18160ddd` (`totalSupply()`) -/
@@ -405,18 +363,14 @@ def Transfer_emit_Evm (self : Transfer) : FeM Unit := do
   let mut r0 : MemBuffer := default
   let mut r1 : UInt256 := default
   let mut r2 : UInt256 := default
-  let v2 := self.wad
-  let v3 := v2
-  let v4 ← encode_abi_payload_tuple_u256 v3
+  let v4 ← encode_abi_payload_tuple_u256 self.wad
   r0 := v4
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 100389287136786176327247604509743168900146139575972864366142685224231313322991) -- a constant, as the compiler evaluates it
-  let v8 := self.src
-  r1 := v8
+  r1 := self.src
   let v9 := r1
   let v10 ← Address_as_topic v9
-  let v11 := self.dst
-  r2 := v11
+  r2 := self.dst
   let v12 := r2
   let v13 ← Address_as_topic v12
   let _ ← Evm_log3 v6 v7 v10 v13
@@ -431,11 +385,9 @@ def emit_Evm_Transfer (event : Transfer) : FeM Unit := do
 /-- `lib::transfer_from<Weth9Store, Evm, Evm>` -/
 def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt256) : FeM Bool := do
   let mut sender : UInt256 := default
-  let v3 := src
-  let balance_of_entry ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v3
+  let balance_of_entry ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
   let v4 ← load (Place.mk .storage balance_of_entry.slot)
-  let v6 := decide (wad.toNat ≤ v4.toNat)
-  if v6 then
+  if decide (wad.toNat ≤ v4.toNat) then
     let sender_9 ← Evm_caller
     sender := sender_9
     let sender_11 := sender
@@ -445,49 +397,39 @@ def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt
       let v35 := src
       let balance_of_entry_1 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v35
       let v36 ← load (Place.mk .storage balance_of_entry_1.slot)
-      let v37 := v36 - wad
       let balance_of_entry_2 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v35
-      store (Place.mk .storage balance_of_entry_2.slot) v37
+      store (Place.mk .storage balance_of_entry_2.slot) (v36 - wad)
       let v40 := dst
       let balance_of_entry_3 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v40
       let v41 ← load (Place.mk .storage balance_of_entry_3.slot)
-      let v42 := v41 + wad
       let balance_of_entry_4 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v40
-      store (Place.mk .storage balance_of_entry_4.slot) v42
-      let v44 := src
-      let v45 := dst
-      let v47 := (Transfer.mk v44 v45 wad)
-      let _ ← emit_Evm_Transfer v47
+      store (Place.mk .storage balance_of_entry_4.slot) (v41 + wad)
+      let _ ← emit_Evm_Transfer (Transfer.mk src dst wad)
       return true
     let join_1 : UInt256 → FeM Bool := fun sender => do
       let mut sender := sender
       join sender
     if v12 then
-      let v13 := src
       let sender_14 := sender
-      let allowance_entry ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v13
+      let allowance_entry ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot src
       let allowance_entry_sender_14 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry.slot) (Place.mk .storage allowance_entry.slot).slot sender_14
       let v15 ← load (Place.mk .storage allowance_entry_sender_14.slot)
       let v16 ← u256_max
-      let v17 := decide (v15 ≠ v16)
-      if v17 then
-        let v18 := src
+      if decide (v15 ≠ v16) then
         let sender_19 := sender
-        let allowance_entry_1 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v18
+        let allowance_entry_1 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot src
         let allowance_entry_sender_19 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_1.slot) (Place.mk .storage allowance_entry_1.slot).slot sender_19
         let v20 ← load (Place.mk .storage allowance_entry_sender_19.slot)
-        let v22 := decide (wad.toNat ≤ v20.toNat)
-        if v22 then
+        if decide (wad.toNat ≤ v20.toNat) then
           let v25 := src
           let sender_26 := sender
           let allowance_entry_2 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v25
           let allowance_entry_sender_26 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_2.slot) (Place.mk .storage allowance_entry_2.slot).slot sender_26
           let v27 ← load (Place.mk .storage allowance_entry_sender_26.slot)
-          let v28 := v27 - wad
           let sender_29 := sender
           let allowance_entry_3 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v25
           let allowance_entry_sender_29 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_3.slot) (Place.mk .storage allowance_entry_3.slot).slot sender_29
-          store (Place.mk .storage allowance_entry_sender_29.slot) v28
+          store (Place.mk .storage allowance_entry_sender_29.slot) (v27 - wad)
           join sender
         else
           M.panic 0x01
@@ -511,14 +453,11 @@ def recv_TransferFrom (src : UInt256) (dst : UInt256) (wad : UInt256) : FeM Bool
 def Withdrawal_emit_Evm (self : Withdrawal) : FeM Unit := do
   let mut r0 : MemBuffer := default
   let mut r1 : UInt256 := default
-  let v2 := self.wad
-  let v3 := v2
-  let v4 ← encode_abi_payload_tuple_u256 v3
+  let v4 ← encode_abi_payload_tuple_u256 self.wad
   r0 := v4
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 57810043145978950376228313794938171962422655018555593468903716172405399886693) -- a constant, as the compiler evaluates it
-  let v8 := self.src
-  r1 := v8
+  r1 := self.src
   let v9 := r1
   let v10 ← Address_as_topic v9
   let _ ← Evm_log2 v6 v7 v10
@@ -537,14 +476,11 @@ def recv_Withdraw (wad : UInt256) : FeM Unit := do
   let src ← Evm_caller
   let balance_of_src ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
   let v5 ← load (Place.mk .storage balance_of_src.slot)
-  let v6 := decide (wad.toNat ≤ v5.toNat)
-  if v6 then
+  if decide (wad.toNat ≤ v5.toNat) then
     let balance_of_src_1 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
     let v8 ← load (Place.mk .storage balance_of_src_1.slot)
-    let v9 := v8 - wad
     let balance_of_src_2 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
-    store (Place.mk .storage balance_of_src_2.slot) v9
-    let v12 := decide (wad = (UInt256.ofNat 0))
+    store (Place.mk .storage balance_of_src_2.slot) (v8 - wad)
     let join : Wei → RawCallOutcome → UInt256 → FeM Unit := fun r2 r3 gas_1 => do
       let mut r2 := r2
       let mut r3 := r3
@@ -555,12 +491,11 @@ def recv_Withdraw (wad : UInt256) : FeM Unit := do
       r3 := v21
       let v23 ← RawCallOutcome_success r3
       if v23 then
-        let v25 := (Withdrawal.mk src wad)
-        let _ ← emit_Evm_Withdrawal v25
+        let _ ← emit_Evm_Withdrawal (Withdrawal.mk src wad)
         return ()
       else
         M.panic 0x01
-    if v12 then
+    if decide (wad = (UInt256.ofNat 0)) then
       join r2 r3 (UInt256.ofNat 2300)
     else
       join r2 r3 (UInt256.ofNat 0)
@@ -571,8 +506,7 @@ def recv_Withdraw (wad : UInt256) : FeM Unit := do
 def SolSlot_read_u8 (self : Place) (offset : UInt256) : FeM UInt256 := do
   let mut r0 : SolWord := default
   let v2 ← load ((self.field Layout.SolSlot 0).field Layout.Payload 0)
-  let v3 := (SolWord.mk v2)
-  r0 := v3
+  r0 := (SolWord.mk v2)
   let v4 := r0
   let v5 ← SolWord_get_u8 v4 offset
   return v5
@@ -580,8 +514,7 @@ def SolSlot_read_u8 (self : Place) (offset : UInt256) : FeM UInt256 := do
 /-- `Decimals -> u8`, selector `0x313ce567` (`decimals()`) -/
 def recv_Decimals : FeM UInt256 := do
   let v1 := Field.store.decimals
-  let v2 := v1
-  let v3 ← SolSlot_read_u8 v2 (UInt256.ofNat 0)
+  let v3 ← SolSlot_read_u8 v1 (UInt256.ofNat 0)
   return v3
 
 /-- `BalanceOf { owner } -> u256`, selector `0x70a08231` (`balanceOf(address)`) -/
@@ -593,8 +526,7 @@ def recv_BalanceOf (owner : UInt256) : FeM UInt256 := do
 /-- `Symbol -> DynString`, selector `0x95d89b41` (`symbol()`) -/
 def recv_Symbol : FeM DynString := do
   let v0 := Field.store.symbol
-  let v1 := v0
-  let v2 ← SolString_load v1
+  let v2 ← SolString_load v0
   return v2
 
 /-- `Transfer { dst, wad } -> bool`, selector `0xa9059cbb` (`transfer(address,uint256)`) -/
@@ -612,14 +544,11 @@ def recv_Transfer (dst : UInt256) (wad : UInt256) : FeM Bool := do
 def Deposit_emit_Evm (self : Deposit) : FeM Unit := do
   let mut r0 : MemBuffer := default
   let mut r1 : UInt256 := default
-  let v2 := self.wad
-  let v3 := v2
-  let v4 ← encode_abi_payload_tuple_u256 v3
+  let v4 ← encode_abi_payload_tuple_u256 self.wad
   r0 := v4
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 102222681472383059465863322013072701928378550215632170212813623808969952268444) -- a constant, as the compiler evaluates it
-  let v8 := self.dst
-  r1 := v8
+  r1 := self.dst
   let v9 := r1
   let v10 ← Address_as_topic v9
   let _ ← Evm_log2 v6 v7 v10
@@ -641,11 +570,9 @@ def deposit_Weth9Store_Evm_Evm : FeM Unit := do
   let wad ← Wei_as_wei v5
   let balance_of_dst ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot dst
   let v8 ← load (Place.mk .storage balance_of_dst.slot)
-  let v9 := v8 + wad
   let balance_of_dst_1 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot dst
-  store (Place.mk .storage balance_of_dst_1.slot) v9
-  let v11 := (Deposit.mk dst wad)
-  let _ ← emit_Evm_Deposit v11
+  store (Place.mk .storage balance_of_dst_1.slot) (v8 + wad)
+  let _ ← emit_Evm_Deposit (Deposit.mk dst wad)
   return ()
 
 /-- `Deposit`, selector `0xd0e30db0` (`deposit()`) -/
@@ -667,12 +594,11 @@ def recv_fallback : FeM Unit := do
 
 /-- `<Name as AbiSize>::HEAD_SIZE` -/
 def Name_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Name as Decode>::decode_from<CallData>` -/
 def Name_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Name := do
-  let v2 := (Name.mk)
-  return v2
+  return Name.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Name, Sol, CallData>` -/
 def decode_from_prechecked_head_Name_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Name := do
@@ -703,20 +629,16 @@ def recv_Name_entry : FeM Empty := do
 /-- `<Approve as AbiSize>::HEAD_SIZE` -/
 def Approve_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Address
-  let v2 := (UInt256.ofNat 0) + v1
   let v3 ← abi_field_head_size_u256
-  let v4 := v2 + v3
-  return v4
+  return ((UInt256.ofNat 0) + v1) + v3
 
 /-- `<Approve as Decode>::decode_from<CallData>` -/
 def Approve_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Approve := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := v1 + v7
-  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
-  let v11 := (Approve.mk v4 v9)
-  return v11
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 (v1 + v7) v2
+  return Approve.mk v4 v9
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Approve, Sol, CallData>` -/
 def decode_from_prechecked_head_Approve_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Approve := do
@@ -746,12 +668,11 @@ def recv_Approve_entry : FeM Empty := do
 
 /-- `<TotalSupply as AbiSize>::HEAD_SIZE` -/
 def TotalSupply_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<TotalSupply as Decode>::decode_from<CallData>` -/
 def TotalSupply_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM TotalSupply := do
-  let v2 := (TotalSupply.mk)
-  return v2
+  return TotalSupply.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<TotalSupply, Sol, CallData>` -/
 def decode_from_prechecked_head_TotalSupply_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM TotalSupply := do
@@ -782,27 +703,20 @@ def recv_TotalSupply_entry : FeM Empty := do
 /-- `<TransferFrom as AbiSize>::HEAD_SIZE` -/
 def TransferFrom_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Address
-  let v2 := (UInt256.ofNat 0) + v1
   let v3 ← abi_field_head_size_Address
-  let v4 := v2 + v3
   let v5 ← abi_field_head_size_u256
-  let v6 := v4 + v5
-  return v6
+  return (((UInt256.ofNat 0) + v1) + v3) + v5
 
 /-- `<TransferFrom as Decode>::decode_from<CallData>` -/
 def TransferFrom_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM TransferFrom := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := v1 + v7
-  let v9 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v8 v2
+  let v9 ← decode_msg_field_from_Sol_Address_CallData v0 v1 (v1 + v7) v2
   let v12 ← abi_field_head_size_Address
-  let v13 := v1 + v12
   let v14 ← abi_field_head_size_Address
-  let v15 := v13 + v14
-  let v16 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v15 v2
-  let v18 := (TransferFrom.mk v4 v9 v16)
-  return v18
+  let v16 ← decode_msg_field_from_Sol_u256_CallData v0 v1 ((v1 + v12) + v14) v2
+  return TransferFrom.mk v4 v9 v16
 
 /-- `core::abi::Decode::decode_from_prechecked_head<TransferFrom, Sol, CallData>` -/
 def decode_from_prechecked_head_TransferFrom_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM TransferFrom := do
@@ -833,15 +747,13 @@ def recv_TransferFrom_entry : FeM Empty := do
 /-- `<Withdraw as AbiSize>::HEAD_SIZE` -/
 def Withdraw_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_u256
-  let v2 := (UInt256.ofNat 0) + v1
-  return v2
+  return (UInt256.ofNat 0) + v1
 
 /-- `<Withdraw as Decode>::decode_from<CallData>` -/
 def Withdraw_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Withdraw := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Withdraw.mk v4)
-  return v6
+  return Withdraw.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Withdraw, Sol, CallData>` -/
 def decode_from_prechecked_head_Withdraw_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Withdraw := do
@@ -871,12 +783,11 @@ def recv_Withdraw_entry : FeM Empty := do
 
 /-- `<Decimals as AbiSize>::HEAD_SIZE` -/
 def Decimals_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Decimals as Decode>::decode_from<CallData>` -/
 def Decimals_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Decimals := do
-  let v2 := (Decimals.mk)
-  return v2
+  return Decimals.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Decimals, Sol, CallData>` -/
 def decode_from_prechecked_head_Decimals_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Decimals := do
@@ -907,15 +818,13 @@ def recv_Decimals_entry : FeM Empty := do
 /-- `<BalanceOf as AbiSize>::HEAD_SIZE` -/
 def BalanceOf_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Address
-  let v2 := (UInt256.ofNat 0) + v1
-  return v2
+  return (UInt256.ofNat 0) + v1
 
 /-- `<BalanceOf as Decode>::decode_from<CallData>` -/
 def BalanceOf_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM BalanceOf := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
-  let v6 := (BalanceOf.mk v4)
-  return v6
+  return BalanceOf.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<BalanceOf, Sol, CallData>` -/
 def decode_from_prechecked_head_BalanceOf_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM BalanceOf := do
@@ -945,12 +854,11 @@ def recv_BalanceOf_entry : FeM Empty := do
 
 /-- `<Symbol as AbiSize>::HEAD_SIZE` -/
 def Symbol_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Symbol as Decode>::decode_from<CallData>` -/
 def Symbol_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Symbol := do
-  let v2 := (Symbol.mk)
-  return v2
+  return Symbol.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Symbol, Sol, CallData>` -/
 def decode_from_prechecked_head_Symbol_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Symbol := do
@@ -981,20 +889,16 @@ def recv_Symbol_entry : FeM Empty := do
 /-- `<Transfer as AbiSize>::HEAD_SIZE` -/
 def Transfer_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Address
-  let v2 := (UInt256.ofNat 0) + v1
   let v3 ← abi_field_head_size_u256
-  let v4 := v2 + v3
-  return v4
+  return ((UInt256.ofNat 0) + v1) + v3
 
 /-- `<Transfer as Decode>::decode_from<CallData>` -/
 def Transfer_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Transfer_1 := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := v1 + v7
-  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v8 v2
-  let v11 := (Transfer_1.mk v4 v9)
-  return v11
+  let v9 ← decode_msg_field_from_Sol_u256_CallData v0 v1 (v1 + v7) v2
+  return Transfer_1.mk v4 v9
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Transfer, Sol, CallData>` -/
 def decode_from_prechecked_head_Transfer_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Transfer_1 := do
@@ -1024,12 +928,11 @@ def recv_Transfer_entry : FeM Empty := do
 
 /-- `<Deposit as AbiSize>::HEAD_SIZE` -/
 def Deposit_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Deposit as Decode>::decode_from<CallData>` -/
 def Deposit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Deposit_1 := do
-  let v2 := (Deposit_1.mk)
-  return v2
+  return Deposit_1.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Deposit, Sol, CallData>` -/
 def decode_from_prechecked_head_Deposit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Deposit_1 := do
@@ -1059,20 +962,16 @@ def recv_Deposit_entry : FeM Empty := do
 /-- `<Allowance as AbiSize>::HEAD_SIZE` -/
 def Allowance_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Address
-  let v2 := (UInt256.ofNat 0) + v1
   let v3 ← abi_field_head_size_Address
-  let v4 := v2 + v3
-  return v4
+  return ((UInt256.ofNat 0) + v1) + v3
 
 /-- `<Allowance as Decode>::decode_from<CallData>` -/
 def Allowance_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Allowance := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
   let v7 ← abi_field_head_size_Address
-  let v8 := v1 + v7
-  let v9 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v8 v2
-  let v11 := (Allowance.mk v4 v9)
-  return v11
+  let v9 ← decode_msg_field_from_Sol_Address_CallData v0 v1 (v1 + v7) v2
+  return Allowance.mk v4 v9
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Allowance, Sol, CallData>` -/
 def decode_from_prechecked_head_Allowance_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Allowance := do

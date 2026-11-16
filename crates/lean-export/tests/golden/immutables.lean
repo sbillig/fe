@@ -40,25 +40,20 @@ def set_small_Config (v : UInt256) (config : Config) : FeM (Unit × Config) := d
 def init (limit : UInt256) (config : Config) (words : (Vector UInt256 2)) : FeM (Unit × Config × (Vector UInt256 2)) := do
   let mut config := config
   let mut words := words
-  let v4 := (Config.mk (UInt256.ofNat 0) true limit)
-  config := v4
+  config := (Config.mk (UInt256.ofNat 0) true limit)
   let (v7, v7_0) ← set_small_Config (UInt256.ofNat 7) config
   config := v7_0
-  let v10 := #v[limit, (UInt256.ofNat 2)]
-  words := v10
+  words := (#v[limit, (UInt256.ofNat 2)])
   store Field.count (UInt256.ofNat 1)
   return ((), config, words)
 
 /-- `Limit -> u256`, selector `0xa4d66daf` (`limit()`) -/
 def recv_Limit : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
-  let v1 := config.on
   let join : UInt256 → FeM UInt256 := fun v0 => do
     return v0
-  if v1 then
-    let v2 := config.limit
-    let v3 := config.small
-    let v5 ← checkedAdd v2 v3
+  if config.on then
+    let v5 ← checkedAdd config.limit config.small
     join v5
   else
     join (UInt256.ofNat 0)
@@ -68,23 +63,18 @@ def recv_Sum : FeM UInt256 := do
   let words ← cloadArray 32 (fun q => cload q) (← immutableAt 4 2) 2
   let v0 := (UInt256.ofNat 0)
   checkIndex v0 2
-  let v1 := words[v0.toNat]!
   let v2 := (UInt256.ofNat 1)
   checkIndex v2 2
-  let v3 := words[v2.toNat]!
-  let v4 ← checkedAdd v1 v3
+  let v4 ← checkedAdd words[v0.toNat]! words[v2.toNat]!
   return v4
 
 /-- `immutables::capped<Config>` -/
 def capped_Config («by» : UInt256) : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
-  let v3 := config.limit
-  let v4 := decide (v3.toNat < «by».toNat)
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
-  if v4 then
-    let v5 := config.limit
-    join v5
+  if decide (config.limit.toNat < «by».toNat) then
+    join config.limit
   else
     join «by»
 
@@ -100,12 +90,11 @@ def recv_Bump («by» : UInt256) : FeM UInt256 := do
 
 /-- `<Limit as AbiSize>::HEAD_SIZE` -/
 def Limit_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Limit as Decode>::decode_from<CallData>` -/
 def Limit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Limit := do
-  let v2 := (Limit.mk)
-  return v2
+  return Limit.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Limit, Sol, CallData>` -/
 def decode_from_prechecked_head_Limit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Limit := do
@@ -135,12 +124,11 @@ def recv_Limit_entry : FeM Empty := do
 
 /-- `<Sum as AbiSize>::HEAD_SIZE` -/
 def Sum_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Sum as Decode>::decode_from<CallData>` -/
 def Sum_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Sum := do
-  let v2 := (Sum.mk)
-  return v2
+  return Sum.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Sum, Sol, CallData>` -/
 def decode_from_prechecked_head_Sum_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Sum := do
@@ -178,8 +166,7 @@ def Bump_HEAD_SIZE : FeM UInt256 := do
 def Bump_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Bump := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Bump.mk v4)
-  return v6
+  return Bump.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Bump, Sol, CallData>` -/
 def decode_from_prechecked_head_Bump_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Bump := do

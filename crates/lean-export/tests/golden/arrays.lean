@@ -15,8 +15,7 @@ def bump (items : (Vector UInt256 4)) («at» : UInt256) («by» : UInt256) : Fe
 /-- `Pick { index, value } -> u256`, selector `0xa62f4550` (`pick(uint256,uint256)`) -/
 def recv_Pick (index : UInt256) (value : UInt256) : FeM UInt256 := do
   let mut items : (Vector UInt256 4) := default
-  let items_2 := Vector.replicate 4 value
-  items := items_2
+  items := (Vector.replicate 4 value)
   let v5 := (UInt256.ofNat 0)
   checkIndex v5 4
   items := (items.set! v5.toNat (UInt256.ofNat 7))
@@ -45,16 +44,13 @@ def recv_Weigh (values : (Vector UInt256 3)) : FeM UInt256 := do
     let mut total := total
     let mut i := i
     let i_5 := i
-    let v8 := decide (i_5.toNat < (UInt256.ofNat 3).toNat)
-    if v8 then
+    if decide (i_5.toNat < (UInt256.ofNat 3).toNat) then
       let i_9 := i
       checkIndex i_9 3
-      let v10 := values[i_9.toNat]!
       let v11 ← WEIGHTS
       let i_12 := i
       checkIndex i_12 3
-      let v13 := v11[i_12.toNat]!
-      let v14 ← checkedMul v10 v13
+      let v14 ← checkedMul values[i_9.toNat]! v11[i_12.toNat]!
       let total_15 := total
       let total_16 ← checkedAdd total_15 v14
       total := total_16

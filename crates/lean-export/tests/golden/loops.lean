@@ -14,8 +14,7 @@ def recv_Triangle (n : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
     let i_5 := i
-    let v7 := decide (i_5.toNat < n.toNat)
-    if v7 then
+    if decide (i_5.toNat < n.toNat) then
       let i_9 := i
       let i_10 ← checkedAdd i_9 (UInt256.ofNat 1)
       i := i_10
@@ -32,26 +31,21 @@ def recv_Triangle (n : UInt256) : FeM UInt256 := do
 
 /-- `loops::step` -/
 def step (value : UInt256) : FeM Option_u256 := do
-  let v5 := decide (value = (UInt256.ofNat 1))
   let join : Option_u256 → FeM Option_u256 := fun v1 => do
     return v1
-  if v5 then
-    let v6 := Option_u256.None
-    join v6
+  if decide (value = (UInt256.ofNat 1)) then
+    join Option_u256.None
   else
     let v10 ← checkedRem value (UInt256.ofNat 2)
-    let v12 := decide (v10 = (UInt256.ofNat 0))
     let join_1 : Option_u256 → FeM Option_u256 := fun v2 => do
       join v2
-    if v12 then
+    if decide (v10 = (UInt256.ofNat 0)) then
       let v15 ← checkedDiv value (UInt256.ofNat 2)
-      let v16 := Option_u256.Some v15
-      join_1 v16
+      join_1 (Option_u256.Some v15)
     else
       let v20 ← checkedMul (UInt256.ofNat 3) value
       let v22 ← checkedAdd v20 (UInt256.ofNat 1)
-      let v23 := Option_u256.Some v22
-      join_1 v23
+      join_1 (Option_u256.Some v22)
 
 /-- `Collatz { start, limit } -> u256`, selector `0xea732925` (`collatz(uint256,uint256)`) -/
 def recv_Collatz (start : UInt256) (limit : UInt256) : FeM UInt256 := do
@@ -63,16 +57,14 @@ def recv_Collatz (start : UInt256) (limit : UInt256) : FeM UInt256 := do
     let mut value := value
     let mut steps := steps
     let steps_5 := steps
-    let v7 := decide (steps_5 = limit)
-    if v7 then
+    if decide (steps_5 = limit) then
       return limit
     else
       let value_10 := value
       let v12 ← step value_10
       match (← pure v12) with
       | .Some .. =>
-        let next := v12.Some_0
-        value := next
+        value := v12.Some_0
         let steps_18 := steps
         let steps_19 ← checkedAdd steps_18 (UInt256.ofNat 1)
         steps := steps_19

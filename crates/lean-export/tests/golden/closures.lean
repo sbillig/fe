@@ -43,8 +43,7 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt25
     if v7 then
       let v8 ← array_at_ref_u256_2 self v3
       let acc_10 := acc
-      let x_12 := v8
-      let (acc_13, acc_13_0) ← closure f acc_10 x_12
+      let (acc_13, acc_13_0) ← closure f acc_10 v8
       f := acc_13_0
       acc := acc_13
       let v16 ← array_next_u256_2 self v3
@@ -59,10 +58,8 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt25
 def recv_Scaled (a : UInt256) (b : UInt256) («by» : UInt256) : FeM UInt256 := do
   let mut xs : (Vector UInt256 2) := default
   let mut r1 : UInt256 := default
-  let xs_3 := #v[a, b]
-  xs := xs_3
-  let v6 := «by»
-  r1 := v6
+  xs := (#v[a, b])
+  r1 := «by»
   let (v10, v10_0) ← fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 xs (UInt256.ofNat 0) r1
   r1 := v10_0
   return v10
@@ -95,9 +92,8 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt
     if v7 then
       let v8 ← array_at_ref_u256_2 self v3
       let acc_10 := acc
-      let x_12 := v8
       let store_1 ← load_Store Field.store
-      let (acc_14, acc_14_0) ← closure_1 f acc_10 x_12
+      let (acc_14, acc_14_0) ← closure_1 f acc_10 v8
       f := acc_14_0
       acc := acc_14
       let v17 ← array_next_u256_2 self v3
@@ -112,10 +108,8 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt
 def recv_Tally (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let mut xs : (Vector UInt256 2) := default
   let mut r2 : Unit := default
-  let xs_2 := #v[a, b]
-  xs := xs_2
-  let v5 := ()
-  r2 := v5
+  xs := (#v[a, b])
+  r2 := ()
   let (v9, v9_0) ← fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 xs (UInt256.ofNat 0) r2
   r2 := v9_0
   return v9

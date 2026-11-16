@@ -60,8 +60,7 @@ def Sum_decode_from_CallData_k4 (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v
   let v119 ← abi_field_head_size_u256
   let v120 ← checkedAdd v118 v119
   let v121 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v120 v2
-  let v123 := (Sum.mk v4 v9 v16 v25 v36 v49 v64 v81 v100 v121)
-  return v123
+  return Sum.mk v4 v9 v16 v25 v36 v49 v64 v81 v100 v121
 
 def Sum_decode_from_CallData_k3 (v0 : CallData) (v1 : UInt256) (v2 : UInt256) (v4 : UInt256) (v9 : UInt256) (v16 : UInt256) (v25 : UInt256) (v36 : UInt256) (v49 : UInt256) (v64 : UInt256) (v81 : UInt256) (v89 : UInt256) (v90 : UInt256) : FeM Sum := do
   let v91 ← checkedAdd v89 v90

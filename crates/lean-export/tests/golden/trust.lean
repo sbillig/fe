@@ -29,7 +29,6 @@ def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
   let init_len ← initCodeLen creation_Child
   let init_off ← initCodeOffset creation_Child
   let v6 ← tuple_IS_DYNAMIC
-  let v7 := !v6
   let join : MemBuffer → MemBuffer → MemBuffer → MemBuffer → FeM MemBuffer := fun init_code_r0 encoded init_code_r2 v1 => do
     let mut init_code_r0 := init_code_r0
     let mut encoded := encoded
@@ -49,16 +48,14 @@ def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
     let v30 ← MemBuffer_ptr init_code_r2
     let _ ← codecopy v30 init_off init_len
     let v33 ← MemBuffer_ptr init_code_r2
-    let v34 := v33 + code_len
     let v36 ← MemBuffer_span_ref encoded
-    let _ ← copy v34 v36
+    let _ ← copy (v33 + code_len) v36
     let _ ← MemBuffer_drop encoded
     let init_code_39 := init_code_r2
     join init_code_r0 encoded init_code_r2 init_code_39
-  if v7 then
+  if !v6 then
     let v8 ← tuple_HEAD_SIZE
-    let v10 := decide (v8 = (UInt256.ofNat 0))
-    if v10 then
+    if decide (v8 = (UInt256.ofNat 0)) then
       let v11 ← downcast_unchecked_u256_usize init_len
       let init_code_12 ← MemBuffer_new_uninit v11
       init_code_r0 := init_code_12
@@ -78,9 +75,7 @@ def create2_Evm_Child (value : Wei) (args : Unit) (salt : UInt256) : FeM UInt256
   init_code := init_code_4
   let v7 ← MemBuffer_span_ref init_code
   let addr ← create2_raw_Evm value v7 salt
-  let v11 := addr
-  let v13 := decide (v11 = (UInt256.ofNat 0))
-  if v13 then
+  if decide (addr = (UInt256.ofNat 0)) then
     let v14 ← bubble_last_revert
     nomatch v14
   else
@@ -92,18 +87,17 @@ def recv_Deploy : FeM UInt256 := do
   let mut r1 : Wei := default
   let v0 ← Wei_zero
   r1 := v0
-  let v1 := ()
   let v4 := r1
-  let v5 ← create2_Evm_Child v4 v1 (UInt256.ofNat 0)
+  let v5 ← create2_Evm_Child v4 () (UInt256.ofNat 0)
   return v5
 
 /-- `<Get as MsgVariant>::SELECTOR` -/
 def Get_SELECTOR : FeM UInt256 := do
-  return (UInt256.ofNat 1)
+  return UInt256.ofNat 1
 
 /-- `<Get as AbiSize>::HEAD_SIZE` -/
 def Get_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Get as AbiSize>::payload_size` -/
 def Get_payload_size (self : Get) : FeM UInt256 := do
@@ -129,7 +123,6 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
   let v7 ← downcast_unchecked_u256_usize payload_size
   let len := selector_size + v7
   let v10 ← Get_HEAD_SIZE
-  let v12 := decide (v10.toNat < (UInt256.ofNat 28).toNat)
   let join : Get → MemBuffer → AbiFrame → UInt256 → FeM MemBuffer := fun message buffer r2 capacity => do
     let mut message := message
     let mut buffer := buffer
@@ -141,8 +134,7 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
     let (v26, v26_0) ← MemBuffer_set_len buffer len
     buffer := v26_0
     let v28 ← MemBuffer_ptr buffer
-    let v32 := selector <<< (UInt256.ofNat 224)
-    let _ ← mstore v28 v32
+    let _ ← mstore v28 (selector <<< (UInt256.ofNat 224))
     let v34 ← downcast_unchecked_u256_usize payload_size
     let _ ← zero_bytes payload v34
     let v36 ← AbiFrame_from_raw_parts payload payload_size
@@ -155,9 +147,8 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
     let mut buffer := buffer
     let mut r2 := r2
     join message buffer r2 len
-  if v12 then
-    let v14 := decide (len.toNat < (UInt256.ofNat 32).toNat)
-    if v14 then
+  if decide (v10.toNat < (UInt256.ofNat 28).toNat) then
+    if decide (len.toNat < (UInt256.ofNat 32).toNat) then
       join message buffer r2 (UInt256.ofNat 32)
     else
       join_1 message buffer r2
@@ -194,30 +185,26 @@ def call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message : Get
 /-- `Address::call<Evm, Get>` -/
 def Address_call_Evm_Get (self : UInt256) (message : Get) : FeM UInt256 := do
   let mut r1 : Wei := default
-  let v2 := self
   let v3 ← gas
   let v4 ← Wei_zero
   r1 := v4
   let v7 := r1
-  let v8 ← call_Evm_Get v2 v3 v7 message
+  let v8 ← call_Evm_Get self v3 v7 message
   return v8
 
 /-- `Ask { target } -> u256`, selector `0x00000011` -/
 def recv_Ask (target : UInt256) : FeM UInt256 := do
   let mut target := target
-  let v0 := (Get.mk)
   let target_1 := target
-  let v2 ← Address_call_Evm_Get target_1 v0
+  let v2 ← Address_call_Evm_Get target_1 (Get.mk)
   return v2
 
 /-- `<Words as StateIndex>::locate` -/
 def Words_locate (self : Place) (root : UInt256) (key : UInt256) : FeM Location := do
   let mut r0 : (Vector UInt256 2) := default
-  let v5 := #v[key, root]
-  r0 := v5
+  r0 := (#v[key, root])
   let v7 ← keccak_words_2 r0
-  let v9 := (Location.mk v7 (UInt256.ofNat 0))
-  return v9
+  return Location.mk v7 (UInt256.ofNat 0)
 
 /-- `trust::word_at<Evm>` -/
 def word_at_Evm (slot : UInt256) : FeM Place := do
@@ -249,12 +236,11 @@ def recv_Poke (key : UInt256) : FeM UInt256 := do
 
 /-- `<Deploy as AbiSize>::HEAD_SIZE` -/
 def Deploy_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Deploy as Decode>::decode_from<CallData>` -/
 def Deploy_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Deploy := do
-  let v2 := (Deploy.mk)
-  return v2
+  return Deploy.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Deploy, Sol, CallData>` -/
 def decode_from_prechecked_head_Deploy_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Deploy := do
@@ -292,8 +278,7 @@ def Ask_HEAD_SIZE : FeM UInt256 := do
 def Ask_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Ask := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_Address_CallData v0 v1 v1 v2
-  let v6 := (Ask.mk v4)
-  return v6
+  return Ask.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Ask, Sol, CallData>` -/
 def decode_from_prechecked_head_Ask_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Ask := do
@@ -331,8 +316,7 @@ def Poke_HEAD_SIZE : FeM UInt256 := do
 def Poke_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Poke := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Poke.mk v4)
-  return v6
+  return Poke.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Poke, Sol, CallData>` -/
 def decode_from_prechecked_head_Poke_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Poke := do

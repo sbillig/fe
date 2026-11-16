@@ -25,16 +25,14 @@ def copied_MemBuffer (source : MemBuffer) (gas_used : UInt256) : FeM Output := d
   let v4 ← MemBuffer_try_new len
   match (← pure v4) with
   | .Some .. =>
-    let output_7 := v4.Some_0
-    output := output_7
+    output := v4.Some_0
     i := (UInt256.ofNat 0)
     let rec loop (output : MemBuffer) (i : UInt256) : FeM Output := do
       let mut output := output
       let mut i := i
       let i_10 := i
       let v13 ← checkedAdd i_10 (UInt256.ofNat 8)
-      let v14 := decide (v13.toNat ≤ len.toNat)
-      if v14 then
+      if decide (v13.toNat ≤ len.toNat) then
         let i_15 := i
         let i_17 := i
         let v19 ← MemBuffer_lane_at source i_17
@@ -49,8 +47,7 @@ def copied_MemBuffer (source : MemBuffer) (gas_used : UInt256) : FeM Output := d
           let mut output := output
           let mut i := i
           let i_27 := i
-          let v29 := decide (i_27.toNat < len.toNat)
-          if v29 then
+          if decide (i_27.toNat < len.toNat) then
             let i_30 := i
             let v32 ← MemBuffer_byte_at source i_30
             let i_33 := i
@@ -65,8 +62,7 @@ def copied_MemBuffer (source : MemBuffer) (gas_used : UInt256) : FeM Output := d
           else
             let v43 ← SUCCESS
             let output_45 := output
-            let v46 := (Output.mk v43 gas_used output_45)
-            return v46
+            return Output.mk v43 gas_used output_45
         partial_fixpoint
         loop_1 output i
     partial_fixpoint
@@ -91,8 +87,7 @@ def recv_fallback : FeM Empty := do
   let _ ← MemBuffer_drop r2
   let v5 := result.status
   let v6 ← SUCCESS
-  let v7 := decide (v5 ≠ v6)
-  if v7 then
+  if decide (v5 ≠ v6) then
     let v8 ← MemSlice_empty_u8
     let v11 ← Evm_revert v8
     nomatch v11

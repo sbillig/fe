@@ -32,11 +32,9 @@ def init : FeM Unit := do
 /-- `products::add_to` -/
 def add_to (v0 : Place) (v1 : UInt256) : FeM Unit := do
   let v2 := (v0, v1)
-  let v3 := v2.fst
-  let a := v3
-  let b := v1
+  let a := v2.fst
   let v7 ← load a
-  let v8 ← checkedAdd v7 b
+  let v8 ← checkedAdd v7 v1
   store a v8
   return ()
 
@@ -44,8 +42,7 @@ def add_to (v0 : Place) (v1 : UInt256) : FeM Unit := do
 def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
   let mut v0 := v0
   let v2 := (v0, v1)
-  let v5 := v2.snd
-  let b ← load v5
+  let b ← load v2.snd
   let v7 := v0
   let v8 ← checkedAdd v7 b
   v0 := v8
@@ -67,17 +64,14 @@ def recv_Parts («by» : UInt256) : FeM UInt256 := do
 def Pair_at (self : Place) : FeM (UInt256 × Place) := do
   let v1 ← load (self.field Layout.Pair 0)
   let v2 := (self.field Layout.Pair 1)
-  let v3 := (v1, v2)
   return (v1, v2)
 
 /-- `products::bump` -/
 def bump (v0 : UInt256) (v1 : Place) : FeM UInt256 := do
   let v2 := (v0, v1)
-  let «by» := v2.fst
-  let v4 := v2.snd
-  let x := v4
+  let x := v2.snd
   let v6 ← load x
-  let v7 ← checkedAdd v6 «by»
+  let v7 ← checkedAdd v6 v2.fst
   store x v7
   let v9 ← load x
   return v9
@@ -97,9 +91,8 @@ def Pair_at_1 (self : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256)
 def bump_1 (v0 : UInt256) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
   let mut v1 := v1
   let v2 := (v0, v1)
-  let «by» := v2.fst
   let v6 := v1
-  let v7 ← checkedAdd v6 «by»
+  let v7 ← checkedAdd v6 v2.fst
   v1 := v7
   let v9 := v1
   return (v9, v1)
@@ -110,12 +103,8 @@ def recv_Granted («by» : UInt256) : FeM UInt256 := do
   let mut v12 : (UInt256 × UInt256) := default
   let v1 := Field.pair
   let v2 ← Pair_at v1
-  let v3 := v2.fst
-  let v4 := v2.snd
-  let v5 := v4
-  let stored ← bump v3 v5
-  let local_9 := (Pair.mk «by» (UInt256.ofNat 1))
-  «local» := local_9
+  let stored ← bump v2.fst v2.snd
+  «local» := (Pair.mk «by» (UInt256.ofNat 1))
   let (v12_g, v12_k) ← Pair_at_1 «local»
   v12 := v12_g
   let v13 := v12.fst
@@ -139,7 +128,6 @@ def Small_maybe (self : Place) (second : Bool) : FeM (Option_mut_u8 × (Option_m
       return ()
     return ((Option_mut_u8.Some h2), slide)
   else
-    let v4 := Option_mut_u8.None
     let slide : Option_mut_u8 → FeM Unit := fun g => do
       let mut h2 := h2
       return ()

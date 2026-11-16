@@ -20,7 +20,6 @@ def init : FeM Unit := do
 
 /-- `join::add<Store>` -/
 def add_Store («by» : UInt256) : FeM UInt256 := do
-  let v4 := decide ((UInt256.ofNat 10).toNat < «by».toNat)
   let join : UInt256 → FeM UInt256 := fun next => do
     store Field.store.total next
     let hits_by ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
@@ -29,7 +28,7 @@ def add_Store («by» : UInt256) : FeM UInt256 := do
     let hits_by_1 ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
     store (Place.mk .storage hits_by_1.slot) v18
     return next
-  if v4 then
+  if decide ((UInt256.ofNat 10).toNat < «by».toNat) then
     let v5 ← load Field.store.total
     let v7 ← checkedAdd v5 (UInt256.ofNat 10)
     join v7

@@ -12,17 +12,15 @@ def init (initial : UInt256) (value : UInt256) : FeM (Unit × UInt256) := do
 /-- `Get -> u256`, selector `0x6d4ce63c` (`get()`) -/
 def recv_Get : FeM UInt256 := do
   let value ← cload (← immutableAt 1 0)
-  let value_1 := value
-  return value_1
+  return value
 
 /-- `<Get as AbiSize>::HEAD_SIZE` -/
 def Get_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Get as Decode>::decode_from<CallData>` -/
 def Get_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
-  let v2 := (Get.mk)
-  return v2
+  return Get.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Get, Sol, CallData>` -/
 def decode_from_prechecked_head_Get_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Get := do

@@ -158,18 +158,13 @@ def long (x : UInt256) : FeM UInt256 := do
 /-- `Run { x } -> u256`, selector `0xa444f5e9` (`run(uint256)`) -/
 def recv_Run (x : UInt256) : FeM UInt256 := do
   let v1 ← load_Pair x
-  let v2 := (Pair.mk x v1)
-  store_Pair Field.pair v2
+  store_Pair Field.pair (Pair.mk x v1)
   let v5 ← long_k1 x
-  let v6 := (Prop_1.mk true v5)
-  store_Prop Field.prop v6
+  store_Prop Field.prop (Prop_1.mk true v5)
   let pair ← load_Pair_1 Field.pair
   let prop ← load_Prop Field.prop
-  let v12 := pair.a
-  let v13 := pair.b
-  let v14 ← checkedAdd v12 v13
-  let v15 := prop.n
-  let v16 ← checkedAdd v14 v15
+  let v14 ← checkedAdd pair.a pair.b
+  let v16 ← checkedAdd v14 prop.n
   let v17 ← long x
   let v18 ← checkedAdd v16 v17
   return v18
@@ -184,8 +179,7 @@ def Run_HEAD_SIZE : FeM UInt256 := do
 def Run_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Run := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Run.mk v4)
-  return v6
+  return Run.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Run, Sol, CallData>` -/
 def decode_from_prechecked_head_Run_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Run := do

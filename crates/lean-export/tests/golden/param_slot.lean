@@ -9,14 +9,11 @@ def init : FeM Unit := do
 
 /-- `param_slot::make` -/
 def make (pos : UInt256) : FeM Cursor := do
-  let v3 := (Cursor.mk pos (UInt256.ofNat 4))
-  return v3
+  return Cursor.mk pos (UInt256.ofNat 4)
 
 /-- `Cursor::end` -/
 def Cursor_end (self : Cursor) : FeM UInt256 := do
-  let v1 := self.pos
-  let v2 := self.base
-  let v3 ← checkedAdd v1 v2
+  let v3 ← checkedAdd self.pos self.base
   return v3
 
 /-- `Cursor::advance` -/

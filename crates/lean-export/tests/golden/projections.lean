@@ -40,8 +40,7 @@ def Cell_set (self : Place) (v : UInt256) : FeM Unit := do
 /-- `Cell::cached` -/
 def Cell_cached (self_0 : Place) : FeM (UInt256 × (UInt256 → FeM Unit)) := do
   let mut tmp : UInt256 := default
-  let self_1 := self_0
-  let tmp_2 ← Cell_get self_1
+  let tmp_2 ← Cell_get self_0
   tmp := tmp_2
   let slide : UInt256 → FeM Unit := fun g => do
     let mut tmp := tmp
@@ -77,8 +76,7 @@ def first (pair : (UInt256 × UInt256)) : FeM (UInt256 × (UInt256 → FeM (UInt
 def recv_Local (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let mut pair : (UInt256 × UInt256) := default
   let mut v5 : UInt256 := default
-  let pair_2 := (a, b)
-  pair := pair_2
+  pair := (a, b)
   let (v5_g, v5_k) ← first pair
   v5 := v5_g
   let v6 := v5

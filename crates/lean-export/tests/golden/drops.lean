@@ -49,9 +49,8 @@ def Guard_drop (self : Guard) : FeM Unit := do
 
 /-- `drops::take` -/
 def take (guard : Guard) : FeM UInt256 := do
-  let v1 := guard.n
   let _ ← Guard_drop guard
-  return v1
+  return guard.n
 
 /-- `Moved { keep } -> u256`, selector `0x4f4c6300` (`moved(bool)`) -/
 def recv_Moved (keep : Bool) : FeM UInt256 := do
@@ -73,10 +72,9 @@ def recv_Moved (keep : Bool) : FeM UInt256 := do
 
 /-- `Option<Guard>::is_some` -/
 def Option_is_some_Guard (self : Option_Guard) : FeM Bool := do
-  let v2 := self
   let join : Bool → FeM Bool := fun v1 => do
     return v1
-  match v2 with
+  match self with
   | .Some .. =>
     join true
   | .None =>
@@ -89,13 +87,12 @@ def recv_Payload (some : Bool) : FeM UInt256 := do
     let mut guard := guard
     guard := guard_1
     let v10 ← Option_is_some_Guard guard
-    let v11 := Bool.toUInt256 v10
     match guard with
     | .Some .. =>
       let _ ← Guard_drop guard.Some_0
       pure ()
     | _ => pure ()
-    return v11
+    return Bool.toUInt256 v10
   if some then
     let v3 := (Guard.mk (UInt256.ofNat 2))
     let v4 := Option_Guard.Some v3
@@ -106,8 +103,7 @@ def recv_Payload (some : Bool) : FeM UInt256 := do
 
 /-- `Stored { n } -> u256`, selector `0x8c396222` (`stored(uint256)`) -/
 def recv_Stored (n : UInt256) : FeM UInt256 := do
-  let v1 := (Pair.mk n n)
-  store_Pair Field.pair v1
+  store_Pair Field.pair (Pair.mk n n)
   let v3 ← load Field.pair.a
   return v3
 

@@ -12,8 +12,7 @@ def init : FeM Unit := do
 /-- `lib::right` -/
 def right (x : UInt256) : FeM UInt256 := do
   let mut r0 : Pair := default
-  let v3 := (Pair.mk (UInt256.ofNat 1) x)
-  r0 := v3
+  r0 := (Pair.mk (UInt256.ofNat 1) x)
   let v5 ← sum r0
   let v7 ← checkedMul v5 (UInt256.ofNat 2)
   return v7
@@ -33,8 +32,7 @@ def Right_HEAD_SIZE : FeM UInt256 := do
 def Right_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Right := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Right.mk v4)
-  return v6
+  return Right.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Right, Sol, CallData>` -/
 def decode_from_prechecked_head_Right_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Right := do

@@ -20,11 +20,9 @@ def init : FeM Unit := do
 
 /-- `Vote { voter, proposal } -> bool`, selector `0xb384abef` (`vote(uint256,uint256)`) -/
 def recv_Vote (voter : UInt256) (proposal : UInt256) : FeM Bool := do
-  let v2 := (voter, proposal)
-  let voted_entry ← StorageMap_locate_tuple_u256_u256_bool Field.store.voted Field.store.voted.slot v2
+  let voted_entry ← StorageMap_locate_tuple_u256_u256_bool Field.store.voted Field.store.voted.slot (voter, proposal)
   let before ← loadBool (Place.mk .storage voted_entry.slot)
-  let v6 := (voter, proposal)
-  let voted_entry_1 ← StorageMap_locate_tuple_u256_u256_bool Field.store.voted Field.store.voted.slot v6
+  let voted_entry_1 ← StorageMap_locate_tuple_u256_u256_bool Field.store.voted Field.store.voted.slot (voter, proposal)
   storeBool (Place.mk .storage voted_entry_1.slot) true
   return before
 

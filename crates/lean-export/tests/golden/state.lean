@@ -124,10 +124,8 @@ def recv_SetDelta (delta : UInt256) : FeM UInt256 := do
 /-- `Replace { flag, small, delta, owner, total } -> u256`, selector `0x1e84534a` (`replace(bool,uint8,int16,address,uint256)`) -/
 def recv_Replace (flag : Bool) (small : UInt256) (delta : UInt256) (owner : UInt256) (total : UInt256) : FeM UInt256 := do
   let packed_1 ← load_Packed Field.packed
-  let v7 := (Packed.mk flag small delta owner total)
-  store_Packed Field.packed v7
-  let v9 := packed_1.total
-  return v9
+  store_Packed Field.packed (Packed.mk flag small delta owner total)
+  return packed_1.total
 
 /-- `Advance { by } -> u256`, selector `0x71d6ddd6` (`advance(uint256)`) -/
 def recv_Advance («by» : UInt256) : FeM UInt256 := do
@@ -136,15 +134,12 @@ def recv_Advance («by» : UInt256) : FeM UInt256 := do
     return v1
   match v3 with
   | .Idle =>
-    let v5 := Phase.Running (UInt256.ofNat 1) «by»
-    store_Phase Field.phase v5
+    store_Phase Field.phase (Phase.Running (UInt256.ofNat 1) «by»)
     join (UInt256.ofNat 0)
   | .Running .. =>
     let count ← loadInt (.u 64) (Field.phase.offset 1)
     let sum ← load (Field.phase.offset 2)
-    let v11 := decide («by».toNat < sum.toNat)
-    let v12 := Phase.Done v11
-    store_Phase Field.phase v12
+    store_Phase Field.phase (Phase.Done (decide («by».toNat < sum.toNat)))
     join sum
   | .Done .. =>
     let ok ← loadBool (Field.phase.offset 1)

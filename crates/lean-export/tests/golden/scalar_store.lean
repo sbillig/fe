@@ -27,12 +27,11 @@ def recv_Set (value : UInt256) : FeM Unit := do
 
 /-- `<Get as AbiSize>::HEAD_SIZE` -/
 def Get_HEAD_SIZE : FeM UInt256 := do
-  return (UInt256.ofNat 0)
+  return UInt256.ofNat 0
 
 /-- `<Get as Decode>::decode_from<CallData>` -/
 def Get_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
-  let v2 := (Get.mk)
-  return v2
+  return Get.mk
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Get, Sol, CallData>` -/
 def decode_from_prechecked_head_Get_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Get := do
@@ -70,8 +69,7 @@ def Set_HEAD_SIZE : FeM UInt256 := do
 def Set_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Set := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Set.mk v4)
-  return v6
+  return Set.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Set, Sol, CallData>` -/
 def decode_from_prechecked_head_Set_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Set := do

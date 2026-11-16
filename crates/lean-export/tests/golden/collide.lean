@@ -31,11 +31,11 @@ def v3 (x : UInt256) : FeM UInt256 := do
 
 /-- `collide::bounds::limit` -/
 def limit : FeM UInt256 := do
-  return (UInt256.ofNat 10)
+  return UInt256.ofNat 10
 
 /-- `collide::size` -/
 def size : FeM UInt256 := do
-  return (UInt256.ofNat 4)
+  return UInt256.ofNat 4
 
 /-- `Run { x } -> u256`, selector `0xa444f5e9` (`run(uint256)`) -/
 def recv_CollideMsg_Run (x : UInt256) : FeM UInt256 := do
@@ -70,8 +70,7 @@ def recv_Spin (n : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
     let i_5 := i
-    let v7 := decide (i_5.toNat < n.toNat)
-    if v7 then
+    if decide (i_5.toNat < n.toNat) then
       let i_9 := i
       let i_10 ← checkedAdd i_9 (UInt256.ofNat 1)
       i := i_10
@@ -92,9 +91,7 @@ def recv_OtherMsg_Run (x : UInt256) : FeM UInt256 := do
 
 /-- `Pairs { t: (a, b) } -> u256`, selector `0x6a530d0d` (`pairs((uint256,uint256))`) -/
 def recv_Pairs (v0 : (UInt256 × UInt256)) : FeM UInt256 := do
-  let a := v0.fst
-  let b := v0.snd
-  let v5 ← checkedAdd a b
+  let v5 ← checkedAdd v0.fst v0.snd
   return v5
 
 /-- `<Run as AbiSize>::HEAD_SIZE` -/
@@ -107,8 +104,7 @@ def Run_HEAD_SIZE : FeM UInt256 := do
 def Run_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Run := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Run.mk v4)
-  return v6
+  return Run.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Run, Sol, CallData>` -/
 def decode_from_prechecked_head_Run_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Run := do
@@ -146,8 +142,7 @@ def Spin_HEAD_SIZE : FeM UInt256 := do
 def Spin_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Spin := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v2
-  let v6 := (Spin.mk v4)
-  return v6
+  return Spin.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Spin, Sol, CallData>` -/
 def decode_from_prechecked_head_Spin_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Spin := do
@@ -192,8 +187,7 @@ def Pairs_HEAD_SIZE : FeM UInt256 := do
 def Pairs_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Pairs := do
   let v2 ← len_CallData v0
   let v4 ← decode_msg_field_from_Sol_tuple_u256_u256_CallData v0 v1 v1 v2
-  let v6 := (Pairs.mk v4)
-  return v6
+  return Pairs.mk v4
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Pairs, Sol, CallData>` -/
 def decode_from_prechecked_head_Pairs_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Pairs := do

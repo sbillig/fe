@@ -19,12 +19,10 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
     let mut started := started
     let mut r3 := r3
     let index_10 := index
-    let v13 := decide (index_10.toNat < n.toNat)
-    if v13 then
+    if decide (index_10.toNat < n.toNat) then
       let index_14 := index
       let v17 ← checkedAdd index_14 width
       let v19 ← checkedAdd v17 (UInt256.ofNat 1)
-      let v21 := decide (v19.toNat < n.toNat)
       let join : UInt256 → UInt256 → Bool → Range_Unknown_Unknown → UInt256 → FeM UInt256 := fun acc index started r3 «end» => do
         let mut acc := acc
         let mut index := index
@@ -37,7 +35,6 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
           let mut started := started
           let mut r3 := r3
           let v60 ← checkedRem «end» (UInt256.ofNat 2)
-          let v62 := decide (v60 = (UInt256.ofNat 1))
           let join_1 : UInt256 → UInt256 → Bool → Range_Unknown_Unknown → FeM UInt256 := fun acc index started r3 => do
             let mut acc := acc
             let mut index := index
@@ -45,7 +42,7 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
             let mut r3 := r3
             index := «end»
             loop acc index started r3
-          if v62 then
+          if decide (v60 = (UInt256.ofNat 1)) then
             let acc_63 := acc
             let acc_66 ← checkedAdd acc_63 «end»
             acc := acc_66
@@ -56,8 +53,7 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
         partial_fixpoint
         if started_32 then
           let index_33 := index
-          let v36 := (Range_Unknown_Unknown.mk index_33 «end»)
-          r3 := v36
+          r3 := (Range_Unknown_Unknown.mk index_33 «end»)
           let v38 ← Range_Unknown_Unknown_start r3
           let rec loop_2 (acc : UInt256) (index : UInt256) (started : Bool) (r3 : Range_Unknown_Unknown) (v3 : UInt256) : FeM UInt256 := do
             let mut acc := acc
@@ -79,7 +75,7 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
           loop_2 acc index started r3 v38
         else
           loop_1 acc index started r3
-      if v21 then
+      if decide (v19.toNat < n.toNat) then
         let index_22 := index
         let v25 ← checkedAdd index_22 width
         let v27 ← checkedAdd v25 (UInt256.ofNat 1)
@@ -114,7 +110,6 @@ def break_both (n : UInt256) : FeM UInt256 := do
     let mut done := done
     let mut j := j
     let i_7 := i
-    let v10 := decide (i_7.toNat < n.toNat)
     let join : UInt256 → UInt256 → Bool → UInt256 → FeM UInt256 := fun i found done j => do
       let mut i := i
       let mut found := found
@@ -122,7 +117,7 @@ def break_both (n : UInt256) : FeM UInt256 := do
       let mut j := j
       let found_49 := found
       return found_49
-    if v10 then
+    if decide (i_7.toNat < n.toNat) then
       j := (UInt256.ofNat 0)
       let rec loop_1 (i : UInt256) (found : UInt256) (done : Bool) (j : UInt256) : FeM UInt256 := do
         let mut i := i
@@ -131,7 +126,6 @@ def break_both (n : UInt256) : FeM UInt256 := do
         let mut j := j
         let j_13 := j
         let i_15 := i
-        let v16 := decide (j_13.toNat < i_15.toNat)
         let join_1 : UInt256 → UInt256 → Bool → UInt256 → FeM UInt256 := fun i found done j => do
           let mut i := i
           let mut found := found
@@ -145,12 +139,11 @@ def break_both (n : UInt256) : FeM UInt256 := do
             let i_46 ← checkedAdd i_45 (UInt256.ofNat 1)
             i := i_46
             loop i found done j
-        if v16 then
+        if decide (j_13.toNat < i_15.toNat) then
           let i_17 := i
           let j_19 := j
           let v20 ← checkedMul i_17 j_19
-          let v22 := decide (v20 = (UInt256.ofNat 12))
-          if v22 then
+          if decide (v20 = (UInt256.ofNat 12)) then
             let i_23 := i
             let v26 ← checkedMul i_23 (UInt256.ofNat 100)
             let j_27 := j
@@ -191,8 +184,7 @@ def continue_outer (n : UInt256) : FeM UInt256 := do
     let mut j := j
     let mut skip := skip
     let i_5 := i
-    let v8 := decide (i_5.toNat < n.toNat)
-    if v8 then
+    if decide (i_5.toNat < n.toNat) then
       let i_10 := i
       let i_11 ← checkedAdd i_10 (UInt256.ofNat 1)
       i := i_11
@@ -205,7 +197,6 @@ def continue_outer (n : UInt256) : FeM UInt256 := do
         let mut skip := skip
         let j_18 := j
         let i_20 := i
-        let v21 := decide (j_18.toNat < i_20.toNat)
         let join : UInt256 → UInt256 → UInt256 → Bool → FeM UInt256 := fun i total j skip => do
           let mut i := i
           let mut total := total
@@ -220,10 +211,9 @@ def continue_outer (n : UInt256) : FeM UInt256 := do
             let total_42 ← checkedAdd total_41 i_39
             total := total_42
             loop i total j skip
-        if v21 then
+        if decide (j_18.toNat < i_20.toNat) then
           let j_22 := j
-          let v25 := decide (j_22 = (UInt256.ofNat 3))
-          if v25 then
+          if decide (j_22 = (UInt256.ofNat 3)) then
             skip := true
             join i total j skip
           else
@@ -255,20 +245,17 @@ def return_inner (n : UInt256) : FeM UInt256 := do
     let mut i := i
     let mut j := j
     let i_3 := i
-    let v6 := decide (i_3.toNat < n.toNat)
-    if v6 then
+    if decide (i_3.toNat < n.toNat) then
       j := (UInt256.ofNat 0)
       let rec loop_1 (i : UInt256) (j : UInt256) : FeM UInt256 := do
         let mut i := i
         let mut j := j
         let j_9 := j
-        let v12 := decide (j_9.toNat < n.toNat)
-        if v12 then
+        if decide (j_9.toNat < n.toNat) then
           let i_13 := i
           let j_15 := j
           let v16 ← checkedAdd i_13 j_15
-          let v18 := decide (v16 = (UInt256.ofNat 7))
-          if v18 then
+          if decide (v16 = (UInt256.ofNat 7)) then
             let i_19 := i
             let v22 ← checkedMul i_19 (UInt256.ofNat 10)
             let j_23 := j
@@ -287,7 +274,7 @@ def return_inner (n : UInt256) : FeM UInt256 := do
       partial_fixpoint
       loop_1 i j
     else
-      return (UInt256.ofNat 0)
+      return UInt256.ofNat 0
   partial_fixpoint
   loop i j
 
@@ -303,8 +290,7 @@ def three_levels (n : UInt256) : FeM UInt256 := do
   let mut r2 : Range_Known_0_Unknown := default
   let mut r3 : Range_Known_0_Unknown := default
   total := (UInt256.ofNat 0)
-  let v8 := (Range_Known_0_Unknown.mk () n)
-  r2 := v8
+  r2 := (Range_Known_0_Unknown.mk () n)
   let v10 ← Range_start_0 r2
   let rec loop (total : UInt256) (k : UInt256) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (v1 : UInt256) : FeM UInt256 := do
     let mut total := total
@@ -315,8 +301,7 @@ def three_levels (n : UInt256) : FeM UInt256 := do
     if v13 then
       let v15 ← Range_at_0 r2 v1
       let i := v15
-      let v19 := (Range_Known_0_Unknown.mk () i)
-      r3 := v19
+      r3 := (Range_Known_0_Unknown.mk () i)
       let v21 ← Range_start_0 r3
       let rec loop_1 (total : UInt256) (k : UInt256) (r2 : Range_Known_0_Unknown) (r3 : Range_Known_0_Unknown) (v2 : UInt256) : FeM UInt256 := do
         let mut total := total
@@ -334,13 +319,11 @@ def three_levels (n : UInt256) : FeM UInt256 := do
             let mut r2 := r2
             let mut r3 := r3
             let k_30 := k
-            let v32 := decide (k_30.toNat < j.toNat)
-            if v32 then
+            if decide (k_30.toNat < j.toNat) then
               let v33 ← checkedAdd i j
               let k_34 := k
               let v35 ← checkedAdd v33 k_34
               let v37 ← checkedRem v35 (UInt256.ofNat 3)
-              let v39 := decide (v37 = (UInt256.ofNat 0))
               let join : UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → FeM UInt256 := fun total k r2 r3 => do
                 let mut total := total
                 let mut k := k
@@ -350,7 +333,7 @@ def three_levels (n : UInt256) : FeM UInt256 := do
                 let k_54 ← checkedAdd k_53 (UInt256.ofNat 1)
                 k := k_54
                 loop_2 total k r2 r3
-              if v39 then
+              if decide (v37 = (UInt256.ofNat 0)) then
                 let total_41 := total
                 let total_42 ← checkedAdd total_41 (UInt256.ofNat 1)
                 total := total_42
@@ -362,7 +345,6 @@ def three_levels (n : UInt256) : FeM UInt256 := do
                 join total k r2 r3
             else
               let v58 ← checkedRem j (UInt256.ofNat 2)
-              let v60 := decide (v58 = (UInt256.ofNat 0))
               let join_1 : UInt256 → UInt256 → Range_Known_0_Unknown → Range_Known_0_Unknown → FeM UInt256 := fun total k r2 r3 => do
                 let mut total := total
                 let mut k := k
@@ -370,7 +352,7 @@ def three_levels (n : UInt256) : FeM UInt256 := do
                 let mut r3 := r3
                 let v70 ← Range_next_0 r3 v2
                 loop_1 total k r2 r3 v70
-              if v60 then
+              if decide (v58 = (UInt256.ofNat 0)) then
                 let total_62 := total
                 let total_63 ← checkedAdd total_62 (UInt256.ofNat 10)
                 total := total_63

@@ -5,7 +5,7 @@ deriving Inhabited
 
 /-- `lib::SCALE` -/
 def SCALE : FeM UInt256 := do
-  return (UInt256.ofNat 3)
+  return UInt256.ofNat 3
 
 /-- `lib::scaled` -/
 def scaled (x : UInt256) : FeM UInt256 := do
@@ -15,9 +15,7 @@ def scaled (x : UInt256) : FeM UInt256 := do
 
 /-- `lib::sum` -/
 def sum (pair : Pair) : FeM UInt256 := do
-  let v1 := pair.a
-  let v2 ← scaled v1
-  let v3 := pair.b
-  let v4 ← checkedAdd v2 v3
+  let v2 ← scaled pair.a
+  let v4 ← checkedAdd v2 pair.b
   return v4
 

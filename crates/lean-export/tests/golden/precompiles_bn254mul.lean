@@ -19,49 +19,46 @@ def input_Evm_3 : FeM MemBuffer := do
 
 /-- `lib::bn254::ORDER` -/
 def ORDER : FeM UInt256 := do
-  return (UInt256.ofNat 21888242871839275222246405745257275088548364400416034343698204186575808495617)
+  return UInt256.ofNat 21888242871839275222246405745257275088548364400416034343698204186575808495617
 
 /-- `lib::bn254::GLV_G1` -/
 def GLV_G1 : FeM UInt256 := do
-  return (UInt256.ofNat 52538187511802934231)
+  return UInt256.ofNat 52538187511802934231
 
 /-- `lib::bn254::GLV_G2` -/
 def GLV_G2 : FeM UInt256 := do
-  return (UInt256.ofNat 782660544089080853078787955015628534157)
+  return UInt256.ofNat 782660544089080853078787955015628534157
 
 /-- `lib::bn254::GLV_A1` -/
 def GLV_A1 : FeM UInt256 := do
-  return (UInt256.ofNat 9931322734385697763)
+  return UInt256.ofNat 9931322734385697763
 
 /-- `lib::bn254::GLV_A2` -/
 def GLV_A2 : FeM UInt256 := do
-  return (UInt256.ofNat 147946756881789319010696353538189108491)
+  return UInt256.ofNat 147946756881789319010696353538189108491
 
 /-- `lib::bn254::magnitude` -/
 def magnitude (word : UInt256) : FeM (UInt256 × Bool) := do
-  let v6 := word >>> (UInt256.ofNat 255)
-  let v8 := decide (v6 = (UInt256.ofNat 1))
+  let v8 := decide ((word >>> (UInt256.ofNat 255)) = (UInt256.ofNat 1))
   let join : (UInt256 × Bool) → FeM (UInt256 × Bool) := fun v1 => do
     return v1
   if v8 then
     let v10 ← u256_wrapping_sub (UInt256.ofNat 0) word
-    let v12 := (v10, true)
-    join v12
+    join (v10, true)
   else
-    let v16 := (word, false)
-    join v16
+    join (word, false)
 
 /-- `lib::bn254::GLV_B1` -/
 def GLV_B1 : FeM UInt256 := do
-  return (UInt256.ofNat 147946756881789319000765030803803410728)
+  return UInt256.ofNat 147946756881789319000765030803803410728
 
 /-- `lib::bn254::GLV_B2` -/
 def GLV_B2 : FeM UInt256 := do
-  return (UInt256.ofNat 9931322734385697763)
+  return UInt256.ofNat 9931322734385697763
 
 /-- `lib::bn254::BETA` -/
 def BETA : FeM UInt256 := do
-  return (UInt256.ofNat 2203960485148121921418603742825762020974279258880205651966)
+  return UInt256.ofNat 2203960485148121921418603742825762020974279258880205651966
 
 /-- `Point<Mont<Bn254Base>>::add_affine` -/
 def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn254Base) (y2 : Mont_Bn254Base) : FeM Point_Mont_Bn254Base := do
@@ -100,24 +97,20 @@ def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn2
     let v5 ← Point_affine_Mont_Bn254Base x2 y2
     return v5
   else
-    let v8 := self.z
-    r10 := v8
+    r10 := self.z
     let z1z1_10 ← Mont_square_Bn254Base r10
     z1z1 := z1z1_10
     let u2_13 ← Mont_mul_Bn254Base x2 z1z1
     u2 := u2_13
-    let v15 := self.z
-    r11 := v15
+    r11 := self.z
     let v17 ← Mont_mul_Bn254Base y2 r11
     r12 := v17
     let s2_20 ← Mont_mul_Bn254Base r12 z1z1
     s2 := s2_20
-    let v22 := self.x
-    r13 := v22
+    r13 := self.x
     let h_25 ← Mont_sub_Bn254Base u2 r13
     h := h_25
-    let v27 := self.y
-    r14 := v27
+    r14 := self.y
     let v30 ← Mont_sub_Bn254Base s2 r14
     r15 := v30
     let r_32 ← Mont_double_Bn254Base r15
@@ -172,8 +165,7 @@ def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn2
       i := i_50
       let j_54 ← Mont_mul_Bn254Base h i
       j := j_54
-      let v56 := self.x
-      r17 := v56
+      r17 := self.x
       let v_59 ← Mont_mul_Bn254Base r17 i
       v := v_59
       let v62 ← Mont_square_Bn254Base r
@@ -188,15 +180,13 @@ def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn2
       r21 := v74
       let v77 ← Mont_mul_Bn254Base r r21
       r22 := v77
-      let v78 := self.y
-      r23 := v78
+      r23 := self.y
       let v81 ← Mont_mul_Bn254Base r23 j
       r24 := v81
       let v83 ← Mont_double_Bn254Base r24
       r25 := v83
       let y ← Mont_sub_Bn254Base r22 r25
-      let v88 := self.z
-      r26 := v88
+      r26 := self.z
       let v91 ← Mont_add_Bn254Base r26 h
       r27 := v91
       let v93 ← Mont_square_Bn254Base r27
@@ -205,8 +195,7 @@ def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn2
       r29 := v96
       let v99 ← Mont_sub_Bn254Base r29 hh
       let x_100 := x
-      let v101 := (Point_Mont_Bn254Base.mk x_100 y v99)
-      return v101
+      return Point_Mont_Bn254Base.mk x_100 y v99
 
 /-- `<Mont<Bn254Base> as Field>::neg` -/
 def Mont_neg_Bn254Base (self : Mont_Bn254Base) : FeM Mont_Bn254Base := do
@@ -253,7 +242,6 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
   let v28 ← u256_wrapping_sub v25 v27
   let v29 ← magnitude v28
   let k1 := v29.fst
-  let negative1 := v29.snd
   let v34 ← GLV_B1
   let v35 ← checkedMul c1 v34
   let v36 ← GLV_B2
@@ -262,8 +250,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
   let v39 ← magnitude v38
   let k2 := v39.fst
   let negative2 := v39.snd
-  let x1_44 := point.x
-  x1 := x1_44
+  x1 := point.x
   let join : Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → UInt256 → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Mont_Bn254Base → FeM Point_Mont_Bn254Base := fun x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 y1_2 => do
     let mut x1 := x1
     let mut y1 := y1
@@ -287,8 +274,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
     let v53 ← BETA
     let v54 ← fp v53
     r9 := v54
-    let v55 := point.x
-    r10 := v55
+    r10 := point.x
     let x2_58 ← Mont_mul_Bn254Base r10 r9
     x2 := x2_58
     let join_1 : Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → UInt256 → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Mont_Bn254Base → FeM Point_Mont_Bn254Base := fun x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 y2_3 => do
@@ -316,15 +302,11 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
       let v73 ← Point_add_affine_Mont_Bn254Base r12 x2 y2
       r13 := v73
       let v75 ← Point_to_affine_Mont_Bn254Base r13
-      let x3_76 := v75.fst
-      x3 := x3_76
-      let y3_78 := v75.snd
-      y3 := y3_78
+      x3 := v75.fst
+      y3 := v75.snd
       let result_80 ← Point_infinity_Mont_Bn254Base
       result := result_80
-      let v83 := k1 ||| k2
-      let v84 := IntTy.leadingZeros (.u 256) v83
-      let v85 ← checkedSub (UInt256.ofNat 256) v84
+      let v85 ← checkedSub (UInt256.ofNat 256) (IntTy.leadingZeros (.u 256) (k1 ||| k2))
       let bit_86 ← downcast_truncate_u256_u64 v85
       bit := bit_86
       let rec loop (x1 : Mont_Bn254Base) (y1 : Mont_Bn254Base) (x2 : Mont_Bn254Base) (y2 : Mont_Bn254Base) (x3 : Mont_Bn254Base) (y3 : Mont_Bn254Base) (result : Point_Mont_Bn254Base) (bit : UInt256) (r8 : Mont_Bn254Base) (r9 : Mont_Bn254Base) (r10 : Mont_Bn254Base) (r11 : Mont_Bn254Base) (r12 : Point_Mont_Bn254Base) (r13 : Point_Mont_Bn254Base) (r14 : Point_Mont_Bn254Base) (r15 : Point_Mont_Bn254Base) (r16 : Point_Mont_Bn254Base) (r17 : Point_Mont_Bn254Base) : FeM Point_Mont_Bn254Base := do
@@ -347,8 +329,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
         let mut r16 := r16
         let mut r17 := r17
         let bit_88 := bit
-        let v91 := decide ((UInt256.ofNat 0).toNat < bit_88.toNat)
-        if v91 then
+        if decide ((UInt256.ofNat 0).toNat < bit_88.toNat) then
           let bit_93 := bit
           let bit_94 ← IntTy.sub (.u 64) bit_93 (UInt256.ofNat 1)
           bit := bit_94
@@ -357,13 +338,9 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
           let result_100 ← Point_double_Mont_Bn254Base r14
           result := result_100
           let bit_103 := bit
-          let v105 := k1 >>> bit_103
-          let v107 := v105 &&& (UInt256.ofNat 1)
-          let in1 := decide (v107 = (UInt256.ofNat 1))
+          let in1 := decide (((k1 >>> bit_103) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
           let bit_111 := bit
-          let v113 := k2 >>> bit_111
-          let v115 := v113 &&& (UInt256.ofNat 1)
-          let in2 := decide (v115 = (UInt256.ofNat 1))
+          let in2 := decide (((k2 >>> bit_111) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
           let join_2 : Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → UInt256 → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → FeM Point_Mont_Bn254Base := fun x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 => do
             let mut x1 := x1
             let mut y1 := y1
@@ -475,21 +452,17 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
       partial_fixpoint
       loop x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17
     if negative2 then
-      let v60 := point.y
-      r11 := v60
+      r11 := point.y
       let v62 ← Mont_neg_Bn254Base r11
       join_1 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v62
     else
-      let v64 := point.y
-      join_1 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v64
-  if negative1 then
-    let v46 := point.y
-    r8 := v46
+      join_1 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 point.y
+  if v29.snd then
+    r8 := point.y
     let v48 ← Mont_neg_Bn254Base r8
     join x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v48
   else
-    let v50 := point.y
-    join x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v50
+    join x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 point.y
 
 /-- `lib::bn254::mul<MemBuffer>` -/
 def mul_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
@@ -502,31 +475,26 @@ def mul_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
     return v1
   match v3 with
   | .Some .. =>
-    let point_4 := v3.Some_0
-    point := point_4
+    point := v3.Some_0
     let scalar ← word_at_MemBuffer input (UInt256.ofNat 64)
     let v10 ← Point_is_infinity_Mont_Bn254Base point
     let join_1 : Point_Mont_Bn254Base → Point_Mont_Bn254Base → FeM Option_array_u256_2 := fun point r1 => do
       let mut point := point
       let mut r1 := r1
-      let v23 := #v[(UInt256.ofNat 0), (UInt256.ofNat 0)]
-      let v24 := Option_array_u256_2.Some v23
+      let v24 := Option_array_u256_2.Some (#v[(UInt256.ofNat 0), (UInt256.ofNat 0)])
       return v24
     if v10 then
       join_1 point r1
     else
-      let v12 := decide (scalar = (UInt256.ofNat 0))
-      if v12 then
+      if decide (scalar = (UInt256.ofNat 0)) then
         join_1 point r1
       else
         let v16 ← multiply_g1 point scalar
         r1 := v16
         let v18 ← encode r1
-        let v19 := Option_array_u256_2.Some v18
-        join point r1 v19
+        join point r1 (Option_array_u256_2.Some v18)
   | .None =>
-    let v25 := Option_array_u256_2.None
-    join point r1 v25
+    join point r1 Option_array_u256_2.None
 
 /-- `_`, for a call no other arm takes -/
 def recv_fallback : FeM Empty := do
@@ -542,13 +510,11 @@ def recv_fallback : FeM Empty := do
     output := output_6
     let v9 := (UInt256.ofNat 0)
     checkIndex v9 2
-    let v10 := product[v9.toNat]!
-    let (v12, v12_0) ← MemBuffer_write_word output (UInt256.ofNat 0) v10
+    let (v12, v12_0) ← MemBuffer_write_word output (UInt256.ofNat 0) product[v9.toNat]!
     output := v12_0
     let v14 := (UInt256.ofNat 1)
     checkIndex v14 2
-    let v15 := product[v14.toNat]!
-    let (v17, v17_0) ← MemBuffer_write_word output (UInt256.ofNat 32) v15
+    let (v17, v17_0) ← MemBuffer_write_word output (UInt256.ofNat 32) product[v14.toNat]!
     output := v17_0
     let v19 ← MemBuffer_span_ref output
     let v22 ← Evm_return_data v19

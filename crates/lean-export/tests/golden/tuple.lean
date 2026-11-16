@@ -4,18 +4,13 @@ def init : FeM Unit := do
 
 /-- `tuple::swap` -/
 def swap (pair : (UInt256 × UInt256 × Bool)) : FeM (UInt256 × UInt256 × Bool) := do
-  let v1 := pair.snd.fst
-  let v2 := pair.fst
-  let v3 := pair.snd.snd
-  let v4 := (v1, v2, v3)
-  return v4
+  return (pair.snd.fst, pair.fst, pair.snd.snd)
 
 /-- `Swap { a, b } -> u256`, selector `0xd96073cf` (`swap(uint256,uint256)`) -/
 def recv_Swap (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let mut pair : (UInt256 × UInt256 × Bool) := default
   let mut r1 : (UInt256 × UInt256 × Bool) := default
-  let v4 := (a, b, true)
-  r1 := v4
+  r1 := (a, b, true)
   let pair_6 ← swap r1
   pair := pair_6
   let v8 := pair.snd.fst
