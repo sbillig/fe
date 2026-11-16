@@ -3794,15 +3794,12 @@ impl<'db> BodyExporter<'_, 'db> {
                 self.flag_updates(DropFlagPoint::After(statement.id)),
             ));
             let defined = match statement.kind {
-                NStatementKind::Define { result, .. } if !self.dropped.contains(&result) => {
-                    Some(result)
-                }
+                NStatementKind::Define { result, .. } => Some(result),
                 _ => None,
             };
-            if !text.is_empty() {
-                printed.push((text, defined));
-            } else if defined.is_some_and(|value| self.dropped.contains(&value)) {
-                printed.push((text, None));
+            let dropped = defined.is_some_and(|value| self.dropped.contains(&value));
+            if !text.is_empty() || dropped {
+                printed.push((text, defined.filter(|_| !dropped)));
             }
         }
         let end = flags(self.flag_updates(DropFlagPoint::BeforeTerminator(block)));

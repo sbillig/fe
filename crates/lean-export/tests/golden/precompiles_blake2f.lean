@@ -49,15 +49,14 @@ def rotate_right (value : UInt256) («by» : UInt256) : FeM UInt256 := do
   let v8 ← IntTy.sub (.u 64) (UInt256.ofNat 64) «by»
   return (value >>> «by») ||| (IntTy.shl (.u 64) value v8)
 
-def mix_k1 (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (y : UInt256) (v45 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def mix_k4 (b : UInt256) (v72 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let v47 ← u64_wrapping_add v45 y
-  checkIndex a 16
-  v := (v.set! a.toNat v47)
-  -- v[d] = rotate_right(v[d] ^ v[a], by: 16)
-  checkIndex d 16
-  checkIndex a 16
-  let v56 ← rotate_right (v[d.toNat]! ^^^ v[a.toNat]!) (UInt256.ofNat 16)
+  checkIndex b 16
+  v := (v.set! b.toNat v72)
+  return ((), v)
+
+def mix_k3 (b : UInt256) (c : UInt256) (d : UInt256) (v56 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   checkIndex d 16
   v := (v.set! d.toNat v56)
   -- v[c] = v[c].wrapping_add(v[d])
@@ -70,9 +69,39 @@ def mix_k1 (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (y : UInt256)
   checkIndex b 16
   checkIndex c 16
   let v72 ← rotate_right (v[b.toNat]! ^^^ v[c.toNat]!) (UInt256.ofNat 63)
+  mix_k4 b v72 v
+
+def mix_k2 (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (y : UInt256) (v38 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  v := (v.set! b.toNat v38)
+  -- v[a] = v[a].wrapping_add(v[b]).wrapping_add(y)
   checkIndex b 16
-  v := (v.set! b.toNat v72)
-  return ((), v)
+  checkIndex a 16
+  let v45 ← u64_wrapping_add v[a.toNat]! v[b.toNat]!
+  let v47 ← u64_wrapping_add v45 y
+  checkIndex a 16
+  v := (v.set! a.toNat v47)
+  -- v[d] = rotate_right(v[d] ^ v[a], by: 16)
+  checkIndex d 16
+  checkIndex a 16
+  let v56 ← rotate_right (v[d.toNat]! ^^^ v[a.toNat]!) (UInt256.ofNat 16)
+  mix_k3 b c d v56 v
+
+def mix_k1 (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (y : UInt256) (v22 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  v := (v.set! d.toNat v22)
+  -- v[c] = v[c].wrapping_add(v[d])
+  checkIndex d 16
+  checkIndex c 16
+  let v29 ← u64_wrapping_add v[c.toNat]! v[d.toNat]!
+  checkIndex c 16
+  v := (v.set! c.toNat v29)
+  -- v[b] = rotate_right(v[b] ^ v[c], by: 24)
+  checkIndex b 16
+  checkIndex c 16
+  let v38 ← rotate_right (v[b.toNat]! ^^^ v[c.toNat]!) (UInt256.ofNat 24)
+  checkIndex b 16
+  mix_k2 a b c d y v38 v
 
 /-- `lib::blake2f::mix` -/
 def mix (v : (Vector UInt256 16)) (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (x : UInt256) (y : UInt256) : FeM (Unit × (Vector UInt256 16)) := do
@@ -89,39 +118,10 @@ def mix (v : (Vector UInt256 16)) (a : UInt256) (b : UInt256) (c : UInt256) (d :
   checkIndex a 16
   let v22 ← rotate_right (v[d.toNat]! ^^^ v[a.toNat]!) (UInt256.ofNat 32)
   checkIndex d 16
-  v := (v.set! d.toNat v22)
-  -- v[c] = v[c].wrapping_add(v[d])
-  checkIndex d 16
-  checkIndex c 16
-  let v29 ← u64_wrapping_add v[c.toNat]! v[d.toNat]!
-  checkIndex c 16
-  v := (v.set! c.toNat v29)
-  -- v[b] = rotate_right(v[b] ^ v[c], by: 24)
-  checkIndex b 16
-  checkIndex c 16
-  let v38 ← rotate_right (v[b.toNat]! ^^^ v[c.toNat]!) (UInt256.ofNat 24)
-  checkIndex b 16
-  v := (v.set! b.toNat v38)
-  -- v[a] = v[a].wrapping_add(v[b]).wrapping_add(y)
-  checkIndex b 16
-  checkIndex a 16
-  let v45 ← u64_wrapping_add v[a.toNat]! v[b.toNat]!
-  mix_k1 a b c d y v45 v
+  mix_k1 a b c d y v22 v
 
-def ten_rounds_k16 (m : (Vector UInt256 16)) (v767 : UInt256) (v769 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k36 (m : (Vector UInt256 16)) (v787 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let (v771, v771_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v767.toNat]! m[v769.toNat]!
-  v := v771_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[9], y: m[14])
-  let v777 := (UInt256.ofNat 9)
-  checkIndex v777 16
-  let v779 := (UInt256.ofNat 14)
-  checkIndex v779 16
-  let (v781, v781_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v777.toNat]! m[v779.toNat]!
-  v := v781_0
-  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[3], y: m[12])
-  let v787 := (UInt256.ofNat 3)
-  checkIndex v787 16
   let v789 := (UInt256.ofNat 12)
   checkIndex v789 16
   let (v791, v791_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v787.toNat]! m[v789.toNat]!
@@ -135,7 +135,46 @@ def ten_rounds_k16 (m : (Vector UInt256 16)) (v767 : UInt256) (v769 : UInt256) (
   v := v801_0
   return ((), v)
 
-def ten_rounds_k15 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k35 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[15], y: m[11])
+  let v767 := (UInt256.ofNat 15)
+  checkIndex v767 16
+  let v769 := (UInt256.ofNat 11)
+  checkIndex v769 16
+  let (v771, v771_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v767.toNat]! m[v769.toNat]!
+  v := v771_0
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[9], y: m[14])
+  let v777 := (UInt256.ofNat 9)
+  checkIndex v777 16
+  let v779 := (UInt256.ofNat 14)
+  checkIndex v779 16
+  let (v781, v781_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v777.toNat]! m[v779.toNat]!
+  v := v781_0
+  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[3], y: m[12])
+  let v787 := (UInt256.ofNat 3)
+  checkIndex v787 16
+  ten_rounds_k36 m v787 v
+
+def ten_rounds_k34 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[7], y: m[6])
+  let v747 := (UInt256.ofNat 7)
+  checkIndex v747 16
+  let v749 := (UInt256.ofNat 6)
+  checkIndex v749 16
+  let (v751, v751_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v747.toNat]! m[v749.toNat]!
+  v := v751_0
+  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[1], y: m[5])
+  let v757 := (UInt256.ofNat 1)
+  checkIndex v757 16
+  let v759 := (UInt256.ofNat 5)
+  checkIndex v759 16
+  let (v761, v761_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v757.toNat]! m[v759.toNat]!
+  v := v761_0
+  ten_rounds_k35 m v
+
+def ten_rounds_k33 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
   -- mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[10], y: m[2])
   let v727 := (UInt256.ofNat 10)
@@ -151,46 +190,10 @@ def ten_rounds_k15 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Un
   checkIndex v739 16
   let (v741, v741_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v737.toNat]! m[v739.toNat]!
   v := v741_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[7], y: m[6])
-  let v747 := (UInt256.ofNat 7)
-  checkIndex v747 16
-  let v749 := (UInt256.ofNat 6)
-  checkIndex v749 16
-  let (v751, v751_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v747.toNat]! m[v749.toNat]!
-  v := v751_0
-  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[1], y: m[5])
-  let v757 := (UInt256.ofNat 1)
-  checkIndex v757 16
-  let v759 := (UInt256.ofNat 5)
-  checkIndex v759 16
-  let (v761, v761_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v757.toNat]! m[v759.toNat]!
-  v := v761_0
-  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[15], y: m[11])
-  let v767 := (UInt256.ofNat 15)
-  checkIndex v767 16
-  let v769 := (UInt256.ofNat 11)
-  checkIndex v769 16
-  ten_rounds_k16 m v767 v769 v
+  ten_rounds_k34 m v
 
-def ten_rounds_k14 (m : (Vector UInt256 16)) (v677 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k32 (m : (Vector UInt256 16)) (v697 : UInt256) (v699 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  checkIndex v677 16
-  let v679 := (UInt256.ofNat 8)
-  checkIndex v679 16
-  let (v681, v681_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v677.toNat]! m[v679.toNat]!
-  v := v681_0
-  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[12], y: m[2])
-  let v687 := (UInt256.ofNat 12)
-  checkIndex v687 16
-  let v689 := (UInt256.ofNat 2)
-  checkIndex v689 16
-  let (v691, v691_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v687.toNat]! m[v689.toNat]!
-  v := v691_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[13], y: m[7])
-  let v697 := (UInt256.ofNat 13)
-  checkIndex v697 16
-  let v699 := (UInt256.ofNat 7)
-  checkIndex v699 16
   let (v701, v701_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v697.toNat]! m[v699.toNat]!
   v := v701_0
   -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[1], y: m[4])
@@ -207,14 +210,49 @@ def ten_rounds_k14 (m : (Vector UInt256 16)) (v677 : UInt256) (v : (Vector UInt2
   checkIndex v719 16
   let (v721, v721_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 4) (UInt256.ofNat 9) (UInt256.ofNat 14) m[v717.toNat]! m[v719.toNat]!
   v := v721_0
-  ten_rounds_k15 m v
+  ten_rounds_k33 m v
 
-def ten_rounds_k13 (m : (Vector UInt256 16)) (v627 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k31 (m : (Vector UInt256 16)) (v677 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let v629 := (UInt256.ofNat 6)
-  checkIndex v629 16
-  let (v631, v631_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v627.toNat]! m[v629.toNat]!
-  v := v631_0
+  let v679 := (UInt256.ofNat 8)
+  checkIndex v679 16
+  let (v681, v681_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v677.toNat]! m[v679.toNat]!
+  v := v681_0
+  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[12], y: m[2])
+  let v687 := (UInt256.ofNat 12)
+  checkIndex v687 16
+  let v689 := (UInt256.ofNat 2)
+  checkIndex v689 16
+  let (v691, v691_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v687.toNat]! m[v689.toNat]!
+  v := v691_0
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[13], y: m[7])
+  let v697 := (UInt256.ofNat 13)
+  checkIndex v697 16
+  let v699 := (UInt256.ofNat 7)
+  checkIndex v699 16
+  ten_rounds_k32 m v697 v699 v
+
+def ten_rounds_k30 (m : (Vector UInt256 16)) (v657 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  checkIndex v657 16
+  let v659 := (UInt256.ofNat 9)
+  checkIndex v659 16
+  let (v661, v661_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v657.toNat]! m[v659.toNat]!
+  v := v661_0
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[11], y: m[3])
+  let v667 := (UInt256.ofNat 11)
+  checkIndex v667 16
+  let v669 := (UInt256.ofNat 3)
+  checkIndex v669 16
+  let (v671, v671_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v667.toNat]! m[v669.toNat]!
+  v := v671_0
+  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[0], y: m[8])
+  let v677 := (UInt256.ofNat 0)
+  checkIndex v677 16
+  ten_rounds_k31 m v677 v
+
+def ten_rounds_k29 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   -- mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[2], y: m[10])
   let v637 := (UInt256.ofNat 2)
   checkIndex v637 16
@@ -231,32 +269,28 @@ def ten_rounds_k13 (m : (Vector UInt256 16)) (v627 : UInt256) (v : (Vector UInt2
   v := v651_0
   -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[14], y: m[9])
   let v657 := (UInt256.ofNat 14)
-  checkIndex v657 16
-  let v659 := (UInt256.ofNat 9)
-  checkIndex v659 16
-  let (v661, v661_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v657.toNat]! m[v659.toNat]!
-  v := v661_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[11], y: m[3])
-  let v667 := (UInt256.ofNat 11)
-  checkIndex v667 16
-  let v669 := (UInt256.ofNat 3)
-  checkIndex v669 16
-  let (v671, v671_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v667.toNat]! m[v669.toNat]!
-  v := v671_0
-  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[0], y: m[8])
-  let v677 := (UInt256.ofNat 0)
-  ten_rounds_k14 m v677 v
+  ten_rounds_k30 m v657 v
 
-def ten_rounds_k12 (m : (Vector UInt256 16)) (v577 : UInt256) (v579 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k28 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  checkIndex v579 16
-  let (v581, v581_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v577.toNat]! m[v579.toNat]!
-  v := v581_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[12], y: m[1])
-  let v587 := (UInt256.ofNat 12)
-  checkIndex v587 16
-  let v589 := (UInt256.ofNat 1)
-  checkIndex v589 16
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[15], y: m[4])
+  let v617 := (UInt256.ofNat 15)
+  checkIndex v617 16
+  let v619 := (UInt256.ofNat 4)
+  checkIndex v619 16
+  let (v621, v621_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v617.toNat]! m[v619.toNat]!
+  v := v621_0
+  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[8], y: m[6])
+  let v627 := (UInt256.ofNat 8)
+  checkIndex v627 16
+  let v629 := (UInt256.ofNat 6)
+  checkIndex v629 16
+  let (v631, v631_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v627.toNat]! m[v629.toNat]!
+  v := v631_0
+  ten_rounds_k29 m v
+
+def ten_rounds_k27 (m : (Vector UInt256 16)) (v587 : UInt256) (v589 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   let (v591, v591_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v587.toNat]! m[v589.toNat]!
   v := v591_0
   -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[3], y: m[9])
@@ -273,32 +307,29 @@ def ten_rounds_k12 (m : (Vector UInt256 16)) (v577 : UInt256) (v579 : UInt256) (
   checkIndex v609 16
   let (v611, v611_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v607.toNat]! m[v609.toNat]!
   v := v611_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[15], y: m[4])
-  let v617 := (UInt256.ofNat 15)
-  checkIndex v617 16
-  let v619 := (UInt256.ofNat 4)
-  checkIndex v619 16
-  let (v621, v621_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v617.toNat]! m[v619.toNat]!
-  v := v621_0
-  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[8], y: m[6])
-  let v627 := (UInt256.ofNat 8)
-  checkIndex v627 16
-  ten_rounds_k13 m v627 v
+  ten_rounds_k28 m v
 
-def ten_rounds_k11 (m : (Vector UInt256 16)) (v527 : UInt256) (v529 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k26 (m : (Vector UInt256 16)) (v567 : UInt256) (v569 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let (v531, v531_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v527.toNat]! m[v529.toNat]!
-  v := v531_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[6], y: m[3])
-  let v537 := (UInt256.ofNat 6)
-  checkIndex v537 16
-  let v539 := (UInt256.ofNat 3)
-  checkIndex v539 16
-  let (v541, v541_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v537.toNat]! m[v539.toNat]!
-  v := v541_0
-  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[9], y: m[2])
-  let v547 := (UInt256.ofNat 9)
-  checkIndex v547 16
+  checkIndex v569 16
+  let (v571, v571_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) m[v567.toNat]! m[v569.toNat]!
+  v := v571_0
+  -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[7], y: m[14])
+  let v577 := (UInt256.ofNat 7)
+  checkIndex v577 16
+  let v579 := (UInt256.ofNat 14)
+  checkIndex v579 16
+  let (v581, v581_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v577.toNat]! m[v579.toNat]!
+  v := v581_0
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[12], y: m[1])
+  let v587 := (UInt256.ofNat 12)
+  checkIndex v587 16
+  let v589 := (UInt256.ofNat 1)
+  checkIndex v589 16
+  ten_rounds_k27 m v587 v589 v
+
+def ten_rounds_k25 (m : (Vector UInt256 16)) (v547 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   let v549 := (UInt256.ofNat 2)
   checkIndex v549 16
   let (v551, v551_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v547.toNat]! m[v549.toNat]!
@@ -314,16 +345,48 @@ def ten_rounds_k11 (m : (Vector UInt256 16)) (v527 : UInt256) (v529 : UInt256) (
   let v567 := (UInt256.ofNat 13)
   checkIndex v567 16
   let v569 := (UInt256.ofNat 11)
-  checkIndex v569 16
-  let (v571, v571_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) m[v567.toNat]! m[v569.toNat]!
-  v := v571_0
-  -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[7], y: m[14])
-  let v577 := (UInt256.ofNat 7)
-  checkIndex v577 16
-  let v579 := (UInt256.ofNat 14)
-  ten_rounds_k12 m v577 v579 v
+  ten_rounds_k26 m v567 v569 v
 
-def ten_rounds_k10 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k24 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[0], y: m[7])
+  let v527 := (UInt256.ofNat 0)
+  checkIndex v527 16
+  let v529 := (UInt256.ofNat 7)
+  checkIndex v529 16
+  let (v531, v531_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v527.toNat]! m[v529.toNat]!
+  v := v531_0
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[6], y: m[3])
+  let v537 := (UInt256.ofNat 6)
+  checkIndex v537 16
+  let v539 := (UInt256.ofNat 3)
+  checkIndex v539 16
+  let (v541, v541_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v537.toNat]! m[v539.toNat]!
+  v := v541_0
+  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[9], y: m[2])
+  let v547 := (UInt256.ofNat 9)
+  checkIndex v547 16
+  ten_rounds_k25 m v547 v
+
+def ten_rounds_k23 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[14], y: m[13])
+  let v507 := (UInt256.ofNat 14)
+  checkIndex v507 16
+  let v509 := (UInt256.ofNat 13)
+  checkIndex v509 16
+  let (v511, v511_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v507.toNat]! m[v509.toNat]!
+  v := v511_0
+  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[4], y: m[10])
+  let v517 := (UInt256.ofNat 4)
+  checkIndex v517 16
+  let v519 := (UInt256.ofNat 10)
+  checkIndex v519 16
+  let (v521, v521_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v517.toNat]! m[v519.toNat]!
+  v := v521_0
+  ten_rounds_k24 m v
+
+def ten_rounds_k22 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
   -- mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[12], y: m[5])
   let v487 := (UInt256.ofNat 12)
@@ -339,46 +402,10 @@ def ten_rounds_k10 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Un
   checkIndex v499 16
   let (v501, v501_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v497.toNat]! m[v499.toNat]!
   v := v501_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[14], y: m[13])
-  let v507 := (UInt256.ofNat 14)
-  checkIndex v507 16
-  let v509 := (UInt256.ofNat 13)
-  checkIndex v509 16
-  let (v511, v511_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v507.toNat]! m[v509.toNat]!
-  v := v511_0
-  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[4], y: m[10])
-  let v517 := (UInt256.ofNat 4)
-  checkIndex v517 16
-  let v519 := (UInt256.ofNat 10)
-  checkIndex v519 16
-  let (v521, v521_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v517.toNat]! m[v519.toNat]!
-  v := v521_0
-  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[0], y: m[7])
-  let v527 := (UInt256.ofNat 0)
-  checkIndex v527 16
-  let v529 := (UInt256.ofNat 7)
-  checkIndex v529 16
-  ten_rounds_k11 m v527 v529 v
+  ten_rounds_k23 m v
 
-def ten_rounds_k9 (m : (Vector UInt256 16)) (v437 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k21 (m : (Vector UInt256 16)) (v457 : UInt256) (v459 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  checkIndex v437 16
-  let v439 := (UInt256.ofNat 3)
-  checkIndex v439 16
-  let (v441, v441_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v437.toNat]! m[v439.toNat]!
-  v := v441_0
-  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[4], y: m[13])
-  let v447 := (UInt256.ofNat 4)
-  checkIndex v447 16
-  let v449 := (UInt256.ofNat 13)
-  checkIndex v449 16
-  let (v451, v451_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v447.toNat]! m[v449.toNat]!
-  v := v451_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[7], y: m[5])
-  let v457 := (UInt256.ofNat 7)
-  checkIndex v457 16
-  let v459 := (UInt256.ofNat 5)
-  checkIndex v459 16
   let (v461, v461_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v457.toNat]! m[v459.toNat]!
   v := v461_0
   -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[15], y: m[14])
@@ -395,14 +422,49 @@ def ten_rounds_k9 (m : (Vector UInt256 16)) (v437 : UInt256) (v : (Vector UInt25
   checkIndex v479 16
   let (v481, v481_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 4) (UInt256.ofNat 9) (UInt256.ofNat 14) m[v477.toNat]! m[v479.toNat]!
   v := v481_0
-  ten_rounds_k10 m v
+  ten_rounds_k22 m v
 
-def ten_rounds_k8 (m : (Vector UInt256 16)) (v387 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k20 (m : (Vector UInt256 16)) (v437 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let v389 := (UInt256.ofNat 8)
-  checkIndex v389 16
-  let (v391, v391_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v387.toNat]! m[v389.toNat]!
-  v := v391_0
+  let v439 := (UInt256.ofNat 3)
+  checkIndex v439 16
+  let (v441, v441_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v437.toNat]! m[v439.toNat]!
+  v := v441_0
+  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[4], y: m[13])
+  let v447 := (UInt256.ofNat 4)
+  checkIndex v447 16
+  let v449 := (UInt256.ofNat 13)
+  checkIndex v449 16
+  let (v451, v451_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v447.toNat]! m[v449.toNat]!
+  v := v451_0
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[7], y: m[5])
+  let v457 := (UInt256.ofNat 7)
+  checkIndex v457 16
+  let v459 := (UInt256.ofNat 5)
+  checkIndex v459 16
+  ten_rounds_k21 m v457 v459 v
+
+def ten_rounds_k19 (m : (Vector UInt256 16)) (v417 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  checkIndex v417 16
+  let v419 := (UInt256.ofNat 10)
+  checkIndex v419 16
+  let (v421, v421_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v417.toNat]! m[v419.toNat]!
+  v := v421_0
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[0], y: m[11])
+  let v427 := (UInt256.ofNat 0)
+  checkIndex v427 16
+  let v429 := (UInt256.ofNat 11)
+  checkIndex v429 16
+  let (v431, v431_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v427.toNat]! m[v429.toNat]!
+  v := v431_0
+  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[8], y: m[3])
+  let v437 := (UInt256.ofNat 8)
+  checkIndex v437 16
+  ten_rounds_k20 m v437 v
+
+def ten_rounds_k18 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   -- mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[3], y: m[13])
   let v397 := (UInt256.ofNat 3)
   checkIndex v397 16
@@ -419,32 +481,28 @@ def ten_rounds_k8 (m : (Vector UInt256 16)) (v387 : UInt256) (v : (Vector UInt25
   v := v411_0
   -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[6], y: m[10])
   let v417 := (UInt256.ofNat 6)
-  checkIndex v417 16
-  let v419 := (UInt256.ofNat 10)
-  checkIndex v419 16
-  let (v421, v421_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v417.toNat]! m[v419.toNat]!
-  v := v421_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[0], y: m[11])
-  let v427 := (UInt256.ofNat 0)
-  checkIndex v427 16
-  let v429 := (UInt256.ofNat 11)
-  checkIndex v429 16
-  let (v431, v431_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v427.toNat]! m[v429.toNat]!
-  v := v431_0
-  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[8], y: m[3])
-  let v437 := (UInt256.ofNat 8)
-  ten_rounds_k9 m v437 v
+  ten_rounds_k19 m v417 v
 
-def ten_rounds_k7 (m : (Vector UInt256 16)) (v337 : UInt256) (v339 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k17 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  checkIndex v339 16
-  let (v341, v341_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v337.toNat]! m[v339.toNat]!
-  v := v341_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[2], y: m[4])
-  let v347 := (UInt256.ofNat 2)
-  checkIndex v347 16
-  let v349 := (UInt256.ofNat 4)
-  checkIndex v349 16
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[11], y: m[12])
+  let v377 := (UInt256.ofNat 11)
+  checkIndex v377 16
+  let v379 := (UInt256.ofNat 12)
+  checkIndex v379 16
+  let (v381, v381_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v377.toNat]! m[v379.toNat]!
+  v := v381_0
+  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[6], y: m[8])
+  let v387 := (UInt256.ofNat 6)
+  checkIndex v387 16
+  let v389 := (UInt256.ofNat 8)
+  checkIndex v389 16
+  let (v391, v391_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v387.toNat]! m[v389.toNat]!
+  v := v391_0
+  ten_rounds_k18 m v
+
+def ten_rounds_k16 (m : (Vector UInt256 16)) (v347 : UInt256) (v349 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   let (v351, v351_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v347.toNat]! m[v349.toNat]!
   v := v351_0
   -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[10], y: m[15])
@@ -461,32 +519,29 @@ def ten_rounds_k7 (m : (Vector UInt256 16)) (v337 : UInt256) (v339 : UInt256) (v
   checkIndex v369 16
   let (v371, v371_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v367.toNat]! m[v369.toNat]!
   v := v371_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[11], y: m[12])
-  let v377 := (UInt256.ofNat 11)
-  checkIndex v377 16
-  let v379 := (UInt256.ofNat 12)
-  checkIndex v379 16
-  let (v381, v381_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v377.toNat]! m[v379.toNat]!
-  v := v381_0
-  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[6], y: m[8])
-  let v387 := (UInt256.ofNat 6)
-  checkIndex v387 16
-  ten_rounds_k8 m v387 v
+  ten_rounds_k17 m v
 
-def ten_rounds_k6 (m : (Vector UInt256 16)) (v287 : UInt256) (v289 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k15 (m : (Vector UInt256 16)) (v327 : UInt256) (v329 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let (v291, v291_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v287.toNat]! m[v289.toNat]!
-  v := v291_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[5], y: m[10])
-  let v297 := (UInt256.ofNat 5)
-  checkIndex v297 16
-  let v299 := (UInt256.ofNat 10)
-  checkIndex v299 16
-  let (v301, v301_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v297.toNat]! m[v299.toNat]!
-  v := v301_0
-  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[4], y: m[0])
-  let v307 := (UInt256.ofNat 4)
-  checkIndex v307 16
+  checkIndex v329 16
+  let (v331, v331_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) m[v327.toNat]! m[v329.toNat]!
+  v := v331_0
+  -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[5], y: m[7])
+  let v337 := (UInt256.ofNat 5)
+  checkIndex v337 16
+  let v339 := (UInt256.ofNat 7)
+  checkIndex v339 16
+  let (v341, v341_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v337.toNat]! m[v339.toNat]!
+  v := v341_0
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[2], y: m[4])
+  let v347 := (UInt256.ofNat 2)
+  checkIndex v347 16
+  let v349 := (UInt256.ofNat 4)
+  checkIndex v349 16
+  ten_rounds_k16 m v347 v349 v
+
+def ten_rounds_k14 (m : (Vector UInt256 16)) (v307 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   let v309 := (UInt256.ofNat 0)
   checkIndex v309 16
   let (v311, v311_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v307.toNat]! m[v309.toNat]!
@@ -502,16 +557,48 @@ def ten_rounds_k6 (m : (Vector UInt256 16)) (v287 : UInt256) (v289 : UInt256) (v
   let v327 := (UInt256.ofNat 9)
   checkIndex v327 16
   let v329 := (UInt256.ofNat 0)
-  checkIndex v329 16
-  let (v331, v331_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) m[v327.toNat]! m[v329.toNat]!
-  v := v331_0
-  -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[5], y: m[7])
-  let v337 := (UInt256.ofNat 5)
-  checkIndex v337 16
-  let v339 := (UInt256.ofNat 7)
-  ten_rounds_k7 m v337 v339 v
+  ten_rounds_k15 m v327 v329 v
 
-def ten_rounds_k5 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k13 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[2], y: m[6])
+  let v287 := (UInt256.ofNat 2)
+  checkIndex v287 16
+  let v289 := (UInt256.ofNat 6)
+  checkIndex v289 16
+  let (v291, v291_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v287.toNat]! m[v289.toNat]!
+  v := v291_0
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[5], y: m[10])
+  let v297 := (UInt256.ofNat 5)
+  checkIndex v297 16
+  let v299 := (UInt256.ofNat 10)
+  checkIndex v299 16
+  let (v301, v301_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v297.toNat]! m[v299.toNat]!
+  v := v301_0
+  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[4], y: m[0])
+  let v307 := (UInt256.ofNat 4)
+  checkIndex v307 16
+  ten_rounds_k14 m v307 v
+
+def ten_rounds_k12 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[13], y: m[12])
+  let v267 := (UInt256.ofNat 13)
+  checkIndex v267 16
+  let v269 := (UInt256.ofNat 12)
+  checkIndex v269 16
+  let (v271, v271_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v267.toNat]! m[v269.toNat]!
+  v := v271_0
+  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[11], y: m[14])
+  let v277 := (UInt256.ofNat 11)
+  checkIndex v277 16
+  let v279 := (UInt256.ofNat 14)
+  checkIndex v279 16
+  let (v281, v281_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v277.toNat]! m[v279.toNat]!
+  v := v281_0
+  ten_rounds_k13 m v
+
+def ten_rounds_k11 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
   -- mix(mut v, a: 0, b: 4, c: 8, d: 12, x: m[7], y: m[9])
   let v247 := (UInt256.ofNat 7)
@@ -527,46 +614,10 @@ def ten_rounds_k5 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Uni
   checkIndex v259 16
   let (v261, v261_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v257.toNat]! m[v259.toNat]!
   v := v261_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[13], y: m[12])
-  let v267 := (UInt256.ofNat 13)
-  checkIndex v267 16
-  let v269 := (UInt256.ofNat 12)
-  checkIndex v269 16
-  let (v271, v271_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v267.toNat]! m[v269.toNat]!
-  v := v271_0
-  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[11], y: m[14])
-  let v277 := (UInt256.ofNat 11)
-  checkIndex v277 16
-  let v279 := (UInt256.ofNat 14)
-  checkIndex v279 16
-  let (v281, v281_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v277.toNat]! m[v279.toNat]!
-  v := v281_0
-  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[2], y: m[6])
-  let v287 := (UInt256.ofNat 2)
-  checkIndex v287 16
-  let v289 := (UInt256.ofNat 6)
-  checkIndex v289 16
-  ten_rounds_k6 m v287 v289 v
+  ten_rounds_k12 m v
 
-def ten_rounds_k4 (m : (Vector UInt256 16)) (v197 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k10 (m : (Vector UInt256 16)) (v217 : UInt256) (v219 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  checkIndex v197 16
-  let v199 := (UInt256.ofNat 13)
-  checkIndex v199 16
-  let (v201, v201_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v197.toNat]! m[v199.toNat]!
-  v := v201_0
-  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[10], y: m[14])
-  let v207 := (UInt256.ofNat 10)
-  checkIndex v207 16
-  let v209 := (UInt256.ofNat 14)
-  checkIndex v209 16
-  let (v211, v211_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v207.toNat]! m[v209.toNat]!
-  v := v211_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[3], y: m[6])
-  let v217 := (UInt256.ofNat 3)
-  checkIndex v217 16
-  let v219 := (UInt256.ofNat 6)
-  checkIndex v219 16
   let (v221, v221_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v217.toNat]! m[v219.toNat]!
   v := v221_0
   -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[7], y: m[1])
@@ -583,14 +634,49 @@ def ten_rounds_k4 (m : (Vector UInt256 16)) (v197 : UInt256) (v : (Vector UInt25
   checkIndex v239 16
   let (v241, v241_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 4) (UInt256.ofNat 9) (UInt256.ofNat 14) m[v237.toNat]! m[v239.toNat]!
   v := v241_0
-  ten_rounds_k5 m v
+  ten_rounds_k11 m v
 
-def ten_rounds_k3 (m : (Vector UInt256 16)) (v147 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k9 (m : (Vector UInt256 16)) (v197 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let v149 := (UInt256.ofNat 7)
-  checkIndex v149 16
-  let (v151, v151_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v147.toNat]! m[v149.toNat]!
-  v := v151_0
+  let v199 := (UInt256.ofNat 13)
+  checkIndex v199 16
+  let (v201, v201_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v197.toNat]! m[v199.toNat]!
+  v := v201_0
+  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[10], y: m[14])
+  let v207 := (UInt256.ofNat 10)
+  checkIndex v207 16
+  let v209 := (UInt256.ofNat 14)
+  checkIndex v209 16
+  let (v211, v211_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v207.toNat]! m[v209.toNat]!
+  v := v211_0
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[3], y: m[6])
+  let v217 := (UInt256.ofNat 3)
+  checkIndex v217 16
+  let v219 := (UInt256.ofNat 6)
+  checkIndex v219 16
+  ten_rounds_k10 m v217 v219 v
+
+def ten_rounds_k8 (m : (Vector UInt256 16)) (v177 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  checkIndex v177 16
+  let v179 := (UInt256.ofNat 0)
+  checkIndex v179 16
+  let (v181, v181_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v177.toNat]! m[v179.toNat]!
+  v := v181_0
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[5], y: m[2])
+  let v187 := (UInt256.ofNat 5)
+  checkIndex v187 16
+  let v189 := (UInt256.ofNat 2)
+  checkIndex v189 16
+  let (v191, v191_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v187.toNat]! m[v189.toNat]!
+  v := v191_0
+  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[15], y: m[13])
+  let v197 := (UInt256.ofNat 15)
+  checkIndex v197 16
+  ten_rounds_k9 m v197 v
+
+def ten_rounds_k7 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   -- mix(mut v, a: 3, b: 4, c: 9, d: 14, x: m[5], y: m[3])
   let v157 := (UInt256.ofNat 5)
   checkIndex v157 16
@@ -607,32 +693,28 @@ def ten_rounds_k3 (m : (Vector UInt256 16)) (v147 : UInt256) (v : (Vector UInt25
   v := v171_0
   -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[12], y: m[0])
   let v177 := (UInt256.ofNat 12)
-  checkIndex v177 16
-  let v179 := (UInt256.ofNat 0)
-  checkIndex v179 16
-  let (v181, v181_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v177.toNat]! m[v179.toNat]!
-  v := v181_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[5], y: m[2])
-  let v187 := (UInt256.ofNat 5)
-  checkIndex v187 16
-  let v189 := (UInt256.ofNat 2)
-  checkIndex v189 16
-  let (v191, v191_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v187.toNat]! m[v189.toNat]!
-  v := v191_0
-  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[15], y: m[13])
-  let v197 := (UInt256.ofNat 15)
-  ten_rounds_k4 m v197 v
+  ten_rounds_k8 m v177 v
 
-def ten_rounds_k2 (m : (Vector UInt256 16)) (v97 : UInt256) (v99 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k6 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  checkIndex v99 16
-  let (v101, v101_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v97.toNat]! m[v99.toNat]!
-  v := v101_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[9], y: m[15])
-  let v107 := (UInt256.ofNat 9)
-  checkIndex v107 16
-  let v109 := (UInt256.ofNat 15)
-  checkIndex v109 16
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[0], y: m[2])
+  let v137 := (UInt256.ofNat 0)
+  checkIndex v137 16
+  let v139 := (UInt256.ofNat 2)
+  checkIndex v139 16
+  let (v141, v141_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v137.toNat]! m[v139.toNat]!
+  v := v141_0
+  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[11], y: m[7])
+  let v147 := (UInt256.ofNat 11)
+  checkIndex v147 16
+  let v149 := (UInt256.ofNat 7)
+  checkIndex v149 16
+  let (v151, v151_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v147.toNat]! m[v149.toNat]!
+  v := v151_0
+  ten_rounds_k7 m v
+
+def ten_rounds_k5 (m : (Vector UInt256 16)) (v107 : UInt256) (v109 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   let (v111, v111_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v107.toNat]! m[v109.toNat]!
   v := v111_0
   -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[13], y: m[6])
@@ -649,32 +731,29 @@ def ten_rounds_k2 (m : (Vector UInt256 16)) (v97 : UInt256) (v99 : UInt256) (v :
   checkIndex v129 16
   let (v131, v131_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v127.toNat]! m[v129.toNat]!
   v := v131_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[0], y: m[2])
-  let v137 := (UInt256.ofNat 0)
-  checkIndex v137 16
-  let v139 := (UInt256.ofNat 2)
-  checkIndex v139 16
-  let (v141, v141_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v137.toNat]! m[v139.toNat]!
-  v := v141_0
-  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[11], y: m[7])
-  let v147 := (UInt256.ofNat 11)
-  checkIndex v147 16
-  ten_rounds_k3 m v147 v
+  ten_rounds_k6 m v
 
-def ten_rounds_k1 (m : (Vector UInt256 16)) (v47 : UInt256) (v49 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def ten_rounds_k4 (m : (Vector UInt256 16)) (v87 : UInt256) (v89 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let (v51, v51_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v47.toNat]! m[v49.toNat]!
-  v := v51_0
-  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[10], y: m[11])
-  let v57 := (UInt256.ofNat 10)
-  checkIndex v57 16
-  let v59 := (UInt256.ofNat 11)
-  checkIndex v59 16
-  let (v61, v61_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v57.toNat]! m[v59.toNat]!
-  v := v61_0
-  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[12], y: m[13])
-  let v67 := (UInt256.ofNat 12)
-  checkIndex v67 16
+  checkIndex v89 16
+  let (v91, v91_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) m[v87.toNat]! m[v89.toNat]!
+  v := v91_0
+  -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[4], y: m[8])
+  let v97 := (UInt256.ofNat 4)
+  checkIndex v97 16
+  let v99 := (UInt256.ofNat 8)
+  checkIndex v99 16
+  let (v101, v101_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v97.toNat]! m[v99.toNat]!
+  v := v101_0
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[9], y: m[15])
+  let v107 := (UInt256.ofNat 9)
+  checkIndex v107 16
+  let v109 := (UInt256.ofNat 15)
+  checkIndex v109 16
+  ten_rounds_k5 m v107 v109 v
+
+def ten_rounds_k3 (m : (Vector UInt256 16)) (v67 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
   let v69 := (UInt256.ofNat 13)
   checkIndex v69 16
   let (v71, v71_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v67.toNat]! m[v69.toNat]!
@@ -690,14 +769,46 @@ def ten_rounds_k1 (m : (Vector UInt256 16)) (v47 : UInt256) (v49 : UInt256) (v :
   let v87 := (UInt256.ofNat 14)
   checkIndex v87 16
   let v89 := (UInt256.ofNat 10)
-  checkIndex v89 16
-  let (v91, v91_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) m[v87.toNat]! m[v89.toNat]!
-  v := v91_0
-  -- mix(mut v, a: 1, b: 5, c: 9, d: 13, x: m[4], y: m[8])
-  let v97 := (UInt256.ofNat 4)
-  checkIndex v97 16
-  let v99 := (UInt256.ofNat 8)
-  ten_rounds_k2 m v97 v99 v
+  ten_rounds_k4 m v87 v89 v
+
+def ten_rounds_k2 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[8], y: m[9])
+  let v47 := (UInt256.ofNat 8)
+  checkIndex v47 16
+  let v49 := (UInt256.ofNat 9)
+  checkIndex v49 16
+  let (v51, v51_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v47.toNat]! m[v49.toNat]!
+  v := v51_0
+  -- mix(mut v, a: 1, b: 6, c: 11, d: 12, x: m[10], y: m[11])
+  let v57 := (UInt256.ofNat 10)
+  checkIndex v57 16
+  let v59 := (UInt256.ofNat 11)
+  checkIndex v59 16
+  let (v61, v61_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v57.toNat]! m[v59.toNat]!
+  v := v61_0
+  -- mix(mut v, a: 2, b: 7, c: 8, d: 13, x: m[12], y: m[13])
+  let v67 := (UInt256.ofNat 12)
+  checkIndex v67 16
+  ten_rounds_k3 m v67 v
+
+def ten_rounds_k1 (m : (Vector UInt256 16)) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+  let mut v := v
+  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[4], y: m[5])
+  let v27 := (UInt256.ofNat 4)
+  checkIndex v27 16
+  let v29 := (UInt256.ofNat 5)
+  checkIndex v29 16
+  let (v31, v31_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v27.toNat]! m[v29.toNat]!
+  v := v31_0
+  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[6], y: m[7])
+  let v37 := (UInt256.ofNat 6)
+  checkIndex v37 16
+  let v39 := (UInt256.ofNat 7)
+  checkIndex v39 16
+  let (v41, v41_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v37.toNat]! m[v39.toNat]!
+  v := v41_0
+  ten_rounds_k2 m v
 
 /-- `lib::blake2f::ten_rounds` -/
 def ten_rounds (v : (Vector UInt256 16)) (m : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
@@ -716,31 +827,30 @@ def ten_rounds (v : (Vector UInt256 16)) (m : (Vector UInt256 16)) : FeM (Unit �
   checkIndex v19 16
   let (v21, v21_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v17.toNat]! m[v19.toNat]!
   v := v21_0
-  -- mix(mut v, a: 2, b: 6, c: 10, d: 14, x: m[4], y: m[5])
-  let v27 := (UInt256.ofNat 4)
-  checkIndex v27 16
-  let v29 := (UInt256.ofNat 5)
-  checkIndex v29 16
-  let (v31, v31_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v27.toNat]! m[v29.toNat]!
-  v := v31_0
-  -- mix(mut v, a: 3, b: 7, c: 11, d: 15, x: m[6], y: m[7])
-  let v37 := (UInt256.ofNat 6)
-  checkIndex v37 16
-  let v39 := (UInt256.ofNat 7)
-  checkIndex v39 16
-  let (v41, v41_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v37.toNat]! m[v39.toNat]!
-  v := v41_0
-  -- mix(mut v, a: 0, b: 5, c: 10, d: 15, x: m[8], y: m[9])
-  let v47 := (UInt256.ofNat 8)
-  checkIndex v47 16
-  let v49 := (UInt256.ofNat 9)
-  checkIndex v49 16
-  ten_rounds_k1 m v47 v49 v
+  ten_rounds_k1 m v
+
+def SIGMA_k6 : FeM (Vector UInt256 160) := do
+  let v160 := #v[(UInt256.ofNat 0), (UInt256.ofNat 1), (UInt256.ofNat 2), (UInt256.ofNat 3), (UInt256.ofNat 4), (UInt256.ofNat 5), (UInt256.ofNat 6), (UInt256.ofNat 7), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 10), (UInt256.ofNat 11), (UInt256.ofNat 12), (UInt256.ofNat 13), (UInt256.ofNat 14), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 10), (UInt256.ofNat 4), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 15), (UInt256.ofNat 13), (UInt256.ofNat 6), (UInt256.ofNat 1), (UInt256.ofNat 12), (UInt256.ofNat 0), (UInt256.ofNat 2), (UInt256.ofNat 11), (UInt256.ofNat 7), (UInt256.ofNat 5), (UInt256.ofNat 3), (UInt256.ofNat 11), (UInt256.ofNat 8), (UInt256.ofNat 12), (UInt256.ofNat 0), (UInt256.ofNat 5), (UInt256.ofNat 2), (UInt256.ofNat 15), (UInt256.ofNat 13), (UInt256.ofNat 10), (UInt256.ofNat 14), (UInt256.ofNat 3), (UInt256.ofNat 6), (UInt256.ofNat 7), (UInt256.ofNat 1), (UInt256.ofNat 9), (UInt256.ofNat 4), (UInt256.ofNat 7), (UInt256.ofNat 9), (UInt256.ofNat 3), (UInt256.ofNat 1), (UInt256.ofNat 13), (UInt256.ofNat 12), (UInt256.ofNat 11), (UInt256.ofNat 14), (UInt256.ofNat 2), (UInt256.ofNat 6), (UInt256.ofNat 5), (UInt256.ofNat 10), (UInt256.ofNat 4), (UInt256.ofNat 0), (UInt256.ofNat 15), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 0), (UInt256.ofNat 5), (UInt256.ofNat 7), (UInt256.ofNat 2), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 1), (UInt256.ofNat 11), (UInt256.ofNat 12), (UInt256.ofNat 6), (UInt256.ofNat 8), (UInt256.ofNat 3), (UInt256.ofNat 13), (UInt256.ofNat 2), (UInt256.ofNat 12), (UInt256.ofNat 6), (UInt256.ofNat 10), (UInt256.ofNat 0), (UInt256.ofNat 11), (UInt256.ofNat 8), (UInt256.ofNat 3), (UInt256.ofNat 4), (UInt256.ofNat 13), (UInt256.ofNat 7), (UInt256.ofNat 5), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 1), (UInt256.ofNat 9), (UInt256.ofNat 12), (UInt256.ofNat 5), (UInt256.ofNat 1), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 13), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 0), (UInt256.ofNat 7), (UInt256.ofNat 6), (UInt256.ofNat 3), (UInt256.ofNat 9), (UInt256.ofNat 2), (UInt256.ofNat 8), (UInt256.ofNat 11), (UInt256.ofNat 13), (UInt256.ofNat 11), (UInt256.ofNat 7), (UInt256.ofNat 14), (UInt256.ofNat 12), (UInt256.ofNat 1), (UInt256.ofNat 3), (UInt256.ofNat 9), (UInt256.ofNat 5), (UInt256.ofNat 0), (UInt256.ofNat 15), (UInt256.ofNat 4), (UInt256.ofNat 8), (UInt256.ofNat 6), (UInt256.ofNat 2), (UInt256.ofNat 10), (UInt256.ofNat 6), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 9), (UInt256.ofNat 11), (UInt256.ofNat 3), (UInt256.ofNat 0), (UInt256.ofNat 8), (UInt256.ofNat 12), (UInt256.ofNat 2), (UInt256.ofNat 13), (UInt256.ofNat 7), (UInt256.ofNat 1), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 5), (UInt256.ofNat 10), (UInt256.ofNat 2), (UInt256.ofNat 8), (UInt256.ofNat 4), (UInt256.ofNat 7), (UInt256.ofNat 6), (UInt256.ofNat 1), (UInt256.ofNat 5), (UInt256.ofNat 15), (UInt256.ofNat 11), (UInt256.ofNat 9), (UInt256.ofNat 14), (UInt256.ofNat 3), (UInt256.ofNat 12), (UInt256.ofNat 13), (UInt256.ofNat 0)]
+  return v160
+
+def SIGMA_k5 : FeM (Vector UInt256 160) := do
+  SIGMA_k6
+
+def SIGMA_k4 : FeM (Vector UInt256 160) := do
+  SIGMA_k5
+
+def SIGMA_k3 : FeM (Vector UInt256 160) := do
+  SIGMA_k4
+
+def SIGMA_k2 : FeM (Vector UInt256 160) := do
+  SIGMA_k3
+
+def SIGMA_k1 : FeM (Vector UInt256 160) := do
+  SIGMA_k2
 
 /-- `lib::blake2f::SIGMA` -/
 def SIGMA : FeM (Vector UInt256 160) := do
-  let v160 := #v[(UInt256.ofNat 0), (UInt256.ofNat 1), (UInt256.ofNat 2), (UInt256.ofNat 3), (UInt256.ofNat 4), (UInt256.ofNat 5), (UInt256.ofNat 6), (UInt256.ofNat 7), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 10), (UInt256.ofNat 11), (UInt256.ofNat 12), (UInt256.ofNat 13), (UInt256.ofNat 14), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 10), (UInt256.ofNat 4), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 15), (UInt256.ofNat 13), (UInt256.ofNat 6), (UInt256.ofNat 1), (UInt256.ofNat 12), (UInt256.ofNat 0), (UInt256.ofNat 2), (UInt256.ofNat 11), (UInt256.ofNat 7), (UInt256.ofNat 5), (UInt256.ofNat 3), (UInt256.ofNat 11), (UInt256.ofNat 8), (UInt256.ofNat 12), (UInt256.ofNat 0), (UInt256.ofNat 5), (UInt256.ofNat 2), (UInt256.ofNat 15), (UInt256.ofNat 13), (UInt256.ofNat 10), (UInt256.ofNat 14), (UInt256.ofNat 3), (UInt256.ofNat 6), (UInt256.ofNat 7), (UInt256.ofNat 1), (UInt256.ofNat 9), (UInt256.ofNat 4), (UInt256.ofNat 7), (UInt256.ofNat 9), (UInt256.ofNat 3), (UInt256.ofNat 1), (UInt256.ofNat 13), (UInt256.ofNat 12), (UInt256.ofNat 11), (UInt256.ofNat 14), (UInt256.ofNat 2), (UInt256.ofNat 6), (UInt256.ofNat 5), (UInt256.ofNat 10), (UInt256.ofNat 4), (UInt256.ofNat 0), (UInt256.ofNat 15), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 0), (UInt256.ofNat 5), (UInt256.ofNat 7), (UInt256.ofNat 2), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 1), (UInt256.ofNat 11), (UInt256.ofNat 12), (UInt256.ofNat 6), (UInt256.ofNat 8), (UInt256.ofNat 3), (UInt256.ofNat 13), (UInt256.ofNat 2), (UInt256.ofNat 12), (UInt256.ofNat 6), (UInt256.ofNat 10), (UInt256.ofNat 0), (UInt256.ofNat 11), (UInt256.ofNat 8), (UInt256.ofNat 3), (UInt256.ofNat 4), (UInt256.ofNat 13), (UInt256.ofNat 7), (UInt256.ofNat 5), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 1), (UInt256.ofNat 9), (UInt256.ofNat 12), (UInt256.ofNat 5), (UInt256.ofNat 1), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 13), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 0), (UInt256.ofNat 7), (UInt256.ofNat 6), (UInt256.ofNat 3), (UInt256.ofNat 9), (UInt256.ofNat 2), (UInt256.ofNat 8), (UInt256.ofNat 11), (UInt256.ofNat 13), (UInt256.ofNat 11), (UInt256.ofNat 7), (UInt256.ofNat 14), (UInt256.ofNat 12), (UInt256.ofNat 1), (UInt256.ofNat 3), (UInt256.ofNat 9), (UInt256.ofNat 5), (UInt256.ofNat 0), (UInt256.ofNat 15), (UInt256.ofNat 4), (UInt256.ofNat 8), (UInt256.ofNat 6), (UInt256.ofNat 2), (UInt256.ofNat 10), (UInt256.ofNat 6), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 9), (UInt256.ofNat 11), (UInt256.ofNat 3), (UInt256.ofNat 0), (UInt256.ofNat 8), (UInt256.ofNat 12), (UInt256.ofNat 2), (UInt256.ofNat 13), (UInt256.ofNat 7), (UInt256.ofNat 1), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 5), (UInt256.ofNat 10), (UInt256.ofNat 2), (UInt256.ofNat 8), (UInt256.ofNat 4), (UInt256.ofNat 7), (UInt256.ofNat 6), (UInt256.ofNat 1), (UInt256.ofNat 5), (UInt256.ofNat 15), (UInt256.ofNat 11), (UInt256.ofNat 9), (UInt256.ofNat 14), (UInt256.ofNat 3), (UInt256.ofNat 12), (UInt256.ofNat 13), (UInt256.ofNat 0)]
-  return v160
+  SIGMA_k1
 
 /-- `lib::blake2f::compress<MemBuffer>` -/
 def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
