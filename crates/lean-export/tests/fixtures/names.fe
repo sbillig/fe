@@ -1,0 +1,96 @@
+// Top-level names the exporter makes, spelled by the program too: `load_Pair`,
+// the loader of the stored struct `Pair`; `long_k1`, the first piece of the
+// long function `long`; and a struct `Prop`, a Lean keyword.
+use std::abi::sol
+
+msg NamesMsg {
+    #[selector = sol("run(uint256)")]
+    Run { x: u256 } -> u256,
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Copy for Pair {}
+
+struct Prop {
+    flag: bool,
+    n: u256,
+}
+
+impl Copy for Prop {}
+
+fn load_Pair(_ x: u256) -> u256 {
+    x + 1
+}
+
+fn long_k1(_ x: u256) -> u256 {
+    x + 2
+}
+
+fn long(_ x: u256) -> u256 {
+    let a0 = x + 1
+    let a1 = a0 * 3 + 1
+    let a2 = a1 * 3 + 2
+    let a3 = a2 * 3 + 3
+    let a4 = a3 * 3 + 4
+    let a5 = a4 * 3 + 5
+    let a6 = a5 * 3 + 6
+    let a7 = a6 * 3 + 7
+    let a8 = a7 * 3 + 8
+    let a9 = a8 * 3 + 9
+    let a10 = a9 * 3 + 10
+    let a11 = a10 * 3 + 11
+    let a12 = a11 * 3 + 12
+    let a13 = a12 * 3 + 13
+    let a14 = a13 * 3 + 14
+    let a15 = a14 * 3 + 15
+    let a16 = a15 * 3 + 16
+    let a17 = a16 * 3 + 17
+    let a18 = a17 * 3 + 18
+    let a19 = a18 * 3 + 19
+    let a20 = a19 * 3 + 20
+    let a21 = a20 * 3 + 21
+    let a22 = a21 * 3 + 22
+    let a23 = a22 * 3 + 23
+    let a24 = a23 * 3 + 24
+    let a25 = a24 * 3 + 25
+    let a26 = a25 * 3 + 26
+    let a27 = a26 * 3 + 27
+    let a28 = a27 * 3 + 28
+    let a29 = a28 * 3 + 29
+    let a30 = a29 * 3 + 30
+    let a31 = a30 * 3 + 31
+    let a32 = a31 * 3 + 32
+    let a33 = a32 * 3 + 33
+    let a34 = a33 * 3 + 34
+    let a35 = a34 * 3 + 35
+    let a36 = a35 * 3 + 36
+    let a37 = a36 * 3 + 37
+    let a38 = a37 * 3 + 38
+    let a39 = a38 * 3 + 39
+    let a40 = a39 * 3 + 40
+    let a41 = a40 * 3 + 41
+    let a42 = a41 * 3 + 42
+    let a43 = a42 * 3 + 43
+    let a44 = a43 * 3 + 44
+    a44
+}
+
+
+pub contract Names {
+    mut pair: Pair,
+    mut prop: Prop,
+
+    recv NamesMsg {
+        Run { x } -> u256 uses (mut pair, mut prop) {
+            pair = Pair { a: x, b: load_Pair(x) }
+            prop = Prop { flag: true, n: long_k1(x) }
+            let stored = pair
+            let p = prop
+            stored.a + stored.b + p.n + long(x)
+        }
+    }
+}

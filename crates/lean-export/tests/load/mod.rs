@@ -48,6 +48,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("nested_loops", false),
     ("deposit_contract", true),
     ("collide", true),
+    ("names", true),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it
