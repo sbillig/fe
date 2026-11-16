@@ -5,7 +5,10 @@
 //!
 //! In a lowering record values are numbered as `v<n>` and blocks as `block<n>` in the text of
 //! the module they belong to: `sources` and `mallocs` name the source IR, everything else the
-//! machine IR. Immediates are decimal strings of their unsigned value.
+//! machine IR. Immediates are decimal strings of their unsigned value. A point of a function's
+//! code is `"entry"`, or `{"before": {"block", "index"}}`, `{"after": {"block", "index"}}` or
+//! `{"case": {"block", "index", "case"}}`, where `index` is an instruction's position in its
+//! block, phis included.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -17,7 +20,7 @@ use serde::Serialize;
 use sonatina_codegen::object::{
     ObjectArtifact,
     lowering::{
-        CodeLabel, DynSpInitLowering, MallocLowering, SectionLowering, SpillLocation,
+        CodeLabel, CodePoint, DynSpInitLowering, MallocLowering, SectionLowering, SpillLocation,
         StableLowering, StackSlot,
     },
 };
@@ -29,7 +32,7 @@ use super::{
 use crate::{OptLevel, runtime_package::ensure_runtime_package_has_roots};
 
 /// The version of the sidecar format, raised with each change to it.
-pub const SIDECAR_VERSION: u32 = 3;
+pub const SIDECAR_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SonatinaSidecar {
@@ -100,6 +103,50 @@ pub enum SidecarSlot {
 pub struct SidecarSpill {
     pub value: u32,
     pub location: SidecarLocation,
+    /// The points at which the code stores the value into its location, in emission order:
+    /// after its definition, at entry for an argument, and before the terminator of each
+    /// predecessor (an edge block, for a critical edge) that gives a phi an operand other than
+    /// the phi itself. The stack top holds the value stored: a phi's operand on its edge.
+    pub stores: Vec<SidecarPoint>,
+    /// The points at which the code reloads the value from its location onto the stack, in
+    /// emission order. A function without code of its own has no points.
+    pub reloads: Vec<SidecarPoint>,
+}
+
+/// A point of a function's machine IR at which its code runs the stack allocator's moves.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarPoint {
+    /// Function entry, before the entry block's first instruction.
+    Entry,
+    /// Before the instruction's opcodes: its operands, and for a terminator the moves into its
+    /// successors.
+    Before { block: u32, index: u32 },
+    /// After the instruction's opcodes, where its results are stored.
+    After { block: u32, index: u32 },
+    /// Before the comparison of case `case` of the `br_table` instruction.
+    Case { block: u32, index: u32, case: u32 },
+}
+
+impl From<&CodePoint> for SidecarPoint {
+    fn from(point: &CodePoint) -> Self {
+        match *point {
+            CodePoint::Entry => Self::Entry,
+            CodePoint::Before { block, index } => Self::Before {
+                block: block.as_u32(),
+                index,
+            },
+            CodePoint::After { block, index } => Self::After {
+                block: block.as_u32(),
+                index,
+            },
+            CodePoint::Case { block, index, case } => Self::Case {
+                block: block.as_u32(),
+                index,
+                case,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,13 +262,15 @@ impl From<&SectionLowering> for SidecarLowering {
                 spills: func
                     .spills
                     .iter()
-                    .map(|(value, location)| SidecarSpill {
-                        value: value.as_u32(),
-                        location: match *location {
+                    .map(|spill| SidecarSpill {
+                        value: spill.value.as_u32(),
+                        location: match spill.location {
                             SpillLocation::Memory(addr) => SidecarLocation::Memory(addr),
                             SpillLocation::Frame(slot) => SidecarLocation::Frame(slot),
                             SpillLocation::Rematerialized => SidecarLocation::Rematerialized,
                         },
+                        stores: spill.stores.iter().map(SidecarPoint::from).collect(),
+                        reloads: spill.reloads.iter().map(SidecarPoint::from).collect(),
                     })
                     .collect(),
                 frame: SidecarFrame {
