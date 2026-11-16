@@ -426,8 +426,8 @@ def emit_Evm_Transfer (event : Transfer) : FeM Unit := do
   let _ ← Transfer_emit_Evm event
   return ()
 
-/-- `lib::transfer_from<Weth9Store, Evm, Evm>` -/
-def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt256) : FeM Bool := do
+/-- `lib::transfer_from<Evm, Evm>` -/
+def transfer_from_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt256) : FeM Bool := do
   let mut sender : UInt256 := default
   -- assert!(store.balance_of[src] >= wad)
   let balance_of_entry ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
@@ -493,7 +493,7 @@ def recv_TransferFrom (src : UInt256) (dst : UInt256) (wad : UInt256) : FeM Bool
   let mut dst := dst
   -- transfer_from(src, dst, wad)
   let src_1 := src
-  let v3 ← transfer_from_Weth9Store_Evm_Evm src_1 dst wad
+  let v3 ← transfer_from_Evm_Evm src_1 dst wad
   return v3
 
 /-- `<Withdrawal as Event>::emit<Evm>` -/
@@ -592,7 +592,7 @@ def recv_Transfer (dst : UInt256) (wad : UInt256) : FeM Bool := do
   let v2 ← Evm_caller
   r3 := v2
   let v3 := r3
-  let v5 ← transfer_from_Weth9Store_Evm_Evm v3 dst wad
+  let v5 ← transfer_from_Evm_Evm v3 dst wad
   return v5
 
 /-- `<Deposit as Event>::emit<Evm>` -/
@@ -615,8 +615,8 @@ def emit_Evm_Deposit (event : Deposit) : FeM Unit := do
   let _ ← Deposit_emit_Evm event
   return ()
 
-/-- `lib::deposit<Weth9Store, Evm, Evm>` -/
-def deposit_Weth9Store_Evm_Evm : FeM Unit := do
+/-- `lib::deposit<Evm, Evm>` -/
+def deposit_Evm_Evm : FeM Unit := do
   let mut r3 : Wei := default
   -- let dst = ctx.caller()
   let dst ← Evm_caller
@@ -636,7 +636,7 @@ def deposit_Weth9Store_Evm_Evm : FeM Unit := do
 /-- `Deposit`, selector `0xd0e30db0` (`deposit()`) -/
 def recv_Deposit : FeM Unit := do
   -- deposit()
-  let _ ← deposit_Weth9Store_Evm_Evm
+  let _ ← deposit_Evm_Evm
   return ()
 
 /-- `Allowance { owner, guy } -> u256`, selector `0xdd62ed3e` (`allowance(address,address)`) -/
@@ -650,7 +650,7 @@ def recv_Allowance (owner : UInt256) (guy : UInt256) : FeM UInt256 := do
 /-- `_`, for a call no other arm takes -/
 def recv_fallback : FeM Unit := do
   -- deposit()
-  let _ ← deposit_Weth9Store_Evm_Evm
+  let _ ← deposit_Evm_Evm
   return ()
 
 /-- `<Name as AbiSize>::HEAD_SIZE` -/

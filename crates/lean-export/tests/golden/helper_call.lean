@@ -18,8 +18,8 @@ abbrev Field.store.hits : Place :=
 def init : FeM Unit := do
   return ()
 
-/-- `helper_call::add<Store>` -/
-def add_Store («by» : UInt256) : FeM UInt256 := do
+/-- `helper_call::add` -/
+def add («by» : UInt256) : FeM UInt256 := do
   -- let next = store.total + by
   let v1 ← load Field.store.total
   let next ← checkedAdd v1 «by»
@@ -36,6 +36,6 @@ def add_Store («by» : UInt256) : FeM UInt256 := do
 /-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
   -- add(by)
-  let v1 ← add_Store «by»
+  let v1 ← add «by»
   return v1
 

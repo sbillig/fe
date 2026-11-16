@@ -42,14 +42,13 @@ use hir::{
         initialize_analysis_pass,
         semantic::{
             BinaryOp, CarrierBase, DropFlagPoint, DropStep, EvalOutcome, FailReason, FieldIndex,
-            NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr,
-            NIndex, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
-            NSuccessor, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow,
-            SConst, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
-            SemanticAccessAnalysisPass, SemanticInstance, SemanticInstanceKey, UnaryOp,
-            VariantIndex, core_method_callee_key, drop_elaboration, eval_const_ref,
-            generated_callee_key, identity_semantic_instance_key, normalize_semantic_body,
-            projection_component_spaces, runtime_size_bytes,
+            NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NExpr, NIndex, NOperand,
+            NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind, NSuccessor,
+            NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow, SConst,
+            SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticAccessAnalysisPass,
+            SemanticInstance, SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key,
+            drop_elaboration, eval_const_ref, generated_callee_key, identity_semantic_instance_key,
+            normalize_semantic_body, projection_component_spaces, runtime_size_bytes,
         },
         ty::{
             AddressSpace,
@@ -4904,32 +4903,15 @@ impl<'db> BodyExporter<'_, 'db> {
         }
         // A callee's instance names the contract field behind an effect.
         // Any other effect is an argument: its place in contract state, or
-        // the value of the local it is, which a `mut` effect leaves changed.
+        // the local it names, which a `mut` effect leaves changed.
         let params = self.module.effect_params(callee);
         for effect in &params {
             let arg = effect_args
                 .iter()
                 .find(|arg| arg.binding_idx == effect.provider)
                 .ok_or_else(|| Unsupported("effect without an argument".to_string()))?;
-            let target = match &arg.arg {
-                NEffectArgValue::Place(place) => self.target(place)?,
-                NEffectArgValue::Value(operand) if self.is_access(self.ty(operand.value)) => {
-                    match self.carrier(operand.value)? {
-                        Carrier::Value => Target::Value(self.carrier_value(operand.value)?),
-                        _ => Target::Place(self.value(operand.value), None),
-                    }
-                }
-                NEffectArgValue::Value(operand) => {
-                    if effect.mutable {
-                        return Err(Unsupported(
-                            "`mut` effect argument that is a value".to_string(),
-                        ));
-                    }
-                    write!(lean_args, " {}", self.operand(operand)?).unwrap();
-                    effects.push((effect.provider, Carrier::Value));
-                    continue;
-                }
-            };
+            let place = &arg.place;
+            let target = self.target(place)?;
             // The callee takes the effect as the caller has it: a place in
             // contract state, or a value.
             match target {
@@ -4947,9 +4929,6 @@ impl<'db> BodyExporter<'_, 'db> {
                 // A packed lane is passed as the value it holds, and a `mut`
                 // effect writes back the value it leaves.
                 Target::Place(lean, Some(lane)) => {
-                    let NEffectArgValue::Place(place) = &arg.arg else {
-                        return Err(Unsupported("lane behind an access".to_string()));
-                    };
                     let held = self.derived(result, format!("e{}", effect.provider));
                     let load = self.load(place.ty, &lean, Some(lane))?;
                     self.located.push(format!("let {held} ← {load}"));
@@ -4962,9 +4941,6 @@ impl<'db> BodyExporter<'_, 'db> {
                 // Nothing writes calldata, so an effect there is the value
                 // it holds.
                 Target::Calldata(offset) if !effect.mutable => {
-                    let NEffectArgValue::Place(place) = &arg.arg else {
-                        return Err(Unsupported("calldata behind an access".to_string()));
-                    };
                     let held = self.derived(result, format!("e{}", effect.provider));
                     let load = self.module.mload("cd", place.ty, &offset)?;
                     self.located.push(format!("let {held} ← {load}"));
@@ -4980,13 +4956,8 @@ impl<'db> BodyExporter<'_, 'db> {
         // loads what a `mut` effect leaves.
         let mut reloads = String::new();
         for arg in effect_args {
-            let carrier = match &arg.arg {
-                NEffectArgValue::Place(NPlace {
-                    base: NPlaceBase::CapabilityTarget { carrier },
-                    ..
-                }) => *carrier,
-                NEffectArgValue::Value(operand) => operand.value,
-                NEffectArgValue::Place(_) => continue,
+            let NPlaceBase::CapabilityTarget { carrier } = arg.place.base else {
+                continue;
             };
             if params
                 .iter()

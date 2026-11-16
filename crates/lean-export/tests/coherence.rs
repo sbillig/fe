@@ -18,8 +18,8 @@ use hir::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            NBlock, NDropTarget, NEffectArg, NEffectArgValue, NExpr, NPlace, NStatementKind,
-            NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, SConst, SemanticInstance,
+            NBlock, NDropTarget, NEffectArg, NExpr, NPlace, NStatementKind, NTerminatorKind,
+            NValueDefinition, NValueId, NormalizedBody, SConst, SemanticInstance,
             SemanticInstanceKey, identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::{
@@ -140,22 +140,13 @@ impl<'db> Compare<'_, 'db> {
 
     fn effect_arg(&self, generic: &NEffectArg<'db>, arg: &NEffectArg<'db>) -> Result<(), String> {
         Self::eq("effect", generic.binding_idx, arg.binding_idx)?;
-        Self::eq("effect pass mode", generic.pass_mode, arg.pass_mode)?;
         Self::eq("effect `mut`", generic.required_mut, arg.required_mut)?;
         Self::eq("effect space", generic.provider, arg.provider)?;
         match (generic.provider_target_ty, arg.provider_target_ty) {
             (Some(generic), Some(ty)) => self.ty(generic, ty)?,
             (generic, ty) => Self::eq("effect target", generic.is_some(), ty.is_some())?,
         }
-        match (&generic.arg, &arg.arg) {
-            (NEffectArgValue::Place(generic), NEffectArgValue::Place(place)) => {
-                self.place(generic, place)
-            }
-            (NEffectArgValue::Value(generic), NEffectArgValue::Value(value)) => {
-                Self::eq("effect operand", generic, value)
-            }
-            _ => Err("effect argument of another kind".to_string()),
-        }
+        self.place(&generic.place, &arg.place)
     }
 
     fn constant(&self, generic: &SConst<'db>, constant: &SConst<'db>) -> Result<(), String> {

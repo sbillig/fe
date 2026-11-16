@@ -4,8 +4,8 @@ export Lib (calldata_ptr_Evm_array_u256_2)
 def init : FeM Unit := do
   return ()
 
-/-- `calldata_read::second<[u256; 2]>` -/
-def second_array_u256_2 (words : (Vector UInt256 2)) : FeM UInt256 := do
+/-- `calldata_read::second` -/
+def second (words : (Vector UInt256 2)) : FeM UInt256 := do
   let mut words := words
   -- words[1]
   let v0 := (UInt256.ofNat 1)
@@ -21,6 +21,6 @@ def recv_Second : FeM UInt256 := do
   r1 := data
   -- second()
   let v6_e0 ← cdloadArray 32 (fun q => cdload q) r1 2
-  let v6 ← second_array_u256_2 v6_e0
+  let v6 ← second v6_e0
   return v6
 

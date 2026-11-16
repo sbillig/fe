@@ -1,4 +1,4 @@
-own add_Store unsafe-impl entry of StorageMap<u256, u256>
+own add unsafe-impl entry of StorageMap<u256, u256>
 core MemBuffer_drop unsafe-block 1 of 1
 core MemBuffer_new_uninit unsafe-fn the whole body
 core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body

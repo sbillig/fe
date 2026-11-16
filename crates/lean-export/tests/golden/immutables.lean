@@ -30,8 +30,8 @@ def mstore_Config (p : UInt256) (v : Config) : FeM Unit := do
   mstoreBool (p + UInt256.ofNat 1) v.on
   mstore (p + UInt256.ofNat 2) v.limit
 
-/-- `immutables::set_small<Config>` -/
-def set_small_Config (v : UInt256) (config : Config) : FeM (Unit × Config) := do
+/-- `immutables::set_small` -/
+def set_small (v : UInt256) (config : Config) : FeM (Unit × Config) := do
   let mut config := config
   -- config.small = v
   config := { config with small := v }
@@ -44,7 +44,7 @@ def init (limit : UInt256) (config : Config) (words : (Vector UInt256 2)) : FeM 
   -- config = Config { small: 0, on: true, limit }
   config := (Config.mk (UInt256.ofNat 0) true limit)
   -- set_small(7)
-  let (v7, v7_0) ← set_small_Config (UInt256.ofNat 7) config
+  let (v7, v7_0) ← set_small (UInt256.ofNat 7) config
   config := v7_0
   -- words = [limit, 2]
   words := (#v[limit, (UInt256.ofNat 2)])
@@ -76,8 +76,8 @@ def recv_Sum : FeM UInt256 := do
   let v4 ← checkedAdd words[v0.toNat]! words[v2.toNat]!
   return v4
 
-/-- `immutables::capped<Config>` -/
-def capped_Config («by» : UInt256) : FeM UInt256 := do
+/-- `immutables::capped` -/
+def capped («by» : UInt256) : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
@@ -91,7 +91,7 @@ def capped_Config («by» : UInt256) : FeM UInt256 := do
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
   -- capped(by)
-  let v1 ← capped_Config «by»
+  let v1 ← capped «by»
   -- count += with (config) { capped(by) }
   let count_2 ← load Field.count
   let v3 ← checkedAdd count_2 v1

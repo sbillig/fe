@@ -27,8 +27,8 @@ def left (x : UInt256) : FeM UInt256 := do
   let v5 ← sum r0
   return v5
 
-/-- `lib::bump<Store>` -/
-def bump_Store («by» : UInt256) : FeM UInt256 := do
+/-- `lib::bump` -/
+def bump («by» : UInt256) : FeM UInt256 := do
   -- store.total = store.total + left(by)
   let v1 ← load Field.store.total
   let v2 ← left «by»
@@ -41,7 +41,7 @@ def bump_Store («by» : UInt256) : FeM UInt256 := do
 /-- `Left { x } -> u256`, selector `0x1bb95617` (`left(uint256)`) -/
 def recv_Left (x : UInt256) : FeM UInt256 := do
   -- bump(x)
-  let v1 ← bump_Store x
+  let v1 ← bump x
   return v1
 
 /-- `<Left as AbiSize>::HEAD_SIZE` -/
