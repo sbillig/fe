@@ -2106,7 +2106,7 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
   b1 state digest r2 r3 v12
 
 /-- `_`, for a call no other arm takes -/
-def recv0_arm0 : FeM Empty := do
+def recv_fallback : FeM Empty := do
   let mut output : MemBuffer := default
   let mut r2 : MemBuffer := default
   let output_1 ← MemBuffer_new (UInt256.ofNat 32)
@@ -2121,20 +2121,20 @@ def recv0_arm0 : FeM Empty := do
   let v13 ← Evm_return_data v10
   nomatch v13
 
-/-- The entry of `recv0_arm0`, for a call no other arm takes -/
-def recv0_arm0_entry : FeM Empty := do
+/-- The entry of `recv_fallback`, for a call no other arm takes -/
+def recv_fallback_entry : FeM Empty := do
   nonPayable
-  let _ ← recv0_arm0
+  let _ ← recv_fallback
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 /-- The runtime entry of contract `Ripemd160`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
-    recv0_arm0_entry
+    recv_fallback_entry
   else
     let selector ← calldataSelector
-    recv0_arm0_entry
+    recv_fallback_entry
 
 /-- The deployment entry of contract `Ripemd160`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do

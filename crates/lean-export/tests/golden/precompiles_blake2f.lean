@@ -1340,7 +1340,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
     b2 h m v round r4 r5 r6 r7 r8
 
 /-- `_`, for a call no other arm takes -/
-def recv0_arm0 : FeM Empty := do
+def recv_fallback : FeM Empty := do
   let mut input : MemBuffer := default
   let mut output : MemBuffer := default
   let mut r3 : Range_Known_0_Known_8 := default
@@ -1393,20 +1393,20 @@ def recv0_arm0 : FeM Empty := do
       partial_fixpoint
       b5 input output r3 v26
 
-/-- The entry of `recv0_arm0`, for a call no other arm takes -/
-def recv0_arm0_entry : FeM Empty := do
+/-- The entry of `recv_fallback`, for a call no other arm takes -/
+def recv_fallback_entry : FeM Empty := do
   nonPayable
-  let _ ← recv0_arm0
+  let _ ← recv_fallback
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 /-- The runtime entry of contract `Blake2F`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
-    recv0_arm0_entry
+    recv_fallback_entry
   else
     let selector ← calldataSelector
-    recv0_arm0_entry
+    recv_fallback_entry
 
 /-- The deployment entry of contract `Blake2F`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do

@@ -6269,9 +6269,10 @@ fn assoc_const_name<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<
 
 /// Each recv arm of `contract` with its Lean name: `recv_` and the name of
 /// the msg variant it handles, with the msg's name before the variant's if
-/// another arm handles a variant of the same name. An arm that handles no
-/// variant, or whose name or entry's name is still another arm's, is named
-/// by its place, `recv<n>_arm<m>`.
+/// another arm handles a variant of the same name, and `recv_fallback` for
+/// the arm that takes any other call. An arm whose name or entry's name is
+/// still another arm's, or that handles neither, is named by its place,
+/// `recv<n>_arm<m>`.
 fn arm_names<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
@@ -6291,9 +6292,13 @@ fn arm_names<'db>(
             Some((msg, variant.name(db).to_opt()?))
         })
         .collect();
-    let short: Vec<_> = variants
+    let short: Vec<_> = arms
         .iter()
-        .map(|variant| variant.map(|(_, variant)| format!("recv_{}", variant.data(db))))
+        .zip(&variants)
+        .map(|(arm, variant)| match variant {
+            Some((_, variant)) => Some(format!("recv_{}", variant.data(db))),
+            None => arm.is_fallback(db).then(|| "recv_fallback".to_string()),
+        })
         .collect();
     let chosen: Vec<_> = variants
         .iter()

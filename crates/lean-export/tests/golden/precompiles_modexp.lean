@@ -9421,7 +9421,7 @@ def run_MemBuffer (input : MemBuffer) (gas_1 : UInt256) : FeM Output := do
               return v59
 
 /-- `_`, for a call no other arm takes -/
-def recv0_arm0 : FeM Empty := do
+def recv_fallback : FeM Empty := do
   let mut result : Output := default
   let mut r2 : MemBuffer := default
   let v0 ← input_Evm_6
@@ -9441,20 +9441,20 @@ def recv0_arm0 : FeM Empty := do
     let v19 ← Evm_return_data v16
     nomatch v19
 
-/-- The entry of `recv0_arm0`, for a call no other arm takes -/
-def recv0_arm0_entry : FeM Empty := do
+/-- The entry of `recv_fallback`, for a call no other arm takes -/
+def recv_fallback_entry : FeM Empty := do
   nonPayable
-  let _ ← recv0_arm0
+  let _ ← recv_fallback
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 /-- The runtime entry of contract `Modexp`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
-    recv0_arm0_entry
+    recv_fallback_entry
   else
     let selector ← calldataSelector
-    recv0_arm0_entry
+    recv_fallback_entry
 
 /-- The deployment entry of contract `Modexp`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do

@@ -643,7 +643,7 @@ def recv_Allowance (owner : UInt256) (guy : UInt256) : FeM UInt256 := do
   return v2
 
 /-- `_`, for a call no other arm takes -/
-def recv1_arm0 : FeM Unit := do
+def recv_fallback : FeM Unit := do
   let _ ← deposit_Weth9Store_Evm_Evm
   return ()
 
@@ -1082,16 +1082,16 @@ def recv_Allowance_entry : FeM Empty := do
   let result ← recv_Allowance message.owner message.guy
   Evm_return_value_Sol_u256 result
 
-/-- The entry of `recv1_arm0`, for a call no other arm takes -/
-def recv1_arm0_entry : FeM Empty := do
-  let _ ← recv1_arm0
+/-- The entry of `recv_fallback`, for a call no other arm takes -/
+def recv_fallback_entry : FeM Empty := do
+  let _ ← recv_fallback
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 /-- The runtime entry of contract `WETH9`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
-    recv1_arm0_entry
+    recv_fallback_entry
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x06fdde03 then
@@ -1117,7 +1117,7 @@ def runtime : FeM Empty := do
     else if selector = UInt256.ofNat 0xdd62ed3e then
       recv_Allowance_entry
     else
-      recv1_arm0_entry
+      recv_fallback_entry
 
 /-- The deployment entry of contract `WETH9`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
