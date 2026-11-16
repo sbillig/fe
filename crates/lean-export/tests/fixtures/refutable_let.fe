@@ -1,0 +1,20 @@
+// A program the compiler rejects: `let limit` with the constant `limit` in
+// scope is a refutable pattern (`fe check`: error 8-0101). Its contract
+// must not be exported.
+use std::abi::sol
+
+msg RefutableMsg {
+    #[selector = sol("run(uint256)")]
+    Run { x: u256 } -> u256,
+}
+
+const limit: u256 = 10
+
+pub contract Refutable {
+    recv RefutableMsg {
+        Run { x } -> u256 {
+            let limit = x * 2
+            limit + 1
+        }
+    }
+}

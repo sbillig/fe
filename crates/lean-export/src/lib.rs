@@ -28,23 +28,26 @@ use std::fmt::{self, Write};
 
 use common::{
     compilation::Target as CompilationTarget,
+    diagnostics::Severity,
     ingot::{Ingot, IngotKind},
     layout::StorageFieldPlacement,
 };
 use cranelift_entity::EntityRef;
 use hir::{
     SpannedHirDb,
-    analysis::diagnostics::SpannedHirAnalysisDb,
     analysis::{
         HirAnalysisDb,
+        analysis_pass::AnalysisPassManager,
+        diagnostics::SpannedHirAnalysisDb,
+        initialize_analysis_pass,
         semantic::{
             BinaryOp, CarrierBase, DropFlagPoint, DropStep, EvalOutcome, FailReason, FieldIndex,
             NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr,
             NIndex, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
             NSuccessor, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow,
-            SConst, SemConstId, SemConstScalar, SemConstValue, SemanticInstance,
-            SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key, drop_elaboration,
-            eval_const_ref, generated_callee_key, identity_semantic_instance_key,
+            SConst, SemConstId, SemConstScalar, SemConstValue, SemanticAccessAnalysisPass,
+            SemanticInstance, SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key,
+            drop_elaboration, eval_const_ref, generated_callee_key, identity_semantic_instance_key,
             normalize_semantic_body, projection_component_spaces, runtime_size_bytes,
         },
         ty::{
@@ -73,8 +76,8 @@ use hir::{
         },
     },
     hir_def::{
-        BlockKind, Body, Contract, EnumVariant, Expr, FieldParent, GenericParamOwner, IdentId,
-        ItemKind, Partial, PatId,
+        BlockKind, Body, Contract, EnumVariant, Expr, FieldParent, GenericParamOwner, HirIngot,
+        IdentId, ItemKind, Partial, PatId,
         expr::{ArithBinOp, BinOp, CompBinOp},
         scope_graph::ScopeId,
     },
@@ -199,7 +202,8 @@ const BINDER_ID: char = '\u{4}';
 /// `_` where nothing names it.
 const UNNAMED: char = '_';
 
-/// A construct the exporter has no model for.
+/// Why a contract is not exported: a construct the exporter has no model
+/// for, or the errors the compiler reports in its ingot.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
 
@@ -544,7 +548,7 @@ impl Scope {
 pub struct IngotExport<'db> {
     db: &'db dyn HirAnalysisDb,
     /// The database, for the source text of a span.
-    spans: &'db dyn SpannedHirDb,
+    spans: &'db dyn SpannedHirAnalysisDb,
     /// The Lean name of each instance of the ingot's code exported so far,
     /// for each way it receives its access parameters.
     names: FxHashMap<(SemanticInstanceKey<'db>, Carriers), String>,
@@ -612,8 +616,9 @@ impl<'db> IngotExport<'db> {
     /// The deployment entry, `init_entry`, decodes the constructor arguments
     /// and runs `init`. They call std's decoder and encoder as exported.
     ///
-    /// A contract that cannot be exported leaves the export and the library
-    /// as they were.
+    /// A contract of an ingot the compiler reports errors in is not
+    /// exported. A contract that cannot be exported leaves the export and the
+    /// library as they were.
     pub fn export_contract(
         &mut self,
         contract: Contract<'db>,
@@ -621,6 +626,13 @@ impl<'db> IngotExport<'db> {
         library: &mut Library,
     ) -> Result<(), Unsupported> {
         let db = self.db;
+        let errors = ingot_errors(self.spans, contract.top_mod(db).ingot(db));
+        if !errors.is_empty() {
+            return Err(Unsupported(format!(
+                "the program has errors: {}",
+                errors.join("; ")
+            )));
+        }
         let arms = arm_names(db, contract);
         // `init` is documented by its header, and an arm by its pattern and
         // return type and by the selector it takes.
@@ -6304,6 +6316,30 @@ fn arm_names<'db>(
             (*arm, name)
         })
         .collect()
+}
+
+/// The errors the compiler reports in `ingot`, as `fe check` finds them: the
+/// analysis of its modules, and the check of their accesses if that finds
+/// none.
+fn ingot_errors<'db>(db: &'db dyn SpannedHirAnalysisDb, ingot: Ingot<'db>) -> Vec<String> {
+    let tree = ingot.module_tree(db);
+    let errors = |mut passes: AnalysisPassManager| -> Vec<String> {
+        let diagnostics = passes.run_on_module_tree(db, tree);
+        let diagnostics = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(db));
+        diagnostics
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+            .map(|diagnostic| diagnostic.message)
+            .collect()
+    };
+    let analysis = errors(initialize_analysis_pass());
+    if !analysis.is_empty() {
+        return analysis;
+    }
+    let mut access = AnalysisPassManager::new();
+    access.add_module_pass("SemanticAccess", Box::new(SemanticAccessAnalysisPass));
+    errors(access)
 }
 
 /// The source text from where `start` begins to where `end` ends, each run

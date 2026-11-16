@@ -67,3 +67,17 @@ fn golden() {
     compare("lib.lean", library.text());
     compare("lib.checks", library.checks());
 }
+
+/// A contract of a program the compiler rejects is not exported:
+/// `refutable_let.fe` binds a constant's name with `let`, a refutable
+/// pattern.
+#[test]
+fn rejects_programs_with_errors() {
+    let mut library = Library::default();
+    let error = with_fixture("refutable_let", |db, contracts| {
+        IngotExport::new(db)
+            .export_contract(contracts[0], true, &mut library)
+            .unwrap_err()
+    });
+    assert!(error.0.contains("refutable pattern"), "{}", error.0);
+}
