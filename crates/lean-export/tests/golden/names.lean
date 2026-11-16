@@ -1,5 +1,11 @@
 export Lib (CallData Evm_input Evm_return_value_Sol_u256 Sol_SELECTOR_SIZE Sol_validate_runtime_head abi_field_head_size_u256 decode_msg_field_from_Sol_u256_CallData len_CallData)
 
+def Field.counter : Place :=
+  .storage (UInt256.ofNat 4)
+
+def Layout.Counter : Layout :=
+  { storage := [0, 1] }
+
 structure Pair where
   a : UInt256
   b : UInt256
@@ -222,22 +228,26 @@ def long (x : UInt256) : FeM UInt256 := do
 
 /-- `Run { x } -> u256`, selector `0xa444f5e9` (`run(uint256)`) -/
 def recv_Run (x : UInt256) : FeM UInt256 := do
+  -- counter.1 += x
+  let v1 ← load (Field.counter.field Layout.Counter 1)
+  let v2 ← checkedAdd v1 x
+  store (Field.counter.field Layout.Counter 1) v2
   -- pair = Pair { a: x, b: load_Pair(x) }
-  let v1 ← load_Pair x
-  store_Pair Field.pair (Pair.mk x v1)
+  let v4 ← load_Pair x
+  store_Pair Field.pair (Pair.mk x v4)
   -- prop = Prop { flag: true, n: long_k1(x) }
-  let v5 ← long_k1 x
-  store_Prop Field.prop (Prop_1.mk true v5)
+  let v8 ← long_k1 x
+  store_Prop Field.prop (Prop_1.mk true v8)
   -- let stored = pair
   let pair ← load_Pair_1 Field.pair
   -- let p = prop
   let prop ← load_Prop Field.prop
   -- stored.a + stored.b + p.n + long(x)
-  let v14 ← checkedAdd pair.a pair.b
-  let v16 ← checkedAdd v14 prop.n
-  let v17 ← long x
-  let v18 ← checkedAdd v16 v17
-  return v18
+  let v17 ← checkedAdd pair.a pair.b
+  let v19 ← checkedAdd v17 prop.n
+  let v20 ← long x
+  let v21 ← checkedAdd v19 v20
+  return v21
 
 /-- `<Run as AbiSize>::HEAD_SIZE` -/
 def Run_HEAD_SIZE : FeM UInt256 := do

@@ -1,6 +1,7 @@
 // Top-level names the exporter makes, spelled by the program too: `load_Pair`,
 // the loader of the stored struct `Pair`; `long_k1`, the first piece of the
-// long function `long`; and a struct `Prop`, a Lean keyword.
+// long function `long`; and a struct `Prop`, a Lean keyword. The fields of
+// the tuple struct `Counter` are numbered, not named.
 use std::abi::sol
 
 msg NamesMsg {
@@ -21,6 +22,8 @@ struct Prop {
 }
 
 impl Copy for Prop {}
+
+struct Counter(u256, u256)
 
 fn load_Pair(_ x: u256) -> u256 {
     x + 1
@@ -83,9 +86,11 @@ fn long(_ x: u256) -> u256 {
 pub contract Names {
     mut pair: Pair,
     mut prop: Prop,
+    mut counter: Counter,
 
     recv NamesMsg {
-        Run { x } -> u256 uses (mut pair, mut prop) {
+        Run { x } -> u256 uses (mut pair, mut prop, mut counter) {
+            counter.1 += x
             pair = Pair { a: x, b: load_Pair(x) }
             prop = Prop { flag: true, n: long_k1(x) }
             let stored = pair

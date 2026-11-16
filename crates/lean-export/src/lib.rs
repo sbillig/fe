@@ -6084,9 +6084,12 @@ impl<'db> BodyExporter<'_, 'db> {
                     // a place of its own, named after both: apart from what
                     // `Place`'s namespace holds, which the place's name would
                     // otherwise shadow.
-                    if lean.starts_with("Field.") && !lean.contains([' ', '(', BINDER]) {
-                        let (steps, _) = self.module.fields(ty)?.swap_remove(usize::from(index.0));
-                        let field = &steps[0];
+                    let (steps, _) = self.module.fields(ty)?.swap_remove(usize::from(index.0));
+                    let field = &steps[0];
+                    // A tuple struct's fields are numbered, which names nothing.
+                    let named =
+                        field.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '«');
+                    if named && lean.starts_with("Field.") && !lean.contains([' ', '(', BINDER]) {
                         let member = match PLACE.contains(&field.trim_matches(['«', '»'])) {
                             true => format!("{lean}.{field}_1"),
                             false => format!("{lean}.{field}"),
