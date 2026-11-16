@@ -11,9 +11,9 @@ use hir::analysis::{
         SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex,
         core_method_callee_key, eval_const_ref, generated_callee_key,
         normalized::{
-            NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
-            NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
-            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
+            NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
+            NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
+            NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
         },
         panic_payload_encodable, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
     },
@@ -409,6 +409,9 @@ pub(super) struct RmirEmitter<'db> {
     lane_copies: FxHashMap<RLocalId, LaneSite<'db>>,
     /// The lane copies held for each extent, whose end stores them back.
     lane_extents: FxHashMap<LaneExtent, Vec<RLocalId>>,
+    /// The extent whose hold of a lane copy is marked (`HoldLane`): the
+    /// first it is held for, which the others lie inside.
+    lane_owners: FxHashMap<RLocalId, LaneExtent>,
     /// The lane copies the arguments of the call being lowered pass by
     /// address, with the places they copy.
     call_lane_copies: Vec<(NPlace<'db>, RLocalId)>,
@@ -467,7 +470,9 @@ enum ResolvedPlace<'db> {
 enum LaneExtent {
     /// A `mut` access, a binding or an argument, which its `End` ends.
     Access(NValueId),
-    /// A projection call's session, given the copy as a `mut` effect.
+    /// A call given the copy as a `mut` effect, by the local it assigns:
+    /// a projection's session, which its `End` ends, or any other call,
+    /// which ends when it returns.
     Session(RLocalId),
 }
 
@@ -653,6 +658,7 @@ impl<'db> RmirEmitter<'db> {
             sessions: FxHashMap::default(),
             lane_copies: FxHashMap::default(),
             lane_extents: FxHashMap::default(),
+            lane_owners: FxHashMap::default(),
             call_lane_copies: Vec::new(),
             locals,
             blocks,
@@ -1286,7 +1292,8 @@ impl<'db> RmirEmitter<'db> {
                     self.lower_semantic_place_read_into(bb, dst, place, &dst_class);
                     return;
                 }
-                let (value, copy) = self.lower_place_address(
+                let (place, copy) = self.resolve_place_address(bb, place);
+                let value = self.lower_place_addr_of_for_class(
                     self.locals[dst.index()].semantic_ty,
                     bb,
                     place,
@@ -1298,7 +1305,8 @@ impl<'db> RmirEmitter<'db> {
                 } = expr
                     && let Some(copy) = copy
                 {
-                    self.hold_until(LaneExtent::Access(result), copy);
+                    let owned = self.open_lane_hold(bb, copy);
+                    self.hold_until(LaneExtent::Access(result), copy, owned);
                 }
                 self.push_stmt(
                     bb,
@@ -2941,15 +2949,13 @@ impl<'db> RmirEmitter<'db> {
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
         let semantic = SemanticInstance::new(self.db, callee.key);
-        if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
+        if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args) {
             return ret;
         }
         let mut boundary_sites = BoundarySiteAllocator::default();
         let call_input_plan = compile_call_input_plan_for_semantic(
             self.db,
-            &self.semantic_body,
             semantic,
-            self.env,
             effect_args,
             &mut boundary_sites,
         );
@@ -2957,21 +2963,22 @@ impl<'db> RmirEmitter<'db> {
             self.lower_runtime_call_inputs(bb, args, effect_args, &call_input_plan);
         // A lane a `mut` effect argument provides is passed as a copy, which
         // the callee may update: it is stored back when the call returns, or
-        // when a projection's session ends.
+        // when a projection's session ends. Its hold opens before the call,
+        // which may halt.
         let lane_copies: Vec<_> = std::mem::take(&mut self.call_lane_copies)
             .into_iter()
             .filter(|(place, _)| {
-                effect_args.iter().any(|effect| {
-                    effect.required_mut
-                        && matches!(&effect.arg, NEffectArgValue::Place(arg) if arg == place)
-                })
+                effect_args
+                    .iter()
+                    .any(|effect| effect.required_mut && effect.place == *place)
             })
-            .map(|(_, copy)| copy)
+            .map(|(_, copy)| (copy, self.open_lane_hold(bb, copy)))
             .collect();
         let runtime_key = RuntimeInstanceKey::new(
             self.db,
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
             runtime_classes,
+            false,
         );
         let signature = runtime_declaration_signature(self.db, runtime_key);
         let callee = get_or_build_runtime_instance(self.db, runtime_key);
@@ -3002,15 +3009,14 @@ impl<'db> RmirEmitter<'db> {
                 },
             },
         );
+        let session = LaneExtent::Session(call_result);
+        for (copy, owned) in lane_copies {
+            self.hold_until(session, copy, owned);
+        }
         if semantic.is_projection(self.db) {
             self.sessions.insert(stmt_id, call_result);
-            for copy in lane_copies {
-                self.hold_until(LaneExtent::Session(call_result), copy);
-            }
         } else {
-            for copy in lane_copies {
-                self.store_lane_copy(bb, copy);
-            }
+            self.end_lane_extent(bb, session);
         }
         call_result
     }
@@ -3043,7 +3049,6 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         semantic: SemanticInstance<'db>,
         args: &[NOperand],
-        effect_args: &[NEffectArg<'db>],
     ) -> Option<RLocalId> {
         let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
             return None;
@@ -3093,14 +3098,8 @@ impl<'db> RmirEmitter<'db> {
         let kind = runtime_builtin_func_kind(self.db, func)?;
 
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
+        let call_input_plan =
+            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         if kind == RuntimeBuiltinFuncKind::PanicWithValue {
             let [value] = args.as_slice() else {
@@ -3171,7 +3170,6 @@ impl<'db> RmirEmitter<'db> {
         }
         let lowered = self.lower_extern_builtin(semantic, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
-        let _ = effect_args;
         Some(match lowered {
             LoweredBuiltinCall::Expr { builtin, class } => {
                 let ret = class
@@ -3278,14 +3276,8 @@ impl<'db> RmirEmitter<'db> {
         }
         let name = func.name(self.db).to_opt()?.data(self.db);
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
+        let call_input_plan =
+            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         let ret_ty = semantic_return_ty(self.db, semantic);
         let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
@@ -4200,14 +4192,8 @@ impl<'db> RmirEmitter<'db> {
         )
         .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, routine, error)));
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
+        let call_input_plan =
+            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         Some(self.call_generated(bb, SemanticInstance::new(self.db, key), &args))
     }
@@ -4735,9 +4721,7 @@ impl<'db> RmirEmitter<'db> {
             };
             let semantic = SemanticInstance::new(self.db, callee.key);
             let mut sites = BoundarySiteAllocator::default();
-            let plan = compile_call_input_plan_for_semantic(
-                self.db, &self.semantic_body, semantic, self.env, effect_args, &mut sites,
-            );
+            let plan = compile_call_input_plan_for_semantic(self.db, semantic, effect_args, &mut sites);
             self.with_current_body_cx(|cx| {
                 RuntimeArgSelector::new(cx.env, cx.carriers, None)
                     .with_concrete_roots(&roots)
@@ -5295,9 +5279,42 @@ impl<'db> RmirEmitter<'db> {
         copy
     }
 
-    /// Holds the lane copy `copy` until `extent` ends.
-    fn hold_until(&mut self, extent: LaneExtent, copy: RLocalId) {
+    /// Marks a hold of the lane copy `copy` opening in `bb` (`HoldLane`),
+    /// unless the copy is held already, by an access this one lies inside:
+    /// whether it marked one.
+    fn open_lane_hold(&mut self, bb: RBlockId, copy: RLocalId) -> bool {
+        if self.lane_owners.contains_key(&copy) {
+            return false;
+        }
+        let flush = self.lane_flush(copy);
+        self.push_stmt(bb, RStmt::HoldLane { copy, flush });
+        true
+    }
+
+    /// The statements storing the lane copy `copy` back, which a successful
+    /// halt runs while the copy is held.
+    fn lane_flush(&mut self, copy: RLocalId) -> Box<[RStmt<'db>]> {
+        let scratch = self.new_block();
+        self.store_lane_copy(scratch, copy);
+        assert_eq!(
+            scratch.index() + 1,
+            self.blocks.len(),
+            "storing a lane copy back takes no blocks"
+        );
+        self.stmt_origins.pop();
+        self.terminator_origins.pop();
+        self.terminated_blocks.pop();
+        let block = self.blocks.pop().expect("the scratch block");
+        block.stmts.into_boxed_slice()
+    }
+
+    /// Holds the lane copy `copy` until `extent` ends; `owned` when the
+    /// hold of `copy` opening for `extent` is the one marked.
+    fn hold_until(&mut self, extent: LaneExtent, copy: RLocalId, owned: bool) {
         self.lane_extents.entry(extent).or_default().push(copy);
+        if owned {
+            self.lane_owners.insert(copy, extent);
+        }
     }
 
     /// Stores back the lane copies held for `extent`, which ends here; an
@@ -5305,6 +5322,9 @@ impl<'db> RmirEmitter<'db> {
     fn end_lane_extent(&mut self, bb: RBlockId, extent: LaneExtent) {
         for copy in self.lane_extents.get(&extent).cloned().unwrap_or_default() {
             self.store_lane_copy(bb, copy);
+            if self.lane_owners.get(&copy) == Some(&extent) {
+                self.push_stmt(bb, RStmt::ReleaseLane { copy });
+            }
         }
     }
 
@@ -5488,17 +5508,15 @@ impl<'db> RmirEmitter<'db> {
         zero
     }
 
-    /// The address of `place` as a `target`, and the lane copy it lies in:
-    /// a lane has no address, so it is referenced as a memory copy, which
-    /// the access's users store back.
-    fn lower_place_address(
+    /// `place` resolved to be addressed, and the lane copy it lies in: a lane
+    /// has no address, so it is referenced as a memory copy, which the
+    /// access's users store back.
+    fn resolve_place_address(
         &mut self,
-        semantic_ty: TyId<'db>,
         bb: RBlockId,
         place: &NPlace<'db>,
-        target: RuntimeClass<'db>,
-    ) -> (RLocalId, Option<RLocalId>) {
-        let (place, copy) = match self.resolve_place(bb, place) {
+    ) -> (RuntimePlace<'db>, Option<RLocalId>) {
+        match self.resolve_place(bb, place) {
             ResolvedPlace::Lane(lane) => {
                 let copy = self.hold_lane(bb, lane);
                 let place = RuntimePlace {
@@ -5511,9 +5529,7 @@ impl<'db> RmirEmitter<'db> {
                 let copy = self.lane_copy_root(&place);
                 (place, copy)
             }
-        };
-        let value = self.lower_place_addr_of_for_class(semantic_ty, bb, place, target);
-        (value, copy)
+        }
     }
 
     fn alloc_word_const(&mut self, bb: RBlockId, value: u64) -> RLocalId {
@@ -5554,6 +5570,7 @@ impl<'db> RmirEmitter<'db> {
             self.db,
             crate::instance::RuntimeInstanceSource::Semantic(semantic),
             params,
+            false,
         );
         let callee = get_or_build_runtime_instance(self.db, callee_key);
         let carrier = runtime_declaration_signature(self.db, callee_key)
@@ -6096,11 +6113,18 @@ impl<'db> RmirEmitter<'db> {
 struct RuntimeArgLowerer<'emitter, 'db> {
     emitter: &'emitter mut RmirEmitter<'db>,
     bb: RBlockId,
+    /// The places in lane copies the call's arguments hold, by the place
+    /// each provides: effects that are one place share one copy.
+    held: Vec<(NPlace<'db>, RuntimePlace<'db>)>,
 }
 
 impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
     fn new(emitter: &'emitter mut RmirEmitter<'db>, bb: RBlockId) -> Self {
-        Self { emitter, bb }
+        Self {
+            emitter,
+            bb,
+            held: Vec::new(),
+        }
     }
 
     fn lower_all(
@@ -6165,15 +6189,23 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
             (RuntimeArgSource::PlaceAddress(source, semantic_ty), use_plan) => {
-                let (value, copy) = self.emitter.lower_place_address(
+                let place = match self.held.iter().find(|(held, _)| held == source) {
+                    Some((_, place)) => place.clone(),
+                    None => {
+                        let (place, copy) = self.emitter.resolve_place_address(self.bb, source);
+                        if let Some(copy) = copy {
+                            self.held.push((source.clone(), place.clone()));
+                            self.emitter.call_lane_copies.push((source.clone(), copy));
+                        }
+                        place
+                    }
+                };
+                let value = self.emitter.lower_place_addr_of_for_class(
                     *semantic_ty,
                     self.bb,
-                    source,
+                    place,
                     selected.class.clone(),
                 );
-                if let Some(copy) = copy {
-                    self.emitter.call_lane_copies.push((source.clone(), copy));
-                }
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
             (RuntimeArgSource::PlaceValue(place, semantic_ty), use_plan) => {

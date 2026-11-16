@@ -41,6 +41,7 @@ use crate::analysis::ty::ty_def::{AssocTy, BorrowKind, Kind, ShapeMode};
 use crate::analysis::ty::ty_error::{collect_hir_ty_diags, qualified_path_wf_diags};
 use crate::hir_def::params::{FuncParamMode, KindBound as HirKindBound};
 use crate::hir_def::scope_graph::ScopeId;
+use crate::span::types::LazyTySpan;
 use crate::{HirDb, SpannedHirDb};
 pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
@@ -352,6 +353,9 @@ fn func_effect_requirements_canonical<'db>(
         .collect()
 }
 
+/// A function's providers: one per type-keyed or trait-keyed effect, then
+/// its root's. A type key's provider is a place of the key's type, and a
+/// trait key's is of the function's provider parameter for the effect.
 fn func_provider_bindings_canonical<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
@@ -362,18 +366,18 @@ fn func_provider_bindings_canonical<'db>(
     let provider_params = CallableDef::Func(func).params(db);
     let mut providers = requirements
         .iter()
-        .filter(|requirement| {
-            matches!(
-                requirement.key.kind(),
-                EffectKeyKind::Type | EffectKeyKind::Trait
-            )
-        })
         .filter_map(|requirement| {
-            let provider_param_idx = provider_map
-                .get(requirement.binding_idx as usize)
-                .copied()
-                .flatten()?;
-            let provider_ty = *provider_params.get(provider_param_idx)?;
+            let provider_ty = match requirement.key {
+                EffectRequirementKey::Type(key_ty) => key_ty,
+                EffectRequirementKey::Trait(_) => {
+                    let provider_param_idx = provider_map
+                        .get(requirement.binding_idx as usize)
+                        .copied()
+                        .flatten()?;
+                    *provider_params.get(provider_param_idx)?
+                }
+                EffectRequirementKey::Row(_) | EffectRequirementKey::Other => return None,
+            };
             Some(ProviderBinding {
                 provider_idx: requirement.binding_idx,
                 provider_ty,
@@ -419,10 +423,7 @@ fn func_effect_resolutions_canonical<'db>(
         .filter_map(|provider| match provider.source {
             ProviderSource::UsesParam {
                 requirement_idx, ..
-            } => Some((
-                requirement_idx,
-                (provider.provider_idx, provider.semantics.kind),
-            )),
+            } => Some((requirement_idx, provider.provider_idx)),
             ProviderSource::RootProvider { .. } | ProviderSource::ContractField { .. } => None,
         })
         .collect::<FxHashMap<_, _>>();
@@ -442,7 +443,7 @@ fn func_effect_resolutions_canonical<'db>(
         .filter_map(|requirement| {
             explicit_provider_idx
                 .get(&requirement.binding_idx)
-                .map(|(provider_idx, _)| *provider_idx)
+                .copied()
                 .or(root_provider_idx)
                 .map(|provider_idx| ResolvedEffectBinding {
                     requirement_idx: requirement.binding_idx,
@@ -2347,21 +2348,24 @@ pub fn effect_requirements_for_site<'db>(
 }
 
 /// The canonical provider of `requirement`, a component of a row the body at
-/// `owner` is generic over (the closure's at `closure`, if any): the provider
-/// parameter its instances substitute.
+/// `owner` is generic over (the closure's at `closure`, if any): a place of
+/// a type key's type, or of the provider parameter the body's instances
+/// substitute for a trait key.
 pub(crate) fn row_effect_provider<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: ScopeId<'db>,
     closure: Option<ExprId>,
     requirement: &EffectRequirement<'db>,
 ) -> ProviderBinding<'db> {
-    let provider_ty = TyParam::row_effect_provider(
-        requirement.binding_name,
-        requirement.binding_idx as usize,
-        owner,
-        closure,
-    )
-    .ty(db);
+    let provider_ty = requirement.key.key_ty().unwrap_or_else(|| {
+        TyParam::row_effect_provider(
+            requirement.binding_name,
+            requirement.binding_idx as usize,
+            owner,
+            closure,
+        )
+        .ty(db)
+    });
     ProviderBinding {
         provider_idx: requirement.binding_idx,
         provider_ty,
@@ -2388,7 +2392,7 @@ pub(crate) fn effect_param_provider_semantics<'db>(
     if semantics.kind == ProviderKind::RootObject
         && let EffectRequirementKey::Type(key_ty) = key
     {
-        semantics.address_space = Some(key_ty.default_space(db));
+        semantics.address_space = key_ty.default_space(db);
     }
     semantics
 }
@@ -2649,15 +2653,12 @@ fn contract_provider_bindings_canonical<'db>(
                 semantics: ProviderSemantics {
                     provider_ty,
                     kind: ProviderKind::Place,
-                    address_space: Some(field.address_space).map(|space| {
-                        if is_init_site && space == AddressSpace::Code {
-                            AddressSpace::Memory
-                        } else {
-                            space
-                        }
-                    }),
+                    address_space: if is_init_site && field.address_space == AddressSpace::Code {
+                        AddressSpace::Memory
+                    } else {
+                        field.address_space
+                    },
                     target_ty: Some(provider_ty),
-                    transport: crate::analysis::ty::ProviderTransport::ByValue,
                 },
             }
         })
@@ -5236,72 +5237,34 @@ impl<'db> ImplAssocTypeView<'db> {
     /// All type-related diagnostics for this associated type.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let def = self.owner.types(db)[self.idx];
-        let Some(hir) = def.type_ref.to_opt() else {
+        let (Some(hir), Some(ty)) = (def.type_ref.to_opt(), self.ty(db)) else {
             return Vec::new();
         };
-
         let ty_span = self.span().ty();
-        let assumptions = constraints_for(db, self.owner.into());
-
-        let scope = self.owner.scope();
-        let errs = if def.is_shape {
-            shape_value_diags(db, hir, scope, ty_span.clone(), assumptions)
-        } else {
-            collect_ty_lower_errors(db, scope, hir, ty_span.clone(), assumptions)
-        };
-        if !errs.is_empty() {
-            return errs;
-        }
-
-        let Some(ty) = self.ty(db) else {
-            return Vec::new();
-        };
-        if let Some(diag) = ty.emit_diag(db, ty_span.clone().into()) {
-            return vec![diag];
-        }
-        // A type is of its declaration's kind: `*`, unless a bound gives
-        // another.
-        if !def.is_shape
-            && let Some(trait_) = self.owner.trait_def(db)
-            && let Some(decl) = trait_
+        let trait_ = self.owner.trait_def(db);
+        let decl = trait_.and_then(|trait_| {
+            trait_
                 .assoc_types(db)
                 .find(|assoc| assoc.name(db) == def.name.to_opt())
-            && !decl.is_shape(db)
-        {
-            let expected = lower_kind_in_bounds(decl.bounds_raw(db)).unwrap_or(Kind::Star);
-            if !ty.kind(db).does_match(&expected) {
-                return vec![
-                    TyLowerDiag::InvalidTypeArgKind {
-                        span: ty_span.into(),
-                        expected: Some(expected),
-                        given: ty,
-                    }
-                    .into(),
-                ];
-            }
-        }
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        });
+        let diags = assoc_ty_value_diags(
             db,
-            TraitSolveCx::new(db, self.owner.scope())
-                .with_assumptions(param_env(db, self.owner.into())),
+            self.owner.into(),
+            decl,
+            def.is_shape,
+            hir,
             ty,
-        ) {
-            return vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ];
+            ty_span.clone(),
+        );
+        if !diags.is_empty() {
+            return diags;
         }
 
         if def.is_shape
             && let Some(name) = def.name.to_opt()
             && let Some(diag) = shape_contract_diag(
                 db,
-                self.owner.trait_def(db),
+                trait_,
                 name,
                 ty,
                 param_env(db, self.owner.into()),
@@ -5313,6 +5276,67 @@ impl<'db> ImplAssocTypeView<'db> {
 
         Vec::new()
     }
+}
+
+/// Diagnostics for an associated type's value, `ty` written as `hir` in
+/// `owner`: an impl's, or a trait's default. What lowering the written type
+/// reports, and else a type that is invalid, not of the kind `decl` declares
+/// (`*`, unless a bound gives another) or not well-formed in `owner`.
+pub(crate) fn assoc_ty_value_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: ItemKind<'db>,
+    decl: Option<TraitAssocTypeView<'db>>,
+    is_shape: bool,
+    hir: TypeId<'db>,
+    ty: TyId<'db>,
+    span: LazyTySpan<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let scope = owner.scope();
+    let assumptions = constraints_for(db, owner);
+    let errs = if is_shape {
+        shape_value_diags(db, hir, scope, span.clone(), assumptions)
+    } else {
+        collect_ty_lower_errors(db, scope, hir, span.clone(), assumptions)
+    };
+    if !errs.is_empty() {
+        return errs;
+    }
+
+    if let Some(diag) = ty.emit_diag(db, span.clone().into()) {
+        return vec![diag];
+    }
+    if !is_shape
+        && let Some(decl) = decl
+        && !decl.is_shape(db)
+    {
+        let expected = lower_kind_in_bounds(decl.bounds_raw(db)).unwrap_or(Kind::Star);
+        if !ty.kind(db).does_match(&expected) {
+            return vec![
+                TyLowerDiag::InvalidTypeArgKind {
+                    span: span.into(),
+                    expected: Some(expected),
+                    given: ty,
+                }
+                .into(),
+            ];
+        }
+    }
+    if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        db,
+        TraitSolveCx::new(db, scope).with_assumptions(param_env(db, owner)),
+        ty,
+    ) {
+        return vec![
+            TraitConstraintDiag::TraitBoundNotSat {
+                span: span.into(),
+                primary_goal: goal,
+                unsat_subgoal: subgoal,
+                required_by: None,
+            }
+            .into(),
+        ];
+    }
+    Vec::new()
 }
 
 /// The contract an associated shape's value `ty`, given for the shape `name`
@@ -5552,6 +5576,11 @@ impl<'db> TraitAssocTypeView<'db> {
     /// Raw bounds for this associated type (HIR). Prefer semantic checks where possible.
     pub(in crate::core) fn bounds_raw(self, db: &'db dyn HirDb) -> &'db [TypeBound<'db>] {
         &self.decl(db).bounds
+    }
+
+    /// The default as written, if any.
+    pub(crate) fn default_hir(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.decl(db).default
     }
 
     /// Semantic default type for this associated type, lowered in the trait's

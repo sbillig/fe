@@ -6,6 +6,7 @@ use std::{
 use common::{
     InputDb,
     diagnostics::{CompleteDiagnostic, Severity},
+    stdlib::is_embedded_builtin,
 };
 use driver::{DriverDataBase, db::DiagnosticsCollection};
 use hir::{Ingot, analysis::semantic::collect_blocked_semantic_bodies, hir_def::TopLevelMod};
@@ -286,12 +287,6 @@ impl<'db> CompilationDiagnostics<'db> {
     }
 }
 
-/// The compiler-owned embedded libraries. Source and workspace replacements of
-/// core and std use ordinary URLs and are validated like other dependencies.
-fn is_embedded_builtin(url: &Url) -> bool {
-    matches!(url.scheme(), "builtin-core" | "builtin-std")
-}
-
 fn ingot_modules<'db>(db: &'db DriverDataBase, ingot: Ingot<'db>) -> Vec<TopLevelMod<'db>> {
     hir::lower::module_tree(db, ingot).all_modules().collect()
 }
@@ -407,11 +402,11 @@ mod tests {
 
         let core_url = Url::parse(BUILTIN_CORE_BASE_URL)
             .unwrap()
-            .join("src/effect_ref.fe")
+            .join("src/marker.fe")
             .unwrap();
         let core_file = db.workspace().get(&db, &core_url).unwrap();
         let mut core_source = core_file.text(&db).to_string();
-        core_source.push_str("\nfn invalid_self_ingot_path() { core::effect_ref::read(0) }\n");
+        core_source.push_str("\nfn invalid_self_ingot_path() { core::marker::read(0) }\n");
         db.workspace().update(&mut db, core_url, core_source);
 
         let diagnostics = collect(&db, &root_url);

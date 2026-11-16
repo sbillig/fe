@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId,
-        ItemKind, LitKind, ModeMarker, Partial,
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArg, GenericArgListId,
+        IdentId, ItemKind, LitKind, ModeMarker, Partial,
     },
     span::{
         DynLazySpan,
@@ -29,6 +29,7 @@ use crate::analysis::{
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
         normalize::{normalize_ty, normalize_with_trait_evidence},
+        provider::{ProviderSemantics, RootProviderRegistration},
         shape::Shape,
         trait_def::{AssocBinding, ResolvedMethodInstance, TraitInstId},
         trait_resolution::{
@@ -49,7 +50,7 @@ use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 
 pub(super) enum CallGenericArgUnifyError<'db> {
-    ArityMismatch { given: usize, expected: usize },
+    TooManyArgs { given: usize, expected: usize },
     UnificationFailed,
     InvalidArgument(GenericArgError<'db>),
 }
@@ -78,22 +79,85 @@ pub struct EffectProviderSpecialization<'db> {
     pub provenance: EffectProviderProvenance<'db>,
 }
 
+/// The provider a call's argument gives a callee effect, before the effect
+/// has a slot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub struct EffectArgProvider<'db> {
+    pub provider_ty: TyId<'db>,
+    pub is_mut: bool,
+    pub semantics: ProviderSemantics<'db>,
+    /// The caller's provider the argument passes on. A provider the call
+    /// makes has none: its source is the callee slot it fills.
+    pub source: Option<ProviderSource<'db>>,
+    pub provenance: EffectProviderProvenance<'db>,
+}
+
+impl<'db> EffectArgProvider<'db> {
+    /// The provider in the callee slot `provider_idx`, whose own source is
+    /// `slot`.
+    pub fn in_slot(
+        self,
+        provider_idx: u32,
+        slot: ProviderSource<'db>,
+    ) -> EffectProviderSpecialization<'db> {
+        EffectProviderSpecialization {
+            provider: ProviderBinding {
+                provider_idx,
+                provider_ty: self.provider_ty,
+                is_mut: self.is_mut,
+                source: self.source.unwrap_or(slot),
+                semantics: self.semantics,
+            },
+            provenance: self.provenance,
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ProviderSemantics<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.provider_ty.visit_with(visitor);
+        if let Some(target_ty) = self.target_ty {
+            target_ty.visit_with(visitor);
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ProviderSource<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            ProviderSource::UsesParam { .. } | ProviderSource::ContractField { .. } => {}
+            ProviderSource::RootProvider { registration, .. } => {
+                registration.provider_ty.visit_with(visitor);
+            }
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for EffectProviderProvenance<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        if let EffectProviderProvenance::Binding { binding, .. } = self {
+            binding.visit_with(visitor);
+        }
+    }
+}
+
 impl<'db> TyVisitable<'db> for ProviderBinding<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
         V: TyVisitor<'db> + ?Sized,
     {
         self.provider_ty.visit_with(visitor);
-        self.semantics.provider_ty.visit_with(visitor);
-        if let Some(target_ty) = self.semantics.target_ty {
-            target_ty.visit_with(visitor);
-        }
-        match &self.source {
-            ProviderSource::UsesParam { .. } | ProviderSource::ContractField { .. } => {}
-            ProviderSource::RootProvider { registration, .. } => {
-                registration.provider_ty.visit_with(visitor);
-            }
-        }
+        self.semantics.visit_with(visitor);
+        self.source.visit_with(visitor);
     }
 }
 
@@ -103,8 +167,71 @@ impl<'db> TyVisitable<'db> for EffectProviderSpecialization<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.provider.visit_with(visitor);
-        if let EffectProviderProvenance::Binding { binding, .. } = self.provenance {
-            binding.visit_with(visitor);
+        self.provenance.visit_with(visitor);
+    }
+}
+
+impl<'db> TyVisitable<'db> for EffectArgProvider<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.provider_ty.visit_with(visitor);
+        self.semantics.visit_with(visitor);
+        if let Some(source) = &self.source {
+            source.visit_with(visitor);
+        }
+        self.provenance.visit_with(visitor);
+    }
+}
+
+impl<'db> TyFoldable<'db> for ProviderSemantics<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            provider_ty: self.provider_ty.fold_with(db, folder),
+            target_ty: self.target_ty.map(|ty| ty.fold_with(db, folder)),
+            ..self
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ProviderSource<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            ProviderSource::UsesParam { .. } | ProviderSource::ContractField { .. } => self,
+            ProviderSource::RootProvider {
+                scope,
+                registration,
+            } => ProviderSource::RootProvider {
+                scope,
+                registration: RootProviderRegistration {
+                    provider_ty: registration.provider_ty.fold_with(db, folder),
+                    ..registration
+                },
+            },
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for EffectProviderProvenance<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            EffectProviderProvenance::Binding { owner, binding } => {
+                EffectProviderProvenance::Binding {
+                    owner,
+                    binding: binding.fold_with(db, folder),
+                }
+            }
+            EffectProviderProvenance::Expr { .. } => self,
         }
     }
 }
@@ -114,36 +241,10 @@ impl<'db> TyFoldable<'db> for ProviderBinding<'db> {
     where
         F: TyFolder<'db>,
     {
-        let provider_ty = self.provider_ty.fold_with(db, folder);
-        let semantics = crate::analysis::ty::provider::ProviderSemantics {
-            provider_ty: self.semantics.provider_ty.fold_with(db, folder),
-            target_ty: self.semantics.target_ty.map(|ty| ty.fold_with(db, folder)),
-            ..self.semantics
-        };
-        let source = match self.source {
-            ProviderSource::UsesParam {
-                site,
-                requirement_idx,
-            } => ProviderSource::UsesParam {
-                site,
-                requirement_idx,
-            },
-            ProviderSource::ContractField { field } => ProviderSource::ContractField { field },
-            ProviderSource::RootProvider {
-                scope,
-                registration,
-            } => ProviderSource::RootProvider {
-                scope,
-                registration: crate::analysis::ty::provider::RootProviderRegistration {
-                    provider_ty: registration.provider_ty.fold_with(db, folder),
-                    ..registration
-                },
-            },
-        };
         Self {
-            provider_ty,
-            semantics,
-            source,
+            provider_ty: self.provider_ty.fold_with(db, folder),
+            semantics: self.semantics.fold_with(db, folder),
+            source: self.source.fold_with(db, folder),
             ..self
         }
     }
@@ -154,20 +255,24 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
     where
         F: TyFolder<'db>,
     {
-        let provenance = match self.provenance {
-            EffectProviderProvenance::Binding { owner, binding } => {
-                EffectProviderProvenance::Binding {
-                    owner,
-                    binding: binding.fold_with(db, folder),
-                }
-            }
-            EffectProviderProvenance::Expr { owner, expr } => {
-                EffectProviderProvenance::Expr { owner, expr }
-            }
-        };
         Self {
             provider: self.provider.fold_with(db, folder),
-            provenance,
+            provenance: self.provenance.fold_with(db, folder),
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for EffectArgProvider<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            provider_ty: self.provider_ty.fold_with(db, folder),
+            semantics: self.semantics.fold_with(db, folder),
+            source: self.source.map(|source| source.fold_with(db, folder)),
+            provenance: self.provenance.fold_with(db, folder),
+            ..self
         }
     }
 }
@@ -181,37 +286,41 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 ) -> Result<(), CallGenericArgUnifyError<'db>> {
     let db = tc.db;
     let lowering_cx = LoweringContext::new();
-    let given_args = args.is_given(db).then(|| {
-        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
-    });
-    let given_count = given_args.as_ref().map_or(0, Vec::len);
     let offset = callable.callable_def.offset_to_explicit_params_position(db);
     let explicit_arg_count = callable.generic_args.len() - offset;
+    let given = args.data(db);
+    let given_count = given.len();
+    if given_count > explicit_arg_count {
+        return Err(CallGenericArgUnifyError::TooManyArgs {
+            given: given_count,
+            expected: explicit_arg_count,
+        });
+    }
 
+    // The given arguments fill the explicit parameters from the left. A `_`
+    // stays the inference variable the callee was instantiated with, as does
+    // an omitted parameter without a default; one with a default takes it.
+    let inferred = &callable.generic_args[offset..];
+    let mut provided: Vec<_> =
+        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
+            .into_iter()
+            .zip(given)
+            .zip(inferred)
+            .map(|((lowered, arg), &var)| match arg {
+                GenericArg::Infer => var,
+                _ => lowered,
+            })
+            .collect();
     let completed_args = match callable.callable_def {
         CallableDef::Func(func) => {
             let param_set = collect_generic_params(db, func.into());
             let required = param_set.required_explicit_param_count(db);
-            if given_args.is_some() && !(required..=explicit_arg_count).contains(&given_count) {
-                return Err(CallGenericArgUnifyError::ArityMismatch {
-                    given: given_count,
-                    expected: if given_count < required {
-                        required
-                    } else {
-                        explicit_arg_count
-                    },
-                });
-            }
-
-            // Without explicit arguments, required parameters stay inferred.
-            let provided = given_args
-                .as_deref()
-                .unwrap_or_else(|| &callable.generic_args[offset..offset + required]);
+            provided.extend_from_slice(&inferred[given_count.min(required)..required]);
             param_set
                 .complete_args(
                     db,
                     &callable.generic_args[..offset],
-                    provided,
+                    &provided,
                     match phase {
                         CallGenericArgPhase::Probe => {
                             DefaultApplication::StructuralMetadata(&lowering_cx)
@@ -223,24 +332,22 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
                 )
                 .map_err(CallGenericArgUnifyError::InvalidArgument)?
         }
-        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => given_args
-            .clone()
-            .unwrap_or_else(|| callable.generic_args[offset..].to_vec()),
+        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => {
+            provided.extend_from_slice(&inferred[given_count..]);
+            provided
+        }
     };
-
-    if completed_args.len() != explicit_arg_count {
-        return Err(CallGenericArgUnifyError::ArityMismatch {
-            given: given_count,
-            expected: explicit_arg_count,
-        });
-    }
+    debug_assert_eq!(completed_args.len(), explicit_arg_count);
 
     for (idx, (completed, current)) in completed_args
         .into_iter()
         .zip(&mut callable.generic_args[offset..])
         .enumerate()
     {
-        if idx >= given_count {
+        if given
+            .get(idx)
+            .is_none_or(|arg| matches!(arg, GenericArg::Infer))
+        {
             *current = completed;
         } else if !unify_arg(tc, idx, completed, current) {
             return Err(CallGenericArgUnifyError::UnificationFailed);
@@ -632,8 +739,8 @@ impl<'db> Callable<'db> {
             },
         ) {
             Ok(()) => true,
-            Err(CallGenericArgUnifyError::ArityMismatch { given, expected }) => {
-                tc.push_diag(BodyDiag::CallGenericArgNumMismatch {
+            Err(CallGenericArgUnifyError::TooManyArgs { given, expected }) => {
+                tc.push_diag(BodyDiag::TooManyCallGenericArgs {
                     primary: span.into(),
                     def_span: self.callable_def.name_span(),
                     given,

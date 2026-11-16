@@ -108,7 +108,8 @@ call, as does `x.take()` on an `Option`.
 A value reached through a view or a `ref` access, through an effect, or in
 storage, cannot move; bind it `ref` to read it in place. An effect lends its
 place: a non-`Copy` value under it is read in place or passed on to a callee's
-effects, never taken.
+effects, never taken. A call's effects reach disjoint places, as its
+arguments do (see [effects](effects.md)).
 
 An owned parameter is immutable unless declared `var x: own T`, and an owned
 receiver unless declared `var own self`. An access
@@ -474,7 +475,8 @@ the compiler gives any other element `BITS` of 256 per slot its storage
 layout takes. A
 lane is read and written in place, but a `mut` binding, argument, provided
 effect or yield of one works on a memory copy that is stored back into the
-lane when the access ends.
+lane when the access ends, or before the execution halts successfully
+(returns or stops) while the access is open, wherever the halt happens.
 
 ```fe
 let x = mut balances[from]

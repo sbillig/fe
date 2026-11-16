@@ -6,12 +6,11 @@ use async_lsp::{
     lsp_types::{
         DocumentFormattingParams, Hover, HoverParams, InitializeParams, InitializeResult,
         InitializedParams, LogMessageParams, MessageType, Position, Range, ShowMessageParams,
-        TextEdit,
+        TextEdit, WorkspaceFolder,
     },
 };
 
-use common::InputDb;
-use common::compilation::Target;
+use common::{InputDb, compilation::Target, stdlib::is_embedded_builtin};
 use driver::{
     init_ingot,
     project_target::{ingots_target, set_target},
@@ -20,7 +19,7 @@ use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
 };
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use url::Url;
 
 use super::{capabilities::server_capabilities, hover::hover_helper};
@@ -43,12 +42,6 @@ impl std::fmt::Display for NeedsDiagnostics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "FileNeedsDiagnostics({})", self.0)
     }
-}
-
-#[derive(Debug)]
-pub struct FileChange {
-    pub uri: url::Url,
-    pub kind: ChangeKind,
 }
 
 #[derive(Debug)]
@@ -179,6 +172,29 @@ fn read_file_text_optional(path: &std::path::Path) -> Option<String> {
     resolver.resolve(&mut handler, &file_url).ok().flatten()
 }
 
+/// The folder to analyze: the first workspace folder, or the current directory if
+/// there is no workspace folder or the first one is not a local path.
+fn workspace_root(
+    workspace_folders: Option<Vec<WorkspaceFolder>>,
+    current_dir: impl FnOnce() -> std::io::Result<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, ResponseError> {
+    let folder = workspace_folders
+        .and_then(|folders| folders.into_iter().next())
+        .and_then(|folder| folder.uri.to_file_path().ok());
+    match folder {
+        Some(root) => Ok(root),
+        None => current_dir().map_err(|e| {
+            ResponseError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!(
+                    "The client sent no usable workspace folder and the current directory is \
+                     not available: {e}"
+                ),
+            )
+        }),
+    }
+}
+
 pub async fn initialize(
     backend: &mut Backend,
     message: InitializeParams,
@@ -228,11 +244,7 @@ pub async fn initialize(
         "initialize params received"
     );
 
-    let root = message
-        .workspace_folders
-        .and_then(|folders| folders.first().cloned())
-        .and_then(|folder| folder.uri.to_file_path().ok())
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let root = workspace_root(message.workspace_folders, std::env::current_dir)?;
 
     info!(
         target: "fe::lsp::workspace",
@@ -373,7 +385,7 @@ pub async fn handle_exit(_backend: &Backend, _message: ()) -> Result<(), Respons
 }
 
 pub async fn handle_did_change_watched_files(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidChangeWatchedFilesParams,
 ) -> Result<(), ResponseError> {
     for event in message.changes {
@@ -386,28 +398,27 @@ pub async fn handle_did_change_watched_files(
                 continue;
             }
         };
-        let _ = backend.client.clone().emit(FileChange {
-            uri: event.uri,
-            kind,
-        });
+        if let Err(error) = apply_file_change(backend, event.uri, kind) {
+            warn!("could not apply a watched file change: {}", error.message);
+        }
     }
     Ok(())
 }
 
 pub async fn handle_did_open_text_document(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidOpenTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file opened: {:?}", message.text_document.uri);
-    let _ = backend.client.clone().emit(FileChange {
-        uri: message.text_document.uri,
-        kind: ChangeKind::Open(message.text_document.text),
-    });
-    Ok(())
+    apply_file_change(
+        backend,
+        message.text_document.uri,
+        ChangeKind::Open(message.text_document.text),
+    )
 }
 
 pub async fn handle_did_change_text_document(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidChangeTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file changed: {:?}", message.text_document.uri);
@@ -425,38 +436,36 @@ pub async fn handle_did_change_text_document(
             message.text_document.uri
         );
     }
-    let _ = backend.client.clone().emit(FileChange {
-        uri: message.text_document.uri,
-        kind: ChangeKind::Edit(Some(last.text.clone())),
-    });
-    Ok(())
+    apply_file_change(
+        backend,
+        message.text_document.uri,
+        ChangeKind::Edit(Some(last.text.clone())),
+    )
 }
 
 pub async fn handle_did_save_text_document(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file saved: {:?}", message.text_document.uri);
-    if message.text_document.uri.path().ends_with("/fe.toml") {
-        let _ = backend.client.clone().emit(FileChange {
-            uri: message.text_document.uri,
-            kind: ChangeKind::Edit(None),
-        });
-    }
+    let applied = if message.text_document.uri.path().ends_with("/fe.toml") {
+        apply_file_change(backend, message.text_document.uri, ChangeKind::Edit(None))
+    } else {
+        Ok(())
+    };
     if backend.doc_reload_tx.is_some() {
         let _ = backend.client.clone().emit(DocReloadRequest);
     }
-    Ok(())
+    applied
 }
 
-pub async fn handle_file_change(
+fn apply_file_change(
     backend: &mut Backend,
-    message: FileChange,
+    uri: Url,
+    kind: ChangeKind,
 ) -> Result<(), ResponseError> {
-    if backend.is_virtual_uri(&message.uri) {
-        if matches!(message.kind, ChangeKind::Edit(_))
-            && backend.readonly_warnings.insert(message.uri.clone())
-        {
+    if backend.is_virtual_uri(&uri) {
+        if matches!(kind, ChangeKind::Edit(_)) && backend.readonly_warnings.insert(uri.clone()) {
             let _ = backend.client.clone().show_message(ShowMessageParams {
                 typ: MessageType::ERROR,
                 message: "Built-in library files are read-only in the editor; edits are ignored."
@@ -466,11 +475,11 @@ pub async fn handle_file_change(
         return Ok(());
     }
 
-    let Ok(path) = message.uri.to_file_path() else {
-        error!("Failed to convert URI to path: {:?}", message.uri);
+    let Ok(path) = uri.to_file_path() else {
+        error!("Failed to convert URI to path: {:?}", uri);
         return Err(ResponseError::new(
             ErrorCode::INVALID_PARAMS,
-            format!("Invalid file URI: {}", message.uri),
+            format!("Invalid file URI: {}", uri),
         ));
     };
 
@@ -482,13 +491,22 @@ pub async fn handle_file_change(
         ));
     };
 
+    // Every file of the database has a name, which becomes the name of its module.
+    if path.file_name().is_none() {
+        error!("URI has no file name: {:?}", uri);
+        return Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Not a file: {}", uri),
+        ));
+    }
+
     // Check if this is a fe.toml file
     let is_fe_toml = path
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name == "fe.toml");
 
-    match message.kind {
+    match kind {
         ChangeKind::Open(contents) => {
             debug!("file opened: {:?}", &path_str);
             if let Ok(url) = url::Url::from_file_path(&path) {
@@ -571,23 +589,13 @@ pub async fn handle_file_change(
 
                 sync_project_target(backend);
 
-                // Emit diagnostics for all workspace files
-                let all_files: Vec<_> = backend
-                    .db
-                    .workspace()
-                    .all_files(&backend.db)
-                    .iter()
-                    .map(|(url, _file)| url)
-                    .collect();
-                for url in all_files {
-                    let _ = backend.client.emit(NeedsDiagnostics(url));
-                }
+                emit_workspace_diagnostics(backend);
                 return Ok(());
             }
         }
     }
 
-    let _ = backend.client.emit(NeedsDiagnostics(message.uri));
+    let _ = backend.client.emit(NeedsDiagnostics(uri));
 
     if backend.doc_reload_tx.is_some() {
         let _ = backend.client.emit(DocReloadRequest);
@@ -647,20 +655,18 @@ fn load_ingot_files(
     }
     sync_project_target(backend);
 
-    // Emit diagnostics for all files that were loaded
-    let all_files: Vec<_> = backend
-        .db
-        .workspace()
-        .all_files(&backend.db)
-        .iter()
-        .map(|(url, _file)| url)
-        .collect();
-
-    for url in all_files {
-        let _ = backend.client.emit(NeedsDiagnostics(url));
-    }
+    emit_workspace_diagnostics(backend);
 
     Ok(())
+}
+
+fn emit_workspace_diagnostics(backend: &Backend) {
+    // Embedded libraries are compiler-owned; source replacements still need checks.
+    for (url, _) in backend.db.workspace().all_files(&backend.db).iter() {
+        if !is_embedded_builtin(&url) {
+            let _ = backend.client.emit(NeedsDiagnostics(url));
+        }
+    }
 }
 
 pub async fn handle_files_need_diagnostics(
@@ -673,16 +679,23 @@ pub async fn handle_files_need_diagnostics(
 
     // Track all requested URIs so we can clear stale diagnostics for any that
     // don't appear in the computed diagnostics (e.g. deleted files, fixed errors)
-    let mut pending_clear: FxHashSet<url::Url> = need_diagnostics
+    let mut pending_clear: FxHashMap<Url, Url> = need_diagnostics
         .iter()
-        .map(|NeedsDiagnostics(u)| u.clone())
+        .map(|NeedsDiagnostics(uri)| {
+            (
+                backend.map_client_uri_to_internal(uri.clone()),
+                backend.map_internal_uri_to_client(uri.clone()),
+            )
+        })
         .collect();
 
-    let ingots_need_diagnostics: FxHashSet<_> = need_diagnostics
-        .iter()
-        .filter_map(|NeedsDiagnostics(url)| {
-            let url = backend.map_client_uri_to_internal(url.clone());
-            backend.db.workspace().containing_ingot(&backend.db, url)
+    let ingots_need_diagnostics: FxHashSet<_> = pending_clear
+        .keys()
+        .filter_map(|url| {
+            backend
+                .db
+                .workspace()
+                .containing_ingot(&backend.db, url.clone())
         })
         .collect();
 
@@ -729,8 +742,8 @@ pub async fn handle_files_need_diagnostics(
         };
 
         for (internal_uri, diags) in diagnostics_map.iter() {
+            pending_clear.remove(internal_uri);
             let uri = backend.map_internal_uri_to_client(internal_uri.clone());
-            pending_clear.remove(&uri);
             let mut diagnostic = diags.clone();
             map_related_info_uris(backend, &mut diagnostic);
             let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
@@ -745,7 +758,7 @@ pub async fn handle_files_need_diagnostics(
     }
 
     // Clear diagnostics for any requested URIs that weren't covered above
-    for uri in pending_clear {
+    for uri in pending_clear.into_values() {
         let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
             uri: uri.clone(),
             diagnostics: Vec::new(),
@@ -899,5 +912,60 @@ pub async fn handle_formatting(
             Ok(None)
         }
         Err(fmt::FormatError::Io(_)) => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn folder(path: &std::path::Path) -> WorkspaceFolder {
+        WorkspaceFolder {
+            uri: Url::from_directory_path(path).unwrap(),
+            name: "workspace".to_string(),
+        }
+    }
+
+    fn missing_current_dir() -> std::io::Result<PathBuf> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the directory was removed",
+        ))
+    }
+
+    #[test]
+    fn the_first_workspace_folder_is_the_root() {
+        let first = std::env::temp_dir().join("first");
+        let second = std::env::temp_dir().join("second");
+        let root = workspace_root(
+            Some(vec![folder(&first), folder(&second)]),
+            missing_current_dir,
+        )
+        .unwrap();
+        assert_eq!(root, first);
+    }
+
+    #[test]
+    fn the_current_directory_is_the_root_without_a_usable_workspace_folder() {
+        let current = std::env::temp_dir().join("current");
+        let current_dir = || Ok(current.clone());
+        assert_eq!(workspace_root(None, current_dir).unwrap(), current);
+        // A folder that is not a local path cannot be analyzed.
+        let remote = WorkspaceFolder {
+            uri: Url::parse("https://example.com/workspace").unwrap(),
+            name: "workspace".to_string(),
+        };
+        assert_eq!(
+            workspace_root(Some(vec![remote]), current_dir).unwrap(),
+            current
+        );
+    }
+
+    #[test]
+    fn a_missing_current_directory_is_an_error() {
+        let error = workspace_root(None, missing_current_dir).unwrap_err();
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert!(error.message.contains("the directory was removed"));
     }
 }

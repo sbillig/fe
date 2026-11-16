@@ -71,6 +71,8 @@ pub enum TyLowerDiag<'db> {
     /// `ref` or `mut` as a generic argument of anything but an associated
     /// shape.
     ModeArgNotShape(DynLazySpan<'db>),
+    /// `_` as a generic argument of anything but a call.
+    InferArgOutsideCall(DynLazySpan<'db>),
     /// An associated type binding as a generic argument of anything but a
     /// trait.
     AssocBindingNotOnTrait(DynLazySpan<'db>),
@@ -132,6 +134,18 @@ pub enum TyLowerDiag<'db> {
     MaybeMutRowEffect {
         span: DynLazySpan<'db>,
         entry: bool,
+    },
+    /// A `uses` list names `key` twice.
+    EffectKeyNamedTwice {
+        span: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        key: HirTypeId<'db>,
+    },
+    /// Two effects of a `uses` list bind `name`.
+    EffectNameBoundTwice {
+        span: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        name: IdentId<'db>,
     },
     /// A spread parameter, `..A`, that is not the last of a trait method's
     /// declaration.
@@ -364,7 +378,7 @@ pub enum RevealedBy {
     Evaluation,
 }
 
-/// Why a C caller cannot call an `#[unsafe(export)]` function.
+/// Why the caller outside Fe cannot call an `#[unsafe(export)]` function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ExportIssue {
     NotPub,
@@ -386,6 +400,7 @@ impl TyLowerDiag<'_> {
             Self::ModeNotType(_) => 58,
             Self::ModeOnProduct { .. } => 82,
             Self::ModeArgNotShape(_) => 83,
+            Self::InferArgOutsideCall(_) => 94,
             Self::AssocBindingNotOnTrait(_) => 89,
             Self::ShapeWithoutMode(_) => 84,
             Self::ProductReceiver(_) => 74,
@@ -396,6 +411,8 @@ impl TyLowerDiag<'_> {
             Self::InvalidMainReturn { .. } => 91,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
+            Self::EffectKeyNamedTwice { .. } => 92,
+            Self::EffectNameBoundTwice { .. } => 93,
             Self::MisplacedSpread(_) => 80,
             Self::SpreadOfNonShape { .. } => 81,
             Self::MaybeMutBound(_) => 71,
@@ -732,6 +749,13 @@ pub enum BodyDiag<'db> {
         key: PathId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
+    },
+
+    /// Two keyed bindings of one `with` provide one key.
+    DuplicateWithKey {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        key: PathId<'db>,
     },
 
     ReturnedTypeMismatch {
@@ -1147,7 +1171,8 @@ pub enum BodyDiag<'db> {
         func_ty: TyId<'db>,
     },
 
-    CallGenericArgNumMismatch {
+    /// More generic arguments at a call than the callee has parameters.
+    TooManyCallGenericArgs {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
         given: usize,
@@ -1511,6 +1536,7 @@ impl<'db> BodyDiag<'db> {
             Self::EffectTraitUnsatisfied { .. } => 39,
             Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::WithEffectTypeUnsatisfied { .. } => 76,
+            Self::DuplicateWithKey { .. } => 159,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
@@ -1592,7 +1618,7 @@ impl<'db> BodyDiag<'db> {
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,
-            Self::CallGenericArgNumMismatch { .. } => 22,
+            Self::TooManyCallGenericArgs { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
             Self::AssertArgNumMismatch { .. } => 82,
             Self::AssertMessageMustBeStringLiteral { .. } => 83,

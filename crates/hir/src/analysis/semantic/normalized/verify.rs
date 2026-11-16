@@ -11,7 +11,6 @@ use crate::analysis::{
     ty::{
         adt_def::AdtRef,
         provider::provider_semantics,
-        ty_check::EffectPassMode,
         ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
         ty_is_copy,
     },
@@ -423,7 +422,10 @@ fn verify_expr<'db>(
                 }
             }
             let requirements = callee.call_effect_requirements(db);
-            let mut effect_bindings = FxHashSet::default();
+            // The callee takes its effects in the order its body numbers them.
+            if !effect_args.is_sorted_by(|a, b| a.binding_idx < b.binding_idx) {
+                return Err(NormalizedBodyVerifyError::ExpressionType);
+            }
             for arg in effect_args {
                 let Some(requirement) = requirements
                     .iter()
@@ -431,22 +433,12 @@ fn verify_expr<'db>(
                 else {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 };
-                let shape_matches = matches!(
-                    (&arg.pass_mode, &arg.arg),
-                    (EffectPassMode::ByPlace, NEffectArgValue::Place(_))
-                        | (EffectPassMode::ByValue, NEffectArgValue::Value(_))
-                );
-                if !effect_bindings.insert(arg.binding_idx)
-                    || requirement.is_mut != arg.required_mut
-                    || !shape_matches
+                if requirement.is_mut != arg.required_mut
                     || arg.provider_target_ty.is_some_and(|ty| ty.has_invalid(db))
                 {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 }
-                let arg_ty = match &arg.arg {
-                    NEffectArgValue::Place(place) => place.ty,
-                    NEffectArgValue::Value(value) => operand_ty(body, *value)?,
-                };
+                let arg_ty = arg.place.ty;
                 let semantics = provider_semantics(db, arg_ty);
                 if let Some(target_ty) = arg.provider_target_ty
                     && !structural_types_are_boundary_compatible(
@@ -458,13 +450,11 @@ fn verify_expr<'db>(
                 {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 }
-                if arg.required_mut
-                    && let NEffectArgValue::Place(place) = &arg.arg
-                {
-                    verify_mutation(db, body, place, false)?;
+                if arg.required_mut {
+                    verify_mutation(db, body, &arg.place, false)?;
                 }
             }
-            if effect_bindings.len() != requirements.len()
+            if effect_args.len() != requirements.len()
                 && typed_body.smir_lowering_issues(db).is_empty()
             {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
