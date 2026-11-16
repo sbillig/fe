@@ -44,7 +44,6 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt25
     -- for ref x in self {
     let v7 ← array_has_u256_2 self v3
     if v7 then
-      -- for ref x in self {
       let v8 ← array_at_ref_u256_2 self v3
       -- acc = f(acc, x)
       let (acc_13, acc_13_0) ← closure f acc v8
@@ -102,7 +101,6 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt
     -- for ref x in self {
     let v7 ← array_has_u256_2 self v3
     if v7 then
-      -- for ref x in self {
       let v8 ← array_at_ref_u256_2 self v3
       -- acc = f(acc, x)
       let store_1 ← load_Store Field.store

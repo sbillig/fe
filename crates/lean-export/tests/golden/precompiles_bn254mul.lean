@@ -45,7 +45,6 @@ def magnitude (word : UInt256) : FeM (UInt256 × Bool) := do
   let v8 := decide ((word >>> (UInt256.ofNat 255)) = (UInt256.ofNat 1))
   let join : (UInt256 × Bool) → FeM (UInt256 × Bool) := fun v1 => do
     return v1
-  -- if word >> 255 == 1 { (zero.wrapping_sub(word), true) } else { (word, false) }
   if v8 then
     -- (zero.wrapping_sub(word), true)
     let v10 ← u256_wrapping_sub (UInt256.ofNat 0) word
@@ -164,7 +163,6 @@ def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn2
         let mut r28 := r28
         let mut r29 := r29
         return v3
-      -- return if r.is_zero() { self.double() } else { Self::infinity() }
       if v37 then
         -- self.double()
         let v38 ← Point_double_Mont_Bn254Base self
@@ -443,7 +441,6 @@ def multiply_g1_k1 (point : Point_Mont_Bn254Base) (c1 : UInt256) (c2 : UInt256) 
                 let mut r16 := r16
                 let mut r17 := r17
                 join_4 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v5
-              -- if in1 && in2 { result = result.add_affine(x2: x3, y2: y3) }
               if in2 then
                 -- result = result.add_affine(x2, y2)
                 r17 := result
@@ -454,7 +451,6 @@ def multiply_g1_k1 (point : Point_Mont_Bn254Base) (c1 : UInt256) (c2 : UInt256) 
                 join_5 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 ()
           -- if in1 && in2 { result = result.add_affine(x2: x3, y2: y3) }
           if in1 then
-            -- if in1 && in2 { result = result.add_affine(x2: x3, y2: y3) }
             if in2 then
               -- result = result.add_affine(x2: x3, y2: y3)
               r15 := result
@@ -539,10 +535,8 @@ def mul_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
     let mut point := point
     let mut r1 := r1
     return v1
-  -- match g1_point(input, offset: 0) {
   match v3 with
   | .Some .. =>
-    -- match g1_point(input, offset: 0) {
     point := v3.Some_0
     -- let scalar = word_at(input, offset: 64)
     let scalar ← word_at_MemBuffer input (UInt256.ofNat 64)
@@ -554,11 +548,9 @@ def mul_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
       -- return Option::Some([0, 0])
       let v24 := Option_array_u256_2.Some (#v[(UInt256.ofNat 0), (UInt256.ofNat 0)])
       return v24
-    -- if point.is_infinity() || scalar == 0 { return Option::Some([0, 0]) }
     if v10 then
       join_1 point r1
     else
-      -- if point.is_infinity() || scalar == 0 { return Option::Some([0, 0]) }
       if decide (scalar = (UInt256.ofNat 0)) then
         join_1 point r1
       else
@@ -580,7 +572,6 @@ def recv_fallback : FeM Empty := do
   let v2 ← mul_MemBuffer r2
   match v2 with
   | .Some .. =>
-    -- match bn254::mul(input()) {
     let product := v2.Some_0
     -- var output = MemBuffer::new(64)
     let output_6 ← MemBuffer_new (UInt256.ofNat 64)
@@ -600,7 +591,6 @@ def recv_fallback : FeM Empty := do
     let v22 ← Evm_return_data v19
     nomatch v22
   | .None =>
-    -- match bn254::mul(input()) {
     let v23 ← MemSlice_empty_u8
     let v26 ← Evm_revert v23
     nomatch v26

@@ -52,7 +52,6 @@ def shape (width : UInt256) (height : UInt256) : FeM Shape := do
   else
     let join_1 : Shape → FeM Shape := fun v3 => do
       join v3
-    -- if width == 0 {
     if decide (width = height) then
       join_1 (Shape.Square width)
     else
@@ -64,17 +63,14 @@ def recv_Area (width_0 : UInt256) (height_1 : UInt256) : FeM UInt256 := do
   let v3 ← shape width_0 height_1
   let join : UInt256 → FeM UInt256 := fun v2 => do
     return v2
-  -- match shape(width, height) {
   match v3 with
   | .Empty =>
     join (UInt256.ofNat 0)
   | .Square .. =>
-    -- match shape(width, height) {
     let side := v3.Square_0
     let v8 ← checkedMul side side
     join v8
   | .Rect .. =>
-    -- match shape(width, height) {
     let v14 ← checkedMul v3.Rect_0 v3.Rect_1
     join v14
 
@@ -84,7 +80,6 @@ def halve (value : UInt256) : FeM Option_u256 := do
   let v4 ← checkedRem value (UInt256.ofNat 2)
   let join : Option_u256 → FeM Option_u256 := fun v1 => do
     return v1
-  -- if value % 2 == 0 {
   if decide (v4 = (UInt256.ofNat 0)) then
     -- Option::Some(value / 2)
     let v9 ← checkedDiv value (UInt256.ofNat 2)
@@ -98,7 +93,6 @@ def recv_Half (value : UInt256) : FeM UInt256 := do
   let v2 ← halve value
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
-  -- match halve(value) {
   match v2 with
   | .Some .. =>
     join v2.Some_0

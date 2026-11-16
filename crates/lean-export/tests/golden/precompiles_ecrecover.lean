@@ -18,24 +18,19 @@ def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UIn
   let v6 := decide ((UInt256.ofNat 1).toNat < recovery_id.toNat)
   let join : FeM (Bool × UInt256 × UInt256) := do
     return (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
-  -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
   if v6 then
     join
   else
-    -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
     if decide (r = (UInt256.ofNat 0)) then
       join
     else
-      -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
       let v9 ← N
       if decide (v9.toNat ≤ r.toNat) then
         join
       else
-        -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
         if decide (s = (UInt256.ofNat 0)) then
           join
         else
-          -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
           let v13 ← N
           if decide (v13.toNat ≤ s.toNat) then
             join
@@ -44,10 +39,8 @@ def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UIn
             let v17 ← recover hash recovery_id r s
             let join_1 : (Bool × UInt256 × UInt256) → FeM (Bool × UInt256 × UInt256) := fun v4 => do
               return v4
-            -- match secp256k1::recover(hash, recovery_id, r, s) {
             match v17 with
             | .Some .. =>
-              -- match secp256k1::recover(hash, recovery_id, r, s) {
               let key := v17.Some_0
               join_1 (true, key.x, key.y)
             | .None =>

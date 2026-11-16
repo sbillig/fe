@@ -236,7 +236,6 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
           join_1 words i_r1 i_r2
       partial_fixpoint
       loop_1 words i_r1 i_r2
-  -- let old_words = if old & 1 == 0 { 0 } else { word_count(old_len) }
   if v12 then
     join words i_r1 i_r2 (UInt256.ofNat 0)
   else
@@ -252,7 +251,6 @@ def SolSlot_write_u8 (self : Place) (offset : UInt256) (value : UInt256) : FeM U
   let join : SolWord → FeM Unit := fun word => do
     let mut word := word
     return ()
-  -- if T::BITS == 256 {
   if decide (v3 = (UInt256.ofNat 256)) then
     -- let _ = field_shift(offset, bits: T::BITS)
     let v6 ← u8_BITS
@@ -318,7 +316,6 @@ def SolString_load (self : Place) : FeM DynString := do
     let v61 ← downcast_unchecked_u256_usize len
     let v62 ← DynString_from_abi_tail data v61 size
     return v62
-  -- if head & 1 == 0 {
   if v19 then
     let join_1 : UInt256 → Unit → FeM DynString := fun i v1 => do
       let mut i := i
@@ -461,9 +458,7 @@ def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt
     let join_1 : UInt256 → FeM Bool := fun sender => do
       let mut sender := sender
       join sender
-    -- if src != sender && store.allowance[src][sender] != u256::max() {
     if v12 then
-      -- if src != sender && store.allowance[src][sender] != u256::max() {
       let allowance_entry ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot src
       let allowance_entry_sender_14 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry.slot) (Place.mk .storage allowance_entry.slot).slot sender
       let v15 ← load (Place.mk .storage allowance_entry_sender_14.slot)

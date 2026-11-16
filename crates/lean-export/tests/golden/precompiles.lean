@@ -407,7 +407,6 @@ def Mont_pow_Base (self : Mont_Base) (exponent : UInt256) : FeM Mont_Base := do
         let mut r2 := r2
         let mut r3 := r3
         loop result bit r2 r3
-      -- if (exponent >> bit as u256) & 1 == 1 { result = result.mul(self) }
       if v28 then
         -- result = result.mul(self)
         r3 := result
@@ -429,11 +428,8 @@ def Mont_equals_Base (self : Mont_Base) (other : Mont_Base) : FeM Bool := do
     join false
   -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
   if decide (self.l0 = other.l0) then
-    -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
     if decide (self.l1 = other.l1) then
-      -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
       if decide (self.l2 = other.l2) then
-        -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
         if decide (self.l3 = other.l3) then
           join true
         else
@@ -1624,11 +1620,8 @@ def Mont_is_zero_Base (self : Mont_Base) : FeM Bool := do
     join false
   -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
   if decide (self.l0 = (UInt256.ofNat 0)) then
-    -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
     if decide (self.l1 = (UInt256.ofNat 0)) then
-      -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
       if decide (self.l2 = (UInt256.ofNat 0)) then
-        -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
         if decide (self.l3 = (UInt256.ofNat 0)) then
           join true
         else
@@ -1756,11 +1749,9 @@ def Point_double_Mont_Base (self : Point_Mont_Base) : FeM Point_Mont_Base := do
     -- return Self::infinity()
     let v72 ← Point_infinity_Mont_Base
     return v72
-  -- if self.is_infinity() || self.y.is_zero() { return Self::infinity() }
   if v1 then
     join a b c d e x r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24
   else
-    -- if self.is_infinity() || self.y.is_zero() { return Self::infinity() }
     r6 := self.y
     let v4 ← Mont_is_zero_Base r6
     if v4 then
@@ -1952,7 +1943,6 @@ def Point_add_Mont_Base (self : Point_Mont_Base) (other : Point_Mont_Base) : FeM
           let mut r35 := r35
           let mut r36 := r36
           return v2
-        -- return if r.is_zero() { self.double() } else { Self::infinity() }
         if v60 then
           -- self.double()
           let v61 ← Point_double_Mont_Base self
@@ -2147,7 +2137,6 @@ def Point_add_affine_Mont_Base (self : Point_Mont_Base) (x2 : Mont_Base) (y2 : M
         let mut r28 := r28
         let mut r29 := r29
         return v3
-      -- return if r.is_zero() { self.double() } else { Self::infinity() }
       if v37 then
         -- self.double()
         let v38 ← Point_double_Mont_Base self
@@ -2286,7 +2275,6 @@ def combination_k2 (u : UInt256) (v_1 : UInt256) (g : Point_Mont_Base) (table : 
     -- for i in [4 as usize, 8, 12] {
     let v46 ← array_has_usize_3 r12 v3
     if v46 then
-      -- for i in [4 as usize, 8, 12] {
       let v48 ← array_at_ref_usize_3 r12 v3
       let i := v48
       -- for j in 1..4 { table[i + j] = table[i].add(table[j]) }
@@ -2333,7 +2321,6 @@ def combination_k2 (u : UInt256) (v_1 : UInt256) (g : Point_Mont_Base) (table : 
         -- for j in 1..4 { table[i + j] = table[i].add(table[j]) }
         let v58 ← Range_has_1_4 r13 v4
         if v58 then
-          -- for j in 1..4 { table[i + j] = table[i].add(table[j]) }
           let v60 ← Range_at_1_4 r13 v4
           let j := v60
           -- table[i + j] = table[i].add(table[j])
@@ -2405,7 +2392,6 @@ def combination_k2 (u : UInt256) (v_1 : UInt256) (g : Point_Mont_Base) (table : 
         -- for k in 1..16 {
         let v89 ← Range_has_1_16 r16 v5
         if v89 then
-          -- for k in 1..16 {
           let v91 ← Range_at_1_16 r16 v5
           let k_92 := v91
           -- prefix[k] = running
@@ -2456,7 +2442,6 @@ def combination_k2 (u : UInt256) (v_1 : UInt256) (g : Point_Mont_Base) (table : 
             -- for k in 1..16 {
             let v112 ← Range_next_1_16 r16 v5
             loop_2 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v112
-          -- if !table[k].is_infinity() { running = running.mul(table[k].z) }
           if !v98 then
             -- running = running.mul(table[k].z)
             checkIndex k_92 16
@@ -2698,7 +2683,6 @@ def combination_k2 (u : UInt256) (v_1 : UInt256) (g : Point_Mont_Base) (table : 
                     join_1 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
                   -- if entry != 0 && !table[entry].is_infinity() {
                   if decide (entry ≠ (UInt256.ofNat 0)) then
-                    -- if entry != 0 && !table[entry].is_infinity() {
                     checkIndex entry 16
                     r33 := table[entry.toNat]!
                     let v221 ← Point_is_infinity_Mont_Base r33
@@ -3014,7 +2998,6 @@ def recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256)
           let v109 ← Mont_value_Base key_x
           let v111 ← Mont_value_Base key_y
           return Option_PublicKey.Some (PublicKey.mk v109 v111)
-      -- let y = if beta.value() & 1 == recovery_id { beta } else { beta.neg() }
       if decide ((v57 &&& (UInt256.ofNat 1)) = recovery_id) then
         join_1 x alpha beta y r_inverse key key_x key_y r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 beta
       else
@@ -3042,16 +3025,11 @@ def recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256)
     let mut r17 := r17
     let mut r18 := r18
     join x alpha beta y r_inverse key key_x key_y r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 false
-  -- core::assert(recovery_id <= 1 && r != 0 && r < N && s != 0 && s < N)
   if v8 then
-    -- core::assert(recovery_id <= 1 && r != 0 && r < N && s != 0 && s < N)
     if decide (r ≠ (UInt256.ofNat 0)) then
-      -- core::assert(recovery_id <= 1 && r != 0 && r < N && s != 0 && s < N)
       let v13 ← N
       if decide (r.toNat < v13.toNat) then
-        -- core::assert(recovery_id <= 1 && r != 0 && r < N && s != 0 && s < N)
         if decide (s ≠ (UInt256.ofNat 0)) then
-          -- core::assert(recovery_id <= 1 && r != 0 && r < N && s != 0 && s < N)
           let v19 ← N
           if decide (s.toNat < v19.toNat) then
             join x alpha beta y r_inverse key key_x key_y r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 true
@@ -3119,7 +3097,6 @@ def word_at_MemBuffer (input : MemBuffer) (offset : UInt256) : FeM UInt256 := do
       -- for index in offset..offset + 32 {
       let v53 ← Range_Unknown_Unknown_has r1 v2
       if v53 then
-        -- for index in offset..offset + 32 {
         let v55 ← Range_Unknown_Unknown_at r1 v2
         let index := v55
         -- value = (value << 8) | if index < input.len() { input.byte_at(index) as u256 } else { 0 }
@@ -3133,7 +3110,6 @@ def word_at_MemBuffer (input : MemBuffer) (offset : UInt256) : FeM UInt256 := do
           -- for index in offset..offset + 32 {
           let v72 ← Range_Unknown_Unknown_next r1 v2
           loop value r1 v72
-        -- value = (value << 8) | if index < input.len() { input.byte_at(index) as u256 } else { 0 }
         if decide (index.toNat < v61.toNat) then
           -- input.byte_at(index) as u256
           let v63 ← MemBuffer_byte_at input index
@@ -3419,11 +3395,8 @@ def Mont_equals_Bn254Base (self : Mont_Bn254Base) (other : Mont_Bn254Base) : FeM
     join false
   -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
   if decide (self.l0 = other.l0) then
-    -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
     if decide (self.l1 = other.l1) then
-      -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
       if decide (self.l2 = other.l2) then
-        -- self.l0 == other.l0 && self.l1 == other.l1 && self.l2 == other.l2 && self.l3 == other.l3
         if decide (self.l3 = other.l3) then
           join true
         else
@@ -3488,11 +3461,9 @@ def g1_point_MemBuffer (input : MemBuffer) (offset : UInt256) : FeM Option_Point
     let mut r3 := r3
     let mut r4 := r4
     return Option_Point_Mont_Bn254Base.None
-  -- if x >= MODULUS || y >= MODULUS { return Option::None }
   if decide (v9.toNat ≤ x.toNat) then
     join r0 r1 r2 r3 r4
   else
-    -- if x >= MODULUS || y >= MODULUS { return Option::None }
     let v11 ← MODULUS
     if decide (v11.toNat ≤ y.toNat) then
       join r0 r1 r2 r3 r4
@@ -3521,7 +3492,6 @@ def g1_point_MemBuffer (input : MemBuffer) (offset : UInt256) : FeM Option_Point
           return Option_Point_Mont_Bn254Base.Some point
       -- if x == 0 && y == 0 { return Option::Some(Point::infinity()) }
       if decide (x = (UInt256.ofNat 0)) then
-        -- if x == 0 && y == 0 { return Option::Some(Point::infinity()) }
         if decide (y = (UInt256.ofNat 0)) then
           -- return Option::Some(Point::infinity())
           let v19 ← Point_infinity_Mont_Bn254Base
@@ -3539,11 +3509,8 @@ def Mont_is_zero_Bn254Base (self : Mont_Bn254Base) : FeM Bool := do
     join false
   -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
   if decide (self.l0 = (UInt256.ofNat 0)) then
-    -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
     if decide (self.l1 = (UInt256.ofNat 0)) then
-      -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
       if decide (self.l2 = (UInt256.ofNat 0)) then
-        -- self.l0 == 0 && self.l1 == 0 && self.l2 == 0 && self.l3 == 0
         if decide (self.l3 = (UInt256.ofNat 0)) then
           join true
         else
@@ -3671,11 +3638,9 @@ def Point_double_Mont_Bn254Base (self : Point_Mont_Bn254Base) : FeM Point_Mont_B
     -- return Self::infinity()
     let v72 ← Point_infinity_Mont_Bn254Base
     return v72
-  -- if self.is_infinity() || self.y.is_zero() { return Self::infinity() }
   if v1 then
     join a b c d e x r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24
   else
-    -- if self.is_infinity() || self.y.is_zero() { return Self::infinity() }
     r6 := self.y
     let v4 ← Mont_is_zero_Bn254Base r6
     if v4 then

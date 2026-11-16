@@ -898,7 +898,6 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
       -- for i in 0..8 { h[i] = input.lane_at(4 + i * 8) }
       let v32 ← Range_has_0_8 r4 v2
       if v32 then
-        -- for i in 0..8 { h[i] = input.lane_at(4 + i * 8) }
         let v34 ← Range_at_0_8 r4 v2
         let i_35 := v34
         -- h[i] = input.lane_at(4 + i * 8)
@@ -927,7 +926,6 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
           -- for i in 0..16 { m[i] = input.lane_at(68 + i * 8) }
           let v53 ← Range_has_0_16 r5 v3
           if v53 then
-            -- for i in 0..16 { m[i] = input.lane_at(68 + i * 8) }
             let v55 ← Range_at_0_16 r5 v3
             let i_56 := v55
             -- m[i] = input.lane_at(68 + i * 8)
@@ -958,7 +956,6 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
               -- for i in 0..8 {
               let v77 ← Range_has_0_8 r6 v4
               if v77 then
-                -- for i in 0..8 {
                 let v79 ← Range_at_0_8 r6 v4
                 let i_80 := v79
                 -- v[i] = h[i]
@@ -1165,7 +1162,6 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                             -- for i in 0..8 { h[i] ^= v[i] ^ v[i + 8] }
                             let v299 ← Range_has_0_8 r8 v5
                             if v299 then
-                              -- for i in 0..8 { h[i] ^= v[i] ^ v[i + 8] }
                               let v301 ← Range_at_0_8 r8 v5
                               let i_302 := v301
                               -- h[i] ^= v[i] ^ v[i + 8]
@@ -1187,7 +1183,6 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                       loop_4 h m v round r4 r5 r6 r7 r8
                   partial_fixpoint
                   loop_3 h m v round r4 r5 r6 r7 r8
-                -- if input.byte_at(212) == 1 { v[14] = !v[14] }
                 if decide (v104 = (UInt256.ofNat 1)) then
                   -- v[14] = !v[14]
                   let v107 := (UInt256.ofNat 14)
@@ -1215,9 +1210,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
     let mut r7 := r7
     let mut r8 := r8
     join h m v round r4 r5 r6 r7 r8 false
-  -- core::assert(input.len() == INPUT_LEN && input.byte_at(212) <= 1)
   if decide (v6 = v7) then
-    -- core::assert(input.len() == INPUT_LEN && input.byte_at(212) <= 1)
     let v10 ← MemBuffer_byte_at input (UInt256.ofNat 212)
     if decide (v10.toNat ≤ (UInt256.ofNat 1).toNat) then
       join h m v round r4 r5 r6 r7 r8 true
@@ -1245,11 +1238,9 @@ def recv_fallback : FeM Empty := do
     let v46 ← MemSlice_empty_u8
     let v49 ← Evm_revert v46
     nomatch v49
-  -- if input.len() != blake2f::INPUT_LEN || input[212] > 1 {
   if decide (v4 ≠ v5) then
     join input output r3
   else
-    -- if input.len() != blake2f::INPUT_LEN || input[212] > 1 {
     let v9 ← MemBuffer_index_ref input (UInt256.ofNat 212)
     let v10 ← mloadInt (.u 8) v9
     if decide ((UInt256.ofNat 1).toNat < v10.toNat) then
@@ -1270,7 +1261,6 @@ def recv_fallback : FeM Empty := do
         -- for i in 0..8 { output.write_le<u64>(offset: i * 8, value: state[i]) }
         let v29 ← Range_has_0_8 r3 v0
         if v29 then
-          -- for i in 0..8 { output.write_le<u64>(offset: i * 8, value: state[i]) }
           let v31 ← Range_at_0_8 r3 v0
           let i := v31
           -- output.write_le<u64>(offset: i * 8, value: state[i])

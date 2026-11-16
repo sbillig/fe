@@ -37,11 +37,9 @@ def step (value : UInt256) : FeM Option_u256 := do
   if decide (value = (UInt256.ofNat 1)) then
     join Option_u256.None
   else
-    -- if value == 1 {
     let v10 ← checkedRem value (UInt256.ofNat 2)
     let join_1 : Option_u256 → FeM Option_u256 := fun v2 => do
       join v2
-    -- if value == 1 {
     if decide (v10 = (UInt256.ofNat 0)) then
       -- Option::Some(value / 2)
       let v15 ← checkedDiv value (UInt256.ofNat 2)

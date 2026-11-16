@@ -60,7 +60,6 @@ def init : FeM Unit := do
     -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
     let v11 ← Range_has_0 r1 v0
     if v11 then
-      -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
       let v13 ← Range_at_0 r1 v0
       let height := v13
       -- let cur: u256 = store.zero_hashes[height]
@@ -221,7 +220,6 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                     -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                     let v86 ← Range_has_0 r11 v1
                     if v86 then
-                      -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                       let v88 ← Range_at_0 r11 v1
                       let height := v88
                       -- if size & 1 == 1 {
@@ -289,7 +287,6 @@ def recv_GetDepositRoot : FeM UInt256 := do
     -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
     let v13 ← Range_has_0 r3 v0
     if v13 then
-      -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
       let v15 ← Range_at_0 r3 v0
       let height := v15
       -- if size & 1 == 1 {
@@ -304,7 +301,6 @@ def recv_GetDepositRoot : FeM UInt256 := do
         -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
         let v44 ← Range_next_0 r3 v0
         loop node size r3 v44
-      -- if size & 1 == 1 {
       if v22 then
         -- node = ssz::hash_pair(left: store.branch[height], right: node)
         checkIndex height 32
@@ -346,11 +342,9 @@ def recv_SupportsInterface (interface_id : FixedBytes_4) : FeM Bool := do
     return v1
   let join_1 : FeM Bool := do
     join true
-  -- interface_id.val == 0x01ffc9a7 || interface_id.val == 0x85640907
   if v4 then
     join_1
   else
-    -- interface_id.val == 0x01ffc9a7 || interface_id.val == 0x85640907
     let v7 := decide (interface_id.val = (UInt256.ofNat 2237925639))
     if v7 then
       join_1

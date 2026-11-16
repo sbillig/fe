@@ -46,7 +46,6 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
             -- index = end
             index := «end»
             loop acc index started r3
-          -- if end % 2 == 1 {
           if decide (v60 = (UInt256.ofNat 1)) then
             -- acc = acc + end as u256
             let acc_66 ← checkedAdd acc «end»
@@ -70,7 +69,6 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
             -- for _ in index..end { acc = acc * 2 % 1000003 }
             let v41 ← Range_Unknown_Unknown_has r3 v3
             if v41 then
-              -- for _ in index..end { acc = acc * 2 % 1000003 }
               let _ ← Range_Unknown_Unknown_at r3 v3
               -- acc = acc * 2 % 1000003
               let v47 ← checkedMul acc (UInt256.ofNat 2)
@@ -85,7 +83,6 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
           loop_2 acc index started r3 v38
         else
           loop_1 acc index started r3
-      -- let end = if index + width + 1 < n { index + width + 1 } else { n }
       if decide (v19.toNat < n.toNat) then
         -- index + width + 1
         let v25 ← checkedAdd index width
@@ -319,7 +316,6 @@ def three_levels (n : UInt256) : FeM UInt256 := do
     -- for i in 0..n {
     let v13 ← Range_has_0 r2 v1
     if v13 then
-      -- for i in 0..n {
       let v15 ← Range_at_0 r2 v1
       let i := v15
       -- for j in 0..i {
@@ -333,7 +329,6 @@ def three_levels (n : UInt256) : FeM UInt256 := do
         -- for j in 0..i {
         let v24 ← Range_has_0 r3 v2
         if v24 then
-          -- for j in 0..i {
           let v26 ← Range_at_0 r3 v2
           let j := v26
           -- var k: usize = 0
@@ -358,7 +353,6 @@ def three_levels (n : UInt256) : FeM UInt256 := do
                 let k_54 ← checkedAdd k (UInt256.ofNat 1)
                 k := k_54
                 loop_2 total k r2 r3
-              -- if (i + j + k) % 3 == 0 { total += 1 } else { total += 2 }
               if decide (v37 = (UInt256.ofNat 0)) then
                 -- total += 1
                 let total_42 ← checkedAdd total (UInt256.ofNat 1)
@@ -380,7 +374,6 @@ def three_levels (n : UInt256) : FeM UInt256 := do
                 -- for j in 0..i {
                 let v70 ← Range_next_0 r3 v2
                 loop_1 total k r2 r3 v70
-              -- if j % 2 == 0 { total += 10 }
               if decide (v58 = (UInt256.ofNat 0)) then
                 -- total += 10
                 let total_63 ← checkedAdd total (UInt256.ofNat 10)

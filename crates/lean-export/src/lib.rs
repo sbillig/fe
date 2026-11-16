@@ -3775,7 +3775,6 @@ impl<'db> BodyExporter<'_, 'db> {
         if !start.is_empty() {
             printed.push((start, None));
         }
-        self.commented = None;
         for (position, statement) in data.statements.iter().enumerate() {
             let text = match (&statement.kind, self.statement(statement)?) {
                 (NStatementKind::Define { result, .. }, Some(text)) => {
@@ -3954,7 +3953,10 @@ impl<'db> BodyExporter<'_, 'db> {
             for var in &state {
                 writeln!(out, "{pad}  let mut {var} := {var}").unwrap();
             }
+            // A join's body starts its own comments.
+            let outer = self.commented.take();
             self.block(target, depth + 1, out)?;
+            self.commented = outer;
             if self.recursive.contains(&target) {
                 writeln!(out, "{pad}partial_fixpoint").unwrap();
             }
@@ -3995,8 +3997,11 @@ impl<'db> BodyExporter<'_, 'db> {
                 let origin = cond.origin.map_or(data.terminator.origin, SemOrigin::Expr);
                 out.push_str(&self.comment(origin, &pad));
                 writeln!(out, "{pad}if {} then", bare(&self.value(cond.value))).unwrap();
+                // Each branch goes on from the comment before it.
+                let commented = self.commented;
                 self.jump(then_target, depth + 1, out)?;
                 writeln!(out, "{pad}else").unwrap();
+                self.commented = commented;
                 self.jump(else_target, depth + 1, out)?;
             }
             NTerminatorKind::MatchEnum {
@@ -4022,16 +4027,19 @@ impl<'db> BodyExporter<'_, 'db> {
                 } else {
                     writeln!(out, "{pad}match (← pure {value}) with").unwrap();
                 }
+                let commented = self.commented;
                 for (variant, target) in cases {
                     let (variant, fields) = &variants[usize::from(variant.0)];
                     let rest = if fields.is_empty() { "" } else { " .." };
                     writeln!(out, "{pad}| .{variant}{rest} =>").unwrap();
+                    self.commented = commented;
                     self.jump(target, depth + 1, out)?;
                 }
                 if let Some(default) = default
                     && cases.len() < variants.len()
                 {
                     writeln!(out, "{pad}| _ =>").unwrap();
+                    self.commented = commented;
                     self.jump(default, depth + 1, out)?;
                 }
             }

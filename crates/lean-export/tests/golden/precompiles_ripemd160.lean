@@ -51,7 +51,6 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
     -- for i in 0..64 {
     let v23 ← Range_has_0_64 r1 v5
     if v23 then
-      -- for i in 0..64 {
       let v25 ← Range_at_0_64 r1 v5
       let i_26 := v25
       -- let position = start + i
@@ -76,7 +75,6 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
           let mut r1 := r1
           let mut r2 := r2
           join block r1 r2
-        -- if position < len {
         if decide (position = len) then
           -- block[i] = 0x80
           checkIndex i_26 64
@@ -92,7 +90,6 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
         let mut r1 := r1
         let mut r2 := r2
         return block
-      -- if block_index == blocks - 1 {
       if v51 then
         -- let bits: u64 = (len * 8).downcast_unchecked()
         let bits ← downcast_unchecked_usize_u64 (len * (UInt256.ofNat 8))
@@ -106,7 +103,6 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
           -- for i in 0..8 {
           let v65 ← Range_has_0_8 r2 v7
           if v65 then
-            -- for i in 0..8 {
             let v67 ← Range_at_0_8 r2 v7
             let i_68 := v67
             -- block[56 + i] = (bits >> (i * 8).downcast_unchecked()).downcast_truncate()
@@ -2037,7 +2033,6 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
     -- for index in 0..blocks {
     let v15 ← Range_has_0 r2 v1
     if v15 then
-      -- for index in 0..blocks {
       let v17 ← Range_at_0 r2 v1
       -- ripemd_compress(mut state, padded_block(input, offset: 0, len: input.len(), block_index: index, blocks))
       let v21 ← MemBuffer_len_1 input
@@ -2061,7 +2056,6 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
         -- for word in state { digest = (digest << 32) | swap_bytes(word) as u256 }
         let v34 ← array_has_u32_5 state v2
         if v34 then
-          -- for word in state { digest = (digest << 32) | swap_bytes(word) as u256 }
           let v36 ← array_at_ref_u32_5 state v2
           -- digest = (digest << 32) | swap_bytes(word) as u256
           let v41 := digest <<< (UInt256.ofNat 32)

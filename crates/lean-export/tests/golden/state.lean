@@ -137,21 +137,18 @@ def recv_Advance («by» : UInt256) : FeM UInt256 := do
   let v3 ← load_Phase Field.phase
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
-  -- match phase {
   match v3 with
   | .Idle =>
     -- phase = Phase::Running(1, by)
     store_Phase Field.phase (Phase.Running (UInt256.ofNat 1) «by»)
     join (UInt256.ofNat 0)
   | .Running .. =>
-    -- match phase {
     let count ← loadInt (.u 64) (Field.phase.offset 1)
     let sum ← load (Field.phase.offset 2)
     -- phase = Phase::Done { ok: sum > by }
     store_Phase Field.phase (Phase.Done (decide («by».toNat < sum.toNat)))
     join sum
   | .Done .. =>
-    -- match phase {
     let ok ← loadBool (Field.phase.offset 1)
     let join_1 : UInt256 → FeM UInt256 := fun v2 => do
       join v2

@@ -156,7 +156,6 @@ def recv_Lane (second : Bool) : FeM UInt256 := do
     -- small.b as u256
     let v13 ← loadIntAt (.u 8) Field.small.b ⟨1, 1, true⟩
     return v13
-  -- if let Option::Some(mut x) = small.maybe(second) {
   match v2 with
   | .Some .. =>
     -- x += 40

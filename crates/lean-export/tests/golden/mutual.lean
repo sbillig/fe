@@ -11,11 +11,9 @@ def left (n : UInt256) : FeM UInt256 := do
   if decide (n = (UInt256.ofNat 0)) then
     join (UInt256.ofNat 0)
   else
-    -- if n == 0 {
     let v10 ← checkedRem n (UInt256.ofNat 2)
     let join_1 : UInt256 → FeM UInt256 := fun v2 => do
       join v2
-    -- if n == 0 {
     if decide (v10 = (UInt256.ofNat 1)) then
       -- step(n - 1)
       let v15 ← checkedSub n (UInt256.ofNat 1)

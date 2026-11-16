@@ -33,7 +33,6 @@ def words_1 (values : (Vector UInt256 1)) (gas_used : UInt256) : FeM Output := d
   let v6 ← MemBuffer_try_new v5
   match (← pure v6) with
   | .Some .. =>
-    -- let Option::Some(var output) = MemBuffer::try_new(N * 32) else { return host_allocation(gas_used) }
     output := v6.Some_0
     -- for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
     r1 := (Range_Known_0_Unknown.mk () (UInt256.ofNat 1))
@@ -44,7 +43,6 @@ def words_1 (values : (Vector UInt256 1)) (gas_used : UInt256) : FeM Output := d
       -- for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
       let v18 ← Range_has_0 r1 v2
       if v18 then
-        -- for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
         let v20 ← Range_at_0 r1 v2
         let i := v20
         -- output.write_word(offset: i * 32, value: values[i])
@@ -479,7 +477,6 @@ def permute (state : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) :=
         let round_35 ← checkedAdd round (UInt256.ofNat 1)
         round := round_35
         loop other round r2 state
-      -- if round % 2 == 0 {
       if decide (v13 = (UInt256.ofNat 0)) then
         -- keccak_round(state, mut other, ROUND_CONSTANTS[round])
         let v18 ← ROUND_CONSTANTS
@@ -613,7 +610,6 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
             checkIndex v201 5
             let v204 ← IntTy.sub (.u 64) (UInt256.ofNat 64) shift_183
             join_2 start remaining self (IntTy.shl (.u 64) words[v201.toNat]! v204)
-        -- let take = if remaining < 8 - offset { remaining } else { 8 - offset }
         if decide (remaining.toNat < v168.toNat) then
           join_1 start remaining self remaining
         else
@@ -626,7 +622,6 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
     loop start remaining self
   -- if len != 0 && self.position + len <= 136 {
   if decide (len ≠ (UInt256.ofNat 0)) then
-    -- if len != 0 && self.position + len <= 136 {
     let v15 ← checkedAdd self.position len
     if decide (v15.toNat ≤ (UInt256.ofNat 136).toNat) then
       -- let leading = value << ((32 - len) * 8) as u256
@@ -783,7 +778,6 @@ def recover_signer (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : U
   let v4 ← recover hash recovery_id r s
   match v4 with
   | .Some .. =>
-    -- let Option::Some(key) = secp256k1::recover(hash, recovery_id, r, s) else { return Option::None }
     let key := v4.Some_0
     -- var digest = Keccak256::new()
     let digest_7 ← Keccak256_new
@@ -822,12 +816,10 @@ def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
       -- match signer {
       match signer with
       | .Some .. =>
-        -- match signer {
         r0 := #v[signer.Some_0]
         let v45 ← words_1 r0 (UInt256.ofNat 3000)
         join_2 r0 v45
       | .None =>
-        -- match signer {
         let v47 ← SUCCESS
         let v49 ← MemBuffer_empty
         let v50 := (Output.mk v47 (UInt256.ofNat 3000) v49)
@@ -849,16 +841,13 @@ def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
     if decide (r = (UInt256.ofNat 0)) then
       join_3 r0
     else
-      -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
       let v22 ← N
       if decide (v22.toNat ≤ r.toNat) then
         join_3 r0
       else
-        -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
         if decide (s = (UInt256.ofNat 0)) then
           join_3 r0
         else
-          -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
           let v26 ← N
           if decide (v26.toNat ≤ s.toNat) then
             join_3 r0
@@ -866,7 +855,6 @@ def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
             join r0 false
   -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
   if decide (v_1 ≠ (UInt256.ofNat 27)) then
-    -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
     if decide (v_1 ≠ (UInt256.ofNat 28)) then
       join_3 r0
     else

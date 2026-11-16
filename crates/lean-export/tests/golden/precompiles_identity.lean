@@ -29,7 +29,6 @@ def copied_MemBuffer (source : MemBuffer) (gas_used : UInt256) : FeM Output := d
   let v4 ← MemBuffer_try_new len
   match (← pure v4) with
   | .Some .. =>
-    -- let Option::Some(var output) = MemBuffer::try_new(len) else { return host_allocation(gas_used) }
     output := v4.Some_0
     -- var i: usize = 0
     i := (UInt256.ofNat 0)

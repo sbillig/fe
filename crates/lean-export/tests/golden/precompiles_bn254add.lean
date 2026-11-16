@@ -150,7 +150,6 @@ def Point_add_Mont_Bn254Base (self : Point_Mont_Bn254Base) (other : Point_Mont_B
           let mut r35 := r35
           let mut r36 := r36
           return v2
-        -- return if r.is_zero() { self.double() } else { Self::infinity() }
         if v60 then
           -- self.double()
           let v61 ← Point_double_Mont_Bn254Base self
@@ -213,21 +212,17 @@ def add_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
   let v3 ← g1_point_MemBuffer input (UInt256.ofNat 0)
   let v5 ← g1_point_MemBuffer input (UInt256.ofNat 64)
   let v6 := (v3, v5)
-  -- match (g1_point(input, offset: 0), g1_point(input, offset: 64)) {
   let v7 := v6.snd
   let join : Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Option_array_u256_2 → FeM Option_array_u256_2 := fun a b r2 v1 => do
     let mut a := a
     let mut b := b
     let mut r2 := r2
     return v1
-  -- match (g1_point(input, offset: 0), g1_point(input, offset: 64)) {
   match v7 with
   | .Some .. =>
-    -- match (g1_point(input, offset: 0), g1_point(input, offset: 64)) {
     let v8 := v6.fst
     match v8 with
     | .Some .. =>
-      -- match (g1_point(input, offset: 0), g1_point(input, offset: 64)) {
       a := v8.Some_0
       b := v7.Some_0
       let v15 ← Point_add_Mont_Bn254Base a b
@@ -249,7 +244,6 @@ def recv_fallback : FeM Empty := do
   let v2 ← add_MemBuffer r2
   match v2 with
   | .Some .. =>
-    -- match bn254::add(input()) {
     let sum := v2.Some_0
     -- var output = MemBuffer::new(64)
     let output_6 ← MemBuffer_new (UInt256.ofNat 64)
@@ -269,7 +263,6 @@ def recv_fallback : FeM Empty := do
     let v22 ← Evm_return_data v19
     nomatch v22
   | .None =>
-    -- match bn254::add(input()) {
     let v23 ← MemSlice_empty_u8
     let v26 ← Evm_revert v23
     nomatch v26

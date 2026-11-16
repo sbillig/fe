@@ -64,7 +64,6 @@ def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
     let init_code_39 := init_code_r2
     join init_code_r0 encoded init_code_r2 init_code_39
   if !v6 then
-    -- if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
     let v8 ← tuple_HEAD_SIZE
     if decide (v8 = (UInt256.ofNat 0)) then
       -- MemBuffer::new_uninit(init_len.downcast_unchecked())
@@ -177,9 +176,7 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
     let mut buffer := buffer
     let mut r2 := r2
     join message buffer r2 len
-  -- let capacity = if M::HEAD_SIZE < 28 && len < 32 { 32 } else { len }
   if decide (v10.toNat < (UInt256.ofNat 28).toNat) then
-    -- let capacity = if M::HEAD_SIZE < 28 && len < 32 { 32 } else { len }
     if decide (len.toNat < (UInt256.ofNat 32).toNat) then
       join message buffer r2 (UInt256.ofNat 32)
     else
