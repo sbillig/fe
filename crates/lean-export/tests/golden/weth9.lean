@@ -6,17 +6,37 @@ def Field.store : Place :=
 def Layout.Weth9Store : Layout :=
   { storage := [0, 1, 2, 3, 4] }
 
+/-- `store.name` -/
+abbrev Field.store.name : Place :=
+  Field.store.field Layout.Weth9Store 0
+
+/-- `store.symbol` -/
+abbrev Field.store.symbol : Place :=
+  Field.store.field Layout.Weth9Store 1
+
+/-- `store.decimals` -/
+abbrev Field.store.decimals : Place :=
+  Field.store.field Layout.Weth9Store 2
+
 def Layout.SolString : Layout :=
   { storage := [0] }
 
 def Layout.Payload : Layout :=
   { storage := [0] }
 
+/-- `store.allowance` -/
+abbrev Field.store.allowance : Place :=
+  Field.store.field Layout.Weth9Store 4
+
 structure Approval where
   src : UInt256
   guy : UInt256
   wad : UInt256
 deriving Inhabited
+
+/-- `store.balance_of` -/
+abbrev Field.store.balance_of : Place :=
+  Field.store.field Layout.Weth9Store 3
 
 structure Transfer where
   src : UInt256
@@ -255,16 +275,16 @@ def init : FeM Unit := do
   let v0_p ← stringLiteral ⟨#[87, 114, 97, 112, 112, 101, 100, 32, 69, 116, 104, 101, 114]⟩
   let v0 := (DynString.mk v0_p (UInt256.ofNat 13) (UInt256.ofNat 64))
   r1 := v0
-  let v1 := (Field.store.field Layout.Weth9Store 0)
+  let v1 := Field.store.name
   let _ ← SolString_store v1 r1
   let _ ← DynString_drop r1
   let v4_p ← stringLiteral ⟨#[87, 69, 84, 72]⟩
   let v4 := (DynString.mk v4_p (UInt256.ofNat 4) (UInt256.ofNat 64))
   r2 := v4
-  let v5 := (Field.store.field Layout.Weth9Store 1)
+  let v5 := Field.store.symbol
   let _ ← SolString_store v5 r2
   let _ ← DynString_drop r2
-  let v11 := (Field.store.field Layout.Weth9Store 2)
+  let v11 := Field.store.decimals
   let _ ← SolSlot_write_u8 v11 (UInt256.ofNat 0) (UInt256.ofNat 18)
   return ()
 
@@ -330,7 +350,7 @@ def SolString_load (self : Place) : FeM DynString := do
 
 /-- `Name -> DynString`, selector `0x06fdde03` (`name()`) -/
 def recv_Name : FeM DynString := do
-  let v0 := (Field.store.field Layout.Weth9Store 0)
+  let v0 := Field.store.name
   let v1 := v0
   let v2 ← SolString_load v1
   return v2
@@ -366,7 +386,7 @@ def emit_Evm_Approval (event : Approval) : FeM Unit := do
 /-- `Approve { guy, wad } -> bool`, selector `0x095ea7b3` (`approve(address,uint256)`) -/
 def recv_Approve (guy : UInt256) (wad : UInt256) : FeM Bool := do
   let src ← Evm_caller
-  let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot src
+  let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot src
   let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot guy
   store (Place.mk .storage l1.slot) wad
   let v6 := (Approval.mk src guy wad)
@@ -414,7 +434,7 @@ def emit_Evm_Transfer (event : Transfer) : FeM Unit := do
 def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt256) : FeM Bool := do
   let mut sender : UInt256 := default
   let v3 := src
-  let l0 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot v3
+  let l0 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v3
   let v4 ← load (Place.mk .storage l0.slot)
   let v6 := decide (wad.toNat ≤ v4.toNat)
   if v6 then
@@ -425,16 +445,16 @@ def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt
     let b6 : UInt256 → FeM Bool := fun sender => do
       let mut sender := sender
       let v35 := src
-      let l1 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot v35
+      let l1 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v35
       let v36 ← load (Place.mk .storage l1.slot)
       let v37 := v36 - wad
-      let l2 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot v35
+      let l2 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v35
       store (Place.mk .storage l2.slot) v37
       let v40 := dst
-      let l3 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot v40
+      let l3 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v40
       let v41 ← load (Place.mk .storage l3.slot)
       let v42 := v41 + wad
-      let l4 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot v40
+      let l4 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot v40
       store (Place.mk .storage l4.slot) v42
       let v44 := src
       let v45 := dst
@@ -447,7 +467,7 @@ def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt
     if v12 then
       let v13 := src
       let sender_14 := sender
-      let l5 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot v13
+      let l5 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v13
       let l6 ← StorageMap_locate_Address_u256 (Place.mk .storage l5.slot) (Place.mk .storage l5.slot).slot sender_14
       let v15 ← load (Place.mk .storage l6.slot)
       let v16 ← u256_max
@@ -455,19 +475,19 @@ def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt
       if v17 then
         let v18 := src
         let sender_19 := sender
-        let l7 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot v18
+        let l7 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v18
         let l8 ← StorageMap_locate_Address_u256 (Place.mk .storage l7.slot) (Place.mk .storage l7.slot).slot sender_19
         let v20 ← load (Place.mk .storage l8.slot)
         let v22 := decide (wad.toNat ≤ v20.toNat)
         if v22 then
           let v25 := src
           let sender_26 := sender
-          let l9 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot v25
+          let l9 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v25
           let l10 ← StorageMap_locate_Address_u256 (Place.mk .storage l9.slot) (Place.mk .storage l9.slot).slot sender_26
           let v27 ← load (Place.mk .storage l10.slot)
           let v28 := v27 - wad
           let sender_29 := sender
-          let l11 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot v25
+          let l11 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v25
           let l12 ← StorageMap_locate_Address_u256 (Place.mk .storage l11.slot) (Place.mk .storage l11.slot).slot sender_29
           store (Place.mk .storage l12.slot) v28
           b6 sender
@@ -517,14 +537,14 @@ def recv_Withdraw (wad : UInt256) : FeM Unit := do
   let mut r2 : Wei := default
   let mut r3 : RawCallOutcome := default
   let src ← Evm_caller
-  let l0 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot src
+  let l0 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
   let v5 ← load (Place.mk .storage l0.slot)
   let v6 := decide (wad.toNat ≤ v5.toNat)
   if v6 then
-    let l1 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot src
+    let l1 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
     let v8 ← load (Place.mk .storage l1.slot)
     let v9 := v8 - wad
-    let l2 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot src
+    let l2 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot src
     store (Place.mk .storage l2.slot) v9
     let v12 := decide (wad = (UInt256.ofNat 0))
     let b6 : Wei → RawCallOutcome → UInt256 → FeM Unit := fun r2 r3 gas_1 => do
@@ -561,20 +581,20 @@ def SolSlot_read_u8 (self : Place) (offset : UInt256) : FeM UInt256 := do
 
 /-- `Decimals -> u8`, selector `0x313ce567` (`decimals()`) -/
 def recv_Decimals : FeM UInt256 := do
-  let v1 := (Field.store.field Layout.Weth9Store 2)
+  let v1 := Field.store.decimals
   let v2 := v1
   let v3 ← SolSlot_read_u8 v2 (UInt256.ofNat 0)
   return v3
 
 /-- `BalanceOf { owner } -> u256`, selector `0x70a08231` (`balanceOf(address)`) -/
 def recv_BalanceOf (owner : UInt256) : FeM UInt256 := do
-  let l0 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot owner
+  let l0 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot owner
   let v1 ← load (Place.mk .storage l0.slot)
   return v1
 
 /-- `Symbol -> DynString`, selector `0x95d89b41` (`symbol()`) -/
 def recv_Symbol : FeM DynString := do
-  let v0 := (Field.store.field Layout.Weth9Store 1)
+  let v0 := Field.store.symbol
   let v1 := v0
   let v2 ← SolString_load v1
   return v2
@@ -621,10 +641,10 @@ def deposit_Weth9Store_Evm_Evm : FeM Unit := do
   r3 := v4
   let v5 := r3
   let wad ← Wei_as_wei v5
-  let l0 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot dst
+  let l0 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot dst
   let v8 ← load (Place.mk .storage l0.slot)
   let v9 := v8 + wad
-  let l1 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot dst
+  let l1 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot dst
   store (Place.mk .storage l1.slot) v9
   let v11 := (Deposit.mk dst wad)
   let _ ← emit_Evm_Deposit v11
@@ -637,7 +657,7 @@ def recv_Deposit : FeM Unit := do
 
 /-- `Allowance { owner, guy } -> u256`, selector `0xdd62ed3e` (`allowance(address,address)`) -/
 def recv_Allowance (owner : UInt256) (guy : UInt256) : FeM UInt256 := do
-  let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot owner
+  let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot owner
   let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot guy
   let v2 ← load (Place.mk .storage l1.slot)
   return v2

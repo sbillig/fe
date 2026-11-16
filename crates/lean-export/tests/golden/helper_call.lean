@@ -6,19 +6,27 @@ def Field.store : Place :=
 def Layout.Store : Layout :=
   { storage := [0, 1] }
 
+/-- `store.total` -/
+abbrev Field.store.total : Place :=
+  Field.store.field Layout.Store 0
+
+/-- `store.hits` -/
+abbrev Field.store.hits : Place :=
+  Field.store.field Layout.Store 1
+
 /-- The `init` of contract `Counter`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
 /-- `helper_call::add<Store>` -/
 def add_Store («by» : UInt256) : FeM UInt256 := do
-  let v1 ← load (Field.store.field Layout.Store 0)
+  let v1 ← load Field.store.total
   let next ← checkedAdd v1 «by»
-  store (Field.store.field Layout.Store 0) next
-  let l0 ← StorageMap_locate_u256_u256 (Field.store.field Layout.Store 1) (Field.store.field Layout.Store 1).slot «by»
+  store Field.store.total next
+  let l0 ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
   let v8 ← load (Place.mk .storage l0.slot)
   let v9 ← checkedAdd v8 (UInt256.ofNat 1)
-  let l1 ← StorageMap_locate_u256_u256 (Field.store.field Layout.Store 1) (Field.store.field Layout.Store 1).slot «by»
+  let l1 ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
   store (Place.mk .storage l1.slot) v9
   return next
 

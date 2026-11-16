@@ -6,6 +6,10 @@ def Field.packed : Place :=
 def Layout.Packed : Layout :=
   { storage := [0, 0, 0, 0, 1] }
 
+/-- `packed.delta` -/
+abbrev Field.packed.delta : Place :=
+  Field.packed.field Layout.Packed 2
+
 structure Packed where
   flag : Bool
   small : UInt256
@@ -113,8 +117,8 @@ def init : FeM Unit := do
 
 /-- `SetDelta { delta } -> i16`, selector `0x36899e92` (`setDelta(int16)`) -/
 def recv_SetDelta (delta : UInt256) : FeM UInt256 := do
-  let old ← loadIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩
-  storeIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩ delta
+  let old ← loadIntAt (.i 16) Field.packed.delta ⟨2, 2, true⟩
+  storeIntAt (.i 16) Field.packed.delta ⟨2, 2, true⟩ delta
   return old
 
 /-- `Replace { flag, small, delta, owner, total } -> u256`, selector `0x1e84534a` (`replace(bool,uint8,int16,address,uint256)`) -/

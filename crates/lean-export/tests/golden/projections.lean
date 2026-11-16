@@ -4,6 +4,10 @@ def Field.cell : Place :=
 def Layout.Cell : Layout :=
   { storage := [0] }
 
+/-- `cell.v` -/
+abbrev Field.cell.v : Place :=
+  Field.cell.field Layout.Cell 0
+
 /-- The `init` of contract `Projections`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
@@ -20,7 +24,7 @@ def recv_Direct («by» : UInt256) : FeM UInt256 := do
   let v3 ← load v2
   let v4 ← checkedAdd v3 «by»
   store v2 v4
-  let v6 ← load (Field.cell.field Layout.Cell 0)
+  let v6 ← load Field.cell.v
   return v6
 
 /-- `Cell::get` -/
@@ -57,7 +61,7 @@ def recv_Slide («by» : UInt256) : FeM UInt256 := do
   let v4 ← checkedAdd v3 «by»
   v2 := v4
   let _ ← v2_k v2
-  let v6 ← load (Field.cell.field Layout.Cell 0)
+  let v6 ← load Field.cell.v
   return v6
 
 /-- `projections::first` -/

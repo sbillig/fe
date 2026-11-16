@@ -6,6 +6,10 @@ def Field.pair : Place :=
 def Layout.Pair : Layout :=
   { storage := [0, 1] }
 
+/-- `pair.a` -/
+abbrev Field.pair.a : Place :=
+  Field.pair.field Layout.Pair 0
+
 structure Pair where
   a : UInt256
   b : UInt256
@@ -16,6 +20,10 @@ def Field.small : Place :=
 
 def Layout.Small : Layout :=
   { storage := [0, 0] }
+
+/-- `small.b` -/
+abbrev Field.small.b : Place :=
+  Field.small.field Layout.Small 1
 
 /-- The `init` of contract `Products`, which its source leaves out -/
 def init : FeM Unit := do
@@ -47,9 +55,9 @@ def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
 def recv_Parts («by» : UInt256) : FeM UInt256 := do
   let mut «local» : UInt256 := default
   «local» := «by»
-  let v2 := (Field.pair.field Layout.Pair 0)
+  let v2 := Field.pair.a
   let _ ← add_to v2 «local»
-  let v6 := (Field.pair.field Layout.Pair 0)
+  let v6 := Field.pair.a
   let (v7, v7_0) ← add_to_1 «local» v6
   «local» := v7_0
   let local_8 := «local»
@@ -146,7 +154,7 @@ def recv_Lane (second : Bool) : FeM UInt256 := do
   let v3 := v2
   let b3 : Option_mut_u8 → FeM UInt256 := fun v2 => do
     let mut v2 := v2
-    let v13 ← loadIntAt (.u 8) (Field.small.field Layout.Small 1) ⟨1, 1, true⟩
+    let v13 ← loadIntAt (.u 8) Field.small.b ⟨1, 1, true⟩
     let v14 := v13
     return v14
   match v3 with

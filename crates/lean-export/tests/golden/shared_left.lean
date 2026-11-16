@@ -7,6 +7,10 @@ def Field.store : Place :=
 def Layout.Store : Layout :=
   { storage := [0] }
 
+/-- `store.total` -/
+abbrev Field.store.total : Place :=
+  Field.store.field Layout.Store 0
+
 structure Left where
   x : UInt256
 deriving Inhabited
@@ -25,11 +29,11 @@ def left (x : UInt256) : FeM UInt256 := do
 
 /-- `lib::bump<Store>` -/
 def bump_Store («by» : UInt256) : FeM UInt256 := do
-  let v1 ← load (Field.store.field Layout.Store 0)
+  let v1 ← load Field.store.total
   let v2 ← left «by»
   let v3 ← checkedAdd v1 v2
-  store (Field.store.field Layout.Store 0) v3
-  let v5 ← load (Field.store.field Layout.Store 0)
+  store Field.store.total v3
+  let v5 ← load Field.store.total
   return v5
 
 /-- `Left { x } -> u256`, selector `0x1bb95617` (`left(uint256)`) -/

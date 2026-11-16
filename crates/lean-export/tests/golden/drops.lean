@@ -35,6 +35,10 @@ def store_Pair (p : Place) (v : Pair) : FeM Unit := do
 def Layout.Pair : Layout :=
   { storage := [0, 1] }
 
+/-- `pair.a` -/
+abbrev Field.pair.a : Place :=
+  Field.pair.field Layout.Pair 0
+
 /-- The `init` of contract `Drops`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
@@ -104,6 +108,6 @@ def recv_Payload (some : Bool) : FeM UInt256 := do
 def recv_Stored (n : UInt256) : FeM UInt256 := do
   let v1 := (Pair.mk n n)
   store_Pair Field.pair v1
-  let v3 ← load (Field.pair.field Layout.Pair 0)
+  let v3 ← load Field.pair.a
   return v3
 

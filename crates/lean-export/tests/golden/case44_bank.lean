@@ -6,6 +6,14 @@ def Field.ledger : Place :=
 def Layout.Ledger : Layout :=
   { storage := [0, 1] }
 
+/-- `ledger.balances` -/
+abbrev Field.ledger.balances : Place :=
+  Field.ledger.field Layout.Ledger 0
+
+/-- `ledger.total` -/
+abbrev Field.ledger.total : Place :=
+  Field.ledger.field Layout.Ledger 1
+
 structure Credit where
   who : UInt256
   amount : UInt256
@@ -28,19 +36,19 @@ def credit (m : Place) (who : UInt256) (amount : UInt256) : FeM Unit := do
 /-- `Credit { who, amount } -> u256`, selector `0x00000001` -/
 def recv_Credit (who : UInt256) (amount : UInt256) : FeM UInt256 := do
   let mut who := who
-  let v1 := (Field.ledger.field Layout.Ledger 0)
+  let v1 := Field.ledger.balances
   let who_2 := who
   let _ ← credit v1 who_2 amount
-  let v4 := (Field.ledger.field Layout.Ledger 0)
+  let v4 := Field.ledger.balances
   let who_5 := who
   let _ ← credit v4 who_5 amount
-  let v7 ← load (Field.ledger.field Layout.Ledger 1)
+  let v7 ← load Field.ledger.total
   let v8 ← checkedAdd v7 amount
-  store (Field.ledger.field Layout.Ledger 1) v8
+  store Field.ledger.total v8
   let who_10 := who
-  let l0 ← StorageMap_locate_Address_u256 (Field.ledger.field Layout.Ledger 0) (Field.ledger.field Layout.Ledger 0).slot who_10
+  let l0 ← StorageMap_locate_Address_u256 Field.ledger.balances Field.ledger.balances.slot who_10
   let v11 ← load (Place.mk .storage l0.slot)
-  let v12 ← load (Field.ledger.field Layout.Ledger 1)
+  let v12 ← load Field.ledger.total
   let v13 ← checkedAdd v11 v12
   return v13
 

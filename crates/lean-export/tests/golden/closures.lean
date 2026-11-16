@@ -14,6 +14,10 @@ def load_Store (p : Place) : FeM Store := do
 def Layout.Store : Layout :=
   { storage := [0] }
 
+/-- `store.n` -/
+abbrev Field.store.n : Place :=
+  Field.store.field Layout.Store 0
+
 /-- The `init` of contract `Closures`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
@@ -65,16 +69,16 @@ def recv_Scaled (a : UInt256) (b : UInt256) («by» : UInt256) : FeM UInt256 := 
 
 /-- `closures::bump<Store>` -/
 def bump_Store («by» : UInt256) : FeM Unit := do
-  let v2 ← load (Field.store.field Layout.Store 0)
+  let v2 ← load Field.store.n
   let v3 ← checkedAdd v2 «by»
-  store (Field.store.field Layout.Store 0) v3
+  store Field.store.n v3
   return ()
 
 /-- A closure in `closures::Closures::{fn_body}` -/
 def closure_1 (self : Unit) (acc : UInt256) (x : UInt256) : FeM (UInt256 × Unit) := do
   let mut self := self
   let _ ← bump_Store x
-  let v4 ← load (Field.store.field Layout.Store 0)
+  let v4 ← load Field.store.n
   let v5 ← checkedAdd acc v4
   return (v5, self)
 

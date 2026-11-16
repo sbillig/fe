@@ -6,6 +6,14 @@ def Field.store : Place :=
 def Layout.DepositStore : Layout :=
   { storage := [0, 32, 33] }
 
+/-- `store.zero_hashes` -/
+abbrev Field.store.zero_hashes : Place :=
+  Field.store.field Layout.DepositStore 2
+
+/-- `store.deposit_count` -/
+abbrev Field.store.deposit_count : Place :=
+  Field.store.field Layout.DepositStore 1
+
 structure DepositEvent where
   pubkey : Bytes
   withdrawal_credentials : Bytes
@@ -13,6 +21,10 @@ structure DepositEvent where
   signature : Bytes
   index : Bytes
 deriving Inhabited
+
+/-- `store.branch` -/
+abbrev Field.store.branch : Place :=
+  Field.store.field Layout.DepositStore 0
 
 structure Deposit where
   pubkey : Bytes
@@ -50,11 +62,11 @@ def init : FeM Unit := do
       let v13 ← Range_at_0 r1 v0
       let height := v13
       checkIndex height 32
-      let cur ← load ((Field.store.field Layout.DepositStore 2).index 1 height)
+      let cur ← load (Field.store.zero_hashes.index 1 height)
       let v17 ← hash_pair cur cur
       let v19 ← checkedAdd height (UInt256.ofNat 1)
       checkIndex v19 32
-      store ((Field.store.field Layout.DepositStore 2).index 1 v19) v17
+      store (Field.store.zero_hashes.index 1 v19) v17
       let v22 ← Range_next_0 r1 v0
       b1 r1 v22
     else
@@ -171,19 +183,19 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                 let withdrawal_credentials_57 := withdrawal_credentials
                 let v59 ← serialize_u64 amount_gwei
                 let signature_60 := signature
-                let v62 ← load (Field.store.field Layout.DepositStore 1)
+                let v62 ← load Field.store.deposit_count
                 let v63 ← downcast_truncate_u256_u64 v62
                 let v64 ← serialize_u64 v63
                 let v65 := (DepositEvent.mk pubkey_55 withdrawal_credentials_57 v59 signature_60 v64)
                 let _ ← emit_Evm_DepositEvent v65
-                let v68 ← load (Field.store.field Layout.DepositStore 1)
+                let v68 ← load Field.store.deposit_count
                 let v69 ← MAX_DEPOSIT_COUNT
                 let v70 := decide (v68.toNat < v69.toNat)
                 if v70 then
-                  let v73 ← load (Field.store.field Layout.DepositStore 1)
+                  let v73 ← load Field.store.deposit_count
                   let v74 ← checkedAdd v73 (UInt256.ofNat 1)
-                  store (Field.store.field Layout.DepositStore 1) v74
-                  let size_76 ← load (Field.store.field Layout.DepositStore 1)
+                  store Field.store.deposit_count v74
+                  let size_76 ← load Field.store.deposit_count
                   size := size_76
                   let v79 ← DEPOSIT_CONTRACT_TREE_DEPTH
                   let v81 := (Range_Known_0_Unknown.mk () v79)
@@ -210,11 +222,11 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                       if v95 then
                         let node_96 := node
                         checkIndex height 32
-                        store ((Field.store.field Layout.DepositStore 0).index 1 height) node_96
+                        store (Field.store.branch.index 1 height) node_96
                         return ()
                       else
                         checkIndex height 32
-                        let v101 ← load ((Field.store.field Layout.DepositStore 0).index 1 height)
+                        let v101 ← load (Field.store.branch.index 1 height)
                         let node_102 := node
                         let node_104 ← hash_pair v101 node_102
                         node := node_104
@@ -253,7 +265,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
   let mut size : UInt256 := default
   let mut r3 : Range_Known_0_Unknown := default
   node := (UInt256.ofNat 0)
-  let size_3 ← load (Field.store.field Layout.DepositStore 1)
+  let size_3 ← load Field.store.deposit_count
   size := size_3
   let v6 ← DEPOSIT_CONTRACT_TREE_DEPTH
   let v8 := (Range_Known_0_Unknown.mk () v6)
@@ -281,7 +293,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
         b1 node size r3 v44
       if v22 then
         checkIndex height 32
-        let v23 ← load ((Field.store.field Layout.DepositStore 0).index 1 height)
+        let v23 ← load (Field.store.branch.index 1 height)
         let node_24 := node
         let node_26 ← hash_pair v23 node_24
         node := node_26
@@ -289,13 +301,13 @@ def recv_GetDepositRoot : FeM UInt256 := do
       else
         let node_30 := node
         checkIndex height 32
-        let v32 ← load ((Field.store.field Layout.DepositStore 2).index 1 height)
+        let v32 ← load (Field.store.zero_hashes.index 1 height)
         let node_33 ← hash_pair node_30 v32
         node := node_33
         b7 node size r3
     else
       let node_46 := node
-      let v48 ← load (Field.store.field Layout.DepositStore 1)
+      let v48 ← load Field.store.deposit_count
       let v49 ← downcast_truncate_u256_u64 v48
       let v50 ← mix_in_length node_46 v49
       return v50
@@ -304,7 +316,7 @@ def recv_GetDepositRoot : FeM UInt256 := do
 
 /-- `GetDepositCount -> Bytes`, selector `0x621fd130` (`get_deposit_count()`) -/
 def recv_GetDepositCount : FeM Bytes := do
-  let v0 ← load (Field.store.field Layout.DepositStore 1)
+  let v0 ← load Field.store.deposit_count
   let count ← downcast_truncate_u256_u64 v0
   let v3 ← serialize_u64 count
   return v3

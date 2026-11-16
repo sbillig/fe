@@ -5803,7 +5803,27 @@ impl<'db> BodyExporter<'_, 'db> {
                         .get(usize::from(index.0))
                         .and_then(|placement| self.module.lane(part, *placement));
                     let layout = self.module.struct_layout(ty)?;
-                    (format!("({lean}.field {layout} {})", index.0), lane)
+                    let place = format!("{lean}.field {layout} {}", index.0);
+                    // A field of a contract field, or of one of its fields, is
+                    // a place of its own, named after both: apart from what
+                    // `Place`'s namespace holds, which the place's name would
+                    // otherwise shadow.
+                    if lean.starts_with("Field.") && !lean.contains([' ', '(', BINDER]) {
+                        let (steps, _) = self.module.fields(ty)?.swap_remove(usize::from(index.0));
+                        let field = &steps[0];
+                        let member = match PLACE.contains(&field.trim_matches(['«', '»'])) {
+                            true => format!("{lean}.{field}_1"),
+                            false => format!("{lean}.{field}"),
+                        };
+                        let path = member.trim_start_matches("Field.").replace(['«', '»'], "");
+                        let refs = vec![lean.clone(), layout.clone()];
+                        let member = self.module.layout(member, Scope::Contract, refs, |name| {
+                            format!("/-- `{path}` -/\nabbrev {name} : Place :=\n  {place}")
+                        });
+                        (member, lane)
+                    } else {
+                        (format!("({place})"), lane)
+                    }
                 }
                 // The tag has the enum's first slot, and each field of a
                 // variant whole slots after it.
@@ -6663,6 +6683,27 @@ fn lean_name(name: &str) -> String {
         name.to_string()
     }
 }
+
+/// The names in `Place`'s namespace in the model, which a place's name must
+/// not shadow.
+const PLACE: &[&str] = &[
+    "casesOn",
+    "ctorIdx",
+    "field",
+    "field_storage",
+    "index",
+    "mk",
+    "noConfusion",
+    "noConfusionType",
+    "offset",
+    "pin",
+    "rec",
+    "recOn",
+    "slot",
+    "space",
+    "storage",
+    "storage_slot",
+];
 
 /// The names Lean reserves: the keywords of the model's environment, Lean's
 /// own and those of the commands and notations it imports (Mathlib's,
