@@ -768,38 +768,7 @@ def window_width (bits : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 best best_cost w
 
-/-- `Small<1>::double` -/
-def Small_double_1 (self : Small_1) (x : Wide) : FeM Wide := do
-  let v3 := x.l0
-  let s0 := IntTy.shl (.u 64) v3 (UInt256.ofNat 1)
-  let v7 := x.l1
-  let v9 := IntTy.shl (.u 64) v7 (UInt256.ofNat 1)
-  let v10 := x.l0
-  let v12 := v10 >>> (UInt256.ofNat 63)
-  let s1 := v9 ||| v12
-  let v15 := x.l2
-  let v17 := IntTy.shl (.u 64) v15 (UInt256.ofNat 1)
-  let v18 := x.l1
-  let v20 := v18 >>> (UInt256.ofNat 63)
-  let s2 := v17 ||| v20
-  let v23 := x.l3
-  let v25 := IntTy.shl (.u 64) v23 (UInt256.ofNat 1)
-  let v26 := x.l2
-  let v28 := v26 >>> (UInt256.ofNat 63)
-  let s3 := v25 ||| v28
-  let v31 := self.m.l0
-  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
-  let d0 := v33.fst
-  let borrow_36 := v33.snd
-  let v38 := self.m.l1
-  let v39 ← sbb s1 v38 borrow_36
-  let d1 := v39.fst
-  let borrow_42 := v39.snd
-  let v44 := self.m.l2
-  let v45 ← sbb s2 v44 borrow_42
-  let d2 := v45.fst
-  let borrow_48 := v45.snd
-  let v50 := self.m.l3
+def Small_double_1_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
   let v51 ← sbb s3 v50 borrow_48
   let d3 := v51.fst
   let borrow_54 := v51.snd
@@ -817,6 +786,43 @@ def Small_double_1 (self : Small_1) (x : Wide) : FeM Wide := do
     let v67 := (Wide.mk d0 d1 d2 d3)
     b3 v67
 
+def Small_double_1_k1 (self : Small_1) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
+  let v28 := v26 >>> (UInt256.ofNat 63)
+  let s3 := v25 ||| v28
+  let v31 := self.m.l0
+  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
+  let d0 := v33.fst
+  let borrow_36 := v33.snd
+  let v38 := self.m.l1
+  let v39 ← sbb s1 v38 borrow_36
+  let d1 := v39.fst
+  let borrow_42 := v39.snd
+  let v44 := self.m.l2
+  let v45 ← sbb s2 v44 borrow_42
+  let d2 := v45.fst
+  let borrow_48 := v45.snd
+  let v50 := self.m.l3
+  Small_double_1_k2 x s0 s1 s2 s3 d0 d1 d2 borrow_48 v50
+
+/-- `Small<1>::double` -/
+def Small_double_1 (self : Small_1) (x : Wide) : FeM Wide := do
+  let v3 := x.l0
+  let s0 := IntTy.shl (.u 64) v3 (UInt256.ofNat 1)
+  let v7 := x.l1
+  let v9 := IntTy.shl (.u 64) v7 (UInt256.ofNat 1)
+  let v10 := x.l0
+  let v12 := v10 >>> (UInt256.ofNat 63)
+  let s1 := v9 ||| v12
+  let v15 := x.l2
+  let v17 := IntTy.shl (.u 64) v15 (UInt256.ofNat 1)
+  let v18 := x.l1
+  let v20 := v18 >>> (UInt256.ofNat 63)
+  let s2 := v17 ||| v20
+  let v23 := x.l3
+  let v25 := IntTy.shl (.u 64) v23 (UInt256.ofNat 1)
+  let v26 := x.l2
+  Small_double_1_k1 self x s0 s1 s2 v25 v26
+
 /-- `lib::montgomery::mac` -/
 def mac (a : UInt256) (b : UInt256) (c : UInt256) (carry : UInt256) : FeM (UInt256 × UInt256) := do
   let v5 := a
@@ -831,6 +837,22 @@ def mac (a : UInt256) (b : UInt256) (c : UInt256) (carry : UInt256) : FeM (UInt2
   let v19 ← downcast_truncate_u128_u64 v18
   let v20 := (v16, v19)
   return v20
+
+def Small_row2_1_k1 (self : Small_1) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (m : UInt256) : FeM (Wide × UInt256) := do
+  let v29 := self.m.l0
+  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
+  let c_32 := v31.snd
+  let v34 := self.m.l1
+  let v35 ← mac m v34 t1 c_32
+  let r0 := v35.fst
+  let c_38 := v35.snd
+  let v41 ← adc t2 (UInt256.ofNat 0) c_38
+  let r1 := v41.fst
+  let c_44 := v41.snd
+  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
+  let v49 := IntTy.addW (.u 64) t3 c_44
+  let v50 := (v48, v49)
+  return v50
 
 /-- `Small<1>::row2` -/
 def Small_row2_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -849,20 +871,34 @@ def Small_row2_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t3 := v21.snd
   let v26 := self.inverse
   let m := IntTy.mulW (.u 64) t0 v26
-  let v29 := self.m.l0
-  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
-  let c_32 := v31.snd
-  let v34 := self.m.l1
-  let v35 ← mac m v34 t1 c_32
-  let r0 := v35.fst
-  let c_38 := v35.snd
-  let v41 ← adc t2 (UInt256.ofNat 0) c_38
-  let r1 := v41.fst
-  let c_44 := v41.snd
-  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
-  let v49 := IntTy.addW (.u 64) t3 c_44
-  let v50 := (v48, v49)
-  return v50
+  Small_row2_1_k1 self t0 t1 t2 t3 m
+
+def Small_row3_1_k2 (t3 : UInt256) (t4 : UInt256) (r0 : UInt256) (r1 : UInt256) (c_51 : UInt256) : FeM (Wide × UInt256) := do
+  let v54 ← adc t3 (UInt256.ofNat 0) c_51
+  let r2 := v54.fst
+  let c_57 := v54.snd
+  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
+  let v61 := IntTy.addW (.u 64) t4 c_57
+  let v62 := (v60, v61)
+  return v62
+
+def Small_row3_1_k1 (self : Small_1) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (v28 : (UInt256 × UInt256)) : FeM (Wide × UInt256) := do
+  let t3 := v28.fst
+  let t4 := v28.snd
+  let v33 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v33
+  let v36 := self.m.l0
+  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
+  let c_39 := v38.snd
+  let v41 := self.m.l1
+  let v42 ← mac m v41 t1 c_39
+  let r0 := v42.fst
+  let c_45 := v42.snd
+  let v47 := self.m.l2
+  let v48 ← mac m v47 t2 c_45
+  let r1 := v48.fst
+  let c_51 := v48.snd
+  Small_row3_1_k2 t3 t4 r0 r1 c_51
 
 /-- `Small<1>::row3` -/
 def Small_row3_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -882,38 +918,9 @@ def Small_row3_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t2 := v22.fst
   let c_25 := v22.snd
   let v28 ← adc top c_25 (UInt256.ofNat 0)
-  let t3 := v28.fst
-  let t4 := v28.snd
-  let v33 := self.inverse
-  let m := IntTy.mulW (.u 64) t0 v33
-  let v36 := self.m.l0
-  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
-  let c_39 := v38.snd
-  let v41 := self.m.l1
-  let v42 ← mac m v41 t1 c_39
-  let r0 := v42.fst
-  let c_45 := v42.snd
-  let v47 := self.m.l2
-  let v48 ← mac m v47 t2 c_45
-  let r1 := v48.fst
-  let c_51 := v48.snd
-  let v54 ← adc t3 (UInt256.ofNat 0) c_51
-  let r2 := v54.fst
-  let c_57 := v54.snd
-  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
-  let v61 := IntTy.addW (.u 64) t4 c_57
-  let v62 := (v60, v61)
-  return v62
+  Small_row3_1_k1 self t0 t1 t2 v28
 
-def Small_row4_1_k1 (self : Small_1) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (v40 : UInt256) : FeM (Wide × UInt256) := do
-  let m := IntTy.mulW (.u 64) t0 v40
-  let v43 := self.m.l0
-  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
-  let c_46 := v45.snd
-  let v48 := self.m.l1
-  let v49 ← mac m v48 t1 c_46
-  let r0 := v49.fst
-  let c_52 := v49.snd
+def Small_row4_1_k2 (self : Small_1) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (m : UInt256) (r0 : UInt256) (c_52 : UInt256) : FeM (Wide × UInt256) := do
   let v54 := self.m.l2
   let v55 ← mac m v54 t2 c_52
   let r1 := v55.fst
@@ -929,6 +936,24 @@ def Small_row4_1_k1 (self : Small_1) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v73 := IntTy.addW (.u 64) t5 c_70
   let v74 := (v72, v73)
   return v74
+
+def Small_row4_1_k1 (self : Small_1) (b : UInt256) (top : UInt256) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (c_25 : UInt256) (v27 : UInt256) (v28 : UInt256) : FeM (Wide × UInt256) := do
+  let v29 ← mac v27 b v28 c_25
+  let t3 := v29.fst
+  let c_32 := v29.snd
+  let v35 ← adc top c_32 (UInt256.ofNat 0)
+  let t4 := v35.fst
+  let t5 := v35.snd
+  let v40 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v40
+  let v43 := self.m.l0
+  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
+  let c_46 := v45.snd
+  let v48 := self.m.l1
+  let v49 ← mac m v48 t1 c_46
+  let r0 := v49.fst
+  let c_52 := v49.snd
+  Small_row4_1_k2 self t2 t3 t4 t5 m r0 c_52
 
 /-- `Small<1>::row4` -/
 def Small_row4_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -949,14 +974,7 @@ def Small_row4_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let c_25 := v22.snd
   let v27 := a.l3
   let v28 := t.l3
-  let v29 ← mac v27 b v28 c_25
-  let t3 := v29.fst
-  let c_32 := v29.snd
-  let v35 ← adc top c_32 (UInt256.ofNat 0)
-  let t4 := v35.fst
-  let t5 := v35.snd
-  let v40 := self.inverse
-  Small_row4_1_k1 self t0 t1 t2 t3 t4 t5 v40
+  Small_row4_1_k1 self b top t0 t1 t2 c_25 v27 v28
 
 /-- `Small<1>::mul` -/
 def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
@@ -1893,6 +1911,42 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   partial_fixpoint
   b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
+def Small_double_2_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
+  let v51 ← sbb s3 v50 borrow_48
+  let d3 := v51.fst
+  let borrow_54 := v51.snd
+  let v56 := x.l3
+  let v58 := v56 >>> (UInt256.ofNat 63)
+  let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
+  let borrow_61 := v60.snd
+  let v64 := decide (borrow_61 = (UInt256.ofNat 1))
+  let b3 : Wide → FeM Wide := fun v2 => do
+    return v2
+  if v64 then
+    let v65 := (Wide.mk s0 s1 s2 s3)
+    b3 v65
+  else
+    let v67 := (Wide.mk d0 d1 d2 d3)
+    b3 v67
+
+def Small_double_2_k1 (self : Small_2) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
+  let v28 := v26 >>> (UInt256.ofNat 63)
+  let s3 := v25 ||| v28
+  let v31 := self.m.l0
+  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
+  let d0 := v33.fst
+  let borrow_36 := v33.snd
+  let v38 := self.m.l1
+  let v39 ← sbb s1 v38 borrow_36
+  let d1 := v39.fst
+  let borrow_42 := v39.snd
+  let v44 := self.m.l2
+  let v45 ← sbb s2 v44 borrow_42
+  let d2 := v45.fst
+  let borrow_48 := v45.snd
+  let v50 := self.m.l3
+  Small_double_2_k2 x s0 s1 s2 s3 d0 d1 d2 borrow_48 v50
+
 /-- `Small<2>::double` -/
 def Small_double_2 (self : Small_2) (x : Wide) : FeM Wide := do
   let v3 := x.l0
@@ -1910,37 +1964,23 @@ def Small_double_2 (self : Small_2) (x : Wide) : FeM Wide := do
   let v23 := x.l3
   let v25 := IntTy.shl (.u 64) v23 (UInt256.ofNat 1)
   let v26 := x.l2
-  let v28 := v26 >>> (UInt256.ofNat 63)
-  let s3 := v25 ||| v28
-  let v31 := self.m.l0
-  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
-  let d0 := v33.fst
-  let borrow_36 := v33.snd
-  let v38 := self.m.l1
-  let v39 ← sbb s1 v38 borrow_36
-  let d1 := v39.fst
-  let borrow_42 := v39.snd
-  let v44 := self.m.l2
-  let v45 ← sbb s2 v44 borrow_42
-  let d2 := v45.fst
-  let borrow_48 := v45.snd
-  let v50 := self.m.l3
-  let v51 ← sbb s3 v50 borrow_48
-  let d3 := v51.fst
-  let borrow_54 := v51.snd
-  let v56 := x.l3
-  let v58 := v56 >>> (UInt256.ofNat 63)
-  let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
-  let borrow_61 := v60.snd
-  let v64 := decide (borrow_61 = (UInt256.ofNat 1))
-  let b3 : Wide → FeM Wide := fun v2 => do
-    return v2
-  if v64 then
-    let v65 := (Wide.mk s0 s1 s2 s3)
-    b3 v65
-  else
-    let v67 := (Wide.mk d0 d1 d2 d3)
-    b3 v67
+  Small_double_2_k1 self x s0 s1 s2 v25 v26
+
+def Small_row2_2_k1 (self : Small_2) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (m : UInt256) : FeM (Wide × UInt256) := do
+  let v29 := self.m.l0
+  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
+  let c_32 := v31.snd
+  let v34 := self.m.l1
+  let v35 ← mac m v34 t1 c_32
+  let r0 := v35.fst
+  let c_38 := v35.snd
+  let v41 ← adc t2 (UInt256.ofNat 0) c_38
+  let r1 := v41.fst
+  let c_44 := v41.snd
+  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
+  let v49 := IntTy.addW (.u 64) t3 c_44
+  let v50 := (v48, v49)
+  return v50
 
 /-- `Small<2>::row2` -/
 def Small_row2_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -1959,20 +1999,34 @@ def Small_row2_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t3 := v21.snd
   let v26 := self.inverse
   let m := IntTy.mulW (.u 64) t0 v26
-  let v29 := self.m.l0
-  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
-  let c_32 := v31.snd
-  let v34 := self.m.l1
-  let v35 ← mac m v34 t1 c_32
-  let r0 := v35.fst
-  let c_38 := v35.snd
-  let v41 ← adc t2 (UInt256.ofNat 0) c_38
-  let r1 := v41.fst
-  let c_44 := v41.snd
-  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
-  let v49 := IntTy.addW (.u 64) t3 c_44
-  let v50 := (v48, v49)
-  return v50
+  Small_row2_2_k1 self t0 t1 t2 t3 m
+
+def Small_row3_2_k2 (t3 : UInt256) (t4 : UInt256) (r0 : UInt256) (r1 : UInt256) (c_51 : UInt256) : FeM (Wide × UInt256) := do
+  let v54 ← adc t3 (UInt256.ofNat 0) c_51
+  let r2 := v54.fst
+  let c_57 := v54.snd
+  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
+  let v61 := IntTy.addW (.u 64) t4 c_57
+  let v62 := (v60, v61)
+  return v62
+
+def Small_row3_2_k1 (self : Small_2) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (v28 : (UInt256 × UInt256)) : FeM (Wide × UInt256) := do
+  let t3 := v28.fst
+  let t4 := v28.snd
+  let v33 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v33
+  let v36 := self.m.l0
+  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
+  let c_39 := v38.snd
+  let v41 := self.m.l1
+  let v42 ← mac m v41 t1 c_39
+  let r0 := v42.fst
+  let c_45 := v42.snd
+  let v47 := self.m.l2
+  let v48 ← mac m v47 t2 c_45
+  let r1 := v48.fst
+  let c_51 := v48.snd
+  Small_row3_2_k2 t3 t4 r0 r1 c_51
 
 /-- `Small<2>::row3` -/
 def Small_row3_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -1992,38 +2046,9 @@ def Small_row3_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t2 := v22.fst
   let c_25 := v22.snd
   let v28 ← adc top c_25 (UInt256.ofNat 0)
-  let t3 := v28.fst
-  let t4 := v28.snd
-  let v33 := self.inverse
-  let m := IntTy.mulW (.u 64) t0 v33
-  let v36 := self.m.l0
-  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
-  let c_39 := v38.snd
-  let v41 := self.m.l1
-  let v42 ← mac m v41 t1 c_39
-  let r0 := v42.fst
-  let c_45 := v42.snd
-  let v47 := self.m.l2
-  let v48 ← mac m v47 t2 c_45
-  let r1 := v48.fst
-  let c_51 := v48.snd
-  let v54 ← adc t3 (UInt256.ofNat 0) c_51
-  let r2 := v54.fst
-  let c_57 := v54.snd
-  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
-  let v61 := IntTy.addW (.u 64) t4 c_57
-  let v62 := (v60, v61)
-  return v62
+  Small_row3_2_k1 self t0 t1 t2 v28
 
-def Small_row4_2_k1 (self : Small_2) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (v40 : UInt256) : FeM (Wide × UInt256) := do
-  let m := IntTy.mulW (.u 64) t0 v40
-  let v43 := self.m.l0
-  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
-  let c_46 := v45.snd
-  let v48 := self.m.l1
-  let v49 ← mac m v48 t1 c_46
-  let r0 := v49.fst
-  let c_52 := v49.snd
+def Small_row4_2_k2 (self : Small_2) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (m : UInt256) (r0 : UInt256) (c_52 : UInt256) : FeM (Wide × UInt256) := do
   let v54 := self.m.l2
   let v55 ← mac m v54 t2 c_52
   let r1 := v55.fst
@@ -2039,6 +2064,24 @@ def Small_row4_2_k1 (self : Small_2) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v73 := IntTy.addW (.u 64) t5 c_70
   let v74 := (v72, v73)
   return v74
+
+def Small_row4_2_k1 (self : Small_2) (b : UInt256) (top : UInt256) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (c_25 : UInt256) (v27 : UInt256) (v28 : UInt256) : FeM (Wide × UInt256) := do
+  let v29 ← mac v27 b v28 c_25
+  let t3 := v29.fst
+  let c_32 := v29.snd
+  let v35 ← adc top c_32 (UInt256.ofNat 0)
+  let t4 := v35.fst
+  let t5 := v35.snd
+  let v40 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v40
+  let v43 := self.m.l0
+  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
+  let c_46 := v45.snd
+  let v48 := self.m.l1
+  let v49 ← mac m v48 t1 c_46
+  let r0 := v49.fst
+  let c_52 := v49.snd
+  Small_row4_2_k2 self t2 t3 t4 t5 m r0 c_52
 
 /-- `Small<2>::row4` -/
 def Small_row4_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -2059,14 +2102,7 @@ def Small_row4_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let c_25 := v22.snd
   let v27 := a.l3
   let v28 := t.l3
-  let v29 ← mac v27 b v28 c_25
-  let t3 := v29.fst
-  let c_32 := v29.snd
-  let v35 ← adc top c_32 (UInt256.ofNat 0)
-  let t4 := v35.fst
-  let t5 := v35.snd
-  let v40 := self.inverse
-  Small_row4_2_k1 self t0 t1 t2 t3 t4 t5 v40
+  Small_row4_2_k1 self b top t0 t1 t2 c_25 v27 v28
 
 /-- `Small<2>::mul` -/
 def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
@@ -2909,6 +2945,42 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   partial_fixpoint
   b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
+def Small_double_3_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
+  let v51 ← sbb s3 v50 borrow_48
+  let d3 := v51.fst
+  let borrow_54 := v51.snd
+  let v56 := x.l3
+  let v58 := v56 >>> (UInt256.ofNat 63)
+  let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
+  let borrow_61 := v60.snd
+  let v64 := decide (borrow_61 = (UInt256.ofNat 1))
+  let b3 : Wide → FeM Wide := fun v2 => do
+    return v2
+  if v64 then
+    let v65 := (Wide.mk s0 s1 s2 s3)
+    b3 v65
+  else
+    let v67 := (Wide.mk d0 d1 d2 d3)
+    b3 v67
+
+def Small_double_3_k1 (self : Small_3) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
+  let v28 := v26 >>> (UInt256.ofNat 63)
+  let s3 := v25 ||| v28
+  let v31 := self.m.l0
+  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
+  let d0 := v33.fst
+  let borrow_36 := v33.snd
+  let v38 := self.m.l1
+  let v39 ← sbb s1 v38 borrow_36
+  let d1 := v39.fst
+  let borrow_42 := v39.snd
+  let v44 := self.m.l2
+  let v45 ← sbb s2 v44 borrow_42
+  let d2 := v45.fst
+  let borrow_48 := v45.snd
+  let v50 := self.m.l3
+  Small_double_3_k2 x s0 s1 s2 s3 d0 d1 d2 borrow_48 v50
+
 /-- `Small<3>::double` -/
 def Small_double_3 (self : Small_3) (x : Wide) : FeM Wide := do
   let v3 := x.l0
@@ -2926,37 +2998,23 @@ def Small_double_3 (self : Small_3) (x : Wide) : FeM Wide := do
   let v23 := x.l3
   let v25 := IntTy.shl (.u 64) v23 (UInt256.ofNat 1)
   let v26 := x.l2
-  let v28 := v26 >>> (UInt256.ofNat 63)
-  let s3 := v25 ||| v28
-  let v31 := self.m.l0
-  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
-  let d0 := v33.fst
-  let borrow_36 := v33.snd
-  let v38 := self.m.l1
-  let v39 ← sbb s1 v38 borrow_36
-  let d1 := v39.fst
-  let borrow_42 := v39.snd
-  let v44 := self.m.l2
-  let v45 ← sbb s2 v44 borrow_42
-  let d2 := v45.fst
-  let borrow_48 := v45.snd
-  let v50 := self.m.l3
-  let v51 ← sbb s3 v50 borrow_48
-  let d3 := v51.fst
-  let borrow_54 := v51.snd
-  let v56 := x.l3
-  let v58 := v56 >>> (UInt256.ofNat 63)
-  let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
-  let borrow_61 := v60.snd
-  let v64 := decide (borrow_61 = (UInt256.ofNat 1))
-  let b3 : Wide → FeM Wide := fun v2 => do
-    return v2
-  if v64 then
-    let v65 := (Wide.mk s0 s1 s2 s3)
-    b3 v65
-  else
-    let v67 := (Wide.mk d0 d1 d2 d3)
-    b3 v67
+  Small_double_3_k1 self x s0 s1 s2 v25 v26
+
+def Small_row2_3_k1 (self : Small_3) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (m : UInt256) : FeM (Wide × UInt256) := do
+  let v29 := self.m.l0
+  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
+  let c_32 := v31.snd
+  let v34 := self.m.l1
+  let v35 ← mac m v34 t1 c_32
+  let r0 := v35.fst
+  let c_38 := v35.snd
+  let v41 ← adc t2 (UInt256.ofNat 0) c_38
+  let r1 := v41.fst
+  let c_44 := v41.snd
+  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
+  let v49 := IntTy.addW (.u 64) t3 c_44
+  let v50 := (v48, v49)
+  return v50
 
 /-- `Small<3>::row2` -/
 def Small_row2_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -2975,20 +3033,34 @@ def Small_row2_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t3 := v21.snd
   let v26 := self.inverse
   let m := IntTy.mulW (.u 64) t0 v26
-  let v29 := self.m.l0
-  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
-  let c_32 := v31.snd
-  let v34 := self.m.l1
-  let v35 ← mac m v34 t1 c_32
-  let r0 := v35.fst
-  let c_38 := v35.snd
-  let v41 ← adc t2 (UInt256.ofNat 0) c_38
-  let r1 := v41.fst
-  let c_44 := v41.snd
-  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
-  let v49 := IntTy.addW (.u 64) t3 c_44
-  let v50 := (v48, v49)
-  return v50
+  Small_row2_3_k1 self t0 t1 t2 t3 m
+
+def Small_row3_3_k2 (t3 : UInt256) (t4 : UInt256) (r0 : UInt256) (r1 : UInt256) (c_51 : UInt256) : FeM (Wide × UInt256) := do
+  let v54 ← adc t3 (UInt256.ofNat 0) c_51
+  let r2 := v54.fst
+  let c_57 := v54.snd
+  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
+  let v61 := IntTy.addW (.u 64) t4 c_57
+  let v62 := (v60, v61)
+  return v62
+
+def Small_row3_3_k1 (self : Small_3) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (v28 : (UInt256 × UInt256)) : FeM (Wide × UInt256) := do
+  let t3 := v28.fst
+  let t4 := v28.snd
+  let v33 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v33
+  let v36 := self.m.l0
+  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
+  let c_39 := v38.snd
+  let v41 := self.m.l1
+  let v42 ← mac m v41 t1 c_39
+  let r0 := v42.fst
+  let c_45 := v42.snd
+  let v47 := self.m.l2
+  let v48 ← mac m v47 t2 c_45
+  let r1 := v48.fst
+  let c_51 := v48.snd
+  Small_row3_3_k2 t3 t4 r0 r1 c_51
 
 /-- `Small<3>::row3` -/
 def Small_row3_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -3008,38 +3080,9 @@ def Small_row3_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t2 := v22.fst
   let c_25 := v22.snd
   let v28 ← adc top c_25 (UInt256.ofNat 0)
-  let t3 := v28.fst
-  let t4 := v28.snd
-  let v33 := self.inverse
-  let m := IntTy.mulW (.u 64) t0 v33
-  let v36 := self.m.l0
-  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
-  let c_39 := v38.snd
-  let v41 := self.m.l1
-  let v42 ← mac m v41 t1 c_39
-  let r0 := v42.fst
-  let c_45 := v42.snd
-  let v47 := self.m.l2
-  let v48 ← mac m v47 t2 c_45
-  let r1 := v48.fst
-  let c_51 := v48.snd
-  let v54 ← adc t3 (UInt256.ofNat 0) c_51
-  let r2 := v54.fst
-  let c_57 := v54.snd
-  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
-  let v61 := IntTy.addW (.u 64) t4 c_57
-  let v62 := (v60, v61)
-  return v62
+  Small_row3_3_k1 self t0 t1 t2 v28
 
-def Small_row4_3_k1 (self : Small_3) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (v40 : UInt256) : FeM (Wide × UInt256) := do
-  let m := IntTy.mulW (.u 64) t0 v40
-  let v43 := self.m.l0
-  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
-  let c_46 := v45.snd
-  let v48 := self.m.l1
-  let v49 ← mac m v48 t1 c_46
-  let r0 := v49.fst
-  let c_52 := v49.snd
+def Small_row4_3_k2 (self : Small_3) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (m : UInt256) (r0 : UInt256) (c_52 : UInt256) : FeM (Wide × UInt256) := do
   let v54 := self.m.l2
   let v55 ← mac m v54 t2 c_52
   let r1 := v55.fst
@@ -3055,6 +3098,24 @@ def Small_row4_3_k1 (self : Small_3) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v73 := IntTy.addW (.u 64) t5 c_70
   let v74 := (v72, v73)
   return v74
+
+def Small_row4_3_k1 (self : Small_3) (b : UInt256) (top : UInt256) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (c_25 : UInt256) (v27 : UInt256) (v28 : UInt256) : FeM (Wide × UInt256) := do
+  let v29 ← mac v27 b v28 c_25
+  let t3 := v29.fst
+  let c_32 := v29.snd
+  let v35 ← adc top c_32 (UInt256.ofNat 0)
+  let t4 := v35.fst
+  let t5 := v35.snd
+  let v40 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v40
+  let v43 := self.m.l0
+  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
+  let c_46 := v45.snd
+  let v48 := self.m.l1
+  let v49 ← mac m v48 t1 c_46
+  let r0 := v49.fst
+  let c_52 := v49.snd
+  Small_row4_3_k2 self t2 t3 t4 t5 m r0 c_52
 
 /-- `Small<3>::row4` -/
 def Small_row4_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -3075,14 +3136,7 @@ def Small_row4_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let c_25 := v22.snd
   let v27 := a.l3
   let v28 := t.l3
-  let v29 ← mac v27 b v28 c_25
-  let t3 := v29.fst
-  let c_32 := v29.snd
-  let v35 ← adc top c_32 (UInt256.ofNat 0)
-  let t4 := v35.fst
-  let t5 := v35.snd
-  let v40 := self.inverse
-  Small_row4_3_k1 self t0 t1 t2 t3 t4 t5 v40
+  Small_row4_3_k1 self b top t0 t1 t2 c_25 v27 v28
 
 /-- `Small<3>::mul` -/
 def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
@@ -3925,6 +3979,42 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   partial_fixpoint
   b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
+def Small_double_4_k2 (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (s3 : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (borrow_48 : UInt256) (v50 : UInt256) : FeM Wide := do
+  let v51 ← sbb s3 v50 borrow_48
+  let d3 := v51.fst
+  let borrow_54 := v51.snd
+  let v56 := x.l3
+  let v58 := v56 >>> (UInt256.ofNat 63)
+  let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
+  let borrow_61 := v60.snd
+  let v64 := decide (borrow_61 = (UInt256.ofNat 1))
+  let b3 : Wide → FeM Wide := fun v2 => do
+    return v2
+  if v64 then
+    let v65 := (Wide.mk s0 s1 s2 s3)
+    b3 v65
+  else
+    let v67 := (Wide.mk d0 d1 d2 d3)
+    b3 v67
+
+def Small_double_4_k1 (self : Small_4) (x : Wide) (s0 : UInt256) (s1 : UInt256) (s2 : UInt256) (v25 : UInt256) (v26 : UInt256) : FeM Wide := do
+  let v28 := v26 >>> (UInt256.ofNat 63)
+  let s3 := v25 ||| v28
+  let v31 := self.m.l0
+  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
+  let d0 := v33.fst
+  let borrow_36 := v33.snd
+  let v38 := self.m.l1
+  let v39 ← sbb s1 v38 borrow_36
+  let d1 := v39.fst
+  let borrow_42 := v39.snd
+  let v44 := self.m.l2
+  let v45 ← sbb s2 v44 borrow_42
+  let d2 := v45.fst
+  let borrow_48 := v45.snd
+  let v50 := self.m.l3
+  Small_double_4_k2 x s0 s1 s2 s3 d0 d1 d2 borrow_48 v50
+
 /-- `Small<4>::double` -/
 def Small_double_4 (self : Small_4) (x : Wide) : FeM Wide := do
   let v3 := x.l0
@@ -3942,37 +4032,23 @@ def Small_double_4 (self : Small_4) (x : Wide) : FeM Wide := do
   let v23 := x.l3
   let v25 := IntTy.shl (.u 64) v23 (UInt256.ofNat 1)
   let v26 := x.l2
-  let v28 := v26 >>> (UInt256.ofNat 63)
-  let s3 := v25 ||| v28
-  let v31 := self.m.l0
-  let v33 ← sbb s0 v31 (UInt256.ofNat 0)
-  let d0 := v33.fst
-  let borrow_36 := v33.snd
-  let v38 := self.m.l1
-  let v39 ← sbb s1 v38 borrow_36
-  let d1 := v39.fst
-  let borrow_42 := v39.snd
-  let v44 := self.m.l2
-  let v45 ← sbb s2 v44 borrow_42
-  let d2 := v45.fst
-  let borrow_48 := v45.snd
-  let v50 := self.m.l3
-  let v51 ← sbb s3 v50 borrow_48
-  let d3 := v51.fst
-  let borrow_54 := v51.snd
-  let v56 := x.l3
-  let v58 := v56 >>> (UInt256.ofNat 63)
-  let v60 ← sbb v58 (UInt256.ofNat 0) borrow_54
-  let borrow_61 := v60.snd
-  let v64 := decide (borrow_61 = (UInt256.ofNat 1))
-  let b3 : Wide → FeM Wide := fun v2 => do
-    return v2
-  if v64 then
-    let v65 := (Wide.mk s0 s1 s2 s3)
-    b3 v65
-  else
-    let v67 := (Wide.mk d0 d1 d2 d3)
-    b3 v67
+  Small_double_4_k1 self x s0 s1 s2 v25 v26
+
+def Small_row2_4_k1 (self : Small_4) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (m : UInt256) : FeM (Wide × UInt256) := do
+  let v29 := self.m.l0
+  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
+  let c_32 := v31.snd
+  let v34 := self.m.l1
+  let v35 ← mac m v34 t1 c_32
+  let r0 := v35.fst
+  let c_38 := v35.snd
+  let v41 ← adc t2 (UInt256.ofNat 0) c_38
+  let r1 := v41.fst
+  let c_44 := v41.snd
+  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
+  let v49 := IntTy.addW (.u 64) t3 c_44
+  let v50 := (v48, v49)
+  return v50
 
 /-- `Small<4>::row2` -/
 def Small_row2_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -3991,20 +4067,34 @@ def Small_row2_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t3 := v21.snd
   let v26 := self.inverse
   let m := IntTy.mulW (.u 64) t0 v26
-  let v29 := self.m.l0
-  let v31 ← mac m v29 t0 (UInt256.ofNat 0)
-  let c_32 := v31.snd
-  let v34 := self.m.l1
-  let v35 ← mac m v34 t1 c_32
-  let r0 := v35.fst
-  let c_38 := v35.snd
-  let v41 ← adc t2 (UInt256.ofNat 0) c_38
-  let r1 := v41.fst
-  let c_44 := v41.snd
-  let v48 := (Wide.mk r0 r1 (UInt256.ofNat 0) (UInt256.ofNat 0))
-  let v49 := IntTy.addW (.u 64) t3 c_44
-  let v50 := (v48, v49)
-  return v50
+  Small_row2_4_k1 self t0 t1 t2 t3 m
+
+def Small_row3_4_k2 (t3 : UInt256) (t4 : UInt256) (r0 : UInt256) (r1 : UInt256) (c_51 : UInt256) : FeM (Wide × UInt256) := do
+  let v54 ← adc t3 (UInt256.ofNat 0) c_51
+  let r2 := v54.fst
+  let c_57 := v54.snd
+  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
+  let v61 := IntTy.addW (.u 64) t4 c_57
+  let v62 := (v60, v61)
+  return v62
+
+def Small_row3_4_k1 (self : Small_4) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (v28 : (UInt256 × UInt256)) : FeM (Wide × UInt256) := do
+  let t3 := v28.fst
+  let t4 := v28.snd
+  let v33 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v33
+  let v36 := self.m.l0
+  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
+  let c_39 := v38.snd
+  let v41 := self.m.l1
+  let v42 ← mac m v41 t1 c_39
+  let r0 := v42.fst
+  let c_45 := v42.snd
+  let v47 := self.m.l2
+  let v48 ← mac m v47 t2 c_45
+  let r1 := v48.fst
+  let c_51 := v48.snd
+  Small_row3_4_k2 t3 t4 r0 r1 c_51
 
 /-- `Small<4>::row3` -/
 def Small_row3_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -4024,38 +4114,9 @@ def Small_row3_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let t2 := v22.fst
   let c_25 := v22.snd
   let v28 ← adc top c_25 (UInt256.ofNat 0)
-  let t3 := v28.fst
-  let t4 := v28.snd
-  let v33 := self.inverse
-  let m := IntTy.mulW (.u 64) t0 v33
-  let v36 := self.m.l0
-  let v38 ← mac m v36 t0 (UInt256.ofNat 0)
-  let c_39 := v38.snd
-  let v41 := self.m.l1
-  let v42 ← mac m v41 t1 c_39
-  let r0 := v42.fst
-  let c_45 := v42.snd
-  let v47 := self.m.l2
-  let v48 ← mac m v47 t2 c_45
-  let r1 := v48.fst
-  let c_51 := v48.snd
-  let v54 ← adc t3 (UInt256.ofNat 0) c_51
-  let r2 := v54.fst
-  let c_57 := v54.snd
-  let v60 := (Wide.mk r0 r1 r2 (UInt256.ofNat 0))
-  let v61 := IntTy.addW (.u 64) t4 c_57
-  let v62 := (v60, v61)
-  return v62
+  Small_row3_4_k1 self t0 t1 t2 v28
 
-def Small_row4_4_k1 (self : Small_4) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (v40 : UInt256) : FeM (Wide × UInt256) := do
-  let m := IntTy.mulW (.u 64) t0 v40
-  let v43 := self.m.l0
-  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
-  let c_46 := v45.snd
-  let v48 := self.m.l1
-  let v49 ← mac m v48 t1 c_46
-  let r0 := v49.fst
-  let c_52 := v49.snd
+def Small_row4_4_k2 (self : Small_4) (t2 : UInt256) (t3 : UInt256) (t4 : UInt256) (t5 : UInt256) (m : UInt256) (r0 : UInt256) (c_52 : UInt256) : FeM (Wide × UInt256) := do
   let v54 := self.m.l2
   let v55 ← mac m v54 t2 c_52
   let r1 := v55.fst
@@ -4071,6 +4132,24 @@ def Small_row4_4_k1 (self : Small_4) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v73 := IntTy.addW (.u 64) t5 c_70
   let v74 := (v72, v73)
   return v74
+
+def Small_row4_4_k1 (self : Small_4) (b : UInt256) (top : UInt256) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256) (c_25 : UInt256) (v27 : UInt256) (v28 : UInt256) : FeM (Wide × UInt256) := do
+  let v29 ← mac v27 b v28 c_25
+  let t3 := v29.fst
+  let c_32 := v29.snd
+  let v35 ← adc top c_32 (UInt256.ofNat 0)
+  let t4 := v35.fst
+  let t5 := v35.snd
+  let v40 := self.inverse
+  let m := IntTy.mulW (.u 64) t0 v40
+  let v43 := self.m.l0
+  let v45 ← mac m v43 t0 (UInt256.ofNat 0)
+  let c_46 := v45.snd
+  let v48 := self.m.l1
+  let v49 ← mac m v48 t1 c_46
+  let r0 := v49.fst
+  let c_52 := v49.snd
+  Small_row4_4_k2 self t2 t3 t4 t5 m r0 c_52
 
 /-- `Small<4>::row4` -/
 def Small_row4_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
@@ -4091,14 +4170,7 @@ def Small_row4_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let c_25 := v22.snd
   let v27 := a.l3
   let v28 := t.l3
-  let v29 ← mac v27 b v28 c_25
-  let t3 := v29.fst
-  let c_32 := v29.snd
-  let v35 ← adc top c_32 (UInt256.ofNat 0)
-  let t4 := v35.fst
-  let t5 := v35.snd
-  let v40 := self.inverse
-  Small_row4_4_k1 self t0 t1 t2 t3 t4 t5 v40
+  Small_row4_4_k1 self b top t0 t1 t2 c_25 v27 v28
 
 /-- `Small<4>::mul` -/
 def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
@@ -5045,38 +5117,9 @@ def rem_2by1 (u1 : UInt256) (u0 : UInt256) (d : UInt256) (v : UInt256) : FeM UIn
   else
     b3 r
 
-/-- `lib::bignum::div_3by2` -/
-def div_3by2 (u2 : UInt256) (u1 : UInt256) (u0 : UInt256) (d1 : UInt256) (d0 : UInt256) (v : UInt256) : FeM UInt256 := do
-  let mut q1 : UInt256 := default
-  let mut r : UInt256 := default
-  let v7 := v
-  let v9 := u2
-  let v10 := IntTy.mulW (.u 128) v7 v9
-  let v12 := u2
-  let v14 := IntTy.shl (.u 128) v12 (UInt256.ofNat 64)
-  let v16 := u1
-  let v17 := v14 ||| v16
-  let q := IntTy.addW (.u 128) v10 v17
-  let v21 := q >>> (UInt256.ofNat 64)
-  let q1_22 ← downcast_truncate_u128_u64 v21
-  q1 := q1_22
-  let q0 ← downcast_truncate_u128_u64 q
-  let q1_27 := q1
-  let v30 := IntTy.mulW (.u 64) q1_27 d1
-  let r1 := IntTy.subW (.u 64) u1 v30
-  let v34 := d1
-  let v36 := IntTy.shl (.u 128) v34 (UInt256.ofNat 64)
-  let v38 := d0
-  let d := v36 ||| v38
-  let v41 := r1
-  let v43 := IntTy.shl (.u 128) v41 (UInt256.ofNat 64)
-  let v45 := u0
-  let v46 := v43 ||| v45
-  let v48 := d0
-  let q1_49 := q1
-  let v50 := q1_49
-  let v51 := IntTy.mulW (.u 128) v48 v50
-  let v52 := IntTy.subW (.u 128) v46 v51
+def div_3by2_k2 (q0 : UInt256) (d : UInt256) (v52 : UInt256) (q1 : UInt256) (r : UInt256) : FeM UInt256 := do
+  let mut q1 := q1
+  let mut r := r
   let r_53 := IntTy.subW (.u 128) v52 d
   r := r_53
   let q1_56 := q1
@@ -5113,6 +5156,45 @@ def div_3by2 (u2 : UInt256) (u1 : UInt256) (u0 : UInt256) (d1 : UInt256) (d0 : U
     b3 q1 r
   else
     b3 q1 r
+
+def div_3by2_k1 (u1 : UInt256) (u0 : UInt256) (d1 : UInt256) (d0 : UInt256) (q0 : UInt256) (q1_27 : UInt256) (q1 : UInt256) (r : UInt256) : FeM UInt256 := do
+  let mut q1 := q1
+  let mut r := r
+  let v30 := IntTy.mulW (.u 64) q1_27 d1
+  let r1 := IntTy.subW (.u 64) u1 v30
+  let v34 := d1
+  let v36 := IntTy.shl (.u 128) v34 (UInt256.ofNat 64)
+  let v38 := d0
+  let d := v36 ||| v38
+  let v41 := r1
+  let v43 := IntTy.shl (.u 128) v41 (UInt256.ofNat 64)
+  let v45 := u0
+  let v46 := v43 ||| v45
+  let v48 := d0
+  let q1_49 := q1
+  let v50 := q1_49
+  let v51 := IntTy.mulW (.u 128) v48 v50
+  let v52 := IntTy.subW (.u 128) v46 v51
+  div_3by2_k2 q0 d v52 q1 r
+
+/-- `lib::bignum::div_3by2` -/
+def div_3by2 (u2 : UInt256) (u1 : UInt256) (u0 : UInt256) (d1 : UInt256) (d0 : UInt256) (v : UInt256) : FeM UInt256 := do
+  let mut q1 : UInt256 := default
+  let mut r : UInt256 := default
+  let v7 := v
+  let v9 := u2
+  let v10 := IntTy.mulW (.u 128) v7 v9
+  let v12 := u2
+  let v14 := IntTy.shl (.u 128) v12 (UInt256.ofNat 64)
+  let v16 := u1
+  let v17 := v14 ||| v16
+  let q := IntTy.addW (.u 128) v10 v17
+  let v21 := q >>> (UInt256.ofNat 64)
+  let q1_22 ← downcast_truncate_u128_u64 v21
+  q1 := q1_22
+  let q0 ← downcast_truncate_u128_u64 q
+  let q1_27 := q1
+  div_3by2_k1 u1 u0 d1 d0 q0 q1_27 q1 r
 
 /-- `Modulus::reduce` -/
 def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : FeM (Unit × MemArray_u64) := do

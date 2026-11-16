@@ -84,16 +84,8 @@ def rotate (value : UInt256) («by» : UInt256) : FeM UInt256 := do
   let v10 := v4 ||| v9
   return v10
 
-def keccak_round_k15 (b20 : UInt256) (b21 : UInt256) (b22 : UInt256) (b23 : UInt256) (b24 : UInt256) (v355 : UInt256) (v356 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k19 (b20 : UInt256) (b21 : UInt256) (b23 : UInt256) (b24 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  checkIndex v356 25
-  e := (e.set! v356.toNat v355)
-  let v358 := IntTy.not (.u 64) b23
-  let v359 := v358 &&& b24
-  let v360 := b22 ^^^ v359
-  let v361 := (UInt256.ofNat 22)
-  checkIndex v361 25
-  e := (e.set! v361.toNat v360)
   let v363 := IntTy.not (.u 64) b24
   let v364 := v363 &&& b20
   let v365 := b23 ^^^ v364
@@ -108,8 +100,36 @@ def keccak_round_k15 (b20 : UInt256) (b21 : UInt256) (b22 : UInt256) (b23 : UInt
   e := (e.set! v371.toNat v370)
   return ((), e)
 
-def keccak_round_k14 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d4 : UInt256) (b20 : UInt256) (b21 : UInt256) (v330 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k18 (b20 : UInt256) (b21 : UInt256) (b22 : UInt256) (b23 : UInt256) (v344 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  let b24 ← rotate v344 (UInt256.ofNat 2)
+  let v348 := IntTy.not (.u 64) b21
+  let v349 := v348 &&& b22
+  let v350 := b20 ^^^ v349
+  let v351 := (UInt256.ofNat 20)
+  checkIndex v351 25
+  e := (e.set! v351.toNat v350)
+  let v353 := IntTy.not (.u 64) b22
+  let v354 := v353 &&& b23
+  let v355 := b21 ^^^ v354
+  let v356 := (UInt256.ofNat 21)
+  checkIndex v356 25
+  e := (e.set! v356.toNat v355)
+  let v358 := IntTy.not (.u 64) b23
+  let v359 := v358 &&& b24
+  let v360 := b22 ^^^ v359
+  let v361 := (UInt256.ofNat 22)
+  checkIndex v361 25
+  e := (e.set! v361.toNat v360)
+  keccak_round_k19 b20 b21 b23 b24 e
+
+def keccak_round_k17 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d3 : UInt256) (d4 : UInt256) (b20 : UInt256) (v324 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+  let mut e := e
+  checkIndex v324 25
+  let v325 := a[v324.toNat]!
+  let v326 := v325 ^^^ d3
+  let b21 ← rotate v326 (UInt256.ofNat 55)
+  let v330 := (UInt256.ofNat 14)
   checkIndex v330 25
   let v331 := a[v330.toNat]!
   let v332 := v331 ^^^ d4
@@ -123,20 +143,9 @@ def keccak_round_k14 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d4
   checkIndex v342 25
   let v343 := a[v342.toNat]!
   let v344 := v343 ^^^ d1
-  let b24 ← rotate v344 (UInt256.ofNat 2)
-  let v348 := IntTy.not (.u 64) b21
-  let v349 := v348 &&& b22
-  let v350 := b20 ^^^ v349
-  let v351 := (UInt256.ofNat 20)
-  checkIndex v351 25
-  e := (e.set! v351.toNat v350)
-  let v353 := IntTy.not (.u 64) b22
-  let v354 := v353 &&& b23
-  let v355 := b21 ^^^ v354
-  let v356 := (UInt256.ofNat 21)
-  keccak_round_k15 b20 b21 b22 b23 b24 v355 v356 e
+  keccak_round_k18 b20 b21 b22 b23 v344 e
 
-def keccak_round_k13 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b15 : UInt256) (b16 : UInt256) (b18 : UInt256) (b19 : UInt256) (v305 : UInt256) (v306 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k16 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b15 : UInt256) (b16 : UInt256) (b18 : UInt256) (b19 : UInt256) (v305 : UInt256) (v306 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
   e := (e.set! v306.toNat v305)
   let v308 := IntTy.not (.u 64) b19
@@ -157,19 +166,10 @@ def keccak_round_k13 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2
   let v320 := v319 ^^^ d2
   let b20 ← rotate v320 (UInt256.ofNat 62)
   let v324 := (UInt256.ofNat 8)
-  checkIndex v324 25
-  let v325 := a[v324.toNat]!
-  let v326 := v325 ^^^ d3
-  let b21 ← rotate v326 (UInt256.ofNat 55)
-  let v330 := (UInt256.ofNat 14)
-  keccak_round_k14 a d0 d1 d4 b20 b21 v330 e
+  keccak_round_k17 a d0 d1 d3 d4 b20 v324 e
 
-def keccak_round_k12 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b15 : UInt256) (b16 : UInt256) (b17 : UInt256) (v282 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k15 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b15 : UInt256) (b16 : UInt256) (b17 : UInt256) (b18 : UInt256) (v287 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  let v283 := v282 ^^^ d2
-  let b18 ← rotate v283 (UInt256.ofNat 15)
-  let v287 := (UInt256.ofNat 23)
-  checkIndex v287 25
   let v288 := a[v287.toNat]!
   let v289 := v288 ^^^ d3
   let b19 ← rotate v289 (UInt256.ofNat 56)
@@ -190,21 +190,10 @@ def keccak_round_k12 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2
   let v305 := b17 ^^^ v304
   let v306 := (UInt256.ofNat 17)
   checkIndex v306 25
-  keccak_round_k13 a d0 d1 d2 d3 d4 b15 b16 b18 b19 v305 v306 e
+  keccak_round_k16 a d0 d1 d2 d3 d4 b15 b16 b18 b19 v305 v306 e
 
-def keccak_round_k11 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b10 : UInt256) (b11 : UInt256) (b14 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k14 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b15 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  let v258 := IntTy.not (.u 64) b10
-  let v259 := v258 &&& b11
-  let v260 := b14 ^^^ v259
-  let v261 := (UInt256.ofNat 14)
-  checkIndex v261 25
-  e := (e.set! v261.toNat v260)
-  let v263 := (UInt256.ofNat 4)
-  checkIndex v263 25
-  let v264 := a[v263.toNat]!
-  let v265 := v264 ^^^ d4
-  let b15 ← rotate v265 (UInt256.ofNat 27)
   let v269 := (UInt256.ofNat 5)
   checkIndex v269 25
   let v270 := a[v269.toNat]!
@@ -218,10 +207,43 @@ def keccak_round_k11 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2
   let v281 := (UInt256.ofNat 17)
   checkIndex v281 25
   let v282 := a[v281.toNat]!
-  keccak_round_k12 a d0 d1 d2 d3 d4 b15 b16 b17 v282 e
+  let v283 := v282 ^^^ d2
+  let b18 ← rotate v283 (UInt256.ofNat 15)
+  let v287 := (UInt256.ofNat 23)
+  checkIndex v287 25
+  keccak_round_k15 a d0 d1 d2 d3 d4 b15 b16 b17 b18 v287 e
 
-def keccak_round_k10 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b10 : UInt256) (b11 : UInt256) (b12 : UInt256) (b13 : UInt256) (b14 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k13 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b10 : UInt256) (b11 : UInt256) (b13 : UInt256) (b14 : UInt256) (v250 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  let v251 := (UInt256.ofNat 12)
+  checkIndex v251 25
+  e := (e.set! v251.toNat v250)
+  let v253 := IntTy.not (.u 64) b14
+  let v254 := v253 &&& b10
+  let v255 := b13 ^^^ v254
+  let v256 := (UInt256.ofNat 13)
+  checkIndex v256 25
+  e := (e.set! v256.toNat v255)
+  let v258 := IntTy.not (.u 64) b10
+  let v259 := v258 &&& b11
+  let v260 := b14 ^^^ v259
+  let v261 := (UInt256.ofNat 14)
+  checkIndex v261 25
+  e := (e.set! v261.toNat v260)
+  let v263 := (UInt256.ofNat 4)
+  checkIndex v263 25
+  let v264 := a[v263.toNat]!
+  let v265 := v264 ^^^ d4
+  let b15 ← rotate v265 (UInt256.ofNat 27)
+  keccak_round_k14 a d0 d1 d2 d3 d4 b15 e
+
+def keccak_round_k12 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b10 : UInt256) (b11 : UInt256) (b12 : UInt256) (b13 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+  let mut e := e
+  let v232 := (UInt256.ofNat 20)
+  checkIndex v232 25
+  let v233 := a[v232.toNat]!
+  let v234 := v233 ^^^ d0
+  let b14 ← rotate v234 (UInt256.ofNat 18)
   let v238 := IntTy.not (.u 64) b11
   let v239 := v238 &&& b12
   let v240 := b10 ^^^ v239
@@ -237,22 +259,10 @@ def keccak_round_k10 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2
   let v248 := IntTy.not (.u 64) b13
   let v249 := v248 &&& b14
   let v250 := b12 ^^^ v249
-  let v251 := (UInt256.ofNat 12)
-  checkIndex v251 25
-  e := (e.set! v251.toNat v250)
-  let v253 := IntTy.not (.u 64) b14
-  let v254 := v253 &&& b10
-  let v255 := b13 ^^^ v254
-  let v256 := (UInt256.ofNat 13)
-  checkIndex v256 25
-  e := (e.set! v256.toNat v255)
-  keccak_round_k11 a d0 d1 d2 d3 d4 b10 b11 b14 e
+  keccak_round_k13 a d0 d1 d2 d3 d4 b10 b11 b13 b14 v250 e
 
-def keccak_round_k9 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (v208 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k11 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (v210 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  checkIndex v208 25
-  let v209 := a[v208.toNat]!
-  let v210 := v209 ^^^ d1
   let b10 ← rotate v210 (UInt256.ofNat 1)
   let v214 := (UInt256.ofNat 7)
   checkIndex v214 25
@@ -269,21 +279,10 @@ def keccak_round_k9 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   let v227 := a[v226.toNat]!
   let v228 := v227 ^^^ d4
   let b13 ← rotate v228 (UInt256.ofNat 8)
-  let v232 := (UInt256.ofNat 20)
-  checkIndex v232 25
-  let v233 := a[v232.toNat]!
-  let v234 := v233 ^^^ d0
-  let b14 ← rotate v234 (UInt256.ofNat 18)
-  keccak_round_k10 a d0 d1 d2 d3 d4 b10 b11 b12 b13 b14 e
+  keccak_round_k12 a d0 d1 d2 d3 d4 b10 b11 b12 b13 e
 
-def keccak_round_k8 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b5 : UInt256) (b6 : UInt256) (b7 : UInt256) (b8 : UInt256) (b9 : UInt256) (v188 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k10 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b5 : UInt256) (b6 : UInt256) (b7 : UInt256) (b8 : UInt256) (b9 : UInt256) (v193 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  let v189 := v188 &&& b8
-  let v190 := b6 ^^^ v189
-  let v191 := (UInt256.ofNat 6)
-  checkIndex v191 25
-  e := (e.set! v191.toNat v190)
-  let v193 := IntTy.not (.u 64) b8
   let v194 := v193 &&& b9
   let v195 := b7 ^^^ v194
   let v196 := (UInt256.ofNat 7)
@@ -302,21 +301,13 @@ def keccak_round_k8 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   checkIndex v206 25
   e := (e.set! v206.toNat v205)
   let v208 := (UInt256.ofNat 1)
-  keccak_round_k9 a d0 d1 d2 d3 d4 v208 e
+  checkIndex v208 25
+  let v209 := a[v208.toNat]!
+  let v210 := v209 ^^^ d1
+  keccak_round_k11 a d0 d1 d2 d3 d4 v210 e
 
-def keccak_round_k7 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b5 : UInt256) (v160 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k9 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b5 : UInt256) (b6 : UInt256) (b7 : UInt256) (v173 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  let v161 := v160 ^^^ d4
-  let b6 ← rotate v161 (UInt256.ofNat 20)
-  let v165 := (UInt256.ofNat 10)
-  checkIndex v165 25
-  let v166 := a[v165.toNat]!
-  let v167 := v166 ^^^ d0
-  let b7 ← rotate v167 (UInt256.ofNat 3)
-  let v171 := (UInt256.ofNat 16)
-  checkIndex v171 25
-  let v172 := a[v171.toNat]!
-  let v173 := v172 ^^^ d1
   let b8 ← rotate v173 (UInt256.ofNat 45)
   let v177 := (UInt256.ofNat 22)
   checkIndex v177 25
@@ -330,10 +321,39 @@ def keccak_round_k7 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   checkIndex v186 25
   e := (e.set! v186.toNat v185)
   let v188 := IntTy.not (.u 64) b7
-  keccak_round_k8 a d0 d1 d2 d3 d4 b5 b6 b7 b8 b9 v188 e
+  let v189 := v188 &&& b8
+  let v190 := b6 ^^^ v189
+  let v191 := (UInt256.ofNat 6)
+  checkIndex v191 25
+  e := (e.set! v191.toNat v190)
+  let v193 := IntTy.not (.u 64) b8
+  keccak_round_k10 a d0 d1 d2 d3 d4 b5 b6 b7 b8 b9 v193 e
 
-def keccak_round_k6 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b0 : UInt256) (b1 : UInt256) (b2 : UInt256) (b3 : UInt256) (b4 : UInt256) (v139 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k8 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (v153 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  let v154 := a[v153.toNat]!
+  let v155 := v154 ^^^ d3
+  let b5 ← rotate v155 (UInt256.ofNat 28)
+  let v159 := (UInt256.ofNat 9)
+  checkIndex v159 25
+  let v160 := a[v159.toNat]!
+  let v161 := v160 ^^^ d4
+  let b6 ← rotate v161 (UInt256.ofNat 20)
+  let v165 := (UInt256.ofNat 10)
+  checkIndex v165 25
+  let v166 := a[v165.toNat]!
+  let v167 := v166 ^^^ d0
+  let b7 ← rotate v167 (UInt256.ofNat 3)
+  let v171 := (UInt256.ofNat 16)
+  checkIndex v171 25
+  let v172 := a[v171.toNat]!
+  let v173 := v172 ^^^ d1
+  keccak_round_k9 a d0 d1 d2 d3 d4 b5 b6 b7 v173 e
+
+def keccak_round_k7 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b0 : UInt256) (b1 : UInt256) (b2 : UInt256) (b3 : UInt256) (b4 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+  let mut e := e
+  let v138 := IntTy.not (.u 64) b3
+  let v139 := v138 &&& b4
   let v140 := b2 ^^^ v139
   let v141 := (UInt256.ofNat 2)
   checkIndex v141 25
@@ -352,19 +372,10 @@ def keccak_round_k6 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   e := (e.set! v151.toNat v150)
   let v153 := (UInt256.ofNat 3)
   checkIndex v153 25
-  let v154 := a[v153.toNat]!
-  let v155 := v154 ^^^ d3
-  let b5 ← rotate v155 (UInt256.ofNat 28)
-  let v159 := (UInt256.ofNat 9)
-  checkIndex v159 25
-  let v160 := a[v159.toNat]!
-  keccak_round_k7 a d0 d1 d2 d3 d4 b5 v160 e
+  keccak_round_k8 a d0 d1 d2 d3 d4 v153 e
 
-def keccak_round_k5 (a : (Vector UInt256 25)) (constant : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b0 : UInt256) (b1 : UInt256) (b2 : UInt256) (v114 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k6 (a : (Vector UInt256 25)) (constant : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (b0 : UInt256) (b1 : UInt256) (b2 : UInt256) (v116 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  checkIndex v114 25
-  let v115 := a[v114.toNat]!
-  let v116 := v115 ^^^ d3
   let b3 ← rotate v116 (UInt256.ofNat 21)
   let v120 := (UInt256.ofNat 24)
   checkIndex v120 25
@@ -384,21 +395,10 @@ def keccak_round_k5 (a : (Vector UInt256 25)) (constant : UInt256) (d0 : UInt256
   let v136 := (UInt256.ofNat 1)
   checkIndex v136 25
   e := (e.set! v136.toNat v135)
-  let v138 := IntTy.not (.u 64) b3
-  let v139 := v138 &&& b4
-  keccak_round_k6 a d0 d1 d2 d3 d4 b0 b1 b2 b3 b4 v139 e
+  keccak_round_k7 a d0 d1 d2 d3 d4 b0 b1 b2 b3 b4 e
 
-def keccak_round_k4 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (c2 : UInt256) (c3 : UInt256) (c4 : UInt256) (v79 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k5 (a : (Vector UInt256 25)) (constant : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
-  let d0 := c4 ^^^ v79
-  let v83 ← rotate c2 (UInt256.ofNat 1)
-  let d1 := c0 ^^^ v83
-  let v87 ← rotate c3 (UInt256.ofNat 1)
-  let d2 := c1 ^^^ v87
-  let v91 ← rotate c4 (UInt256.ofNat 1)
-  let d3 := c2 ^^^ v91
-  let v95 ← rotate c0 (UInt256.ofNat 1)
-  let d4 := c3 ^^^ v95
   let v98 := (UInt256.ofNat 0)
   checkIndex v98 25
   let v99 := a[v98.toNat]!
@@ -414,10 +414,33 @@ def keccak_round_k4 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
   let v110 := v109 ^^^ d2
   let b2 ← rotate v110 (UInt256.ofNat 43)
   let v114 := (UInt256.ofNat 18)
-  keccak_round_k5 a constant d0 d1 d2 d3 d4 b0 b1 b2 v114 e
+  checkIndex v114 25
+  let v115 := a[v114.toNat]!
+  let v116 := v115 ^^^ d3
+  keccak_round_k6 a constant d0 d1 d2 d3 d4 b0 b1 b2 v116 e
 
-def keccak_round_k3 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (c2 : UInt256) (v58 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k4 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (c2 : UInt256) (c3 : UInt256) (v73 : UInt256) (v74 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  checkIndex v74 25
+  let v75 := a[v74.toNat]!
+  let c4 := v73 ^^^ v75
+  let v79 ← rotate c1 (UInt256.ofNat 1)
+  let d0 := c4 ^^^ v79
+  let v83 ← rotate c2 (UInt256.ofNat 1)
+  let d1 := c0 ^^^ v83
+  let v87 ← rotate c3 (UInt256.ofNat 1)
+  let d2 := c1 ^^^ v87
+  let v91 ← rotate c4 (UInt256.ofNat 1)
+  let d3 := c2 ^^^ v91
+  let v95 ← rotate c0 (UInt256.ofNat 1)
+  let d4 := c3 ^^^ v95
+  keccak_round_k5 a constant d0 d1 d2 d3 d4 e
+
+def keccak_round_k3 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (c2 : UInt256) (v55 : UInt256) (v56 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+  let mut e := e
+  checkIndex v56 25
+  let v57 := a[v56.toNat]!
+  let v58 := v55 ^^^ v57
   let v59 := (UInt256.ofNat 23)
   checkIndex v59 25
   let v60 := a[v59.toNat]!
@@ -438,14 +461,12 @@ def keccak_round_k3 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
   let v72 := a[v71.toNat]!
   let v73 := v70 ^^^ v72
   let v74 := (UInt256.ofNat 24)
-  checkIndex v74 25
-  let v75 := a[v74.toNat]!
-  let c4 := v73 ^^^ v75
-  let v79 ← rotate c1 (UInt256.ofNat 1)
-  keccak_round_k4 a constant c0 c1 c2 c3 c4 v79 e
+  keccak_round_k4 a constant c0 c1 c2 c3 v73 v74 e
 
-def keccak_round_k2 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (v37 : UInt256) (v39 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
+def keccak_round_k2 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (v37 : UInt256) (v38 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  checkIndex v38 25
+  let v39 := a[v38.toNat]!
   let v40 := v37 ^^^ v39
   let v41 := (UInt256.ofNat 17)
   checkIndex v41 25
@@ -467,13 +488,11 @@ def keccak_round_k2 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
   let v54 := a[v53.toNat]!
   let v55 := v52 ^^^ v54
   let v56 := (UInt256.ofNat 18)
-  checkIndex v56 25
-  let v57 := a[v56.toNat]!
-  let v58 := v55 ^^^ v57
-  keccak_round_k3 a constant c0 c1 c2 v58 e
+  keccak_round_k3 a constant c0 c1 c2 v55 v56 e
 
 def keccak_round_k1 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (v19 : UInt256) (v20 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  checkIndex v20 25
   let v21 := a[v20.toNat]!
   let v22 := v19 ^^^ v21
   let v23 := (UInt256.ofNat 11)
@@ -496,9 +515,7 @@ def keccak_round_k1 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
   let v36 := a[v35.toNat]!
   let v37 := v34 ^^^ v36
   let v38 := (UInt256.ofNat 12)
-  checkIndex v38 25
-  let v39 := a[v38.toNat]!
-  keccak_round_k2 a constant c0 c1 v37 v39 e
+  keccak_round_k2 a constant c0 c1 v37 v38 e
 
 /-- `lib::permutation::keccak_round` -/
 def keccak_round (a : (Vector UInt256 25)) (e : (Vector UInt256 25)) (constant : UInt256) : FeM (Unit × (Vector UInt256 25)) := do
@@ -526,7 +543,6 @@ def keccak_round (a : (Vector UInt256 25)) (e : (Vector UInt256 25)) (constant :
   checkIndex v18 25
   let v19 := a[v18.toNat]!
   let v20 := (UInt256.ofNat 6)
-  checkIndex v20 25
   keccak_round_k1 a constant c0 v19 v20 e
 
 /-- `lib::permutation::permute` -/

@@ -4844,6 +4844,22 @@ def Bytes_word_at (self : Bytes) (offset : UInt256) : FeM UInt256 := do
     let v13 ← readPaddedWord v9 v12
     return v13
 
+def u64_chunk_k1 (v22 : UInt256) (v : UInt256) : FeM UInt256 := do
+  let mut v := v
+  let v24 := v22 <<< (UInt256.ofNat 16)
+  let v_25 := v
+  let v28 := v_25 >>> (UInt256.ofNat 16)
+  let v30 := v28 &&& (UInt256.ofNat 281470681808895)
+  let v_31 := v24 ||| v30
+  v := v_31
+  let v_34 := v
+  let v37 := v_34 <<< (UInt256.ofNat 32)
+  let v_38 := v
+  let v41 := v_38 >>> (UInt256.ofNat 32)
+  let v42 := v37 ||| v41
+  let v44 := v42 <<< (UInt256.ofNat 192)
+  return v44
+
 /-- `std::evm::ssz::u64_chunk` -/
 def u64_chunk (value : UInt256) : FeM UInt256 := do
   let mut v : UInt256 := default
@@ -4859,19 +4875,7 @@ def u64_chunk (value : UInt256) : FeM UInt256 := do
   v := v_16
   let v_19 := v
   let v22 := v_19 &&& (UInt256.ofNat 281470681808895)
-  let v24 := v22 <<< (UInt256.ofNat 16)
-  let v_25 := v
-  let v28 := v_25 >>> (UInt256.ofNat 16)
-  let v30 := v28 &&& (UInt256.ofNat 281470681808895)
-  let v_31 := v24 ||| v30
-  v := v_31
-  let v_34 := v
-  let v37 := v_34 <<< (UInt256.ofNat 32)
-  let v_38 := v
-  let v41 := v_38 >>> (UInt256.ofNat 32)
-  let v42 := v37 ||| v41
-  let v44 := v42 <<< (UInt256.ofNat 192)
-  return v44
+  u64_chunk_k1 v22 v
 
 /-- `<ByteVector<96> as HashTreeRoot>::hash_tree_root` -/
 def ByteVector_96_hash_tree_root (input : MemSlice_u8) (start : UInt256) (len : UInt256) : FeM UInt256 := do
@@ -5069,6 +5073,20 @@ def encode_field_Sol_Bytes (value : Bytes) (out : AbiFrame) (head_pos : UInt256)
     let tails_24 := tails
     return tails_24
 
+def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes_k1 (self : (Bytes × Bytes × Bytes × Bytes × Bytes)) (out : AbiFrame) (head1 : UInt256) (head2 : UInt256) (head3 : UInt256) (head4 : UInt256) (tails_28 : AbiFrame) (tails : AbiFrame) : FeM Unit := do
+  let mut tails := tails
+  let tails_31 ← encode_field_Sol_Bytes self.snd.fst out head1 tails_28
+  tails := tails_31
+  let tails_34 := tails
+  let tails_37 ← encode_field_Sol_Bytes self.snd.snd.fst out head2 tails_34
+  tails := tails_37
+  let tails_40 := tails
+  let tails_43 ← encode_field_Sol_Bytes self.snd.snd.snd.fst out head3 tails_40
+  tails := tails_43
+  let tails_46 := tails
+  let _ ← encode_field_Sol_Bytes self.snd.snd.snd.snd out head4 tails_46
+  return ()
+
 /-- `<(Bytes, Bytes, Bytes, Bytes, Bytes) as Encode>::encode` -/
 def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes (self : (Bytes × Bytes × Bytes × Bytes × Bytes)) (out : AbiFrame) : FeM Unit := do
   let mut tails : AbiFrame := default
@@ -5086,17 +5104,7 @@ def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes (self : (Bytes × Bytes × By
   let tails_25 ← encode_field_Sol_Bytes self.fst out (UInt256.ofNat 0) tails_22
   tails := tails_25
   let tails_28 := tails
-  let tails_31 ← encode_field_Sol_Bytes self.snd.fst out head1 tails_28
-  tails := tails_31
-  let tails_34 := tails
-  let tails_37 ← encode_field_Sol_Bytes self.snd.snd.fst out head2 tails_34
-  tails := tails_37
-  let tails_40 := tails
-  let tails_43 ← encode_field_Sol_Bytes self.snd.snd.snd.fst out head3 tails_40
-  tails := tails_43
-  let tails_46 := tails
-  let _ ← encode_field_Sol_Bytes self.snd.snd.snd.snd out head4 tails_46
-  return ()
+  tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes_k1 self out head1 head2 head3 head4 tails_28 tails
 
 /-- `<Bytes as Drop>::drop` -/
 def Bytes_drop (self : Bytes) : FeM Unit := do

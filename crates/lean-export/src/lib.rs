@@ -3587,7 +3587,8 @@ impl<'db> BodyExporter<'_, 'db> {
         let data = &self.body.blocks[block.index()];
         let pad = "  ".repeat(depth);
         // The text of each statement that prints any, and the value it
-        // defines.
+        // defines, and nothing for each that binds a value it drops: a long
+        // body is cut at the same statements whatever they print.
         let mut printed = Vec::new();
         self.never = None;
         self.yielding = matches!(data.terminator.kind, NTerminatorKind::Yield { .. });
@@ -3612,6 +3613,8 @@ impl<'db> BodyExporter<'_, 'db> {
             };
             if !text.is_empty() {
                 printed.push((text, defined));
+            } else if defined.is_some_and(|value| self.dropped.contains(&value)) {
+                printed.push((text, None));
             }
         }
         let end = flags(self.flag_updates(DropFlagPoint::BeforeTerminator(block)));
