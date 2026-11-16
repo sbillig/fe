@@ -23,11 +23,11 @@ def init : FeM Unit := do
 def add_to (v0 : Place) (v1 : UInt256) : FeM Unit := do
   let v2 := (v0, v1)
   let v3 := v2.fst
-  let v4 := v3
-  let v6 := v1
-  let v7 ← load v4
-  let v8 ← checkedAdd v7 v6
-  store v4 v8
+  let a := v3
+  let b := v1
+  let v7 ← load a
+  let v8 ← checkedAdd v7 b
+  store a v8
   let v9 := ()
   return ()
 
@@ -35,66 +35,66 @@ def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
   let mut v0 := v0
   let v2 := (v0, v1)
   let v5 := v2.snd
-  let v6 ← load v5
+  let b ← load v5
   let v7 := v0
-  let v8 ← checkedAdd v7 v6
+  let v8 ← checkedAdd v7 b
   v0 := v8
   let v9 := ()
   return ((), v0)
 
-def recv_Parts (v0 : UInt256) : FeM UInt256 := do
-  let mut r1 : UInt256 := default
-  let v1 := v0
-  r1 := v1
+def recv_Parts (by_0 : UInt256) : FeM UInt256 := do
+  let mut «local» : UInt256 := default
+  let by_1 := by_0
+  «local» := by_1
   let v2 := (Field.pair.field Layout.Pair 0)
-  let v4 ← add_to v2 r1
+  let v4 ← add_to v2 «local»
   let v6 := (Field.pair.field Layout.Pair 0)
-  let (v7, v7_0) ← add_to_1 r1 v6
-  r1 := v7_0
-  let v8 := r1
-  return v8
+  let (v7, v7_0) ← add_to_1 «local» v6
+  «local» := v7_0
+  let local_8 := «local»
+  return local_8
 
-def Pair_at (v0 : Place) : FeM (UInt256 × Place) := do
-  let v1 ← load (v0.field Layout.Pair 0)
-  let v2 := (v0.field Layout.Pair 1)
+def Pair_at (self : Place) : FeM (UInt256 × Place) := do
+  let v1 ← load (self.field Layout.Pair 0)
+  let v2 := (self.field Layout.Pair 1)
   let v3 := (v1, v2)
   return (v1, v2)
 
 def bump (v0 : UInt256) (v1 : Place) : FeM UInt256 := do
   let v2 := (v0, v1)
-  let v3 := v2.fst
+  let «by» := v2.fst
   let v4 := v2.snd
-  let v5 := v4
-  let v6 ← load v5
-  let v7 ← checkedAdd v6 v3
-  store v5 v7
+  let x := v4
+  let v6 ← load x
+  let v7 ← checkedAdd v6 «by»
+  store x v7
   let v8 := ()
-  let v9 ← load v5
+  let v9 ← load x
   return v9
 
-def Pair_at_1 (v0 : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256) → FeM Pair)) := do
-  let mut v0 := v0
-  let v1 := v0.a
-  let v3 := (v1, v0.b)
+def Pair_at_1 (self : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256) → FeM Pair)) := do
+  let mut self := self
+  let v1 := self.a
+  let v3 := (v1, self.b)
   let slide : (UInt256 × UInt256) → FeM Pair := fun g => do
-    let mut v0 := v0
-    v0 := { v0 with b := g.snd }
-    return v0
-  return ((v1, v0.b), slide)
+    let mut self := self
+    self := { self with b := g.snd }
+    return self
+  return ((v1, self.b), slide)
 
 def bump_1 (v0 : UInt256) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
   let mut v1 := v1
   let v2 := (v0, v1)
-  let v3 := v2.fst
+  let «by» := v2.fst
   let v6 := v1
-  let v7 ← checkedAdd v6 v3
+  let v7 ← checkedAdd v6 «by»
   v1 := v7
   let v8 := ()
   let v9 := v1
   return (v9, v1)
 
-def recv_Granted (v0 : UInt256) : FeM UInt256 := do
-  let mut r1 : Pair := default
+def recv_Granted («by» : UInt256) : FeM UInt256 := do
+  let mut «local» : Pair := default
   let mut v12 : (UInt256 × UInt256) := default
   let v1 := Field.pair
   let v2 ← Pair_at v1
@@ -102,30 +102,30 @@ def recv_Granted (v0 : UInt256) : FeM UInt256 := do
   let v4 := v2.snd
   let v5 := v4
   let v6 ← bump v3 v5
-  let v7 := v6
+  let stored := v6
   let v8 := (UInt256.ofNat 1)
-  let v9 := (Pair.mk v0 v8)
-  let v10 := v9
-  r1 := v10
-  let (v12_g, v12_k) ← Pair_at_1 r1
+  let v9 := (Pair.mk «by» v8)
+  let local_10 := v9
+  «local» := local_10
+  let (v12_g, v12_k) ← Pair_at_1 «local»
   v12 := v12_g
   let v13 := v12.fst
   let (v16, v16_0) ← bump_1 v13 v12.snd
   v12 := { v12 with snd := v16_0 }
   let v12_0 ← v12_k v12
-  r1 := v12_0
-  let v17 ← checkedAdd v7 v16
+  «local» := v12_0
+  let v17 ← checkedAdd stored v16
   return v17
 
-def Small_maybe (v0 : Place) (v1 : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 → FeM Unit)) := do
+def Small_maybe (self : Place) (second : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 → FeM Unit)) := do
   let mut h2 : UInt256 := default
-  if v1 then
-    h2 := (← loadIntAt (.u 8) (v0.field Layout.Small 1) ⟨1, 1, true⟩)
+  if second then
+    h2 := (← loadIntAt (.u 8) (self.field Layout.Small 1) ⟨1, 1, true⟩)
     let v3 := Option_mut_u8.Some h2
     let slide : Option_mut_u8 → FeM Unit := fun g => do
       let mut h2 := h2
       h2 := g.Some_0
-      storeIntAt (.u 8) (v0.field Layout.Small 1) ⟨1, 1, true⟩ h2
+      storeIntAt (.u 8) (self.field Layout.Small 1) ⟨1, 1, true⟩ h2
       return ()
     return ((Option_mut_u8.Some h2), slide)
   else
@@ -135,10 +135,10 @@ def Small_maybe (v0 : Place) (v1 : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 
       return ()
     return (Option_mut_u8.None, slide)
 
-def recv_Lane (v0 : Bool) : FeM UInt256 := do
+def recv_Lane (second : Bool) : FeM UInt256 := do
   let mut v2 : Option_mut_u8 := default
   let v1 := Field.small
-  let (v2_g, v2_k) ← Small_maybe v1 v0
+  let (v2_g, v2_k) ← Small_maybe v1 second
   v2 := v2_g
   let v3 := v2
   let b3 : Option_mut_u8 → FeM UInt256 := fun v2 => do

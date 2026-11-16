@@ -10,18 +10,18 @@ structure Set where
   value : UInt256
 deriving Inhabited
 
-def init (v0 : UInt256) : FeM Unit := do
-  let v1 := v0
-  store Field.stored v1
+def init (initial_0 : UInt256) : FeM Unit := do
+  let initial_1 := initial_0
+  store Field.stored initial_1
   let v2 := ()
   return ()
 
 def recv_Get : FeM UInt256 := do
-  let v0 ← load Field.stored
-  return v0
+  let stored ← load Field.stored
+  return stored
 
-def recv_Set (v0 : UInt256) : FeM Unit := do
-  store Field.stored v0
+def recv_Set (value : UInt256) : FeM Unit := do
+  store Field.stored value
   let v1 := ()
   return ()
 
@@ -29,28 +29,28 @@ def Get_HEAD_SIZE : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   return v0
 
-def Get_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
+def Get_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Get := do
   let v2 := (Get.mk)
   return v2
 
-def decode_from_prechecked_head_Get_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Get := do
-  let v3 ← Get_decode_from_CallData v0 v1
+def decode_from_prechecked_head_Get_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Get := do
+  let v3 ← Get_decode_from_CallData input pos
   return v3
 
 def decode_runtime_args_Evm_Sol_Get : FeM Get := do
-  let mut r0 : CallData := default
+  let mut input : CallData := default
   let v2 ← Evm_input
-  let v3 := v2
-  r0 := v3
+  let input_3 := v2
+  input := input_3
   let v4 ← Sol_SELECTOR_SIZE
-  let v5 := v4
-  let v6 := r0
-  let v7 ← len_CallData v6
-  let v8 := v7
+  let base := v4
+  let input_6 := input
+  let v7 ← len_CallData input_6
+  let len := v7
   let v9 ← Get_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head v8 v5 v9
-  let v11 := r0
-  let v12 ← decode_from_prechecked_head_Get_Sol_CallData v11 v5 v8
+  let v10 ← Sol_validate_runtime_head len base v9
+  let input_11 := input
+  let v12 ← decode_from_prechecked_head_Get_Sol_CallData input_11 base len
   return v12
 
 def recv_Get_entry : FeM Empty := do
@@ -65,32 +65,32 @@ def Set_HEAD_SIZE : FeM UInt256 := do
   let v2 ← checkedAdd v0 v1
   return v2
 
-def Set_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Set := do
-  let v2 ← len_CallData v0
-  let v3 := v2
-  let v4 ← decode_msg_field_from_Sol_u256_CallData v0 v1 v1 v3
-  let v5 := v4
-  let v6 := (Set.mk v5)
+def Set_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Set := do
+  let v2 ← len_CallData __fe_msg_decode_input
+  let __fe_msg_decode_input_len := v2
+  let v4 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+  let __fe_field_0 := v4
+  let v6 := (Set.mk __fe_field_0)
   return v6
 
-def decode_from_prechecked_head_Set_Sol_CallData (v0 : CallData) (v1 : UInt256) (v2 : UInt256) : FeM Set := do
-  let v3 ← Set_decode_from_CallData v0 v1
+def decode_from_prechecked_head_Set_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Set := do
+  let v3 ← Set_decode_from_CallData input pos
   return v3
 
 def decode_runtime_args_Evm_Sol_Set : FeM Set := do
-  let mut r0 : CallData := default
+  let mut input : CallData := default
   let v2 ← Evm_input
-  let v3 := v2
-  r0 := v3
+  let input_3 := v2
+  input := input_3
   let v4 ← Sol_SELECTOR_SIZE
-  let v5 := v4
-  let v6 := r0
-  let v7 ← len_CallData v6
-  let v8 := v7
+  let base := v4
+  let input_6 := input
+  let v7 ← len_CallData input_6
+  let len := v7
   let v9 ← Set_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head v8 v5 v9
-  let v11 := r0
-  let v12 ← decode_from_prechecked_head_Set_Sol_CallData v11 v5 v8
+  let v10 ← Sol_validate_runtime_head len base v9
+  let input_11 := input
+  let v12 ← decode_from_prechecked_head_Set_Sol_CallData input_11 base len
   return v12
 
 def recv_Set_entry : FeM Empty := do

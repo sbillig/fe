@@ -7,80 +7,80 @@ def Layout.Cell : Layout :=
 def init : FeM Unit := do
   return ()
 
-def Cell_slot (v0 : Place) : FeM Place := do
-  let v1 := (v0.field Layout.Cell 0)
+def Cell_slot (self : Place) : FeM Place := do
+  let v1 := (self.field Layout.Cell 0)
   return v1
 
-def recv_Direct (v0 : UInt256) : FeM UInt256 := do
+def recv_Direct («by» : UInt256) : FeM UInt256 := do
   let v1 := Field.cell
   let v2 ← Cell_slot v1
   let v3 ← load v2
-  let v4 ← checkedAdd v3 v0
+  let v4 ← checkedAdd v3 «by»
   store v2 v4
   let v5 := ()
   let v6 ← load (Field.cell.field Layout.Cell 0)
   return v6
 
-def Cell_get (v0 : Place) : FeM UInt256 := do
-  let v1 ← load (v0.field Layout.Cell 0)
+def Cell_get (self : Place) : FeM UInt256 := do
+  let v1 ← load (self.field Layout.Cell 0)
   return v1
 
-def Cell_set (v0 : Place) (v1 : UInt256) : FeM Unit := do
-  let v2 := v1
-  store (v0.field Layout.Cell 0) v2
+def Cell_set (self : Place) (v_1 : UInt256) : FeM Unit := do
+  let v_2 := v_1
+  store (self.field Layout.Cell 0) v_2
   let v3 := ()
   return ()
 
-def Cell_cached (v0 : Place) : FeM (UInt256 × (UInt256 → FeM Unit)) := do
-  let mut r0 : UInt256 := default
-  let v1 := v0
-  let v2 ← Cell_get v1
-  let v3 := v2
-  r0 := v3
+def Cell_cached (self_0 : Place) : FeM (UInt256 × (UInt256 → FeM Unit)) := do
+  let mut tmp : UInt256 := default
+  let self_1 := self_0
+  let v2 ← Cell_get self_1
+  let tmp_3 := v2
+  tmp := tmp_3
   let slide : UInt256 → FeM Unit := fun g => do
-    let mut r0 := r0
-    r0 := g
-    let v5 := r0
-    let v6 := v5
-    let v7 ← Cell_set v0 v6
+    let mut tmp := tmp
+    tmp := g
+    let tmp_5 := tmp
+    let tmp_6 := tmp_5
+    let v7 ← Cell_set self_0 tmp_6
     return ()
-  return (r0, slide)
+  return (tmp, slide)
 
-def recv_Slide (v0 : UInt256) : FeM UInt256 := do
+def recv_Slide («by» : UInt256) : FeM UInt256 := do
   let mut v2 : UInt256 := default
   let v1 := Field.cell
   let (v2_g, v2_k) ← Cell_cached v1
   v2 := v2_g
   let v3 := v2
-  let v4 ← checkedAdd v3 v0
+  let v4 ← checkedAdd v3 «by»
   v2 := v4
   let _ ← v2_k v2
   let v5 := ()
   let v6 ← load (Field.cell.field Layout.Cell 0)
   return v6
 
-def first (v0 : (UInt256 × UInt256)) : FeM (UInt256 × (UInt256 → FeM (UInt256 × UInt256))) := do
-  let mut v0 := v0
+def first (pair : (UInt256 × UInt256)) : FeM (UInt256 × (UInt256 → FeM (UInt256 × UInt256))) := do
+  let mut pair := pair
   let slide : UInt256 → FeM (UInt256 × UInt256) := fun g => do
-    let mut v0 := v0
-    v0 := { v0 with fst := g }
-    return v0
-  return (v0.fst, slide)
+    let mut pair := pair
+    pair := { pair with fst := g }
+    return pair
+  return (pair.fst, slide)
 
-def recv_Local (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
-  let mut r0 : (UInt256 × UInt256) := default
+def recv_Local (a : UInt256) (b : UInt256) : FeM UInt256 := do
+  let mut pair : (UInt256 × UInt256) := default
   let mut v5 : UInt256 := default
-  let v2 := (v0, v1)
-  let v3 := v2
-  r0 := v3
-  let (v5_g, v5_k) ← first r0
+  let v2 := (a, b)
+  let pair_3 := v2
+  pair := pair_3
+  let (v5_g, v5_k) ← first pair
   v5 := v5_g
   let v6 := v5
-  let v7 ← checkedAdd v6 v1
+  let v7 ← checkedAdd v6 b
   v5 := v7
   let v5_0 ← v5_k v5
-  r0 := v5_0
+  pair := v5_0
   let v8 := ()
-  let v9 := r0.fst
+  let v9 := pair.fst
   return v9
 

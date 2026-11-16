@@ -9,23 +9,23 @@ def Layout.Store : Layout :=
 def init : FeM Unit := do
   return ()
 
-def add_Store (v0 : UInt256) : FeM UInt256 := do
-  let v2 := v0
+def add_Store (by_0 : UInt256) : FeM UInt256 := do
+  let by_2 := by_0
   let v3 := (UInt256.ofNat 10)
-  let v4 := decide (v3.toNat < v2.toNat)
+  let v4 := decide (v3.toNat < by_2.toNat)
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
-    let v13 := v1
-    store (Field.store.field Layout.Store 0) v13
+    let next := v1
+    store (Field.store.field Layout.Store 0) next
     let v14 := ()
     let v15 := (UInt256.ofNat 1)
-    let v16 := v0
-    let l0 ← StorageMap_locate_u256_u256 (Field.store.field Layout.Store 1) (Field.store.field Layout.Store 1).slot v16
+    let by_16 := by_0
+    let l0 ← StorageMap_locate_u256_u256 (Field.store.field Layout.Store 1) (Field.store.field Layout.Store 1).slot by_16
     let v17 ← load (Place.mk .storage l0.slot)
     let v18 ← checkedAdd v17 v15
-    let l1 ← StorageMap_locate_u256_u256 (Field.store.field Layout.Store 1) (Field.store.field Layout.Store 1).slot v16
+    let l1 ← StorageMap_locate_u256_u256 (Field.store.field Layout.Store 1) (Field.store.field Layout.Store 1).slot by_16
     store (Place.mk .storage l1.slot) v18
     let v19 := ()
-    return v13
+    return next
   if v4 then
     let v5 ← load (Field.store.field Layout.Store 0)
     let v6 := (UInt256.ofNat 10)
@@ -34,12 +34,12 @@ def add_Store (v0 : UInt256) : FeM UInt256 := do
     b3 v8
   else
     let v9 ← load (Field.store.field Layout.Store 0)
-    let v10 := v0
-    let v11 ← checkedAdd v9 v10
+    let by_10 := by_0
+    let v11 ← checkedAdd v9 by_10
     let v12 := v11
     b3 v12
 
-def recv_Bump (v0 : UInt256) : FeM UInt256 := do
-  let v1 ← add_Store v0
+def recv_Bump («by» : UInt256) : FeM UInt256 := do
+  let v1 ← add_Store «by»
   return v1
 

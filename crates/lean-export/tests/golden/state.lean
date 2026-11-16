@@ -110,50 +110,50 @@ def Field.alone : Place :=
 def init : FeM Unit := do
   return ()
 
-def recv_SetDelta (v0 : UInt256) : FeM UInt256 := do
+def recv_SetDelta (delta : UInt256) : FeM UInt256 := do
   let v1 ← loadIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩
-  let v2 := v1
-  storeIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩ v0
+  let old := v1
+  storeIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩ delta
   let v3 := ()
-  return v2
+  return old
 
-def recv_Replace (v0 : Bool) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) : FeM UInt256 := do
-  let v5 ← load_Packed Field.packed
-  let v6 := v5
-  let v7 := (Packed.mk v0 v1 v2 v3 v4)
+def recv_Replace (flag : Bool) (small : UInt256) (delta : UInt256) (owner : UInt256) (total : UInt256) : FeM UInt256 := do
+  let packed_5 ← load_Packed Field.packed
+  let packed_6 := packed_5
+  let v7 := (Packed.mk flag small delta owner total)
   store_Packed Field.packed v7
   let v8 := ()
-  let v9 := v6.total
+  let v9 := packed_6.total
   return v9
 
-def recv_Advance (v0 : UInt256) : FeM UInt256 := do
+def recv_Advance («by» : UInt256) : FeM UInt256 := do
   let v3 ← load_Phase Field.phase
   let b1 : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   match v3 with
   | .Idle =>
     let v4 := (UInt256.ofNat 1)
-    let v5 := Phase.Running v4 v0
+    let v5 := Phase.Running v4 «by»
     store_Phase Field.phase v5
     let v6 := ()
     let v7 := (UInt256.ofNat 0)
     let v8 := v7
     b1 v8
   | .Running .. =>
-    let v9 ← loadInt (.u 64) (Field.phase.offset 1)
-    let v10 ← load (Field.phase.offset 2)
-    let v11 := decide (v0.toNat < v10.toNat)
+    let count ← loadInt (.u 64) (Field.phase.offset 1)
+    let sum_10 ← load (Field.phase.offset 2)
+    let v11 := decide («by».toNat < sum_10.toNat)
     let v12 := Phase.Done v11
     store_Phase Field.phase v12
     let v13 := ()
-    let v14 := v10
-    b1 v14
+    let sum_14 := sum_10
+    b1 sum_14
   | .Done .. =>
-    let v15 ← loadBool (Field.phase.offset 1)
+    let ok ← loadBool (Field.phase.offset 1)
     let b7 : UInt256 → FeM UInt256 := fun v2 => do
       let v20 := v2
       b1 v20
-    if v15 then
+    if ok then
       let v16 := (UInt256.ofNat 1)
       let v17 := v16
       b7 v17
@@ -162,26 +162,26 @@ def recv_Advance (v0 : UInt256) : FeM UInt256 := do
       let v19 := v18
       b7 v19
 
-def recv_Mark (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
-  checkIndex v0 3
-  let v2 ← loadInt (.u 8) (Field.levels.index 1 v0)
-  let v3 := v2
-  checkIndex v0 3
-  storeInt (.u 8) (Field.levels.index 1 v0) v1
+def recv_Mark («at» : UInt256) (level : UInt256) : FeM UInt256 := do
+  checkIndex «at» 3
+  let v2 ← loadInt (.u 8) (Field.levels.index 1 «at»)
+  let old := v2
+  checkIndex «at» 3
+  storeInt (.u 8) (Field.levels.index 1 «at») level
   let v4 := ()
-  storeIntAt (.u 8) Field.narrow ⟨1, 1, true⟩ v3
+  storeIntAt (.u 8) Field.narrow ⟨1, 1, true⟩ old
   let v5 := ()
-  let v6 ← loadIntAt (.u 8) Field.narrow ⟨1, 1, true⟩
-  return v6
+  let narrow ← loadIntAt (.u 8) Field.narrow ⟨1, 1, true⟩
+  return narrow
 
 def recv_Lock : FeM Bool := do
   let v0 ← loadBoolAt ((Field.lock.pin .transient).field Layout.TSlot_bool 0) ⟨0, 1, false⟩
-  let v1 := v0
+  let was := v0
   let v2 := true
   storeBoolAt ((Field.lock.pin .transient).field Layout.TSlot_bool 0) ⟨0, 1, false⟩ v2
   let v3 := ()
-  storeBoolAt Field.alone ⟨0, 1, true⟩ v1
+  storeBoolAt Field.alone ⟨0, 1, true⟩ was
   let v4 := ()
-  let v5 ← loadBoolAt Field.alone ⟨0, 1, true⟩
-  return v5
+  let alone ← loadBoolAt Field.alone ⟨0, 1, true⟩
+  return alone
 

@@ -3,46 +3,46 @@ export Lib (Option_u256 Option_u256.None Option_u256.Some)
 def init : FeM Unit := do
   return ()
 
-def recv_Triangle (v0 : UInt256) : FeM UInt256 := do
-  let mut r0 : UInt256 := default
-  let mut r1 : UInt256 := default
+def recv_Triangle (n : UInt256) : FeM UInt256 := do
+  let mut total : UInt256 := default
+  let mut i : UInt256 := default
   let v1 := (UInt256.ofNat 0)
-  let v2 := v1
-  r0 := v2
+  let total_2 := v1
+  total := total_2
   let v3 := (UInt256.ofNat 0)
-  let v4 := v3
-  r1 := v4
-  let rec b1 (r0 : UInt256) (r1 : UInt256) : FeM UInt256 := do
-    let mut r0 := r0
-    let mut r1 := r1
-    let v5 := r1
-    let v6 := v5
-    let v7 := decide (v6.toNat < v0.toNat)
+  let i_4 := v3
+  i := i_4
+  let rec b1 (total : UInt256) (i : UInt256) : FeM UInt256 := do
+    let mut total := total
+    let mut i := i
+    let i_5 := i
+    let i_6 := i_5
+    let v7 := decide (i_6.toNat < n.toNat)
     if v7 then
       let v8 := (UInt256.ofNat 1)
-      let v9 := r1
-      let v10 ← checkedAdd v9 v8
-      let v11 := v10
-      r1 := v11
+      let i_9 := i
+      let v10 ← checkedAdd i_9 v8
+      let i_11 := v10
+      i := i_11
       let v12 := ()
-      let v13 := r1
-      let v14 := v13
-      let v15 := r0
-      let v16 ← checkedAdd v15 v14
-      let v17 := v16
-      r0 := v17
+      let i_13 := i
+      let i_14 := i_13
+      let total_15 := total
+      let v16 ← checkedAdd total_15 i_14
+      let total_17 := v16
+      total := total_17
       let v18 := ()
-      b1 r0 r1
+      b1 total i
     else
-      let v19 := r0
-      return v19
+      let total_19 := total
+      return total_19
   partial_fixpoint
-  b1 r0 r1
+  b1 total i
 
-def step (v0 : UInt256) : FeM Option_u256 := do
-  let v3 := v0
+def step (value_0 : UInt256) : FeM Option_u256 := do
+  let value_3 := value_0
   let v4 := (UInt256.ofNat 1)
-  let v5 := decide (v3 = v4)
+  let v5 := decide (value_3 = v4)
   let b3 : Option_u256 → FeM Option_u256 := fun v1 => do
     return v1
   if v5 then
@@ -50,71 +50,71 @@ def step (v0 : UInt256) : FeM Option_u256 := do
     let v7 := v6
     b3 v7
   else
-    let v8 := v0
+    let value_8 := value_0
     let v9 := (UInt256.ofNat 2)
-    let v10 ← checkedRem v8 v9
+    let v10 ← checkedRem value_8 v9
     let v11 := (UInt256.ofNat 0)
     let v12 := decide (v10 = v11)
     let b6 : Option_u256 → FeM Option_u256 := fun v2 => do
       let v25 := v2
       b3 v25
     if v12 then
-      let v13 := v0
+      let value_13 := value_0
       let v14 := (UInt256.ofNat 2)
-      let v15 ← checkedDiv v13 v14
+      let v15 ← checkedDiv value_13 v14
       let v16 := Option_u256.Some v15
       let v17 := v16
       b6 v17
     else
       let v18 := (UInt256.ofNat 3)
-      let v19 := v0
-      let v20 ← checkedMul v18 v19
+      let value_19 := value_0
+      let v20 ← checkedMul v18 value_19
       let v21 := (UInt256.ofNat 1)
       let v22 ← checkedAdd v20 v21
       let v23 := Option_u256.Some v22
       let v24 := v23
       b6 v24
 
-def recv_Collatz (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
-  let mut r0 : UInt256 := default
-  let mut r1 : UInt256 := default
-  let v2 := v0
-  r0 := v2
+def recv_Collatz (start_0 : UInt256) (limit : UInt256) : FeM UInt256 := do
+  let mut value : UInt256 := default
+  let mut steps : UInt256 := default
+  let start_2 := start_0
+  value := start_2
   let v3 := (UInt256.ofNat 0)
-  let v4 := v3
-  r1 := v4
-  let rec b1 (r0 : UInt256) (r1 : UInt256) : FeM UInt256 := do
-    let mut r0 := r0
-    let mut r1 := r1
-    let v5 := r1
-    let v6 := v5
-    let v7 := decide (v6 = v1)
+  let steps_4 := v3
+  steps := steps_4
+  let rec b1 (value : UInt256) (steps : UInt256) : FeM UInt256 := do
+    let mut value := value
+    let mut steps := steps
+    let steps_5 := steps
+    let steps_6 := steps_5
+    let v7 := decide (steps_6 = limit)
     if v7 then
-      return v1
+      return limit
     else
       let v8 := ()
       let v9 := v8
-      let v10 := r0
-      let v11 := v10
-      let v12 ← step v11
+      let value_10 := value
+      let value_11 := value_10
+      let v12 ← step value_11
       match (← pure v12) with
       | .Some .. =>
         let v13 := v12.Some_0
-        let v14 := v13
-        let v15 := v14
-        r0 := v15
+        let next_14 := v13
+        let next_15 := next_14
+        value := next_15
         let v16 := ()
         let v17 := (UInt256.ofNat 1)
-        let v18 := r1
-        let v19 ← checkedAdd v18 v17
-        let v20 := v19
-        r1 := v20
+        let steps_18 := steps
+        let v19 ← checkedAdd steps_18 v17
+        let steps_20 := v19
+        steps := steps_20
         let v21 := ()
         let v22 := v21
-        b1 r0 r1
+        b1 value steps
       | .None =>
-        let v23 := r1
-        return v23
+        let steps_23 := steps
+        return steps_23
   partial_fixpoint
-  b1 r0 r1
+  b1 value steps
 

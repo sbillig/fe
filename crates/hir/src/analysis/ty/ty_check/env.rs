@@ -2073,7 +2073,9 @@ fn param_span<'db>(
     }
 }
 
-fn param_name<'db>(
+/// The name of parameter `idx` of `site` as the source writes it: none for
+/// `_` or a pattern.
+pub fn param_name<'db>(
     db: &'db dyn HirAnalysisDb,
     site: ParamSite<'db>,
     idx: usize,
@@ -2466,6 +2468,21 @@ pub(crate) fn binding_has_authority<'db>(
 impl<'db> LocalBinding<'db> {
     pub(super) fn local(pat: PatId, is_mut: bool) -> Self {
         Self::Local { pat, is_mut }
+    }
+
+    /// The name the source gives the binding, if it gives one: a local's
+    /// pattern in `body`, a parameter's or an effect's name.
+    pub fn name(&self, db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<IdentId<'db>> {
+        match self {
+            Self::Local { pat, .. } => match pat.data(db, body) {
+                Partial::Present(Pat::Path(Partial::Present(path), ..)) => path.ident(db).to_opt(),
+                _ => None,
+            },
+            Self::Param { site, idx, .. } | Self::ParamPart { site, idx, .. } => {
+                param_name(db, *site, *idx)
+            }
+            Self::EffectParam { binding_name, .. } => Some(*binding_name),
+        }
     }
 
     pub fn is_mut(&self) -> bool {

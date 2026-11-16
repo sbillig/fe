@@ -60,7 +60,10 @@ use hir::{
             registered_root_providers,
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, EffectParamSite, LocalBinding, ReturnProjectionStep},
+            ty_check::{
+                BodyOwner, EffectParamSite, LocalBinding, ParamSite, ReturnProjectionStep,
+                param_name,
+            },
             ty_def::{BorrowKind, CapabilityKind, TyId, prim_int_bits},
             ty_is_snapshot,
         },
@@ -1109,6 +1112,7 @@ impl<'db> Module<'db> {
             flags: Vec::new(),
             located: Vec::new(),
             entries: 0,
+            bases: Vec::new(),
             names: Vec::new(),
             roots: Vec::new(),
         }
@@ -2744,7 +2748,9 @@ struct BodyExporter<'a, 'db> {
     located: Vec<String>,
     /// The number of entries located so far, each bound to its own name.
     entries: usize,
-    /// The Lean term for each value: the variable that holds it.
+    /// The name each value would like, which names what it gives besides
+    /// itself too, and the Lean term for it: the variable that holds it.
+    bases: Vec<String>,
     names: Vec<String>,
     /// The variable of each root that has one: a local's or a parameter's
     /// slot.
@@ -2762,11 +2768,66 @@ impl<'db> BodyExporter<'_, 'db> {
         let owner = self.body.owner.key(db).owner(db);
         let arm = matches!(owner, BodyOwner::ContractRecvArm { .. });
         let pats = self.module.arg_pats(owner);
-        self.names = (0..self.body.values.len())
-            .map(|index| binder(&format!("v{index}"), index))
+        // A value or a slot is named after the binding the source gives it,
+        // and a name that several would have after their indices too.
+        // Others are named after their indices alone.
+        let hir = owner.body(db);
+        let site = match owner {
+            BodyOwner::Func(func, _) => Some(ParamSite::Func(func)),
+            BodyOwner::ContractInit { contract } => Some(ParamSite::ContractInit(contract)),
+            _ => None,
+        };
+        let source = |binding: Option<LocalBinding<'db>>| {
+            Some(binding?.name(db, hir?)?.data(db).to_string())
+        };
+        let values: Vec<_> = self
+            .body
+            .values
+            .iter()
+            .map(|value| source(value.source))
             .collect();
-        self.roots = (0..self.body.roots.len())
-            .map(|index| var(&format!("r{index}")))
+        let slots: Vec<_> = self
+            .body
+            .roots
+            .iter()
+            .map(|root| match root.kind {
+                NRootKind::LocalSlot { binding } => source(binding),
+                NRootKind::ParamPlace { param } => {
+                    Some(param_name(db, site?, param as usize)?.data(db).to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        let count = |names: &[Option<String>], name: &str| {
+            names
+                .iter()
+                .flatten()
+                .filter(|other| *other == name)
+                .count()
+        };
+        self.roots = slots
+            .iter()
+            .enumerate()
+            .map(|(index, name)| match name {
+                Some(name) if count(&slots, name) == 1 => binder(name, format!("r{index}")),
+                Some(name) => binder(&format!("{name}_r{index}"), format!("r{index}")),
+                None => var(&format!("r{index}")),
+            })
+            .collect();
+        self.bases = values
+            .iter()
+            .enumerate()
+            .map(|(index, name)| match name {
+                Some(name) if count(&values, name) == 1 && count(&slots, name) == 0 => name.clone(),
+                Some(name) => format!("{name}_{index}"),
+                None => format!("v{index}"),
+            })
+            .collect();
+        self.names = self
+            .bases
+            .iter()
+            .enumerate()
+            .map(|(index, base)| binder(base, index))
             .collect();
         let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
@@ -4670,7 +4731,10 @@ impl<'db> BodyExporter<'_, 'db> {
     /// apart from the others.
     fn derived(&self, value: NValueId, suffix: impl fmt::Display) -> String {
         let index = value.index();
-        binder(&format!("v{index}_{suffix}"), format!("{index}_{suffix}"))
+        binder(
+            &format!("{}_{suffix}", self.bases[index]),
+            format!("{index}_{suffix}"),
+        )
     }
 
     /// Whether a value of `ty` is an access to a place. A view of a snapshot
