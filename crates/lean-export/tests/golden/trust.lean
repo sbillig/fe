@@ -141,8 +141,7 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
     let (v26, v26_0) ← MemBuffer_set_len buffer len
     buffer := v26_0
     let v28 ← MemBuffer_ptr buffer
-    let v30 := selector
-    let v32 := v30 <<< (UInt256.ofNat 224)
+    let v32 := selector <<< (UInt256.ofNat 224)
     let _ ← mstore v28 v32
     let v34 ← downcast_unchecked_u256_usize payload_size
     let _ ← zero_bytes payload v34

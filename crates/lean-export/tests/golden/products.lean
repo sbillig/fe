@@ -155,8 +155,7 @@ def recv_Lane (second : Bool) : FeM UInt256 := do
   let join : Option_mut_u8 → FeM UInt256 := fun v2 => do
     let mut v2 := v2
     let v13 ← loadIntAt (.u 8) Field.small.b ⟨1, 1, true⟩
-    let v14 := v13
-    return v14
+    return v13
   match v3 with
   | .Some .. =>
     let v7 := v2.Some_0

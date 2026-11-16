@@ -126,8 +126,7 @@ def CallData_size (self : CallData) : FeM UInt256 := do
 /-- `<CallData as ByteInput>::len` -/
 def len_CallData (self : CallData) : FeM UInt256 := do
   let v1 ← CallData_size self
-  let v2 := v1
-  return v2
+  return v1
 
 /-- `<i256 as IntWord>::from_word` -/
 def i256_from_word (word : UInt256) : FeM UInt256 := do
@@ -166,8 +165,7 @@ def u64_max : FeM UInt256 := do
 
 /-- `<u64 as IntWord>::to_word` -/
 def u64_to_word (self : UInt256) : FeM UInt256 := do
-  let v2 := self
-  return v2
+  return self
 
 /-- `<usize as IntWord>::IS_SIGNED` -/
 def usize_IS_SIGNED : FeM Bool := do
@@ -176,8 +174,7 @@ def usize_IS_SIGNED : FeM Bool := do
 /-- `<usize as IntWord>::MASK` -/
 def usize_MASK : FeM UInt256 := do
   let v1 := ~~~(UInt256.ofNat 0)
-  let v2 := v1
-  return v2
+  return v1
 
 /-- `<usize as IntWord>::from_word` -/
 def usize_from_word (word : UInt256) : FeM UInt256 := do
@@ -384,8 +381,7 @@ def AbiFrame_slice (self : AbiFrame) (offset : UInt256) (len : UInt256) : FeM Ab
 
 /-- `core::ptr::cast<u8, u256>` -/
 def cast_u8_u256 (ptr : UInt256) : FeM UInt256 := do
-  let v2 := ptr
-  return v2
+  return ptr
 
 /-- `core::abi::store_word` -/
 def store_word (ptr : UInt256) (value : UInt256) : FeM Unit := do
@@ -433,8 +429,7 @@ def MemSlice_len_u8 (self : MemSlice_u8) : FeM UInt256 := do
 def Evm_return_data (data : MemSlice_u8) : FeM Empty := do
   let v2 ← MemSlice_ptr_u8 data
   let v3 ← MemSlice_len_u8 data
-  let v4 := v3
-  let v5 ← returnData v2 v4
+  let v5 ← returnData v2 v3
   nomatch v5
 
 /-- `FixedMemBuffer<64>::alloc_uninit` -/
@@ -502,8 +497,7 @@ def usize_max : FeM UInt256 := do
 /-- `core::ptr::allocation_len` -/
 def allocation_len (len : UInt256) : FeM UInt256 := do
   let v2 ← usize_max
-  let v3 := v2
-  let v4 := decide (v3.toNat < len.toNat)
+  let v4 := decide (v2.toNat < len.toNat)
   if v4 then
     let v5 ← PANIC_OUT_OF_MEMORY
     let v6 ← panicCode v5
@@ -797,8 +791,7 @@ def Sol_decoder_new : FeM SolDecoder := do
 
 /-- `<usize as IntWord>::to_word` -/
 def usize_to_word (self : UInt256) : FeM UInt256 := do
-  let v2 := self
-  return v2
+  return self
 
 /-- `<usize as IntDowncast>::downcast_truncate` -/
 def downcast_truncate_usize_u64 (self : UInt256) : FeM UInt256 := do
@@ -827,13 +820,11 @@ def MemSlice_u8_size (self : MemSlice_u8) : FeM UInt256 := do
 /-- `<MemSlice<u8> as ByteInput>::len` -/
 def len_MemSlice_u8 (self : MemSlice_u8) : FeM UInt256 := do
   let v1 ← MemSlice_u8_size self
-  let v2 := v1
-  return v2
+  return v1
 
 /-- `<MemSlice<u8> as ByteSource>::word_at` -/
 def MemSlice_u8_word_at (self : MemSlice_u8) (byte_offset : UInt256) : FeM UInt256 := do
-  let v2 ← MemSlice_len_u8 self
-  let len := v2
+  let len ← MemSlice_len_u8 self
   let v6 := decide (len.toNat ≤ byte_offset.toNat)
   if v6 then
     return (UInt256.ofNat 0)
@@ -1062,8 +1053,7 @@ def u256_write_key (ptr : UInt256) (self : UInt256) : FeM Unit := do
 def keccak256_1 (data : MemSlice_u8) : FeM UInt256 := do
   let v1 ← MemSlice_ptr_u8 data
   let v2 ← MemSlice_len_u8 data
-  let v3 := v2
-  let v4 ← keccak256 v1 v3
+  let v4 ← keccak256 v1 v2
   return v4
 
 /-- `core::ptr::cast<u8, u8>` -/
@@ -1073,7 +1063,6 @@ def cast_u8_u8 (ptr : UInt256) : FeM UInt256 := do
 /-- `core::ptr::dealloc<u8>` -/
 def dealloc_u8 (ptr : UInt256) : FeM Unit := do
   let _ ← cast_u8_u8 ptr
-  let v2 := ()
   return ()
 
 /-- `<MemBuffer as Drop>::drop` -/
@@ -1263,8 +1252,7 @@ def Address_as_topic (self : UInt256) : FeM UInt256 := do
 def Evm_log3 (data : MemSlice_u8) (topic0 : UInt256) (topic1 : UInt256) (topic2 : UInt256) : FeM Unit := do
   let v5 ← MemSlice_ptr_u8 data
   let v6 ← MemSlice_len_u8 data
-  let v7 := v6
-  let _ ← logData v5 v7 #[topic0, topic1, topic2]
+  let _ ← logData v5 v6 #[topic0, topic1, topic2]
   return ()
 
 /-- `<StorageMap<Address, StorageMap<Address, u256>> as StateIndex>::locate` -/
@@ -1572,9 +1560,8 @@ def Evm_decode_args_tuple_u256_u256 : FeM (UInt256 × UInt256) := do
   let mut r0 : CallData := default
   let v1 ← Evm_input
   r0 := v1
-  let v3 := (UInt256.ofNat 4)
   let v4 := r0
-  let v5 ← decode_input_at_tuple_u256_u256_CallData v4 v3
+  let v5 ← decode_input_at_tuple_u256_u256_CallData v4 (UInt256.ofNat 4)
   return v5
 
 /-- `MemBuffer::len` -/
@@ -1589,8 +1576,7 @@ def revert_u256 (value : UInt256) : FeM Empty := do
   result := result_1
   let v4 ← MemBuffer_ptr result
   let v6 ← MemBuffer_len result
-  let v7 := v6
-  let v8 ← revertData v4 v7
+  let v8 ← revertData v4 v6
   nomatch v8
 
 structure Wei where
@@ -1801,8 +1787,7 @@ def StorageMap_locate_bool_u256 (self : Place) (root : UInt256) (key : Bool) : F
 
 /-- `std::evm::effects::RawOps::calldata_ptr<Evm, [u256; 2]>` -/
 def calldata_ptr_Evm_array_u256_2 (offset : UInt256) : FeM UInt256 := do
-  let v3 := offset
-  return v3
+  return offset
 
 inductive Option_mut_u8 where
   | None
@@ -1952,8 +1937,7 @@ def encode_calldata_Panic (selector : UInt256) (message : Panic) : FeM MemBuffer
     let (v26, v26_0) ← MemBuffer_set_len buffer len
     buffer := v26_0
     let v28 ← MemBuffer_ptr buffer
-    let v30 := selector
-    let v32 := v30 <<< (UInt256.ofNat 224)
+    let v32 := selector <<< (UInt256.ofNat 224)
     let _ ← mstore v28 v32
     let v34 ← downcast_unchecked_u256_usize payload_size
     let _ ← zero_bytes payload v34
@@ -1989,8 +1973,7 @@ def revert_error_Panic (error : Panic) : FeM Empty := do
   buffer := buffer_2
   let v5 ← MemBuffer_ptr buffer
   let v7 ← MemBuffer_len buffer
-  let v8 := v7
-  let v9 ← revertData v5 v8
+  let v9 ← revertData v5 v7
   nomatch v9
 
 /-- `std::evm::crypto::keccak_words<1>` -/
@@ -2045,8 +2028,7 @@ def field_shift (offset : UInt256) (bits : UInt256) : FeM UInt256 := do
 
 /-- `<u8 as SolPacked>::to_packed` -/
 def u8_to_packed (self : UInt256) : FeM UInt256 := do
-  let v1 := self
-  return v1
+  return self
 
 /-- `std::evm::sol_slot::field_mask` -/
 def field_mask (bits : UInt256) : FeM UInt256 := do
@@ -2107,8 +2089,7 @@ def DynString_from_validated_abi_tail (data : UInt256) (len : UInt256) (size : U
 
 /-- `DynString::from_abi_tail` -/
 def DynString_from_abi_tail (data : UInt256) (len : UInt256) (size : UInt256) : FeM DynString := do
-  let v5 := len
-  let v6 ← round_up_words v5
+  let v6 ← round_up_words len
   let expected_size ← checkedAdd (UInt256.ofNat 32) v6
   let v10 := decide (size ≠ expected_size)
   let join : FeM DynString := do
@@ -2118,8 +2099,7 @@ def DynString_from_abi_tail (data : UInt256) (len : UInt256) (size : UInt256) : 
     join
   else
     let v12 ← mem_word_at data (UInt256.ofNat 0)
-    let v14 := len
-    let v15 := decide (v12 ≠ v14)
+    let v15 := decide (v12 ≠ len)
     if v15 then
       join
     else
@@ -2173,8 +2153,7 @@ def finish_raw_call (success : Bool) (ret_1 : MemBuffer) : FeM (RawCallOutcome �
   let mut ret_1 := ret_1
   let returndata_len ← returndatasize
   let v6 ← MemBuffer_capacity ret_1
-  let v7 := v6
-  let v8 := decide (returndata_len.toNat < v7.toNat)
+  let v8 := decide (returndata_len.toNat < v6.toNat)
   let join : MemBuffer → UInt256 → FeM (RawCallOutcome × MemBuffer) := fun ret_1 written => do
     let mut ret_1 := ret_1
     let (v15, v15_0) ← MemBuffer_set_len ret_1 written
@@ -2195,11 +2174,9 @@ def raw_call_Evm (addr : UInt256) (gas_1 : UInt256) (value : Wei) (args : MemSli
   let v7 ← Wei_as_wei value
   let v8 ← MemSlice_ptr_u8 args
   let v9 ← MemSlice_len_u8 args
-  let v10 := v9
   let v12 ← MemBuffer_ptr ret_5
   let v14 ← MemBuffer_capacity ret_5
-  let v15 := v14
-  let v16 ← Fe.EVM.call gas_1 v6 v7 v8 v10 v12 v15
+  let v16 ← Fe.EVM.call gas_1 v6 v7 v8 v9 v12 v14
   let success := decide (v16 ≠ (UInt256.ofNat 0))
   let (v21, v21_0) ← finish_raw_call success ret_5
   ret_5 := v21_0
@@ -2227,8 +2204,7 @@ def RawCallOutcome_success (self : RawCallOutcome) : FeM Bool := do
 def Evm_log2 (data : MemSlice_u8) (topic0 : UInt256) (topic1 : UInt256) : FeM Unit := do
   let v4 ← MemSlice_ptr_u8 data
   let v5 ← MemSlice_len_u8 data
-  let v6 := v5
-  let _ ← logData v4 v6 #[topic0, topic1]
+  let _ ← logData v4 v5 #[topic0, topic1]
   return ()
 
 /-- `<u8 as IntWord>::IS_SIGNED` -/
@@ -2315,8 +2291,7 @@ def copy (dest : UInt256) (source : MemSlice_u8) : FeM Unit := do
 /-- `AbiFrame::copy_from` -/
 def AbiFrame_copy_from (self : AbiFrame) («at» : UInt256) (source : MemSlice_u8) : FeM Unit := do
   let v3 ← MemSlice_len_u8 source
-  let v4 := v3
-  let dest ← AbiFrame_slice self «at» v4
+  let dest ← AbiFrame_slice self «at» v3
   let v7 := dest.ptr
   let _ ← copy v7 source
   return ()
@@ -2523,8 +2498,7 @@ def u8_HEAD_SIZE : FeM UInt256 := do
 
 /-- `<u8 as Encode>::encode` -/
 def u8_encode_Sol (self : UInt256) (out : AbiFrame) : FeM Unit := do
-  let v4 := self
-  let _ ← AbiFrame_store_word out (UInt256.ofNat 0) v4
+  let _ ← AbiFrame_store_word out (UInt256.ofNat 0) self
   return ()
 
 /-- A `const` block in `core::abi::AbiSize::{fn_body}`, at `<u8>` -/
@@ -2762,8 +2736,7 @@ def create2_raw_Evm (value : Wei) (init_code : MemSlice_u8) (salt : UInt256) : F
   let v4 ← Wei_as_wei value
   let v5 ← MemSlice_ptr_u8 init_code
   let v6 ← MemSlice_len_u8 init_code
-  let v7 := v6
-  let v8 ← create2 v4 v5 v7 salt
+  let v8 ← create2 v4 v5 v6 salt
   let v9 := v8
   return v9
 
@@ -2786,8 +2759,7 @@ def bubble_last_revert : FeM Empty := do
   ret := ret_0
   let v3 ← MemBuffer_ptr ret
   let v5 ← MemBuffer_len ret
-  let v6 := v5
-  let v7 ← revertData v3 v6
+  let v7 ← revertData v3 v5
   nomatch v7
 
 /-- `std::evm::effects::copy_call_outcome` -/
@@ -2866,8 +2838,7 @@ def CallOutcome_decode_u256 (self : CallOutcome) : FeM UInt256 := do
   if v5 then
     let v7 ← MemBuffer_ptr returndata
     let v9 ← MemBuffer_len returndata
-    let v10 := v9
-    let v11 ← revertData v7 v10
+    let v11 ← revertData v7 v9
     nomatch v11
   else
     let v15 ← MemBuffer_span_ref returndata
@@ -2882,14 +2853,12 @@ def keccak_words_2 (words : (Vector UInt256 2)) : FeM UInt256 := do
 
 /-- `std::evm::effects::read_transient_word<Evm>` -/
 def read_transient_word_Evm (slot : UInt256) : FeM UInt256 := do
-  let v2 := slot
-  let v3 ← load (Place.mk .transient v2)
+  let v3 ← load (Place.mk .transient slot)
   return v3
 
 /-- `std::evm::effects::storage_at<Evm, u256>`, its `mut` body -/
 def storage_at_mut_Evm_u256 (slot : UInt256) : FeM Place := do
-  let v1 := slot
-  let v2 := (Place.mk .storage v1)
+  let v2 := (Place.mk .storage slot)
   return v2
 
 /-- `<Address as Encode>::encode` -/
@@ -3096,8 +3065,7 @@ def «assert» (condition : Bool) : FeM Unit := do
 
 /-- `<u128 as IntWord>::to_word` -/
 def u128_to_word (self : UInt256) : FeM UInt256 := do
-  let v2 := self
-  return v2
+  return self
 
 /-- `<u128 as IntDowncast>::downcast_truncate` -/
 def downcast_truncate_u128_u64 (self : UInt256) : FeM UInt256 := do
@@ -3170,8 +3138,7 @@ def downcast_truncate_u64_i64 (self : UInt256) : FeM UInt256 := do
 
 /-- `<i64 as IntWord>::to_word` -/
 def i64_to_word (self : UInt256) : FeM UInt256 := do
-  let v2 := self
-  let v3 := v2
+  let v3 := self
   return v3
 
 /-- `<i64 as IntDowncast>::downcast_truncate` -/
@@ -3194,8 +3161,7 @@ def downcast_truncate_i64_u64 (self : UInt256) : FeM UInt256 := do
 
 /-- `<i128 as IntWord>::to_word` -/
 def i128_to_word (self : UInt256) : FeM UInt256 := do
-  let v2 := self
-  let v3 := v2
+  let v3 := self
   return v3
 
 /-- `<i128 as IntDowncast>::downcast_truncate` -/
@@ -3605,8 +3571,7 @@ def Evm_calldatasize : FeM UInt256 := do
 def prepare_copy_destination (dest_0 : MemBuffer) (dest_offset : UInt256) (len : UInt256) : FeM (UInt256 × MemBuffer) := do
   let mut dest_0 := dest_0
   let v5 ← MemBuffer_capacity dest_0
-  let v6 := v5
-  let v7 := decide (v6.toNat < dest_offset.toNat)
+  let v7 := decide (v5.toNat < dest_offset.toNat)
   let join : MemBuffer → FeM (UInt256 × MemBuffer) := fun dest_0 => do
     let mut dest_0 := dest_0
     let v44 ← trap
@@ -3615,8 +3580,7 @@ def prepare_copy_destination (dest_0 : MemBuffer) (dest_offset : UInt256) (len :
     join dest_0
   else
     let v10 ← MemBuffer_capacity dest_0
-    let v11 := v10
-    let v13 ← checkedSub v11 dest_offset
+    let v13 ← checkedSub v10 dest_offset
     let v14 := decide (v13.toNat < len.toNat)
     if v14 then
       join dest_0
@@ -3633,15 +3597,13 @@ def prepare_copy_destination (dest_0 : MemBuffer) (dest_offset : UInt256) (len :
         join_1 dest_0
       if v19 then
         let v22 ← MemBuffer_len dest_0
-        let v23 := v22
-        let v24 := decide (v23.toNat < dest_offset.toNat)
+        let v24 := decide (v22.toNat < dest_offset.toNat)
         if v24 then
           let v26 ← MemBuffer_ptr dest_0
           let v28 ← MemBuffer_len dest_0
           let v29 := v26 + v28
           let v32 ← MemBuffer_len dest_0
-          let v33 := v32
-          let v34 ← checkedSub dest_offset v33
+          let v34 ← checkedSub dest_offset v32
           let v35 ← downcast_unchecked_u256_usize v34
           let _ ← zero_bytes v29 v35
           join_1 dest_0
@@ -3696,8 +3658,7 @@ def MemSlice_u8_value_ptr_u64 (self : MemSlice_u8) (offset : UInt256) : FeM UInt
 
 /-- `core::ptr::cast<u8, u64>` -/
 def cast_u8_u64 (ptr : UInt256) : FeM UInt256 := do
-  let v2 := ptr
-  return v2
+  return ptr
 
 /-- `MemSlice<u8>::read_le<u64>` -/
 def MemSlice_u8_read_le_u64 (self : MemSlice_u8) (offset : UInt256) : FeM UInt256 := do
@@ -3817,8 +3778,7 @@ def MemBuffer_write_word (self : MemBuffer) (offset : UInt256) (value : UInt256)
 def Evm_revert (data : MemSlice_u8) : FeM Empty := do
   let v2 ← MemSlice_ptr_u8 data
   let v3 ← MemSlice_len_u8 data
-  let v4 := v3
-  let v5 ← revertData v2 v4
+  let v5 ← revertData v2 v3
   nomatch v5
 
 structure Range_Known_0_Known_8 where
@@ -4092,8 +4052,7 @@ def try_alloc_bytes (len : UInt256) : FeM Option_u8 := do
     return v5
   else
     let ptr ← alloc len
-    let v10 := ptr
-    let v12 := decide (v10 = (UInt256.ofNat 0))
+    let v12 := decide (ptr = (UInt256.ofNat 0))
     let join : Option_u8 → FeM Option_u8 := fun v1 => do
       return v1
     if v12 then
@@ -4238,8 +4197,7 @@ def MemArray_try_new_uninit_u64 (len : UInt256) : FeM Option_MemArray_u64 := do
 
 /-- `core::ptr::cast<u64, u8>` -/
 def cast_u64_u8 (ptr : UInt256) : FeM UInt256 := do
-  let v2 := ptr
-  return v2
+  return ptr
 
 /-- `MemArray<u64>::byte_len` -/
 def MemArray_byte_len_u64 (self : MemArray_u64) : FeM UInt256 := do
@@ -4304,7 +4262,6 @@ def drop_in_place_n_u64 (ptr : UInt256) (len : UInt256) : FeM Unit := do
 /-- `core::ptr::dealloc<u64>` -/
 def dealloc_u64 (ptr : UInt256) : FeM Unit := do
   let _ ← cast_u64_u8 ptr
-  let v2 := ()
   return ()
 
 /-- `<MemArray<u64> as Drop>::drop` -/
@@ -4653,8 +4610,7 @@ deriving Inhabited
 
 /-- `core::ptr::cast<u8, ChunkPair>` -/
 def cast_u8_ChunkPair (ptr : UInt256) : FeM UInt256 := do
-  let v2 := ptr
-  return v2
+  return ptr
 
 /-- `core::ptr::alloc<ChunkPair>` -/
 def alloc_ChunkPair : FeM UInt256 := do
@@ -4676,8 +4632,7 @@ def alloc_pair (left : UInt256) (right : UInt256) : FeM UInt256 := do
 
 /-- `core::ptr::cast<ChunkPair, u8>` -/
 def cast_ChunkPair_u8 (ptr : UInt256) : FeM UInt256 := do
-  let v2 := ptr
-  return v2
+  return ptr
 
 /-- `core::ptr::byte_ptr<ChunkPair>` -/
 def byte_ptr_ChunkPair (ptr : UInt256) : FeM UInt256 := do
@@ -4844,8 +4799,21 @@ def Bytes_word_at (self : Bytes) (offset : UInt256) : FeM UInt256 := do
     let v13 ← readPaddedWord v9 v12
     return v13
 
-def u64_chunk_k1 (v22 : UInt256) (v : UInt256) : FeM UInt256 := do
-  let mut v := v
+/-- `std::evm::ssz::u64_chunk` -/
+def u64_chunk (value : UInt256) : FeM UInt256 := do
+  let mut v : UInt256 := default
+  let v_3 := value
+  v := v_3
+  let v_4 := v
+  let v7 := v_4 &&& (UInt256.ofNat 71777214294589695)
+  let v9 := v7 <<< (UInt256.ofNat 8)
+  let v_10 := v
+  let v13 := v_10 >>> (UInt256.ofNat 8)
+  let v15 := v13 &&& (UInt256.ofNat 71777214294589695)
+  let v_16 := v9 ||| v15
+  v := v_16
+  let v_19 := v
+  let v22 := v_19 &&& (UInt256.ofNat 281470681808895)
   let v24 := v22 <<< (UInt256.ofNat 16)
   let v_25 := v
   let v28 := v_25 >>> (UInt256.ofNat 16)
@@ -4859,23 +4827,6 @@ def u64_chunk_k1 (v22 : UInt256) (v : UInt256) : FeM UInt256 := do
   let v42 := v37 ||| v41
   let v44 := v42 <<< (UInt256.ofNat 192)
   return v44
-
-/-- `std::evm::ssz::u64_chunk` -/
-def u64_chunk (value : UInt256) : FeM UInt256 := do
-  let mut v : UInt256 := default
-  let v_2 := value
-  v := v_2
-  let v_4 := v
-  let v7 := v_4 &&& (UInt256.ofNat 71777214294589695)
-  let v9 := v7 <<< (UInt256.ofNat 8)
-  let v_10 := v
-  let v13 := v_10 >>> (UInt256.ofNat 8)
-  let v15 := v13 &&& (UInt256.ofNat 71777214294589695)
-  let v_16 := v9 ||| v15
-  v := v_16
-  let v_19 := v
-  let v22 := v_19 &&& (UInt256.ofNat 281470681808895)
-  u64_chunk_k1 v22 v
 
 /-- `<ByteVector<96> as HashTreeRoot>::hash_tree_root` -/
 def ByteVector_96_hash_tree_root (input : MemSlice_u8) (start : UInt256) (len : UInt256) : FeM UInt256 := do
@@ -4947,11 +4898,9 @@ def Bytes_from_word_prefix (word : UInt256) (len : UInt256) : FeM Bytes := do
       return v11
     else
       let data ← alloc_bytes (UInt256.ofNat 64)
-      let v19 := len
-      let v20 ← checkedSub (UInt256.ofNat 32) v19
+      let v20 ← checkedSub (UInt256.ofNat 32) len
       let shift ← checkedMul v20 (UInt256.ofNat 8)
-      let v25 := len
-      let _ ← store_word data v25
+      let _ ← store_word data len
       let v28 := data + (UInt256.ofNat 32)
       let v30 := word >>> shift
       let v31 := v30 <<< shift
@@ -5073,20 +5022,6 @@ def encode_field_Sol_Bytes (value : Bytes) (out : AbiFrame) (head_pos : UInt256)
     let tails_24 := tails
     return tails_24
 
-def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes_k1 (self : (Bytes × Bytes × Bytes × Bytes × Bytes)) (out : AbiFrame) (head1 : UInt256) (head2 : UInt256) (head3 : UInt256) (head4 : UInt256) (tails_28 : AbiFrame) (tails : AbiFrame) : FeM Unit := do
-  let mut tails := tails
-  let tails_31 ← encode_field_Sol_Bytes self.snd.fst out head1 tails_28
-  tails := tails_31
-  let tails_34 := tails
-  let tails_37 ← encode_field_Sol_Bytes self.snd.snd.fst out head2 tails_34
-  tails := tails_37
-  let tails_40 := tails
-  let tails_43 ← encode_field_Sol_Bytes self.snd.snd.snd.fst out head3 tails_40
-  tails := tails_43
-  let tails_46 := tails
-  let _ ← encode_field_Sol_Bytes self.snd.snd.snd.snd out head4 tails_46
-  return ()
-
 /-- `<(Bytes, Bytes, Bytes, Bytes, Bytes) as Encode>::encode` -/
 def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes (self : (Bytes × Bytes × Bytes × Bytes × Bytes)) (out : AbiFrame) : FeM Unit := do
   let mut tails : AbiFrame := default
@@ -5104,7 +5039,17 @@ def tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes (self : (Bytes × Bytes × By
   let tails_25 ← encode_field_Sol_Bytes self.fst out (UInt256.ofNat 0) tails_22
   tails := tails_25
   let tails_28 := tails
-  tuple_encode_Sol_Bytes_Bytes_Bytes_Bytes_Bytes_k1 self out head1 head2 head3 head4 tails_28 tails
+  let tails_31 ← encode_field_Sol_Bytes self.snd.fst out head1 tails_28
+  tails := tails_31
+  let tails_34 := tails
+  let tails_37 ← encode_field_Sol_Bytes self.snd.snd.fst out head2 tails_34
+  tails := tails_37
+  let tails_40 := tails
+  let tails_43 ← encode_field_Sol_Bytes self.snd.snd.snd.fst out head3 tails_40
+  tails := tails_43
+  let tails_46 := tails
+  let _ ← encode_field_Sol_Bytes self.snd.snd.snd.snd out head4 tails_46
+  return ()
 
 /-- `<Bytes as Drop>::drop` -/
 def Bytes_drop (self : Bytes) : FeM Unit := do
@@ -5142,8 +5087,7 @@ def encode_abi_payload_tuple_Bytes_Bytes_Bytes_Bytes_Bytes (value : (Bytes × By
 def Evm_log1 (data : MemSlice_u8) (topic0 : UInt256) : FeM Unit := do
   let v3 ← MemSlice_ptr_u8 data
   let v4 ← MemSlice_len_u8 data
-  let v5 := v4
-  let _ ← logData v3 v5 #[topic0]
+  let _ ← logData v3 v4 #[topic0]
   return ()
 
 /-- `std::evm::ssz::mix_in_length` -/
@@ -5172,8 +5116,7 @@ def abi_field_head_size_FixedBytes_32 : FeM UInt256 := do
 /-- `core::abi::MAX_PAYLOAD_LEN` -/
 def MAX_PAYLOAD_LEN : FeM UInt256 := do
   let v0 ← MAX_ALLOCATION
-  let v1 := v0
-  let v3 ← checkedSub v1 (UInt256.ofNat 31)
+  let v3 ← checkedSub v0 (UInt256.ofNat 31)
   return v3
 
 /-- `core::abi::checked_dynamic_payload_after_head<Sol, CallData>` -/
@@ -5335,8 +5278,7 @@ def decode_fixed_bytes_word (word : UInt256) (len : UInt256) : FeM UInt256 := do
 /-- `<FixedBytes<32> as Decode>::decode_from<CallData>` -/
 def FixedBytes_decode_from_Sol_32_CallData (input : CallData) (pos : UInt256) : FeM FixedBytes_32 := do
   let v2 ← CallData_word_at input pos
-  let v4 := (UInt256.ofNat 32)
-  let v5 ← decode_fixed_bytes_word v2 v4
+  let v5 ← decode_fixed_bytes_word v2 (UInt256.ofNat 32)
   let v6 := (FixedBytes_32.mk v5)
   return v6
 
@@ -5543,8 +5485,7 @@ def abi_field_head_size_FixedBytes_4 : FeM UInt256 := do
 /-- `<FixedBytes<4> as Decode>::decode_from<CallData>` -/
 def FixedBytes_decode_from_Sol_4_CallData (input : CallData) (pos : UInt256) : FeM FixedBytes_4 := do
   let v2 ← CallData_word_at input pos
-  let v4 := (UInt256.ofNat 4)
-  let v5 ← decode_fixed_bytes_word v2 v4
+  let v5 ← decode_fixed_bytes_word v2 (UInt256.ofNat 4)
   let v6 := (FixedBytes_4.mk v5)
   return v6
 

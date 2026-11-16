@@ -1176,6 +1176,9 @@ impl<'db> Module<'db> {
             dropped: FxHashSet::default(),
             roots: Vec::new(),
             effect_names: FxHashMap::default(),
+            uses: Vec::new(),
+            held_values: FxHashSet::default(),
+            copied: Vec::new(),
         }
         .export();
         let refs = self.end(depth);
@@ -2946,6 +2949,13 @@ struct BodyExporter<'a, 'db> {
     /// The name the body gives each effect, by provider: its effect
     /// parameter's, or its contract field's.
     effect_names: FxHashMap<u32, String>,
+    /// The number of uses of each value, and where the last is: the block,
+    /// and the statement or, past them, the terminator.
+    uses: Vec<(usize, Option<(NBlockId, usize)>)>,
+    /// The values a place holds, which stay values of their own.
+    held_values: FxHashSet<NValueId>,
+    /// The value each copy copies.
+    copied: Vec<Option<NValueId>>,
 }
 
 impl<'db> BodyExporter<'_, 'db> {
@@ -2985,8 +2995,9 @@ impl<'db> BodyExporter<'_, 'db> {
             .map(|value| source(value.source))
             .collect();
         // A copy of a value that holds no access is the value it copies,
-        // which takes the copy's name if it has none. A copy that names a
-        // value anew keeps its own variable.
+        // which takes the copy's name if it has none: a forward, a pointer
+        // cast, or a scalar cast that leaves the word as it is. A copy that
+        // names a value anew keeps its own variable.
         let statements = || {
             self.body
                 .reverse_postorder()
@@ -2995,11 +3006,19 @@ impl<'db> BodyExporter<'_, 'db> {
         };
         let mut copied: Vec<Option<NValueId>> = vec![None; values.len()];
         for statement in statements() {
-            if let NStatementKind::Define {
-                result,
-                expr: NExpr::Forward { src },
-            } = &statement.kind
-            {
+            let NStatementKind::Define { result, expr } = &statement.kind else {
+                continue;
+            };
+            let src = match expr {
+                NExpr::Forward { src } | NExpr::PointerCast { value: src, .. } => Some(src),
+                NExpr::ScalarCast { value, to } => self
+                    .module
+                    .cast("x", self.ty(value.value), *to)
+                    .is_ok_and(|cast| cast == "x")
+                    .then_some(value),
+                _ => None,
+            };
+            if let Some(src) = src {
                 let original = copied[src.value.index()].unwrap_or(src.value);
                 let (name, copy) = (&values[original.index()], &values[result.index()]);
                 if self.access_parts(self.ty(original)).is_empty()
@@ -3011,32 +3030,38 @@ impl<'db> BodyExporter<'_, 'db> {
                 }
             }
         }
-        // The uses of each value, a copy's as the original's.
-        let mut uses = vec![0; values.len()];
-        let mut used = |value: NValueId| {
-            uses[copied[value.index()].unwrap_or(value).index()] += 1;
+        // The uses of each value, a copy's as the original's, and where its
+        // last use is: the block, and the statement or, past them, the
+        // terminator.
+        let mut uses = vec![(0, None); values.len()];
+        let mut used = |value: NValueId, at: (NBlockId, usize)| {
+            let (count, last) = &mut uses[copied[value.index()].unwrap_or(value).index()];
+            *count += 1;
+            *last = Some(at);
         };
-        for block in &self.body.blocks {
-            for statement in &block.statements {
+        for (index, block) in self.body.blocks.iter().enumerate() {
+            let id = NBlockId::new(index);
+            for (position, statement) in block.statements.iter().enumerate() {
+                let at = (id, position);
                 let mut places = Vec::new();
                 match &statement.kind {
                     NStatementKind::Define { result, expr } => {
                         if copied[result.index()].is_none() {
-                            expr.for_each_value_operand(|operand| used(operand.value));
+                            expr.for_each_value_operand(|operand| used(operand.value, at));
                         }
                         if let NExpr::ProjectValue { path, .. } = expr {
                             for step in path.0.iter() {
                                 if let NDataProjection::Index(NIndex::Value(value))
                                 | NDataProjection::Entry(value) = step
                                 {
-                                    used(*value);
+                                    used(*value, at);
                                 }
                             }
                         }
                         expr.for_each_place_operand(|place| places.push(place.clone()));
                     }
                     NStatementKind::Store { destination, value } => {
-                        used(value.value);
+                        used(value.value, at);
                         places.push(destination.clone());
                     }
                     NStatementKind::End { access: value }
@@ -3046,25 +3071,30 @@ impl<'db> BodyExporter<'_, 'db> {
                     }
                     | NStatementKind::Drop {
                         target: NDropTarget::Value(value),
-                    } => used(*value),
+                    } => used(*value, at),
                     NStatementKind::Drop {
                         target: NDropTarget::Place(place),
                     } => places.push(place.clone()),
                     NStatementKind::CheckIndex { .. } => {}
                 }
                 for place in &places {
-                    self.body.place_values(place).for_each(&mut used);
+                    self.body
+                        .place_values(place)
+                        .for_each(|value| used(value, at));
                 }
             }
+            let at = (id, block.statements.len());
             let terminator = &block.terminator.kind;
             let tested = match terminator {
                 NTerminatorKind::Branch { cond, .. } => Some(*cond),
                 NTerminatorKind::MatchEnum { value, .. } => Some(*value),
                 _ => terminator.returned(),
             };
-            tested.into_iter().for_each(|operand| used(operand.value));
+            tested
+                .into_iter()
+                .for_each(|operand| used(operand.value, at));
             for successor in terminator.successors() {
-                successor.args.iter().for_each(|arg| used(arg.value));
+                successor.args.iter().for_each(|arg| used(arg.value, at));
             }
         }
         // A unit constant, or a scalar one used once at most, is the
@@ -3091,7 +3121,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let literal = match value {
                     SemConstValue::Unit => true,
                     SemConstValue::Scalar { ty, .. } => {
-                        uses[result.index()] <= 1 && !ty.is_core_dyn_string(db)
+                        uses[result.index()].0 <= 1 && !ty.is_core_dyn_string(db)
                     }
                     _ => false,
                 };
@@ -3159,13 +3189,15 @@ impl<'db> BodyExporter<'_, 'db> {
             self.names[value.index()] = term;
             self.dropped.insert(value);
         }
-        for (index, original) in copied.into_iter().enumerate() {
+        self.uses = uses;
+        self.held_values = held;
+        for (index, original) in copied.iter().enumerate() {
             if let Some(original) = original {
-                self.names[index] = self.names[original.index()].clone();
                 self.bases[index] = self.bases[original.index()].clone();
                 self.dropped.insert(NValueId::new(index));
             }
         }
+        self.copied = copied;
         self.effect_names = self
             .body
             .roots
@@ -3664,7 +3696,10 @@ impl<'db> BodyExporter<'_, 'db> {
             printed.push((start, None));
         }
         for statement in &data.statements {
-            let text = self.statement(statement)?;
+            let text = match (&statement.kind, self.statement(statement)?) {
+                (NStatementKind::Define { result, .. }, Some(text)) => self.fold(*result, text),
+                (_, text) => text,
+            };
             let located = std::mem::take(&mut self.located);
             let lines = located.iter().chain(&text).flat_map(|text| text.lines());
             let mut text: String = lines.map(|line| format!("{pad}{line}\n")).collect();
@@ -3672,7 +3707,9 @@ impl<'db> BodyExporter<'_, 'db> {
                 self.flag_updates(DropFlagPoint::After(statement.id)),
             ));
             let defined = match statement.kind {
-                NStatementKind::Define { result, .. } => Some(result),
+                NStatementKind::Define { result, .. } if !self.dropped.contains(&result) => {
+                    Some(result)
+                }
                 _ => None,
             };
             if !text.is_empty() {
@@ -4054,6 +4091,19 @@ impl<'db> BodyExporter<'_, 'db> {
         )
         .unwrap();
         Ok(())
+    }
+
+    /// `text`, the definition of `value`, unless the definition binds a
+    /// pure term in one line and nothing uses the value.
+    fn fold(&mut self, value: NValueId, text: String) -> Option<String> {
+        let pure = text
+            .strip_prefix(&format!("let {} := ", self.value(value)))
+            .is_some_and(|term| !term.contains(['\n', '←']) && !term.contains("--"));
+        if !pure || self.held_values.contains(&value) || self.uses[value.index()].0 > 0 {
+            return Some(text);
+        }
+        self.dropped.insert(value);
+        None
     }
 
     /// The lines of `statement`, if it prints any.
@@ -5128,8 +5178,10 @@ impl<'db> BodyExporter<'_, 'db> {
         )
     }
 
-    /// The Lean term for `value`: its variable.
+    /// The Lean term for `value`: its variable, or the original's for a
+    /// copy.
     fn value(&self, value: NValueId) -> String {
+        let value = self.copied[value.index()].unwrap_or(value);
         self.names[value.index()].clone()
     }
 

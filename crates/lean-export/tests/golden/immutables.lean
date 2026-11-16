@@ -58,8 +58,7 @@ def recv_Limit : FeM UInt256 := do
   if v1 then
     let v2 := config.limit
     let v3 := config.small
-    let v4 := v3
-    let v5 ← checkedAdd v2 v4
+    let v5 ← checkedAdd v2 v3
     join v5
   else
     join (UInt256.ofNat 0)

@@ -53,13 +53,11 @@ def long_k1 (x : UInt256) : FeM UInt256 := do
   let v3 ← checkedAdd x (UInt256.ofNat 2)
   return v3
 
-def long_k9 (v216 : UInt256) : FeM UInt256 := do
-  let a43 ← checkedAdd v216 (UInt256.ofNat 43)
-  let v221 ← checkedMul a43 (UInt256.ofNat 3)
-  let a44 ← checkedAdd v221 (UInt256.ofNat 44)
-  return a44
-
-def long_k8 (v191 : UInt256) : FeM UInt256 := do
+def long_k3 (v181 : UInt256) : FeM UInt256 := do
+  let a36 ← checkedAdd v181 (UInt256.ofNat 36)
+  let v186 ← checkedMul a36 (UInt256.ofNat 3)
+  let a37 ← checkedAdd v186 (UInt256.ofNat 37)
+  let v191 ← checkedMul a37 (UInt256.ofNat 3)
   let a38 ← checkedAdd v191 (UInt256.ofNat 38)
   let v196 ← checkedMul a38 (UInt256.ofNat 3)
   let a39 ← checkedAdd v196 (UInt256.ofNat 39)
@@ -70,21 +68,21 @@ def long_k8 (v191 : UInt256) : FeM UInt256 := do
   let v211 ← checkedMul a41 (UInt256.ofNat 3)
   let a42 ← checkedAdd v211 (UInt256.ofNat 42)
   let v216 ← checkedMul a42 (UInt256.ofNat 3)
-  long_k9 v216
+  let a43 ← checkedAdd v216 (UInt256.ofNat 43)
+  let v221 ← checkedMul a43 (UInt256.ofNat 3)
+  let a44 ← checkedAdd v221 (UInt256.ofNat 44)
+  return a44
 
-def long_k7 (a33 : UInt256) : FeM UInt256 := do
-  let v171 ← checkedMul a33 (UInt256.ofNat 3)
-  let a34 ← checkedAdd v171 (UInt256.ofNat 34)
-  let v176 ← checkedMul a34 (UInt256.ofNat 3)
-  let a35 ← checkedAdd v176 (UInt256.ofNat 35)
-  let v181 ← checkedMul a35 (UInt256.ofNat 3)
-  let a36 ← checkedAdd v181 (UInt256.ofNat 36)
-  let v186 ← checkedMul a36 (UInt256.ofNat 3)
-  let a37 ← checkedAdd v186 (UInt256.ofNat 37)
-  let v191 ← checkedMul a37 (UInt256.ofNat 3)
-  long_k8 v191
-
-def long_k6 (a28 : UInt256) : FeM UInt256 := do
+def long_k2 (v121 : UInt256) : FeM UInt256 := do
+  let a24 ← checkedAdd v121 (UInt256.ofNat 24)
+  let v126 ← checkedMul a24 (UInt256.ofNat 3)
+  let a25 ← checkedAdd v126 (UInt256.ofNat 25)
+  let v131 ← checkedMul a25 (UInt256.ofNat 3)
+  let a26 ← checkedAdd v131 (UInt256.ofNat 26)
+  let v136 ← checkedMul a26 (UInt256.ofNat 3)
+  let a27 ← checkedAdd v136 (UInt256.ofNat 27)
+  let v141 ← checkedMul a27 (UInt256.ofNat 3)
+  let a28 ← checkedAdd v141 (UInt256.ofNat 28)
   let v146 ← checkedMul a28 (UInt256.ofNat 3)
   let a29 ← checkedAdd v146 (UInt256.ofNat 29)
   let v151 ← checkedMul a29 (UInt256.ofNat 3)
@@ -95,34 +93,18 @@ def long_k6 (a28 : UInt256) : FeM UInt256 := do
   let a32 ← checkedAdd v161 (UInt256.ofNat 32)
   let v166 ← checkedMul a32 (UInt256.ofNat 3)
   let a33 ← checkedAdd v166 (UInt256.ofNat 33)
-  long_k7 a33
+  let v171 ← checkedMul a33 (UInt256.ofNat 3)
+  let a34 ← checkedAdd v171 (UInt256.ofNat 34)
+  let v176 ← checkedMul a34 (UInt256.ofNat 3)
+  let a35 ← checkedAdd v176 (UInt256.ofNat 35)
+  let v181 ← checkedMul a35 (UInt256.ofNat 3)
+  long_k3 v181
 
-def long_k5 (a23 : UInt256) : FeM UInt256 := do
-  let v121 ← checkedMul a23 (UInt256.ofNat 3)
-  let a24 ← checkedAdd v121 (UInt256.ofNat 24)
-  let v126 ← checkedMul a24 (UInt256.ofNat 3)
-  let a25 ← checkedAdd v126 (UInt256.ofNat 25)
-  let v131 ← checkedMul a25 (UInt256.ofNat 3)
-  let a26 ← checkedAdd v131 (UInt256.ofNat 26)
-  let v136 ← checkedMul a26 (UInt256.ofNat 3)
-  let a27 ← checkedAdd v136 (UInt256.ofNat 27)
-  let v141 ← checkedMul a27 (UInt256.ofNat 3)
-  let a28 ← checkedAdd v141 (UInt256.ofNat 28)
-  long_k6 a28
-
-def long_k4 (v96 : UInt256) : FeM UInt256 := do
-  let a19 ← checkedAdd v96 (UInt256.ofNat 19)
-  let v101 ← checkedMul a19 (UInt256.ofNat 3)
-  let a20 ← checkedAdd v101 (UInt256.ofNat 20)
-  let v106 ← checkedMul a20 (UInt256.ofNat 3)
-  let a21 ← checkedAdd v106 (UInt256.ofNat 21)
-  let v111 ← checkedMul a21 (UInt256.ofNat 3)
-  let a22 ← checkedAdd v111 (UInt256.ofNat 22)
-  let v116 ← checkedMul a22 (UInt256.ofNat 3)
-  let a23 ← checkedAdd v116 (UInt256.ofNat 23)
-  long_k5 a23
-
-def long_k3 (v71 : UInt256) : FeM UInt256 := do
+def long_k1_1 (v61 : UInt256) : FeM UInt256 := do
+  let a12 ← checkedAdd v61 (UInt256.ofNat 12)
+  let v66 ← checkedMul a12 (UInt256.ofNat 3)
+  let a13 ← checkedAdd v66 (UInt256.ofNat 13)
+  let v71 ← checkedMul a13 (UInt256.ofNat 3)
   let a14 ← checkedAdd v71 (UInt256.ofNat 14)
   let v76 ← checkedMul a14 (UInt256.ofNat 3)
   let a15 ← checkedAdd v76 (UInt256.ofNat 15)
@@ -133,32 +115,17 @@ def long_k3 (v71 : UInt256) : FeM UInt256 := do
   let v91 ← checkedMul a17 (UInt256.ofNat 3)
   let a18 ← checkedAdd v91 (UInt256.ofNat 18)
   let v96 ← checkedMul a18 (UInt256.ofNat 3)
-  long_k4 v96
-
-def long_k2 (a9 : UInt256) : FeM UInt256 := do
-  let v51 ← checkedMul a9 (UInt256.ofNat 3)
-  let a10 ← checkedAdd v51 (UInt256.ofNat 10)
-  let v56 ← checkedMul a10 (UInt256.ofNat 3)
-  let a11 ← checkedAdd v56 (UInt256.ofNat 11)
-  let v61 ← checkedMul a11 (UInt256.ofNat 3)
-  let a12 ← checkedAdd v61 (UInt256.ofNat 12)
-  let v66 ← checkedMul a12 (UInt256.ofNat 3)
-  let a13 ← checkedAdd v66 (UInt256.ofNat 13)
-  let v71 ← checkedMul a13 (UInt256.ofNat 3)
-  long_k3 v71
-
-def long_k1_1 (a4 : UInt256) : FeM UInt256 := do
-  let v26 ← checkedMul a4 (UInt256.ofNat 3)
-  let a5 ← checkedAdd v26 (UInt256.ofNat 5)
-  let v31 ← checkedMul a5 (UInt256.ofNat 3)
-  let a6 ← checkedAdd v31 (UInt256.ofNat 6)
-  let v36 ← checkedMul a6 (UInt256.ofNat 3)
-  let a7 ← checkedAdd v36 (UInt256.ofNat 7)
-  let v41 ← checkedMul a7 (UInt256.ofNat 3)
-  let a8 ← checkedAdd v41 (UInt256.ofNat 8)
-  let v46 ← checkedMul a8 (UInt256.ofNat 3)
-  let a9 ← checkedAdd v46 (UInt256.ofNat 9)
-  long_k2 a9
+  let a19 ← checkedAdd v96 (UInt256.ofNat 19)
+  let v101 ← checkedMul a19 (UInt256.ofNat 3)
+  let a20 ← checkedAdd v101 (UInt256.ofNat 20)
+  let v106 ← checkedMul a20 (UInt256.ofNat 3)
+  let a21 ← checkedAdd v106 (UInt256.ofNat 21)
+  let v111 ← checkedMul a21 (UInt256.ofNat 3)
+  let a22 ← checkedAdd v111 (UInt256.ofNat 22)
+  let v116 ← checkedMul a22 (UInt256.ofNat 3)
+  let a23 ← checkedAdd v116 (UInt256.ofNat 23)
+  let v121 ← checkedMul a23 (UInt256.ofNat 3)
+  long_k2 v121
 
 /-- `names::long` -/
 def long (x : UInt256) : FeM UInt256 := do
@@ -171,7 +138,22 @@ def long (x : UInt256) : FeM UInt256 := do
   let a3 ← checkedAdd v16 (UInt256.ofNat 3)
   let v21 ← checkedMul a3 (UInt256.ofNat 3)
   let a4 ← checkedAdd v21 (UInt256.ofNat 4)
-  long_k1_1 a4
+  let v26 ← checkedMul a4 (UInt256.ofNat 3)
+  let a5 ← checkedAdd v26 (UInt256.ofNat 5)
+  let v31 ← checkedMul a5 (UInt256.ofNat 3)
+  let a6 ← checkedAdd v31 (UInt256.ofNat 6)
+  let v36 ← checkedMul a6 (UInt256.ofNat 3)
+  let a7 ← checkedAdd v36 (UInt256.ofNat 7)
+  let v41 ← checkedMul a7 (UInt256.ofNat 3)
+  let a8 ← checkedAdd v41 (UInt256.ofNat 8)
+  let v46 ← checkedMul a8 (UInt256.ofNat 3)
+  let a9 ← checkedAdd v46 (UInt256.ofNat 9)
+  let v51 ← checkedMul a9 (UInt256.ofNat 3)
+  let a10 ← checkedAdd v51 (UInt256.ofNat 10)
+  let v56 ← checkedMul a10 (UInt256.ofNat 3)
+  let a11 ← checkedAdd v56 (UInt256.ofNat 11)
+  let v61 ← checkedMul a11 (UInt256.ofNat 3)
+  long_k1_1 v61
 
 /-- `Run { x } -> u256`, selector `0xa444f5e9` (`run(uint256)`) -/
 def recv_Run (x : UInt256) : FeM UInt256 := do

@@ -6,8 +6,7 @@ def init : FeM Unit := do
 
 /-- `core::ptr::cast<u8, Cell>` -/
 def cast_u8_Cell (ptr : UInt256) : FeM UInt256 := do
-  let v2 := ptr
-  return v2
+  return ptr
 
 /-- `core::ptr::alloc<Cell>` -/
 def alloc_Cell : FeM UInt256 := do

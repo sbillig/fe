@@ -216,25 +216,42 @@ def Mont_neg_Bn254Base (self : Mont_Bn254Base) : FeM Mont_Bn254Base := do
   let v3 ← Mont_sub_Bn254Base r0 self
   return v3
 
-def multiply_g1_k1 (point : Point_Mont_Bn254Base) (c1 : UInt256) (c2 : UInt256) (v29 : (UInt256 × Bool)) (x1 : Mont_Bn254Base) (y1 : Mont_Bn254Base) (x2 : Mont_Bn254Base) (y2 : Mont_Bn254Base) (x3 : Mont_Bn254Base) (y3 : Mont_Bn254Base) (result : Point_Mont_Bn254Base) (bit : UInt256) (r8 : Mont_Bn254Base) (r9 : Mont_Bn254Base) (r10 : Mont_Bn254Base) (r11 : Mont_Bn254Base) (r12 : Point_Mont_Bn254Base) (r13 : Point_Mont_Bn254Base) (r14 : Point_Mont_Bn254Base) (r15 : Point_Mont_Bn254Base) (r16 : Point_Mont_Bn254Base) (r17 : Point_Mont_Bn254Base) : FeM Point_Mont_Bn254Base := do
-  let mut x1 := x1
-  let mut y1 := y1
-  let mut x2 := x2
-  let mut y2 := y2
-  let mut x3 := x3
-  let mut y3 := y3
-  let mut result := result
-  let mut bit := bit
-  let mut r8 := r8
-  let mut r9 := r9
-  let mut r10 := r10
-  let mut r11 := r11
-  let mut r12 := r12
-  let mut r13 := r13
-  let mut r14 := r14
-  let mut r15 := r15
-  let mut r16 := r16
-  let mut r17 := r17
+/-- `lib::bn254::multiply_g1` -/
+def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mont_Bn254Base := do
+  let mut x1 : Mont_Bn254Base := default
+  let mut y1 : Mont_Bn254Base := default
+  let mut x2 : Mont_Bn254Base := default
+  let mut y2 : Mont_Bn254Base := default
+  let mut x3 : Mont_Bn254Base := default
+  let mut y3 : Mont_Bn254Base := default
+  let mut result : Point_Mont_Bn254Base := default
+  let mut bit : UInt256 := default
+  let mut r8 : Mont_Bn254Base := default
+  let mut r9 : Mont_Bn254Base := default
+  let mut r10 : Mont_Bn254Base := default
+  let mut r11 : Mont_Bn254Base := default
+  let mut r12 : Point_Mont_Bn254Base := default
+  let mut r13 : Point_Mont_Bn254Base := default
+  let mut r14 : Point_Mont_Bn254Base := default
+  let mut r15 : Point_Mont_Bn254Base := default
+  let mut r16 : Point_Mont_Bn254Base := default
+  let mut r17 : Point_Mont_Bn254Base := default
+  let v7 ← ORDER
+  let k ← checkedRem scalar v7
+  let high := k >>> (UInt256.ofNat 128)
+  let v13 ← GLV_G1
+  let v14 ← checkedMul high v13
+  let c1 := v14 >>> (UInt256.ofNat 128)
+  let v18 ← GLV_G2
+  let v19 ← checkedMul high v18
+  let c2 := v19 >>> (UInt256.ofNat 128)
+  let v23 ← GLV_A1
+  let v24 ← checkedMul c1 v23
+  let v25 ← u256_wrapping_sub k v24
+  let v26 ← GLV_A2
+  let v27 ← checkedMul c2 v26
+  let v28 ← u256_wrapping_sub v25 v27
+  let v29 ← magnitude v28
   let k1 := v29.fst
   let negative1 := v29.snd
   let v34 ← GLV_B1
@@ -340,13 +357,11 @@ def multiply_g1_k1 (point : Point_Mont_Bn254Base) (c1 : UInt256) (c2 : UInt256) 
           let result_100 ← Point_double_Mont_Bn254Base r14
           result := result_100
           let bit_103 := bit
-          let v104 := bit_103
-          let v105 := k1 >>> v104
+          let v105 := k1 >>> bit_103
           let v107 := v105 &&& (UInt256.ofNat 1)
           let in1 := decide (v107 = (UInt256.ofNat 1))
           let bit_111 := bit
-          let v112 := bit_111
-          let v113 := k2 >>> v112
+          let v113 := k2 >>> bit_111
           let v115 := v113 &&& (UInt256.ofNat 1)
           let in2 := decide (v115 = (UInt256.ofNat 1))
           let join_2 : Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → UInt256 → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → FeM Point_Mont_Bn254Base := fun x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 => do
@@ -475,44 +490,6 @@ def multiply_g1_k1 (point : Point_Mont_Bn254Base) (c1 : UInt256) (c2 : UInt256) 
   else
     let v50 := point.y
     join x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v50
-
-/-- `lib::bn254::multiply_g1` -/
-def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mont_Bn254Base := do
-  let mut x1 : Mont_Bn254Base := default
-  let mut y1 : Mont_Bn254Base := default
-  let mut x2 : Mont_Bn254Base := default
-  let mut y2 : Mont_Bn254Base := default
-  let mut x3 : Mont_Bn254Base := default
-  let mut y3 : Mont_Bn254Base := default
-  let mut result : Point_Mont_Bn254Base := default
-  let mut bit : UInt256 := default
-  let mut r8 : Mont_Bn254Base := default
-  let mut r9 : Mont_Bn254Base := default
-  let mut r10 : Mont_Bn254Base := default
-  let mut r11 : Mont_Bn254Base := default
-  let mut r12 : Point_Mont_Bn254Base := default
-  let mut r13 : Point_Mont_Bn254Base := default
-  let mut r14 : Point_Mont_Bn254Base := default
-  let mut r15 : Point_Mont_Bn254Base := default
-  let mut r16 : Point_Mont_Bn254Base := default
-  let mut r17 : Point_Mont_Bn254Base := default
-  let v7 ← ORDER
-  let k ← checkedRem scalar v7
-  let high := k >>> (UInt256.ofNat 128)
-  let v13 ← GLV_G1
-  let v14 ← checkedMul high v13
-  let c1 := v14 >>> (UInt256.ofNat 128)
-  let v18 ← GLV_G2
-  let v19 ← checkedMul high v18
-  let c2 := v19 >>> (UInt256.ofNat 128)
-  let v23 ← GLV_A1
-  let v24 ← checkedMul c1 v23
-  let v25 ← u256_wrapping_sub k v24
-  let v26 ← GLV_A2
-  let v27 ← checkedMul c2 v26
-  let v28 ← u256_wrapping_sub v25 v27
-  let v29 ← magnitude v28
-  multiply_g1_k1 point c1 c2 v29 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17
 
 /-- `lib::bn254::mul<MemBuffer>` -/
 def mul_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do

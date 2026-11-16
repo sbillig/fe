@@ -82,14 +82,12 @@ def compute_deposit_data_root (pubkey : Bytes) (withdrawal_credentials : Bytes) 
   if v6 then
     let v8 ← Bytes_span_ref pubkey
     let v10 ← Bytes_len pubkey
-    let v11 := v10
-    let v13 ← hash_tree_root_ByteVector_48 v8 (UInt256.ofNat 0) v11
+    let v13 ← hash_tree_root_ByteVector_48 v8 (UInt256.ofNat 0) v10
     let v15 ← Bytes_word_at withdrawal_credentials (UInt256.ofNat 0)
     let v16 ← u64_chunk amount_gwei
     let v17 ← Bytes_span_ref signature
     let v19 ← Bytes_len signature
-    let v20 := v19
-    let v22 ← hash_tree_root_ByteVector_96 v17 (UInt256.ofNat 0) v20
+    let v22 ← hash_tree_root_ByteVector_96 v17 (UInt256.ofNat 0) v19
     let v23 := (v13, v15, v16, v22)
     r0 := v23
     let v25 ← tuple_u256_u256_u256_u256_merkleize r0
@@ -122,8 +120,7 @@ def emit_Evm_DepositEvent (event : DepositEvent) : FeM Unit := do
 /-- `deposit_contract::MAX_DEPOSIT_COUNT` -/
 def MAX_DEPOSIT_COUNT : FeM UInt256 := do
   let v1 ← DEPOSIT_CONTRACT_TREE_DEPTH
-  let v2 := v1
-  let v3 ← IntTy.pow (.u 256) (UInt256.ofNat 2) v2
+  let v3 ← IntTy.pow (.u 256) (UInt256.ofNat 2) v1
   let v5 ← checkedSub v3 (UInt256.ofNat 1)
   return v5
 

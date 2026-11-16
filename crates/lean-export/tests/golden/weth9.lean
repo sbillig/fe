@@ -144,8 +144,7 @@ def leading_bytes (word : UInt256) (count : UInt256) : FeM UInt256 := do
 
 /-- `lib::sol_string::payload_word` -/
 def payload_word (payload : MemSlice_u8) (offset : UInt256) : FeM UInt256 := do
-  let v2 ← MemSlice_len_u8 payload
-  let len := v2
+  let len ← MemSlice_len_u8 payload
   let v6 := decide (len.toNat ≤ offset.toNat)
   if v6 then
     return (UInt256.ofNat 0)
@@ -175,8 +174,7 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
     let mut words := words
     let mut i_r1 := i_r1
     let mut i_r2 := i_r2
-    let v19 ← MemSlice_len_u8 v3
-    let len := v19
+    let len ← MemSlice_len_u8 v3
     words := (UInt256.ofNat 0)
     let v25 := decide (len.toNat < (UInt256.ofNat 32).toNat)
     let join_1 : UInt256 → UInt256 → UInt256 → FeM Unit := fun words i_r1 i_r2 => do

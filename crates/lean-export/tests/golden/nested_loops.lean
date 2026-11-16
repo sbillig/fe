@@ -47,8 +47,7 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
             loop acc index started r3
           if v62 then
             let acc_63 := acc
-            let v65 := «end»
-            let acc_66 ← checkedAdd acc_63 v65
+            let acc_66 ← checkedAdd acc_63 «end»
             acc := acc_66
             started := true
             join_1 acc index started r3

@@ -43,8 +43,7 @@ def recv_Mixed (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let bits ← downcast_unchecked_u256_i256 wide
   let v9 := IntTy.shr (.i 256) a (UInt256.ofNat 2)
   let v11 ← IntTy.pow (.i 256) v9 (UInt256.ofNat 2)
-  let v12 := small
-  let v13 ← IntTy.add (.i 256) v11 v12
+  let v13 ← IntTy.add (.i 256) v11 small
   let v14 ← IntTy.add (.i 256) v13 bits
   let v15 := IntTy.not (.i 256) a
   let v16 ← IntTy.add (.i 256) v14 v15
