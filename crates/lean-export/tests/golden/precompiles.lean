@@ -27,7 +27,7 @@ deriving Inhabited
 
 inductive Option_PublicKey where
   | None
-  | Some (f0 : PublicKey)
+  | Some (f0_1 : PublicKey)
 deriving Inhabited
 
 def Option_PublicKey.tag : Option_PublicKey → UInt256
@@ -35,12 +35,12 @@ def Option_PublicKey.tag : Option_PublicKey → UInt256
   | .Some .. => UInt256.ofNat 1
 
 def Option_PublicKey.Some_0 : Option_PublicKey → PublicKey
-  | .Some f0 => f0
+  | .Some f0_1 => f0_1
   | _ => default
 
 def Option_PublicKey.set_Some_0 (x : Option_PublicKey) (v : PublicKey) : Option_PublicKey :=
   match x with
-  | .Some f0 => .Some v
+  | .Some f0_1 => .Some v
   | x => x
 
 structure Transition where
@@ -65,7 +65,7 @@ deriving Inhabited
 
 inductive Option_Point_Mont_Bn254Base where
   | None
-  | Some (f0 : Point_Mont_Bn254Base)
+  | Some (f0_1 : Point_Mont_Bn254Base)
 deriving Inhabited
 
 def Option_Point_Mont_Bn254Base.tag : Option_Point_Mont_Bn254Base → UInt256
@@ -73,12 +73,12 @@ def Option_Point_Mont_Bn254Base.tag : Option_Point_Mont_Bn254Base → UInt256
   | .Some .. => UInt256.ofNat 1
 
 def Option_Point_Mont_Bn254Base.Some_0 : Option_Point_Mont_Bn254Base → Point_Mont_Bn254Base
-  | .Some f0 => f0
+  | .Some f0_1 => f0_1
   | _ => default
 
 def Option_Point_Mont_Bn254Base.set_Some_0 (x : Option_Point_Mont_Bn254Base) (v : Point_Mont_Bn254Base) : Option_Point_Mont_Bn254Base :=
   match x with
-  | .Some f0 => .Some v
+  | .Some f0_1 => .Some v
   | x => x
 
 structure Output where

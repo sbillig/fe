@@ -1,0 +1,60 @@
+// Locals named like what their body names elsewhere: a function it calls
+// (`double`), a constant it reads (`bounds::limit`) and the prelude's `load` and
+// `store`, each bound in a block that ends before the use, which the
+// export's one sequence of `let`s would keep in scope. And top-level
+// names spelled like the exporter's own binders: `v3` and `size`, and `b1`,
+// a loop's local function.
+use std::abi::sol
+
+msg CollideMsg {
+    #[selector = sol("run(uint256)")]
+    Run { x: u256 } -> u256,
+    #[selector = sol("spin(uint256)")]
+    Spin { n: u256 } -> u256,
+}
+
+mod bounds {
+    pub const limit: u256 = 10
+}
+
+const size: u256 = 4
+
+fn double(_ x: u256) -> u256 {
+    x * 2
+}
+
+fn v3(_ x: u256) -> u256 {
+    x + 3
+}
+
+fn b1(_ total: u256, _ i: u256) -> u256 {
+    total + i
+}
+
+pub contract Collide {
+    mut count: u256,
+
+    recv CollideMsg {
+        Run { x } -> u256 uses (mut count) {
+            let total = {
+                let limit = x * 2
+                let double = limit + 1
+                let load = double + count
+                let store = load + 1
+                store
+            }
+            count = total
+            v3(double(total)) + bounds::limit + size + count
+        }
+
+        Spin { n } -> u256 {
+            var total: u256 = 0
+            var i: u256 = 0
+            while i < n {
+                i += 1
+                total = b1(total, i)
+            }
+            total
+        }
+    }
+}

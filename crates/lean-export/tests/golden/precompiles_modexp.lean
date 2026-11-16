@@ -9,7 +9,7 @@ deriving Inhabited
 
 inductive Option_Exponent where
   | None
-  | Some (f0 : Exponent)
+  | Some (f0_1 : Exponent)
 deriving Inhabited
 
 def Option_Exponent.tag : Option_Exponent → UInt256
@@ -17,12 +17,12 @@ def Option_Exponent.tag : Option_Exponent → UInt256
   | .Some .. => UInt256.ofNat 1
 
 def Option_Exponent.Some_0 : Option_Exponent → Exponent
-  | .Some f0 => f0
+  | .Some f0_1 => f0_1
   | _ => default
 
 def Option_Exponent.set_Some_0 (x : Option_Exponent) (v : Exponent) : Option_Exponent :=
   match x with
-  | .Some f0 => .Some v
+  | .Some f0_1 => .Some v
   | x => x
 
 structure Modulus where
@@ -34,7 +34,7 @@ deriving Inhabited
 
 inductive Option_Modulus where
   | None
-  | Some (f0 : Modulus)
+  | Some (f0_1 : Modulus)
 deriving Inhabited
 
 def Option_Modulus.tag : Option_Modulus → UInt256
@@ -42,12 +42,12 @@ def Option_Modulus.tag : Option_Modulus → UInt256
   | .Some .. => UInt256.ofNat 1
 
 def Option_Modulus.Some_0 : Option_Modulus → Modulus
-  | .Some f0 => f0
+  | .Some f0_1 => f0_1
   | _ => default
 
 def Option_Modulus.set_Some_0 (x : Option_Modulus) (v : Modulus) : Option_Modulus :=
   match x with
-  | .Some f0 => .Some v
+  | .Some f0_1 => .Some v
   | x => x
 
 structure Wide where

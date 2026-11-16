@@ -181,6 +181,12 @@ const SELF: char = '\u{1}';
 /// What separates a definition's text from each piece cut from it.
 const CUT: char = '\u{2}';
 
+/// What encloses each binder in a definition's text until the definition is
+/// complete (`binder`), and what separates the name the binder would like
+/// from what tells it apart from the definition's other binders.
+const BINDER: char = '\u{3}';
+const BINDER_ID: char = '\u{4}';
+
 /// A construct the exporter has no model for.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
@@ -743,14 +749,19 @@ impl<'db> IngotExport<'db> {
                 Scope::Contract => part.defs.push(Placed::Contract(item)),
             }
         }
-        for (at, item) in added.iter().enumerate() {
-            if at < layout_count {
-                writeln!(library.text, "{}\n", item.text).unwrap();
-            } else {
-                library.text.push_str(&item.text);
-            }
+        for item in &added {
             library.names.extend(item.names.iter().cloned());
             library.taken.extend(item.names.iter().cloned());
+        }
+        // A library definition's binders are named apart from the library's
+        // definitions, which are all it names.
+        for (at, item) in added.iter().enumerate() {
+            let text = resolve(&item.text, &library.names);
+            if at < layout_count {
+                writeln!(library.text, "{text}\n").unwrap();
+            } else {
+                library.text.push_str(&text);
+            }
         }
         for (at, item) in added.into_iter().enumerate() {
             for name in &item.names {
@@ -845,6 +856,25 @@ impl<'db> IngotExport<'db> {
     /// exported it is shared.
     pub fn finish(self, library: &Library) -> Exports {
         let items: Vec<_> = self.layouts.iter().chain(&self.defs).collect();
+        // The names a definition may mean, which its binders are named apart
+        // from.
+        let contract_items = self.contracts.iter().flat_map(|part| {
+            part.layouts
+                .iter()
+                .chain(&part.defs)
+                .filter_map(|placed| match placed {
+                    Placed::Contract(item) => Some(item),
+                    Placed::Ingot(_) => None,
+                })
+        });
+        let known: FxHashSet<String> = items
+            .iter()
+            .map(|(item, _)| item)
+            .chain(contract_items)
+            .flat_map(|item| item.names.iter().cloned())
+            .chain(library.names.iter().cloned())
+            .chain(self.taken.iter().cloned())
+            .collect();
         let ids: FxHashMap<&str, usize> = items
             .iter()
             .enumerate()
@@ -896,10 +926,11 @@ impl<'db> IngotExport<'db> {
         let export = |items: &[&Item], layouts: usize, checks: Vec<&String>, own: &[Trusted]| {
             let mut text = String::new();
             for (at, item) in items.iter().enumerate() {
+                let item = resolve(&item.text, &known);
                 if at < layouts {
-                    writeln!(text, "{}\n", item.text).unwrap();
+                    writeln!(text, "{item}\n").unwrap();
                 } else {
-                    text.push_str(&item.text);
+                    text.push_str(&item);
                 }
             }
             let mut seen = FxHashSet::default();
@@ -1081,6 +1112,8 @@ impl<'db> Module<'db> {
             flags: Vec::new(),
             located: Vec::new(),
             entries: 0,
+            names: Vec::new(),
+            roots: Vec::new(),
         }
         .export();
         let refs = self.end(depth);
@@ -1201,6 +1234,7 @@ impl<'db> Module<'db> {
                     .ok_or_else(|| Unsupported(format!("{name}: argument bound by no field")))?;
                 positions.sort_unstable();
                 let mut args = String::new();
+                let (message, result) = (var("message"), var("result"));
                 if info.args_ty != TyId::unit(db) {
                     let key = generated_callee_key(
                         db,
@@ -1212,12 +1246,12 @@ impl<'db> Module<'db> {
                     )
                     .map_err(generated)?;
                     let decode = self.instance(key, vec![Some(Carrier::Erased)].into())?;
-                    writeln!(lines, "  let message ← {decode}").unwrap();
+                    writeln!(lines, "  let {message} ← {decode}").unwrap();
                     let fields = self.fields(info.args_ty)?;
                     let bindings = arm.arg_bindings(db);
                     for position in positions {
                         let (steps, _) = &fields[bindings[position].tuple_index as usize];
-                        write!(args, " message.{}", steps.join(".")).unwrap();
+                        write!(args, " {message}.{}", steps.join(".")).unwrap();
                     }
                 }
                 match info.ret_ty {
@@ -1244,8 +1278,8 @@ impl<'db> Module<'db> {
                         .map_err(generated)?;
                         let carriers = vec![Some(Carrier::Erased), None];
                         let return_value = self.instance(key, carriers.into())?;
-                        writeln!(lines, "  let result ← {name}{args}").unwrap();
-                        writeln!(lines, "  {return_value} result").unwrap();
+                        writeln!(lines, "  let {result} ← {name}{args}").unwrap();
+                        writeln!(lines, "  {return_value} {result}").unwrap();
                     }
                 }
                 let refs = self.end(depth);
@@ -1263,11 +1297,12 @@ impl<'db> Module<'db> {
             }
         }
         cases.sort_unstable();
+        let (size, selector) = (var("size"), var("selector"));
         let tests: Vec<_> = cases
             .iter()
-            .map(|(selector, name)| {
+            .map(|(value, name)| {
                 format!(
-                    "if selector = UInt256.ofNat {selector:#010x} then\n      {name}_entry\n    else"
+                    "if {selector} = UInt256.ofNat {value:#010x} then\n      {name}_entry\n    else"
                 )
             })
             .collect();
@@ -1280,9 +1315,9 @@ impl<'db> Module<'db> {
         self.defs.push(Item {
             names: vec!["runtime".to_string()],
             text: format!(
-                "def runtime : FeM Empty := do\n  let size ← calldatasize\n  \
-                 if size.toNat < 4 then\n    {default}\n  else\n    \
-                 let selector ← calldataSelector\n    {dispatch}{last}\n\n"
+                "def runtime : FeM Empty := do\n  let {size} ← calldatasize\n  \
+                 if {size}.toNat < 4 then\n    {default}\n  else\n    \
+                 let {selector} ← calldataSelector\n    {dispatch}{last}\n\n"
             ),
             scope: Scope::Contract,
             refs: Vec::new(),
@@ -1310,6 +1345,8 @@ impl<'db> Module<'db> {
         }
         let args_ty = contract.init_args_ty(db);
         let mut args = String::new();
+        let [bytes_in, size, tail, decoder, decoded, words] =
+            ["args", "size", "tail", "decoder", "decoded", "words"].map(var);
         let owner = BodyOwner::ContractInit { contract };
         let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
         let normalized = normalize_semantic_body(db, instance)
@@ -1353,12 +1390,16 @@ impl<'db> Module<'db> {
                 .then_some(Carrier::Value);
             let decode = self.instance(decode, vec![Some(Carrier::Value), input].into())?;
             let span = self.value_ty(span_ty)?;
-            lines.push_str("  let size := UInt256.ofNat args.size\n");
-            lines.push_str("  let tail ← alloc size\n  mstoreBytes tail args\n");
-            writeln!(lines, "  let decoder ← {decoder_new}").unwrap();
+            writeln!(lines, "  let {size} := UInt256.ofNat {bytes_in}.size").unwrap();
             writeln!(
                 lines,
-                "  let (decoded, _) ← {decode} decoder ({span}.mk tail size)"
+                "  let {tail} ← alloc {size}\n  mstoreBytes {tail} {bytes_in}"
+            )
+            .unwrap();
+            writeln!(lines, "  let {decoder} ← {decoder_new}").unwrap();
+            writeln!(
+                lines,
+                "  let ({decoded}, _) ← {decode} {decoder} ({span}.mk {tail} {size})"
             )
             .unwrap();
             // `init` takes the fields its body has parameters for.
@@ -1384,7 +1425,7 @@ impl<'db> Module<'db> {
             for param in params {
                 let (steps, _) = &fields[param as usize];
                 let steps: String = steps.iter().map(|step| format!(".{step}")).collect();
-                write!(args, " decoded{steps}").unwrap();
+                write!(args, " {decoded}{steps}").unwrap();
             }
         }
         // `init` takes each immutable field it names, unset, and returns it.
@@ -1410,23 +1451,24 @@ impl<'db> Module<'db> {
         } else {
             let left: String = fields
                 .iter()
-                .map(|(provider, ..)| format!(", e{provider}"))
+                .map(|(provider, ..)| format!(", {}", effect(*provider)))
                 .collect();
             let unset = " default".repeat(fields.len());
-            writeln!(lines, "  let words ← alloc (UInt256.ofNat {bytes})").unwrap();
+            writeln!(lines, "  let {words} ← alloc (UInt256.ofNat {bytes})").unwrap();
             writeln!(lines, "  let (_{left}) ← init{args}{unset}").unwrap();
             for (provider, field, ty) in fields {
                 let slot = self.field_layout(field)?.slot_offset;
-                let at = format!("(words + UInt256.ofNat ({slot} * 32))");
-                let value = format!("e{provider}");
-                writeln!(lines, "  {}", self.mstore(ty, &at, &value)?).unwrap();
+                let at = format!("({words} + UInt256.ofNat ({slot} * 32))");
+                writeln!(lines, "  {}", self.mstore(ty, &at, &effect(provider))?).unwrap();
             }
-            writeln!(lines, "  memoryBytes words (UInt256.ofNat {bytes})").unwrap();
+            writeln!(lines, "  memoryBytes {words} (UInt256.ofNat {bytes})").unwrap();
         }
         let refs = self.end(depth);
         self.defs.push(Item {
             names: vec!["init_entry".to_string()],
-            text: format!("def init_entry (args : ByteArray) : FeM ByteArray := do\n{lines}\n"),
+            text: format!(
+                "def init_entry ({bytes_in} : ByteArray) : FeM ByteArray := do\n{lines}\n"
+            ),
             scope: Scope::Contract,
             refs,
         });
@@ -1853,36 +1895,6 @@ impl<'db> Module<'db> {
         }
     }
 
-    /// The Lean projections from a value of `ty` to the part `step` reaches,
-    /// and the part's type.
-    fn part(&self, ty: TyId<'db>, step: Step) -> Result<(Vec<String>, TyId<'db>), Unsupported> {
-        // A part of what an access reaches is a part of the value there.
-        let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
-        match step {
-            Step::Field(index) => Ok(self.fields(ty)?.swap_remove(index)),
-            Step::Variant { variant, field } => {
-                let (name, mut fields) = self
-                    .variants(ty)
-                    .ok_or_else(|| Unsupported(format!("type {}", ty.pretty_print(self.db))))?
-                    .swap_remove(variant);
-                Ok((vec![format!("{name}_{field}")], fields.swap_remove(field)))
-            }
-            // The one name of an element is its index.
-            Step::Index(index) => {
-                let (_, args) = ty.decompose_ty_app(self.db);
-                let elem = args
-                    .first()
-                    .filter(|_| ty.is_array(self.db))
-                    .ok_or_else(|| Unsupported(format!("index of {}", ty.pretty_print(self.db))))?;
-                let index = match index {
-                    NIndex::Const(index) => index.to_string(),
-                    NIndex::Value(value) => format!("{}.toNat", value_name(value)),
-                };
-                Ok((vec![index], *elem))
-            }
-        }
-    }
-
     /// The Lean term for a value of struct, tuple or array type `ty` with
     /// the parts `parts`. A type that is its one field, a tuple of one or an
     /// address, is that field.
@@ -2132,30 +2144,37 @@ impl<'db> Module<'db> {
         let mut ctors = String::new();
         let mut tags = String::new();
         let mut parts = String::new();
+        let (x, v) = (var("x"), var("v"));
         let other = if variants.len() > 1 {
-            ("  | _ => default\n", "  | x => x\n")
+            (
+                "  | _ => default\n".to_string(),
+                format!("  | {x} => {x}\n"),
+            )
         } else {
-            ("", "")
+            (String::new(), String::new())
         };
         for (tag, (variant, tys)) in variants.iter().enumerate() {
-            let binders: String = tys
+            let bound: Vec<_> = (0..tys.len())
+                .map(|field| var(&format!("f{field}")))
+                .collect();
+            let binders: String = bound
                 .iter()
-                .enumerate()
-                .map(|(field, ty)| format!(" (f{field} : {ty})"))
+                .zip(tys)
+                .map(|(field, ty)| format!(" ({field} : {ty})"))
                 .collect();
             writeln!(ctors, "  | {variant}{binders}").unwrap();
             let rest = if tys.is_empty() { "" } else { " .." };
             writeln!(tags, "  | .{variant}{rest} => UInt256.ofNat {tag}").unwrap();
-            let bound: Vec<_> = (0..tys.len()).map(|field| format!("f{field}")).collect();
             for (field, ty) in tys.iter().enumerate() {
                 let pattern = format!(".{variant} {}", bound.join(" "));
                 let mut replaced = bound.clone();
-                replaced[field] = "v".to_string();
+                replaced[field] = v.clone();
                 write!(
                     parts,
-                    "\ndef NAME.{variant}_{field} : NAME → {ty}\n  | {pattern} => f{field}\n{}\n\
-                     def NAME.set_{variant}_{field} (x : NAME) (v : {ty}) : NAME :=\n  match x with\n  \
+                    "\ndef NAME.{variant}_{field} : NAME → {ty}\n  | {pattern} => {}\n{}\n\
+                     def NAME.set_{variant}_{field} ({x} : NAME) ({v} : {ty}) : NAME :=\n  match {x} with\n  \
                      | {pattern} => .{variant} {}\n{}",
+                    bound[field],
                     other.0,
                     replaced.join(" "),
                     other.1,
@@ -2276,19 +2295,22 @@ impl<'db> Module<'db> {
         if let Some(len) = ty.array_len(db) {
             let (_, args) = ty.decompose_ty_app(db);
             let stride = self.span(args[0])?;
-            let elem = self.pinned(args[0], "q".to_string());
+            let q = var("q");
+            let elem = self.pinned(args[0], q.clone());
             let elem = self.load(args[0], &elem, None)?;
             return Ok(format!(
-                "loadArray {stride} (fun q => {elem}) {place} {len}"
+                "loadArray {stride} (fun {q} => {elem}) {place} {len}"
             ));
         }
         let depth = self.begin();
         let name = self.value_ty(ty)?;
         let mut body = String::new();
+        let p = var("p");
+        let field = |index| var(&format!("f{index}"));
         if let Some(variants) = self.variants(ty) {
             writeln!(
                 body,
-                "  match (← loadTag {} {} p) with",
+                "  match (← loadTag {} {} {p}) with",
                 tag_bits(variants.len()),
                 variants.len()
             )
@@ -2303,13 +2325,14 @@ impl<'db> Module<'db> {
                 };
                 writeln!(body, "  | {pattern} => do").unwrap();
                 let mut slot = 1;
-                for (index, field) in fields.iter().enumerate() {
-                    let at = self.pinned(*field, format!("(p.offset {slot})"));
-                    writeln!(body, "    let f{index} ← {}", self.load(*field, &at, None)?).unwrap();
-                    slot += self.span(*field)?;
+                for (index, ty) in fields.iter().enumerate() {
+                    let at = self.pinned(*ty, format!("({p}.offset {slot})"));
+                    let load = self.load(*ty, &at, None)?;
+                    writeln!(body, "    let {} ← {load}", field(index)).unwrap();
+                    slot += self.span(*ty)?;
                 }
                 let parts: String = (0..fields.len())
-                    .map(|index| format!(" f{index}"))
+                    .map(|index| format!(" {}", field(index)))
                     .collect();
                 writeln!(body, "    return .{variant}{parts}").unwrap();
             }
@@ -2317,12 +2340,13 @@ impl<'db> Module<'db> {
             let placements = storage_field_placements(db, ty)
                 .ok_or_else(|| Unsupported(format!("layout of {}", ty.pretty_print(db))))?;
             let fields = self.fields(ty)?;
-            for (index, ((_, field), placement)) in fields.iter().zip(&placements).enumerate() {
-                let at = self.pinned(*field, format!("(p.offset {})", placement.slot));
-                let lane = self.lane(*field, *placement);
-                writeln!(body, "  let f{index} ← {}", self.load(*field, &at, lane)?).unwrap();
+            for (index, ((_, ty), placement)) in fields.iter().zip(&placements).enumerate() {
+                let at = self.pinned(*ty, format!("({p}.offset {})", placement.slot));
+                let lane = self.lane(*ty, *placement);
+                let load = self.load(*ty, &at, lane)?;
+                writeln!(body, "  let {} ← {load}", field(index)).unwrap();
             }
-            let parts: Vec<_> = (0..fields.len()).map(|index| format!("f{index}")).collect();
+            let parts: Vec<_> = (0..fields.len()).map(field).collect();
             writeln!(body, "  return {}", self.aggregate(ty, &parts)?).unwrap();
         }
         let refs = self.end(depth);
@@ -2332,7 +2356,7 @@ impl<'db> Module<'db> {
             refs,
             |loader| {
                 format!(
-                    "def {loader} (p : Place) : FeM {name} := do\n{}",
+                    "def {loader} ({p} : Place) : FeM {name} := do\n{}",
                     body.trim_end()
                 )
             },
@@ -2366,10 +2390,11 @@ impl<'db> Module<'db> {
         }
         if let Some(len) = ty.array_len(db) {
             let (_, args) = ty.decompose_ty_app(db);
-            let elem = self.mload(space, args[0], "q")?;
+            let q = var("q");
+            let elem = self.mload(space, args[0], &q)?;
             let stride = self.size(args[0])?;
             return Ok(format!(
-                "{space}loadArray {stride} (fun q => {elem}) {address} {len}"
+                "{space}loadArray {stride} (fun {q} => {elem}) {address} {len}"
             ));
         }
         if self.variants(ty).is_some() {
@@ -2385,12 +2410,15 @@ impl<'db> Module<'db> {
         let fields = self.fields(ty)?;
         let mut body = String::new();
         let mut offset = 0;
-        for (index, (_, field)) in fields.iter().enumerate() {
-            let at = format!("(p + UInt256.ofNat {offset})");
-            writeln!(body, "  let f{index} ← {}", self.mload(space, *field, &at)?).unwrap();
+        let p = var("p");
+        let parts: Vec<_> = (0..fields.len())
+            .map(|index| var(&format!("f{index}")))
+            .collect();
+        for ((_, field), part) in fields.iter().zip(&parts) {
+            let at = format!("({p} + UInt256.ofNat {offset})");
+            writeln!(body, "  let {part} ← {}", self.mload(space, *field, &at)?).unwrap();
             offset += self.size(*field)?;
         }
-        let parts: Vec<_> = (0..fields.len()).map(|index| format!("f{index}")).collect();
         writeln!(body, "  return {}", self.aggregate(ty, &parts)?).unwrap();
         let refs = self.end(depth);
         let loader = self.layout(
@@ -2399,7 +2427,7 @@ impl<'db> Module<'db> {
             refs,
             |loader| {
                 format!(
-                    "def {loader} (p : UInt256) : FeM {name} := do\n{}",
+                    "def {loader} ({p} : UInt256) : FeM {name} := do\n{}",
                     body.trim_end()
                 )
             },
@@ -2424,10 +2452,11 @@ impl<'db> Module<'db> {
         }
         if ty.array_len(db).is_some() {
             let (_, args) = ty.decompose_ty_app(db);
-            let elem = self.mstore(args[0], "q", "x")?;
+            let (q, x) = (var("q"), var("x"));
+            let elem = self.mstore(args[0], &q, &x)?;
             let stride = self.size(args[0])?;
             return Ok(format!(
-                "mstoreArray {stride} (fun q x => {elem}) {address} {value}"
+                "mstoreArray {stride} (fun {q} {x} => {elem}) {address} {value}"
             ));
         }
         if self.variants(ty).is_some() {
@@ -2437,9 +2466,10 @@ impl<'db> Module<'db> {
         let name = self.value_ty(ty)?;
         let mut body = String::new();
         let mut offset = 0;
+        let (p, v) = (var("p"), var("v"));
         for (steps, field) in self.fields(ty)? {
-            let at = format!("(p + UInt256.ofNat {offset})");
-            let part = Self::projected("v", &steps);
+            let at = format!("({p} + UInt256.ofNat {offset})");
+            let part = Self::projected(&v, &steps);
             if self.size(field)? > 0 {
                 writeln!(body, "  {}", self.mstore(field, &at, &part)?).unwrap();
             }
@@ -2455,7 +2485,7 @@ impl<'db> Module<'db> {
             refs,
             |storer| {
                 format!(
-                    "def {storer} (p : UInt256) (v : {name}) : FeM Unit := do\n{}",
+                    "def {storer} ({p} : UInt256) ({v} : {name}) : FeM Unit := do\n{}",
                     body.trim_end()
                 )
             },
@@ -2521,34 +2551,32 @@ impl<'db> Module<'db> {
         if ty.array_len(db).is_some() {
             let (_, args) = ty.decompose_ty_app(db);
             let stride = self.span(args[0])?;
-            let elem = self.pinned(args[0], "q".to_string());
-            let elem = self.store(args[0], &elem, None, "x")?;
+            let (q, x) = (var("q"), var("x"));
+            let elem = self.pinned(args[0], q.clone());
+            let elem = self.store(args[0], &elem, None, &x)?;
             return Ok(format!(
-                "storeArray {stride} (fun q x => {elem}) {place} {value}"
+                "storeArray {stride} (fun {q} {x} => {elem}) {place} {value}"
             ));
         }
         let depth = self.begin();
         let name = self.value_ty(ty)?;
         let mut body = String::new();
+        let (p, v) = (var("p"), var("v"));
         if let Some(variants) = self.variants(ty) {
-            body.push_str("  match v with\n");
+            writeln!(body, "  match {v} with").unwrap();
             for (tag, (variant, fields)) in variants.iter().enumerate() {
-                let parts: String = (0..fields.len())
-                    .map(|index| format!(" f{index}"))
+                let parts: Vec<_> = (0..fields.len())
+                    .map(|index| var(&format!("f{index}")))
                     .collect();
-                writeln!(body, "  | .{variant}{parts} => do").unwrap();
+                let bound: String = parts.iter().map(|part| format!(" {part}")).collect();
+                writeln!(body, "  | .{variant}{bound} => do").unwrap();
                 // The tag has the enum's first slot, and each field of the
                 // variant whole slots after it. No other slot is written.
-                writeln!(body, "    store p (UInt256.ofNat {tag})").unwrap();
+                writeln!(body, "    store {p} (UInt256.ofNat {tag})").unwrap();
                 let mut slot = 1;
-                for (index, field) in fields.iter().enumerate() {
-                    let at = self.pinned(*field, format!("(p.offset {slot})"));
-                    writeln!(
-                        body,
-                        "    {}",
-                        self.store(*field, &at, None, &format!("f{index}"))?
-                    )
-                    .unwrap();
+                for (field, part) in fields.iter().zip(&parts) {
+                    let at = self.pinned(*field, format!("({p}.offset {slot})"));
+                    writeln!(body, "    {}", self.store(*field, &at, None, part)?).unwrap();
                     slot += self.span(*field)?;
                 }
             }
@@ -2569,7 +2597,7 @@ impl<'db> Module<'db> {
                     .collect();
                 writeln!(
                     body,
-                    "  store (p.offset {slot}) (packed [{}])",
+                    "  store ({p}.offset {slot}) (packed [{}])",
                     lanes.join(", ")
                 )
                 .unwrap();
@@ -2577,13 +2605,13 @@ impl<'db> Module<'db> {
             for (index, ((steps, field), placement)) in
                 self.fields(ty)?.iter().zip(&placements).enumerate()
             {
-                let part = Self::projected("v", steps);
+                let part = Self::projected(&v, steps);
                 let Some(lane) = self.lane(*field, *placement) else {
                     // A field of no slots leaves the fields around it in
                     // one word.
                     if self.span(*field)? > 0 {
                         flush(&mut pending, pending_slot, &mut body);
-                        let at = self.pinned(*field, format!("(p.offset {})", placement.slot));
+                        let at = self.pinned(*field, format!("({p}.offset {})", placement.slot));
                         writeln!(body, "  {}", self.store(*field, &at, None, &part)?).unwrap();
                     }
                     continue;
@@ -2593,13 +2621,14 @@ impl<'db> Module<'db> {
                     pending_slot = placement.slot;
                 }
                 let (int, word) = self.scalar(*field, part)?;
+                let bits = var(&format!("b{index}"));
                 writeln!(
                     body,
-                    "  let b{index} ← Lane.pack {} {int} {word}",
+                    "  let {bits} ← Lane.pack {} {int} {word}",
                     lane.lean()
                 )
                 .unwrap();
-                pending.push((lane.off, format!("b{index}")));
+                pending.push((lane.off, bits));
             }
             flush(&mut pending, pending_slot, &mut body);
             if body.is_empty() {
@@ -2613,7 +2642,7 @@ impl<'db> Module<'db> {
             refs,
             |storer| {
                 format!(
-                    "def {storer} (p : Place) (v : {name}) : FeM Unit := do\n{}",
+                    "def {storer} ({p} : Place) ({v} : {name}) : FeM Unit := do\n{}",
                     body.trim_end()
                 )
             },
@@ -2716,6 +2745,11 @@ struct BodyExporter<'a, 'db> {
     located: Vec<String>,
     /// The number of entries located so far, each bound to its own name.
     entries: usize,
+    /// The Lean term for each value: the variable that holds it.
+    names: Vec<String>,
+    /// The variable of each root that has one: a local's or a parameter's
+    /// slot.
+    roots: Vec<String>,
 }
 
 impl<'db> BodyExporter<'_, 'db> {
@@ -2729,6 +2763,12 @@ impl<'db> BodyExporter<'_, 'db> {
         let owner = self.body.owner.key(db).owner(db);
         let arm = matches!(owner, BodyOwner::ContractRecvArm { .. });
         let pats = self.module.arg_pats(owner);
+        self.names = (0..self.body.values.len())
+            .map(|index| binder(&format!("v{index}"), index))
+            .collect();
+        self.roots = (0..self.body.roots.len())
+            .map(|index| var(&format!("r{index}")))
+            .collect();
         let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
             let NValueDefinition::EntryParam { param } = value.definition else {
@@ -2762,7 +2802,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 (Some(_), Some(Carrier::Memory)) => "UInt256".to_string(),
                 _ => self.lean_ty(value.ty)?,
             };
-            params.push((param, format!("v{index}"), ty));
+            params.push((param, self.names[index].clone(), ty));
         }
         let mut state = String::new();
         for (index, root) in self.body.roots.iter().enumerate() {
@@ -2780,29 +2820,30 @@ impl<'db> BodyExporter<'_, 'db> {
                 }
                 _ => None,
             };
+            let slot = &self.roots[index];
             if let Some(param) = param {
-                params.push((param, format!("r{index}"), ty.clone()));
-                writeln!(state, "  let mut r{index} := r{index}").unwrap();
+                params.push((param, slot.clone(), ty.clone()));
+                writeln!(state, "  let mut {slot} := {slot}").unwrap();
             } else {
-                writeln!(state, "  let mut r{index} : {ty} := default").unwrap();
+                writeln!(state, "  let mut {slot} : {ty} := default").unwrap();
             }
         }
         params.sort_by_key(|(param, ..)| *param);
         self.binders = params.into_iter().map(|(_, name, ty)| (name, ty)).collect();
-        for mut effect in self.module.effect_params(self.body.owner.key(db)) {
-            let name = format!("e{}", effect.provider);
+        for mut param in self.module.effect_params(self.body.owner.key(db)) {
+            let name = effect(param.provider);
             let given = self
                 .carriers
                 .effects
                 .iter()
-                .find(|(provider, _)| *provider == effect.provider);
-            effect.state = given.map_or(effect.state, |(_, carrier)| *carrier == Carrier::Place);
-            if effect.state {
+                .find(|(provider, _)| *provider == param.provider);
+            param.state = given.map_or(param.state, |(_, carrier)| *carrier == Carrier::Place);
+            if param.state {
                 self.binders.push((name, "Place".to_string()));
             } else {
                 writeln!(state, "  let mut {name} := {name}").unwrap();
-                self.binders.push((name, self.module.value_ty(effect.ty)?));
-                self.effects.push(effect);
+                self.binders.push((name, self.module.value_ty(param.ty)?));
+                self.effects.push(param);
             }
         }
         let params = binders(&self.binders);
@@ -2816,7 +2857,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let slot = self.module.field_layout(field)?.slot_offset;
                 let total = field.contract.code_address_space_slot_count(db);
                 let at = format!("(← immutableAt {total} {slot})");
-                let name = format!("e{}", binding.provider_idx);
+                let name = effect(binding.provider_idx);
                 let load = self.module.mload("c", root.ty, &at)?;
                 writeln!(state, "  let {name} ← {load}").unwrap();
                 self.binders.push((name, self.module.value_ty(root.ty)?));
@@ -2824,7 +2865,7 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         for out in &self.outs {
-            writeln!(state, "  let mut {0} := {0}", value_name(*out)).unwrap();
+            writeln!(state, "  let mut {0} := {0}", self.value(*out)).unwrap();
         }
         // A value only some paths through the body move is destroyed where
         // its flag holds, which starts as the body's check has it.
@@ -2846,9 +2887,9 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             self.flags.sort_unstable();
             self.flags.dedup();
-            for flag in &self.flags {
-                let initialized = drops.flags[*flag as usize];
-                writeln!(state, "  let mut f{flag} := {initialized}").unwrap();
+            for index in &self.flags {
+                let initialized = drops.flags[*index as usize];
+                writeln!(state, "  let mut {} := {initialized}", flag(*index)).unwrap();
             }
         }
         // A call of a projection that grants `mut` access to a local holds
@@ -2868,7 +2909,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     })
             {
                 let ty = self.held_ty(*result)?;
-                writeln!(state, "  let mut {} : {ty} := default", value_name(*result)).unwrap();
+                writeln!(state, "  let mut {} : {ty} := default", self.value(*result)).unwrap();
                 self.sessions.push(*result);
             }
         }
@@ -2898,7 +2939,7 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             if self.held(*result).is_none() {
                 let ty = self.module.value_ty(place.ty)?;
-                writeln!(state, "  let mut h{} : {ty} := default", result.index()).unwrap();
+                writeln!(state, "  let mut {} : {ty} := default", held_var(*result)).unwrap();
             }
             self.helds.push((*result, place.clone(), mutable));
         }
@@ -2981,21 +3022,20 @@ impl<'db> BodyExporter<'_, 'db> {
     /// The mutable variables of the body: its local slots, then the values
     /// it returns for its `mut` access parameters.
     fn state(&self) -> Vec<String> {
-        let slots = self.slots.iter().map(|root| format!("r{}", root.index()));
+        let slots = self
+            .slots
+            .iter()
+            .map(|root| self.roots[root.index()].clone());
         let helds = self.helds.iter().filter_map(|(held, ..)| {
             let (var, _) = self.held(*held)?;
-            (var == *held).then(|| format!("h{}", held.index()))
+            (var == *held).then(|| held_var(*held))
         });
         slots
-            .chain(self.outs.iter().copied().map(value_name))
-            .chain(
-                self.effects
-                    .iter()
-                    .map(|effect| format!("e{}", effect.provider)),
-            )
-            .chain(self.sessions.iter().copied().map(value_name))
+            .chain(self.outs.iter().copied().map(|value| self.value(value)))
+            .chain(self.effects.iter().map(|param| effect(param.provider)))
+            .chain(self.sessions.iter().copied().map(|value| self.value(value)))
             .chain(helds)
-            .chain(self.flags.iter().map(|flag| format!("f{flag}")))
+            .chain(self.flags.iter().copied().map(flag))
             .collect()
     }
 
@@ -3005,7 +3045,7 @@ impl<'db> BodyExporter<'_, 'db> {
         let updates = drops.iter().flat_map(|drops| &drops.flag_updates);
         updates
             .filter(|update| update.at == point && self.flags.contains(&update.flag))
-            .map(|update| format!("f{} := {}", update.flag, update.initialized))
+            .map(|update| format!("{} := {}", flag(update.flag), update.initialized))
             .collect()
     }
 
@@ -3016,8 +3056,8 @@ impl<'db> BodyExporter<'_, 'db> {
         self.outs
             .iter()
             .copied()
-            .map(value_name)
-            .chain(effects.map(|effect| format!("e{}", effect.provider)))
+            .map(|value| self.value(value))
+            .chain(effects.map(|param| effect(param.provider)))
             .collect()
     }
 
@@ -3259,9 +3299,9 @@ impl<'db> BodyExporter<'_, 'db> {
             // A session's slide is live with it, and a session the body
             // holds in a mutable variable is passed with those.
             for value in &defined {
-                let name = value_name(*value);
+                let name = self.value(*value);
                 if let Some((_, slide)) = self.slides.get(value) {
-                    live.push((format!("{name}_k"), slide.clone()));
+                    live.push((self.derived(*value, "k"), slide.clone()));
                 }
                 if !state.contains(&name) {
                     live.push((name, self.held_ty(*value)?));
@@ -3321,8 +3361,8 @@ impl<'db> BodyExporter<'_, 'db> {
         // A join takes the body's mutable variables before its parameters,
         // since a local function cannot assign its definer's.
         let state = self.state();
-        for join in self.joins.get(&block).cloned().unwrap_or_default() {
-            let params = &self.body.blocks[join.index()].params;
+        for target in self.joins.get(&block).cloned().unwrap_or_default() {
+            let params = &self.body.blocks[target.index()].params;
             let mut tys = self.state_tys()?;
             for param in params {
                 tys.push(self.lean_ty(self.ty(*param))?);
@@ -3330,21 +3370,25 @@ impl<'db> BodyExporter<'_, 'db> {
             let names = state
                 .iter()
                 .cloned()
-                .chain(params.iter().copied().map(value_name));
-            let index = join.index();
+                .chain(params.iter().copied().map(|value| self.value(value)));
             let result = match &self.slide_ty {
-                Some(outs) if self.slide.contains(&join) => outs.clone(),
+                Some(outs) if self.slide.contains(&target) => outs.clone(),
                 _ => self.result_ty.clone(),
             };
             // A recursive join, the head of a loop or a join on a loop's
             // recursion, is the least fixed point of its body, which diverges
             // where the loop does.
-            if self.recursive.contains(&join) {
+            if self.recursive.contains(&target) {
                 let binders: String = names
                     .zip(&tys)
                     .map(|(name, ty)| format!(" ({name} : {ty})"))
                     .collect();
-                writeln!(out, "{pad}let rec b{index}{binders} : FeM {result} := do").unwrap();
+                writeln!(
+                    out,
+                    "{pad}let rec {}{binders} : FeM {result} := do",
+                    join(target)
+                )
+                .unwrap();
             } else {
                 let ty: String = tys.iter().map(|ty| format!("{ty} → ")).collect();
                 let names: Vec<_> = names.collect();
@@ -3353,13 +3397,18 @@ impl<'db> BodyExporter<'_, 'db> {
                 } else {
                     format!("fun {} => ", names.join(" "))
                 };
-                writeln!(out, "{pad}let b{index} : {ty}FeM {result} := {binder}do").unwrap();
+                writeln!(
+                    out,
+                    "{pad}let {} : {ty}FeM {result} := {binder}do",
+                    join(target)
+                )
+                .unwrap();
             }
             for var in &state {
                 writeln!(out, "{pad}  let mut {var} := {var}").unwrap();
             }
-            self.block(join, depth + 1, out)?;
-            if self.recursive.contains(&join) {
+            self.block(target, depth + 1, out)?;
+            if self.recursive.contains(&target) {
                 writeln!(out, "{pad}partial_fixpoint").unwrap();
             }
         }
@@ -3396,7 +3445,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 then_target,
                 else_target,
             } => {
-                writeln!(out, "{pad}if {} then", value_name(cond.value)).unwrap();
+                writeln!(out, "{pad}if {} then", self.value(cond.value)).unwrap();
                 self.jump(then_target, depth + 1, out)?;
                 writeln!(out, "{pad}else").unwrap();
                 self.jump(else_target, depth + 1, out)?;
@@ -3485,9 +3534,10 @@ impl<'db> BodyExporter<'_, 'db> {
                 // The slide takes the value the caller leaves: a write
                 // through a `mut` grant of a local comes back with it.
                 let granted_ty = self.returned_ty()?;
+                let (slide, left) = (var("slide"), var("g"));
                 writeln!(
                     out,
-                    "{pad}let slide : {granted_ty} → FeM {outs} := fun g => do"
+                    "{pad}let {slide} : {granted_ty} → FeM {outs} := fun {left} => do"
                 )
                 .unwrap();
                 for var in self.state() {
@@ -3495,7 +3545,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 }
                 for part in writes {
                     let left = ValueTarget {
-                        var: "g".to_string(),
+                        var: left.clone(),
                         ty,
                         path: field_path(&part)?,
                     };
@@ -3504,7 +3554,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     writeln!(out, "{pad}  {write}").unwrap();
                 }
                 self.jump(resume, depth + 1, out)?;
-                writeln!(out, "{pad}return ({granted}, slide)").unwrap();
+                writeln!(out, "{pad}return ({granted}, {slide})").unwrap();
             }
             // Control stops at a call that never returns, whose result has
             // no values.
@@ -3523,7 +3573,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         });
                 let never = never
                     .ok_or_else(|| Unsupported("unreachable code after no call".to_string()))?;
-                writeln!(out, "{pad}nomatch {}", value_name(never)).unwrap();
+                writeln!(out, "{pad}nomatch {}", self.value(never)).unwrap();
             }
         }
         Ok(())
@@ -3570,7 +3620,7 @@ impl<'db> BodyExporter<'_, 'db> {
             self.holds_places(arg.value)?;
             write!(args, " {}", self.operand(arg)?).unwrap();
         }
-        writeln!(out, "{}b{}{args}", "  ".repeat(depth), target.block.index()).unwrap();
+        writeln!(out, "{}{}{args}", "  ".repeat(depth), join(target.block)).unwrap();
         Ok(())
     }
 
@@ -3578,7 +3628,7 @@ impl<'db> BodyExporter<'_, 'db> {
     fn statement(&mut self, statement: &NStatement<'db>) -> Result<Option<String>, Unsupported> {
         Ok(match &statement.kind {
             NStatementKind::Define { result, expr } => {
-                let name = value_name(*result);
+                let name = self.value(*result);
                 match expr {
                     // A view or borrow of the `Evm` root carries no data.
                     NExpr::MakeView { place, .. } | NExpr::Borrow { place, .. }
@@ -3593,7 +3643,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         let (var, _) = self.held(*result).unwrap();
                         let (lean, lane) = self.place(place)?;
                         let load = self.load(place.ty, &lean, lane)?;
-                        Some(format!("h{} := (← {load})", var.index()))
+                        Some(format!("{} := (← {load})", held_var(var)))
                     }
                     // An access to a local is read and written through the
                     // local's variable, where it is used; one to the root
@@ -3660,14 +3710,15 @@ impl<'db> BodyExporter<'_, 'db> {
                                 value: SemConstScalar::Bytes(bytes),
                             } if ty.is_core_dyn_string(db) => {
                                 let size = 32 + bytes.len().next_multiple_of(32);
+                                let pointer = self.derived(*result, "p");
                                 let parts = [
-                                    format!("{name}_p"),
+                                    pointer.clone(),
                                     format!("(UInt256.ofNat {})", bytes.len()),
                                     format!("(UInt256.ofNat {size})"),
                                 ];
                                 let bytes: Vec<_> = bytes.iter().map(u8::to_string).collect();
                                 format!(
-                                    "let {name}_p ← stringLiteral ⟨#[{}]⟩\nlet {name} := {}",
+                                    "let {pointer} ← stringLiteral ⟨#[{}]⟩\nlet {name} := {}",
                                     bytes.join(", "),
                                     self.module.aggregate(*ty, &parts)?
                                 )
@@ -3861,14 +3912,14 @@ impl<'db> BodyExporter<'_, 'db> {
             // the session leaves.
             NStatementKind::End { access } if self.slides.contains_key(access) => {
                 let outs = self.slides[access].0.clone();
-                let name = value_name(*access);
-                let names: Vec<_> = (0..outs.len()).map(|n| format!("{name}_{n}")).collect();
+                let name = self.value(*access);
+                let names: Vec<_> = (0..outs.len()).map(|n| self.derived(*access, n)).collect();
                 let binder = match names.as_slice() {
                     [] => "_".to_string(),
                     [one] => one.clone(),
                     names => format!("({})", names.join(", ")),
                 };
-                let mut lines = format!("let {binder} ← {name}_k {name}");
+                let mut lines = format!("let {binder} ← {} {name}", self.derived(*access, "k"));
                 for (out, value) in outs.iter().zip(&names) {
                     let line = match out {
                         Out::Value(target) => self.write(target, value)?,
@@ -3890,7 +3941,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     Some((held, place, _)) => {
                         let (var, _) = self.held(held).unwrap();
                         let (lean, lane) = self.place(&place)?;
-                        let value = format!("h{}", var.index());
+                        let value = held_var(var);
                         Some(self.store(place.ty, &lean, lane, &value)?)
                     }
                     None => None,
@@ -3908,7 +3959,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let len = array
                     .array_len(self.module.db)
                     .ok_or_else(|| Unsupported("array of unknown length".to_string()))?;
-                Some(format!("checkIndex {} {len}", value_name(*index)))
+                Some(format!("checkIndex {} {len}", self.value(*index)))
             }
             NStatementKind::Drop { target } => {
                 let db = self.module.db;
@@ -3920,7 +3971,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let mut read = None;
                 let whole = match target {
                     NDropTarget::Value(value) => ValueTarget {
-                        var: value_name(*value),
+                        var: self.value(*value),
                         ty: self.ty(*value),
                         path: Vec::new(),
                     },
@@ -3929,7 +3980,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         target => {
                             read = Some((place.ty, target));
                             ValueTarget {
-                                var: format!("d{}", statement.id.index()),
+                                var: var(&format!("d{}", statement.id.index())),
                                 ty: place.ty,
                                 path: Vec::new(),
                             }
@@ -3980,7 +4031,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         {
                             variants.push((self.read(&target)?, ty, variant));
                         }
-                        ty = self.module.part(ty, step)?.1;
+                        ty = self.part(ty, step)?.1;
                         target.path.push(step);
                     }
                     let value = self.read(&target)?;
@@ -4008,8 +4059,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     }
                     // A part some paths moved is destroyed where it was not.
                     if !part.flags.is_empty() && !destroyed.is_empty() {
-                        let flags: Vec<_> =
-                            part.flags.iter().map(|flag| format!("f{flag}")).collect();
+                        let flags: Vec<_> = part.flags.iter().copied().map(flag).collect();
                         let lines = indented(&destroyed);
                         destroyed =
                             vec![format!("if {} then\n{lines}  pure ()", flags.join(" && "))];
@@ -4113,7 +4163,7 @@ impl<'db> BodyExporter<'_, 'db> {
         effect_args: &[NEffectArg<'db>],
     ) -> Result<String, Unsupported> {
         let db = self.module.db;
-        let name = &value_name(result);
+        let name = &self.value(result);
         // A closure's body is called as a function is: its first argument
         // is the closure, the values it captured.
         let func = match callee.owner(db) {
@@ -4188,7 +4238,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 NEffectArgValue::Value(operand) if self.is_access(self.ty(operand.value)) => {
                     match self.carrier(operand.value)? {
                         Carrier::Value => Target::Value(self.carrier_value(operand.value)?),
-                        _ => Target::Place(value_name(operand.value), None),
+                        _ => Target::Place(self.value(operand.value), None),
                     }
                 }
                 NEffectArgValue::Value(operand) => {
@@ -4222,7 +4272,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     let NEffectArgValue::Place(place) = &arg.arg else {
                         return Err(Unsupported("lane behind an access".to_string()));
                     };
-                    let held = format!("{name}_e{}", effect.provider);
+                    let held = self.derived(result, format!("e{}", effect.provider));
                     let load = self.load(place.ty, &lean, Some(lane))?;
                     self.located.push(format!("let {held} ← {load}"));
                     write!(lean_args, " {held}").unwrap();
@@ -4237,7 +4287,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     let NEffectArgValue::Place(place) = &arg.arg else {
                         return Err(Unsupported("calldata behind an access".to_string()));
                     };
-                    let held = format!("{name}_e{}", effect.provider);
+                    let held = self.derived(result, format!("e{}", effect.provider));
                     let load = self.module.mload("cd", place.ty, &offset)?;
                     self.located.push(format!("let {held} ← {load}"));
                     write!(lean_args, " {held}").unwrap();
@@ -4272,7 +4322,7 @@ impl<'db> BodyExporter<'_, 'db> {
             let (_, place, mutable) = self.helds.iter().find(|(lane, ..)| *lane == held).unwrap();
             let (place, mutable) = (place.clone(), *mutable);
             let (lean, lane) = self.place(&place)?;
-            let var = format!("h{}", held.index());
+            let var = held_var(held);
             if mutable {
                 let store = self.store(place.ty, &lean, lane, &var)?;
                 self.located.push(store);
@@ -4295,21 +4345,25 @@ impl<'db> BodyExporter<'_, 'db> {
         if let Some(slide) = self.module.lenses.get(&callee).cloned() {
             self.slides.insert(result, (outs, slide));
             self.reloads.insert(result, reloads.clone());
+            let rest = self.derived(result, "k");
             return Ok(if self.sessions.contains(&result) {
+                let granted = self.derived(result, "g");
                 format!(
-                    "let ({name}_g, {name}_k) ← {callee}{lean_args}\n{name} := {name}_g{reloads}"
+                    "let ({granted}, {rest}) ← {callee}{lean_args}\n{name} := {granted}{reloads}"
                 )
             } else {
-                format!("let ({name}, {name}_k) ← {callee}{lean_args}{reloads}")
+                format!("let ({name}, {rest}) ← {callee}{lean_args}{reloads}")
             });
         }
         if outs.is_empty() {
             return Ok(format!("let {name} ← {callee}{lean_args}{reloads}"));
         }
-        let returned: String = (0..outs.len()).map(|n| format!(", {name}_{n}")).collect();
+        let returned: String = (0..outs.len())
+            .map(|n| format!(", {}", self.derived(result, n)))
+            .collect();
         let mut lines = format!("let ({name}{returned}) ← {callee}{lean_args}");
         for (n, out) in outs.iter().enumerate() {
-            let value = format!("{name}_{n}");
+            let value = self.derived(result, n);
             let line = match out {
                 Out::Value(target) => self.write(target, &value)?,
                 Out::Lane(ty, place, lane) => self.store(*ty, place, Some(*lane), &value)?,
@@ -4331,7 +4385,7 @@ impl<'db> BodyExporter<'_, 'db> {
     ) -> Result<String, Unsupported> {
         use RuntimeBuiltinFuncKind as Kind;
         let db = self.module.db;
-        let name = value_name(result);
+        let name = self.value(result);
         let evm = db.compilation_settings().target(db) == CompilationTarget::Evm;
         let operands: Result<Vec<_>, _> = args.iter().map(|arg| self.operand(arg)).collect();
         let operands = operands?;
@@ -4429,7 +4483,7 @@ impl<'db> BodyExporter<'_, 'db> {
             return Ok(match self.carrier(place.value)? {
                 Carrier::Place => format!(
                     "let {name} ← clearSlots {} {}",
-                    value_name(place.value),
+                    self.value(place.value),
                     self.module.span(inner)?
                 ),
                 Carrier::Value => {
@@ -4438,7 +4492,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 }
                 Carrier::Memory => format!(
                     "let {name} ← zeroMem {} (UInt256.ofNat {})",
-                    value_name(place.value),
+                    self.value(place.value),
                     self.module.size(inner)?
                 ),
                 Carrier::Erased => format!("let {name} := ()"),
@@ -4501,7 +4555,7 @@ impl<'db> BodyExporter<'_, 'db> {
     ) -> Result<String, Unsupported> {
         use NumericExternIntrinsic as Kind;
         let db = self.module.db;
-        let name = value_name(result);
+        let name = self.value(result);
         let ty = args.first().map(|arg| self.ty(arg.value));
         let int = ty.and_then(|ty| self.module.int_bits(ty));
         let operands: Result<Vec<_>, _> = args.iter().map(|arg| self.operand(arg)).collect();
@@ -4565,12 +4619,12 @@ impl<'db> BodyExporter<'_, 'db> {
         let Some(call) = call.strip_suffix("\nnever") else {
             return Ok(call);
         };
-        self.never = Some(value_name(result));
+        self.never = Some(self.value(result));
         let ty = self.ty(result);
         if ty.is_never(self.module.db) || self.yielding {
             return Ok(call.to_string());
         }
-        let name = value_name(result);
+        let name = self.value(result);
         Ok(format!(
             "{call}\nlet {name} : {} := nomatch {name}",
             self.held_ty(result)?
@@ -4588,15 +4642,15 @@ impl<'db> BodyExporter<'_, 'db> {
             Carrier::Value => Ok((None, self.read(&self.carrier_value(operand.value)?)?)),
             Carrier::Place => {
                 let (_, inner) = ty.as_capability(self.module.db).unwrap();
-                let name = format!("{}_e", value_name(operand.value));
-                let load = self.load(inner, &value_name(operand.value), None)?;
+                let name = self.derived(operand.value, "e");
+                let load = self.load(inner, &self.value(operand.value), None)?;
                 Ok((Some(format!("let {name} ← {load}")), name))
             }
             // An enum has no layout in memory here.
             Carrier::Memory => {
                 let (_, inner) = ty.as_capability(self.module.db).unwrap();
-                let name = format!("{}_e", value_name(operand.value));
-                let load = self.module.mload("m", inner, &value_name(operand.value))?;
+                let name = self.derived(operand.value, "e");
+                let load = self.module.mload("m", inner, &self.value(operand.value))?;
                 Ok((Some(format!("let {name} ← {load}")), name))
             }
             Carrier::Erased => Err(Unsupported("enum in the root object".to_string())),
@@ -4605,7 +4659,19 @@ impl<'db> BodyExporter<'_, 'db> {
 
     /// `operand` as a Lean term: its variable.
     fn operand(&self, operand: &NOperand) -> Result<String, Unsupported> {
-        Ok(value_name(operand.value))
+        Ok(self.value(operand.value))
+    }
+
+    /// The Lean term for `value`: its variable.
+    fn value(&self, value: NValueId) -> String {
+        self.names[value.index()].clone()
+    }
+
+    /// A variable for what `value` gives besides itself, which `suffix` tells
+    /// apart from the others.
+    fn derived(&self, value: NValueId, suffix: impl fmt::Display) -> String {
+        let index = value.index();
+        binder(&format!("v{index}_{suffix}"), format!("{index}_{suffix}"))
     }
 
     /// Whether a value of `ty` is an access to a place. A view of a snapshot
@@ -4759,10 +4825,10 @@ impl<'db> BodyExporter<'_, 'db> {
             .iter()
             .map(|part| {
                 if !self.is_access(self.ty(part.value)) {
-                    return Ok(value_name(part.value));
+                    return Ok(self.value(part.value));
                 }
                 Ok(match self.carrier(part.value)? {
-                    Carrier::Place | Carrier::Memory => value_name(part.value),
+                    Carrier::Place | Carrier::Memory => self.value(part.value),
                     Carrier::Value => self.read(&self.carrier_value(part.value)?)?,
                     Carrier::Erased => "()".to_string(),
                 })
@@ -4804,12 +4870,12 @@ impl<'db> BodyExporter<'_, 'db> {
         if self.is_access(ty) {
             return match self.carrier(value)? {
                 Carrier::Value => self.read(&self.carrier_value(value)?),
-                _ => Ok(value_name(value)),
+                _ => Ok(self.value(value)),
             };
         }
         let accesses = self.access_parts(ty);
         if !accesses.iter().any(|(_, access)| self.is_access(*access)) {
-            return Ok(value_name(value));
+            return Ok(self.value(value));
         }
         let body = self.body;
         match body.defining_expr(value) {
@@ -4849,7 +4915,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 })
             }
             // A session holds what its projection granted, as it is now.
-            Some((_, NExpr::Call { .. })) => Ok(value_name(value)),
+            Some((_, NExpr::Call { .. })) => Ok(self.value(value)),
             _ => Err(Unsupported(
                 "yield of a value of several accesses made elsewhere".to_string(),
             )),
@@ -4893,7 +4959,7 @@ impl<'db> BodyExporter<'_, 'db> {
         if let Some((held, path)) = self.held_at(value, component) {
             let place = self.helds.iter().find(|(borrow, ..)| *borrow == held);
             return Ok(ValueTarget {
-                var: format!("h{}", held.index()),
+                var: held_var(held),
                 ty: place.unwrap().1.ty,
                 path: field_path(&path)?,
             });
@@ -4919,7 +4985,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let (_, inner) = value.ty.as_capability(db).ok_or_else(|| {
                     Unsupported("access below a value of several accesses".to_string())
                 })?;
-                (format!("v{index}"), inner)
+                (self.names[index].clone(), inner)
             }
             // The session holds the value, at the steps to the access.
             CarrierBase::Grant { session, component } => {
@@ -4927,7 +4993,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let mut steps = field_path(&component)?;
                 steps.extend(field_path(&path)?);
                 return Ok(ValueTarget {
-                    var: value_name(session),
+                    var: self.value(session),
                     ty: ty.as_capability(db).map_or(ty, |(_, inner)| inner),
                     path: steps,
                 });
@@ -4946,16 +5012,16 @@ impl<'db> BodyExporter<'_, 'db> {
     fn root_var(&self, root: NRootId) -> Option<String> {
         match &self.body.roots[root.index()].kind {
             NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
-                Some(format!("r{}", root.index()))
+                Some(self.roots[root.index()].clone())
             }
             // A temporary is the value it was made for.
-            NRootKind::Temporary { value } => Some(value_name(*value)),
+            NRootKind::Temporary { value } => Some(self.value(*value)),
             NRootKind::Provider { binding } => (self.immutables.contains(&binding.provider_idx)
                 || self
                     .effects
                     .iter()
                     .any(|effect| effect.provider == binding.provider_idx))
-            .then(|| format!("e{}", binding.provider_idx)),
+            .then(|| effect(binding.provider_idx)),
             _ => None,
         }
     }
@@ -4976,7 +5042,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 break;
             }
             let part = field_path(&NDataPath::new(vec![*step]))?[0];
-            ty = self.module.part(ty, part)?.1;
+            ty = self.part(ty, part)?.1;
             steps.push(*step);
         }
         Ok((NDataPath::new(steps), ty))
@@ -5007,7 +5073,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 // value of several accesses holds where the view is.
                 let local = if access.as_capability(db).is_some() && !self.is_access(access) {
                     ValueTarget {
-                        var: value_name(carrier),
+                        var: self.value(carrier),
                         ty: ty.as_capability(db).map_or(ty, |(_, inner)| inner),
                         path: field_path(&component)?,
                     }
@@ -5034,8 +5100,8 @@ impl<'db> BodyExporter<'_, 'db> {
         let db = self.module.db;
         Ok(match place.base {
             NPlaceBase::Deref { pointer } => match self.ty(pointer).as_ptr(db) {
-                Some((_, AddressSpace::Memory)) => Some((value_name(pointer), 0, false)),
-                Some((_, AddressSpace::Calldata)) => Some((value_name(pointer), 0, true)),
+                Some((_, AddressSpace::Memory)) => Some((self.value(pointer), 0, false)),
+                Some((_, AddressSpace::Calldata)) => Some((self.value(pointer), 0, true)),
                 _ => None,
             },
             NPlaceBase::CapabilityTarget { carrier } => {
@@ -5046,7 +5112,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     return Ok(None);
                 }
                 let address = ValueTarget {
-                    var: value_name(carrier),
+                    var: self.value(carrier),
                     ty: self.ty(carrier),
                     path: field_path(&component)?,
                 };
@@ -5092,7 +5158,7 @@ impl<'db> BodyExporter<'_, 'db> {
                             NIndex::Value(index) => {
                                 address = format!(
                                     "({address} + {} * UInt256.ofNat {stride})",
-                                    value_name(*index)
+                                    self.value(*index)
                                 );
                             }
                         }
@@ -5118,12 +5184,44 @@ impl<'db> BodyExporter<'_, 'db> {
         })
     }
 
+    /// The Lean projections from a value of `ty` to the part `step` reaches,
+    /// and the part's type.
+    fn part(&self, ty: TyId<'db>, step: Step) -> Result<(Vec<String>, TyId<'db>), Unsupported> {
+        let db = self.module.db;
+        // A part of what an access reaches is a part of the value there.
+        let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+        match step {
+            Step::Field(index) => Ok(self.module.fields(ty)?.swap_remove(index)),
+            Step::Variant { variant, field } => {
+                let (name, mut fields) = self
+                    .module
+                    .variants(ty)
+                    .ok_or_else(|| Unsupported(format!("type {}", ty.pretty_print(db))))?
+                    .swap_remove(variant);
+                Ok((vec![format!("{name}_{field}")], fields.swap_remove(field)))
+            }
+            // The one name of an element is its index.
+            Step::Index(index) => {
+                let (_, args) = ty.decompose_ty_app(db);
+                let elem = args
+                    .first()
+                    .filter(|_| ty.is_array(db))
+                    .ok_or_else(|| Unsupported(format!("index of {}", ty.pretty_print(db))))?;
+                let index = match index {
+                    NIndex::Const(index) => index.to_string(),
+                    NIndex::Value(value) => format!("{}.toNat", self.value(value)),
+                };
+                Ok((vec![index], *elem))
+            }
+        }
+    }
+
     /// The Lean term for the value at `target`.
     fn read(&self, target: &ValueTarget<'db>) -> Result<String, Unsupported> {
         let mut lean = target.var.clone();
         let mut ty = target.ty;
         for &step in &target.path {
-            let (names, part) = self.module.part(ty, step)?;
+            let (names, part) = self.part(ty, step)?;
             for name in names {
                 match step {
                     Step::Index(_) => write!(lean, "[{name}]!").unwrap(),
@@ -5142,7 +5240,7 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut open = String::new();
         let mut close = String::new();
         for &step in &target.path {
-            let (steps, part) = self.module.part(ty, step)?;
+            let (steps, part) = self.part(ty, step)?;
             for name in steps {
                 match step {
                     Step::Field(_) => {
@@ -5216,7 +5314,7 @@ impl<'db> BodyExporter<'_, 'db> {
             let (component, access) = self.selected(carrier, &place.path)?;
             let (_, inner) = access.as_capability(db).ok_or_else(untyped)?;
             selecting = Some(self.read(&ValueTarget {
-                var: value_name(carrier),
+                var: self.value(carrier),
                 ty: self.ty(carrier),
                 path: field_path(&component)?,
             })?);
@@ -5226,7 +5324,7 @@ impl<'db> BodyExporter<'_, 'db> {
         let (base, mut lane) = match place.base {
             NPlaceBase::Root(root) => self.root(root)?,
             NPlaceBase::CapabilityTarget { carrier } => {
-                (selecting.unwrap_or_else(|| value_name(carrier)), None)
+                (selecting.unwrap_or_else(|| self.value(carrier)), None)
             }
             // A pointer into contract state is a slot number.
             NPlaceBase::Deref { pointer } => {
@@ -5235,7 +5333,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     Some((_, AddressSpace::Transient)) => "transient",
                     _ => return Err(Unsupported(format!("place base {:?}", place.base))),
                 };
-                (format!("(Place.mk .{space} {})", value_name(pointer)), None)
+                (format!("(Place.mk .{space} {})", self.value(pointer)), None)
             }
         };
         let mut lean = self.module.pinned(base_ty, base);
@@ -5289,7 +5387,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 NDataProjection::Index(index) => {
                     let index = match index {
                         NIndex::Const(index) => format!("(UInt256.ofNat {index})"),
-                        NIndex::Value(value) => value_name(*value),
+                        NIndex::Value(value) => self.value(*value),
                     };
                     (
                         format!("({lean}.index {} {index})", self.module.span(part)?),
@@ -5314,14 +5412,15 @@ impl<'db> BodyExporter<'_, 'db> {
     ) -> Result<String, Unsupported> {
         match lane.and_then(|lane| lane.codec) {
             Some(codec) => {
-                let (offset, get, _, entry, path) = self.codecs[codec].clone();
+                let (offset, get, _, ty, path) = self.codecs[codec].clone();
+                let entry = var("entry");
                 let part = self.read(&ValueTarget {
-                    var: "entry".to_string(),
-                    ty: entry,
+                    var: entry.clone(),
+                    ty,
                     path,
                 })?;
                 Ok(format!(
-                    "(do let entry ← {get} (← load {place}) {offset}; pure {part})"
+                    "(do let {entry} ← {get} (← load {place}) {offset}; pure {part})"
                 ))
             }
             None => self.module.load(ty, place, lane),
@@ -5341,21 +5440,22 @@ impl<'db> BodyExporter<'_, 'db> {
         match lane.and_then(|lane| lane.codec) {
             // A part of a packed entry is written into the entry as read.
             Some(codec) => {
-                let (offset, get, set, entry, path) = self.codecs[codec].clone();
+                let (offset, get, set, ty, path) = self.codecs[codec].clone();
                 let word = format!("(← load {place})");
                 if path.is_empty() {
                     return Ok(format!(
                         "(do store {place} (← {set} {word} {offset} {value}))"
                     ));
                 }
+                let entry = var("entry");
                 let target = ValueTarget {
-                    var: "entry".to_string(),
-                    ty: entry,
+                    var: entry.clone(),
+                    ty,
                     path,
                 };
                 Ok(format!(
-                    "(do let mut entry ← {get} {word} {offset}; {}; \
-                     store {place} (← {set} {word} {offset} entry))",
+                    "(do let mut {entry} ← {get} {word} {offset}; {}; \
+                     store {place} (← {set} {word} {offset} {entry}))",
                     self.write(&target, value)?
                 ))
             }
@@ -5409,11 +5509,11 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         let locate = self.module.instance(entry.callee, carriers.into())?;
-        let location = format!("l{}", self.entries);
+        let location = var(&format!("l{}", self.entries));
         self.entries += 1;
         self.located.push(format!(
             "let {location} ← {locate} {collection} {collection}.slot {}",
-            value_name(key)
+            self.value(key)
         ));
         let place = format!("(Place.mk .{space} {location}.slot)");
         let Some(lanes) = entry.lanes else {
@@ -5464,7 +5564,7 @@ impl<'db> BodyExporter<'_, 'db> {
             ProviderSource::ContractField { field } => field,
             // A place the caller passes.
             ProviderSource::UsesParam { .. } => {
-                return Ok((format!("e{}", binding.provider_idx), None));
+                return Ok((effect(binding.provider_idx), None));
             }
             ProviderSource::RootProvider { .. } => {
                 return Err(Unsupported("place in the root object".to_string()));
@@ -5777,16 +5877,83 @@ fn shared_ingot(db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> bool {
     matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std)
 }
 
-/// The names in `text`, each with the namespaces it is written with.
-fn tokens(text: &str) -> impl Iterator<Item = &str> {
+/// A part of a text the exporter prints.
+enum Lexeme<'a> {
+    /// A name, with the namespaces it is written with.
+    Name(&'a str),
+    /// A binder, as `binder` writes it.
+    Binder(&'a str),
+}
+
+/// The names and the binders `text` writes outside its comments and string
+/// literals.
+fn lexemes(text: &str) -> Vec<Lexeme<'_>> {
     let part = |c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '\'' | '«' | '»');
-    text.split(move |c| !part(c))
+    let mut lexemes = Vec::new();
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let len = if rest.starts_with("--") {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if rest.starts_with("/-") {
+            // Block comments nest.
+            let mut depth = 0;
+            let mut at = 0;
+            while at < rest.len() {
+                if rest[at..].starts_with("/-") {
+                    depth += 1;
+                    at += 2;
+                } else if rest[at..].starts_with("-/") {
+                    depth -= 1;
+                    at += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    at += rest[at..].chars().next().unwrap().len_utf8();
+                }
+            }
+            at
+        } else if c == '"' {
+            let mut chars = rest.char_indices().skip(1);
+            let mut end = rest.len();
+            while let Some((at, c)) = chars.next() {
+                match c {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '"' => {
+                        end = at + 1;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            end
+        } else if c == BINDER {
+            let end = rest[1..].find(BINDER).map_or(rest.len(), |at| at + 2);
+            lexemes.push(Lexeme::Binder(&rest[..end]));
+            end
+        } else if part(c) {
+            let end = rest.find(|c| !part(c)).unwrap_or(rest.len());
+            lexemes.push(Lexeme::Name(&rest[..end]));
+            end
+        } else {
+            c.len_utf8()
+        };
+        rest = &rest[len..];
+    }
+    lexemes
 }
 
 /// The names in `text` of definitions among `names`, or of what the
 /// namespace of a type among `types` holds, sorted.
 fn uses(text: &str, names: &FxHashSet<String>, types: &FxHashSet<String>) -> Vec<String> {
-    let mut uses: Vec<_> = tokens(text)
+    let mut uses: Vec<_> = lexemes(text)
+        .into_iter()
+        .filter_map(|lexeme| match lexeme {
+            Lexeme::Name(name) => Some(name),
+            Lexeme::Binder(_) => None,
+        })
         .filter(|token| {
             let mut spaces = token.match_indices('.').map(|(at, _)| &token[..at]);
             names.contains(*token) || spaces.any(|space| types.contains(space))
@@ -5796,6 +5963,78 @@ fn uses(text: &str, names: &FxHashSet<String>, types: &FxHashSet<String>) -> Vec
     uses.sort_unstable();
     uses.dedup();
     uses
+}
+
+/// A binder of a definition's text that would like to be named `name`, and
+/// that `id` tells apart from the definition's other binders. The binder is
+/// named once the definition is complete (`resolve`), so that it is named
+/// apart from everything the definition names.
+fn binder(name: &str, id: impl fmt::Display) -> String {
+    format!("{BINDER}{name}{BINDER_ID}{id}{BINDER}")
+}
+
+/// A binder that its name, `name`, tells apart from the other binders of its
+/// definition.
+fn var(name: &str) -> String {
+    binder(name, name)
+}
+
+/// The variable of effect `provider`: the place or the value its body takes
+/// it as.
+fn effect(provider: u32) -> String {
+    var(&format!("e{provider}"))
+}
+
+/// `text`, a definition's, with its binders named. A binder has the name it
+/// would like unless something else might be meant by it: a name among
+/// `known`, the top-level names, or the prelude's, a name the text writes or
+/// a namespace it writes one in, or another binder's name. It then has that
+/// name with the first number that sets it apart. Comments and string
+/// literals name nothing.
+fn resolve(text: &str, known: &FxHashSet<String>) -> String {
+    let mut written = FxHashSet::default();
+    let mut order = Vec::new();
+    for lexeme in lexemes(text) {
+        match lexeme {
+            Lexeme::Name(name) => {
+                let ends = name.match_indices('.').map(|(at, _)| at);
+                for end in ends.chain([name.len()]).filter(|end| *end > 0) {
+                    written.insert(name[..end].replace(['«', '»'], ""));
+                }
+            }
+            Lexeme::Binder(token) => order.push(&token[1..token.len() - 1]),
+        }
+    }
+    let mut assigned = FxHashSet::default();
+    let mut names = FxHashMap::default();
+    for token in order {
+        if names.contains_key(token) {
+            continue;
+        }
+        let (preferred, _) = token.split_once(BINDER_ID).unwrap_or((token, ""));
+        let name = (0..)
+            .map(|n| match n {
+                0 => preferred.to_string(),
+                n => format!("{preferred}_{n}"),
+            })
+            .find(|name| {
+                !(known.contains(name)
+                    || written.contains(name)
+                    || assigned.contains(name)
+                    || PRELUDE.contains(&name.as_str())
+                    || TYPES.contains(&name.as_str()))
+            })
+            .unwrap();
+        names.insert(token, lean_name(&name));
+        assigned.insert(name);
+    }
+    let mut parts = text.split(BINDER);
+    let mut resolved = parts.next().unwrap().to_string();
+    while let (Some(token), Some(after)) = (parts.next(), parts.next()) {
+        resolved.push_str(&names[token]);
+        resolved.push_str(after);
+    }
+    resolved
 }
 
 /// The lines of `texts`, each a step further in.
@@ -5817,8 +6056,19 @@ fn lean_ident(text: impl AsRef<str>) -> String {
         .join("_")
 }
 
-fn value_name(value: NValueId) -> String {
-    format!("v{}", value.index())
+/// The variable that holds the lane the borrow `borrow` holds.
+fn held_var(borrow: NValueId) -> String {
+    var(&format!("h{}", borrow.index()))
+}
+
+/// The variable of drop flag `flag`.
+fn flag(flag: u32) -> String {
+    var(&format!("f{flag}"))
+}
+
+/// The local function of the join `block`.
+fn join(block: NBlockId) -> String {
+    var(&format!("b{}", block.index()))
 }
 
 /// The place of `binding` among the patterns `pats`, if it is one of them.

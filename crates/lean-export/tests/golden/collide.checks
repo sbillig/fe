@@ -1,0 +1,8 @@
+set_option maxRecDepth 10000 in
+example : limit = pure (UInt256.ofNat 10) := rfl
+set_option maxRecDepth 10000 in
+example : size = pure (UInt256.ofNat 4) := rfl
+set_option maxRecDepth 10000 in
+example : Run_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : Spin_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
