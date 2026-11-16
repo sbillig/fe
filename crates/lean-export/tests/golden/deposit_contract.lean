@@ -50,22 +50,28 @@ def DEPOSIT_CONTRACT_TREE_DEPTH : FeM UInt256 := do
 /-- `init()` of contract `DepositContract` -/
 def init : FeM Unit := do
   let mut r1 : Range_Known_0_Unknown := default
+  -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
   let v2 ← DEPOSIT_CONTRACT_TREE_DEPTH
   let v4 ← checkedSub v2 (UInt256.ofNat 1)
   r1 := (Range_Known_0_Unknown.mk () v4)
   let v8 ← Range_start_0 r1
   let rec loop (r1 : Range_Known_0_Unknown) (v0 : UInt256) : FeM Unit := do
     let mut r1 := r1
+    -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
     let v11 ← Range_has_0 r1 v0
     if v11 then
+      -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
       let v13 ← Range_at_0 r1 v0
       let height := v13
+      -- let cur: u256 = store.zero_hashes[height]
       checkIndex height 32
       let cur ← load (Field.store.zero_hashes.index 1 height)
+      -- store.zero_hashes[height + 1] = ssz::hash_pair(left: cur, right: cur)
       let v17 ← hash_pair cur cur
       let v19 ← checkedAdd height (UInt256.ofNat 1)
       checkIndex v19 32
       store (Field.store.zero_hashes.index 1 v19) v17
+      -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
       let v22 ← Range_next_0 r1 v0
       loop r1 v22
     else
@@ -76,8 +82,10 @@ def init : FeM Unit := do
 /-- `deposit_contract::compute_deposit_data_root` -/
 def compute_deposit_data_root (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (amount_gwei : UInt256) : FeM UInt256 := do
   let mut r0 : (UInt256 × UInt256 × UInt256 × UInt256) := default
+  -- assert!(withdrawal_credentials.len() == 32)
   let v4 ← Bytes_len withdrawal_credentials
   if decide (v4 = (UInt256.ofNat 32)) then
+    -- (
     let v8 ← Bytes_span_ref pubkey
     let v10 ← Bytes_len pubkey
     let v13 ← hash_tree_root_ByteVector_48 v8 (UInt256.ofNat 0) v10
@@ -111,6 +119,7 @@ def DepositEvent_emit_Evm (self : DepositEvent) : FeM Unit := do
 
 /-- `std::evm::effects::Log::emit<Evm, DepositEvent>` -/
 def emit_Evm_DepositEvent (event : DepositEvent) : FeM Unit := do
+  -- event.emit(mut self)
   let _ ← DepositEvent_emit_Evm event
   return ()
 
@@ -133,19 +142,25 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
   let mut r9 : Wei := default
   let mut r10 : Wei := default
   let mut r11 : Range_Known_0_Unknown := default
+  -- assert!(pubkey.len() == 48, "DepositContract: invalid pubkey length")
   let v3 ← Bytes_len pubkey
   if decide (v3 = (UInt256.ofNat 48)) then
+    -- assert!(withdrawal_credentials.len() == 32, "DepositContract: invalid withdrawal_credentials length")
     let v8 ← Bytes_len withdrawal_credentials
     if decide (v8 = (UInt256.ofNat 32)) then
+      -- assert!(signature.len() == 96, "DepositContract: invalid signature length")
       let v13 ← Bytes_len signature
       if decide (v13 = (UInt256.ofNat 96)) then
+        -- let value: Wei = ctx.value()
         let value_18 ← Evm_value
         value := value_18
+        -- assert!(value >= ether(1), "DepositContract: deposit value too low")
         let v21 ← ether (UInt256.ofNat 1)
         r8 := v21
         let value_22 := value
         let v24 ← Wei_ge value_22 r8
         if v24 then
+          -- assert!(value % gwei(1) == Wei::zero(), "DepositContract: deposit value not multiple of gwei")
           let v27 ← gwei (UInt256.ofNat 1)
           let v29 ← Wei_rem value v27
           r9 := v29
@@ -154,14 +169,20 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
           let v31 := r9
           let v33 ← Wei_eq v31 r10
           if v33 then
+            -- let deposit_amount: u256 = value / gwei(1)
             let v36 ← gwei (UInt256.ofNat 1)
             let deposit_amount ← Wei_div value v36
+            -- assert!(deposit_amount <= u64::MASK, "DepositContract: deposit value too high")
             let v40 ← u64_MASK
             if decide (deposit_amount.toNat ≤ v40.toNat) then
+              -- let amount_gwei: u64 = deposit_amount.downcast_truncate()
               let amount_gwei ← downcast_truncate_u256_u64 deposit_amount
+              -- var node: u256 = compute_deposit_data_root(
               let node_48 ← compute_deposit_data_root pubkey withdrawal_credentials signature amount_gwei
               node := node_48
+              -- assert!(
               if decide (node = deposit_data_root.val) then
+                -- log.emit(
                 let pubkey_55 := pubkey
                 let withdrawal_credentials_57 := withdrawal_credentials
                 let v59 ← serialize_u64 amount_gwei
@@ -171,14 +192,18 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                 let v64 ← serialize_u64 v63
                 let v65 := (DepositEvent.mk pubkey_55 withdrawal_credentials_57 v59 signature_60 v64)
                 let _ ← emit_Evm_DepositEvent v65
+                -- assert!(store.deposit_count < MAX_DEPOSIT_COUNT, "DepositContract: merkle tree full")
                 let v68 ← load Field.store.deposit_count
                 let v69 ← MAX_DEPOSIT_COUNT
                 if decide (v68.toNat < v69.toNat) then
+                  -- store.deposit_count += 1
                   let v73 ← load Field.store.deposit_count
                   let v74 ← checkedAdd v73 (UInt256.ofNat 1)
                   store Field.store.deposit_count v74
+                  -- var size: u256 = store.deposit_count
                   let size_76 ← load Field.store.deposit_count
                   size := size_76
+                  -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                   let v79 ← DEPOSIT_CONTRACT_TREE_DEPTH
                   r11 := (Range_Known_0_Unknown.mk () v79)
                   let v83 ← Range_start_0 r11
@@ -193,25 +218,33 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                     let mut r9 := r9
                     let mut r10 := r10
                     let mut r11 := r11
+                    -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                     let v86 ← Range_has_0 r11 v1
                     if v86 then
+                      -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                       let v88 ← Range_at_0 r11 v1
                       let height := v88
+                      -- if size & 1 == 1 {
                       let v95 := decide ((size &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
                       if v95 then
+                        -- store.branch[height] = node
                         checkIndex height 32
                         store (Field.store.branch.index 1 height) node
                         return ()
                       else
+                        -- node = ssz::hash_pair(left: store.branch[height], right: node)
                         checkIndex height 32
                         let v101 ← load (Field.store.branch.index 1 height)
                         let node_104 ← hash_pair v101 node
                         node := node_104
+                        -- size = size / 2
                         let size_110 ← checkedDiv size (UInt256.ofNat 2)
                         size := size_110
+                        -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
                         let v114 ← Range_next_0 r11 v1
                         loop pubkey withdrawal_credentials signature value node size r8 r9 r10 r11 v114
                     else
+                      -- assert!(false)
                       if false then
                         return ()
                       else
@@ -240,9 +273,12 @@ def recv_GetDepositRoot : FeM UInt256 := do
   let mut node : UInt256 := default
   let mut size : UInt256 := default
   let mut r3 : Range_Known_0_Unknown := default
+  -- var node: u256 = 0
   node := (UInt256.ofNat 0)
+  -- var size: u256 = store.deposit_count
   let size_3 ← load Field.store.deposit_count
   size := size_3
+  -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
   let v6 ← DEPOSIT_CONTRACT_TREE_DEPTH
   r3 := (Range_Known_0_Unknown.mk () v6)
   let v10 ← Range_start_0 r3
@@ -250,32 +286,41 @@ def recv_GetDepositRoot : FeM UInt256 := do
     let mut node := node
     let mut size := size
     let mut r3 := r3
+    -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
     let v13 ← Range_has_0 r3 v0
     if v13 then
+      -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
       let v15 ← Range_at_0 r3 v0
       let height := v15
+      -- if size & 1 == 1 {
       let v22 := decide ((size &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
       let join : UInt256 → UInt256 → Range_Known_0_Unknown → FeM UInt256 := fun node size r3 => do
         let mut node := node
         let mut size := size
         let mut r3 := r3
+        -- size = size / 2
         let size_40 ← checkedDiv size (UInt256.ofNat 2)
         size := size_40
+        -- for height in 0 .. DEPOSIT_CONTRACT_TREE_DEPTH {
         let v44 ← Range_next_0 r3 v0
         loop node size r3 v44
+      -- if size & 1 == 1 {
       if v22 then
+        -- node = ssz::hash_pair(left: store.branch[height], right: node)
         checkIndex height 32
         let v23 ← load (Field.store.branch.index 1 height)
         let node_26 ← hash_pair v23 node
         node := node_26
         join node size r3
       else
+        -- node = ssz::hash_pair(left: node, right: store.zero_hashes[height])
         checkIndex height 32
         let v32 ← load (Field.store.zero_hashes.index 1 height)
         let node_33 ← hash_pair node v32
         node := node_33
         join node size r3
     else
+      -- ssz::mix_in_length(root: node, len: store.deposit_count.downcast_truncate())
       let node_46 := node
       let v48 ← load Field.store.deposit_count
       let v49 ← downcast_truncate_u256_u64 v48
@@ -286,21 +331,26 @@ def recv_GetDepositRoot : FeM UInt256 := do
 
 /-- `GetDepositCount -> Bytes`, selector `0x621fd130` (`get_deposit_count()`) -/
 def recv_GetDepositCount : FeM Bytes := do
+  -- let count: u64 = store.deposit_count.downcast_truncate()
   let v0 ← load Field.store.deposit_count
   let count ← downcast_truncate_u256_u64 v0
+  -- ssz::serialize_u64(count)
   let v3 ← serialize_u64 count
   return v3
 
 /-- `SupportsInterface { interface_id } -> bool`, selector `0x01ffc9a7` (`supportsInterface(bytes4)`) -/
 def recv_SupportsInterface (interface_id : FixedBytes_4) : FeM Bool := do
+  -- interface_id.val == 0x01ffc9a7 || interface_id.val == 0x85640907
   let v4 := decide (interface_id.val = (UInt256.ofNat 33540519))
   let join : Bool → FeM Bool := fun v1 => do
     return v1
   let join_1 : FeM Bool := do
     join true
+  -- interface_id.val == 0x01ffc9a7 || interface_id.val == 0x85640907
   if v4 then
     join_1
   else
+    -- interface_id.val == 0x01ffc9a7 || interface_id.val == 0x85640907
     let v7 := decide (interface_id.val = (UInt256.ofNat 2237925639))
     if v7 then
       join_1
@@ -342,18 +392,24 @@ def Deposit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Deposit :=
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Deposit, Sol, CallData>` -/
 def decode_from_prechecked_head_Deposit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Deposit := do
+  -- Self::decode_from(input, pos)
   let v3 ← Deposit_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Deposit>` -/
 def decode_runtime_args_Evm_Sol_Deposit : FeM Deposit := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Deposit_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData input base len
   return v12
 
@@ -373,18 +429,24 @@ def GetDepositRoot_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get
 
 /-- `core::abi::Decode::decode_from_prechecked_head<GetDepositRoot, Sol, CallData>` -/
 def decode_from_prechecked_head_GetDepositRoot_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM GetDepositRoot := do
+  -- Self::decode_from(input, pos)
   let v3 ← GetDepositRoot_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, GetDepositRoot>` -/
 def decode_runtime_args_Evm_Sol_GetDepositRoot : FeM GetDepositRoot := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← GetDepositRoot_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_GetDepositRoot_Sol_CallData input base len
   return v12
 
@@ -405,18 +467,24 @@ def GetDepositCount_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Ge
 
 /-- `core::abi::Decode::decode_from_prechecked_head<GetDepositCount, Sol, CallData>` -/
 def decode_from_prechecked_head_GetDepositCount_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM GetDepositCount := do
+  -- Self::decode_from(input, pos)
   let v3 ← GetDepositCount_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, GetDepositCount>` -/
 def decode_runtime_args_Evm_Sol_GetDepositCount : FeM GetDepositCount := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← GetDepositCount_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_GetDepositCount_Sol_CallData input base len
   return v12
 
@@ -441,18 +509,24 @@ def SupportsInterface_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM 
 
 /-- `core::abi::Decode::decode_from_prechecked_head<SupportsInterface, Sol, CallData>` -/
 def decode_from_prechecked_head_SupportsInterface_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM SupportsInterface := do
+  -- Self::decode_from(input, pos)
   let v3 ← SupportsInterface_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, SupportsInterface>` -/
 def decode_runtime_args_Evm_Sol_SupportsInterface : FeM SupportsInterface := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← SupportsInterface_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_SupportsInterface_Sol_CallData input base len
   return v12
 

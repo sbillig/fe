@@ -120,6 +120,15 @@ impl<'db> Body<'db> {
     pub fn iter_block(self, db: &dyn HirDb) -> FxHashMap<ExprId, usize> {
         BlockOrderCalculator::new(db, self).calculate()
     }
+
+    /// Whether the source writes `stmt`, rather than lowering making it in
+    /// desugaring an item, as a `msg` variant's decoder.
+    pub fn is_written(self, db: &'db dyn HirDb, stmt: StmtId) -> bool {
+        matches!(
+            self.source_map(db).stmt_map.node_to_source(stmt),
+            HirOrigin::Raw(_)
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

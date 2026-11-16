@@ -6,6 +6,7 @@ deriving Inhabited
 /-- `init(initial: u256)` of contract `FeCodeScalar` -/
 def init (initial : UInt256) (value : UInt256) : FeM (Unit × UInt256) := do
   let mut value := value
+  -- value = initial
   value := initial
   return ((), value)
 
@@ -24,18 +25,24 @@ def Get_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Get, Sol, CallData>` -/
 def decode_from_prechecked_head_Get_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Get := do
+  -- Self::decode_from(input, pos)
   let v3 ← Get_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Get>` -/
 def decode_runtime_args_Evm_Sol_Get : FeM Get := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Get_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Get_Sol_CallData input base len
   return v12
 

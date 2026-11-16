@@ -33,6 +33,7 @@ def mstore_Config (p : UInt256) (v : Config) : FeM Unit := do
 /-- `immutables::set_small<Config>` -/
 def set_small_Config (v : UInt256) (config : Config) : FeM (Unit × Config) := do
   let mut config := config
+  -- config.small = v
   config := { config with small := v }
   return ((), config)
 
@@ -40,10 +41,14 @@ def set_small_Config (v : UInt256) (config : Config) : FeM (Unit × Config) := d
 def init (limit : UInt256) (config : Config) (words : (Vector UInt256 2)) : FeM (Unit × Config × (Vector UInt256 2)) := do
   let mut config := config
   let mut words := words
+  -- config = Config { small: 0, on: true, limit }
   config := (Config.mk (UInt256.ofNat 0) true limit)
+  -- set_small(7)
   let (v7, v7_0) ← set_small_Config (UInt256.ofNat 7) config
   config := v7_0
+  -- words = [limit, 2]
   words := (#v[limit, (UInt256.ofNat 2)])
+  -- count = 1
   store Field.count (UInt256.ofNat 1)
   return ((), config, words)
 
@@ -52,7 +57,9 @@ def recv_Limit : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
   let join : UInt256 → FeM UInt256 := fun v0 => do
     return v0
+  -- if config.on { config.limit + (config.small as u256) } else { 0 }
   if config.on then
+    -- config.limit + (config.small as u256)
     let v5 ← checkedAdd config.limit config.small
     join v5
   else
@@ -61,6 +68,7 @@ def recv_Limit : FeM UInt256 := do
 /-- `Sum -> u256`, selector `0x853255cc` (`sum()`) -/
 def recv_Sum : FeM UInt256 := do
   let words ← cloadArray 32 (fun q => cload q) (← immutableAt 4 2) 2
+  -- words[0] + words[1]
   let v0 := (UInt256.ofNat 0)
   checkIndex v0 2
   let v2 := (UInt256.ofNat 1)
@@ -73,6 +81,7 @@ def capped_Config («by» : UInt256) : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
+  -- if by > config.limit { config.limit } else { by }
   if decide (config.limit.toNat < «by».toNat) then
     join config.limit
   else
@@ -81,7 +90,9 @@ def capped_Config («by» : UInt256) : FeM UInt256 := do
 /-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
   let config ← cload_Config (← immutableAt 4 0)
+  -- capped(by)
   let v1 ← capped_Config «by»
+  -- count += with (config) { capped(by) }
   let count_2 ← load Field.count
   let v3 ← checkedAdd count_2 v1
   store Field.count v3
@@ -98,18 +109,24 @@ def Limit_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Limit := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Limit, Sol, CallData>` -/
 def decode_from_prechecked_head_Limit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Limit := do
+  -- Self::decode_from(input, pos)
   let v3 ← Limit_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Limit>` -/
 def decode_runtime_args_Evm_Sol_Limit : FeM Limit := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Limit_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Limit_Sol_CallData input base len
   return v12
 
@@ -130,18 +147,24 @@ def Sum_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Sum := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Sum, Sol, CallData>` -/
 def decode_from_prechecked_head_Sum_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Sum := do
+  -- Self::decode_from(input, pos)
   let v3 ← Sum_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Sum>` -/
 def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Sum_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Sum_Sol_CallData input base len
   return v12
 
@@ -166,18 +189,24 @@ def Bump_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Bump := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Bump, Sol, CallData>` -/
 def decode_from_prechecked_head_Bump_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Bump := do
+  -- Self::decode_from(input, pos)
   let v3 ← Bump_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Bump>` -/
 def decode_runtime_args_Evm_Sol_Bump : FeM Bump := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Bump_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Bump_Sol_CallData input base len
   return v12
 

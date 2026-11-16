@@ -22,21 +22,25 @@ def init : FeM Unit := do
 /-- `lib::left` -/
 def left (x : UInt256) : FeM UInt256 := do
   let mut r0 : Pair := default
+  -- sum(Pair { a: x, b: 1 })
   r0 := (Pair.mk x (UInt256.ofNat 1))
   let v5 ← sum r0
   return v5
 
 /-- `lib::bump<Store>` -/
 def bump_Store («by» : UInt256) : FeM UInt256 := do
+  -- store.total = store.total + left(by)
   let v1 ← load Field.store.total
   let v2 ← left «by»
   let v3 ← checkedAdd v1 v2
   store Field.store.total v3
+  -- store.total
   let v5 ← load Field.store.total
   return v5
 
 /-- `Left { x } -> u256`, selector `0x1bb95617` (`left(uint256)`) -/
 def recv_Left (x : UInt256) : FeM UInt256 := do
+  -- bump(x)
   let v1 ← bump_Store x
   return v1
 
@@ -54,18 +58,24 @@ def Left_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Left := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Left, Sol, CallData>` -/
 def decode_from_prechecked_head_Left_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Left := do
+  -- Self::decode_from(input, pos)
   let v3 ← Left_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Left>` -/
 def decode_runtime_args_Evm_Sol_Left : FeM Left := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Left_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Left_Sol_CallData input base len
   return v12
 

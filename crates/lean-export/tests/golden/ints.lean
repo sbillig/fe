@@ -6,7 +6,9 @@ def init : FeM Unit := do
 
 /-- `Narrow { a, b } -> u8`, selector `0x741ef9d5` (`narrow(uint8,uint8)`) -/
 def recv_Narrow (a : UInt256) (b : UInt256) : FeM UInt256 := do
+  -- let sum = a + b
   let sum ← IntTy.add (.u 8) a b
+  -- (sum - low) * 2 / b % 7
   let v9 ← IntTy.sub (.u 8) sum ((sum >>> (UInt256.ofNat 1)) &&& (UInt256.ofNat 15))
   let v11 ← IntTy.mul (.u 8) v9 (UInt256.ofNat 2)
   let v12 ← checkedDiv v11 b
@@ -15,15 +17,19 @@ def recv_Narrow (a : UInt256) (b : UInt256) : FeM UInt256 := do
 
 /-- `ints::wrapping` -/
 def wrapping (a : UInt256) (b : UInt256) : FeM UInt256 := do
+  -- (a * b) << 3
   let v6 := IntTy.shl (.i 32) (IntTy.mulW (.i 32) a b) (UInt256.ofNat 3)
   return v6
 
 /-- `Signed { a, b } -> i32`, selector `0x6effafad` (`signed(int32,int32)`) -/
 def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
+  -- if a < b {
   if UInt256.sltBool a b then
+    -- return -a
     let v3 ← IntTy.neg (.i 32) a
     return v3
   else
+    -- wrapping(a, b) + (a / b) - (a % b) + -5
     let v6 ← wrapping a b
     let v7 ← IntTy.div (.i 32) a b
     let v8 ← IntTy.add (.i 32) v6 v7
@@ -34,8 +40,11 @@ def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
 
 /-- `Mixed { a, b } -> i256`, selector `0x728ac8e2` (`mixed(int256,uint16)`) -/
 def recv_Mixed (a : UInt256) (b : UInt256) : FeM UInt256 := do
+  -- let small: i8 = a.downcast_truncate()
   let small ← downcast_truncate_i256_i8 a
+  -- let bits: i256 = wide.downcast_unchecked()
   let bits ← downcast_unchecked_u256_i256 b
+  -- (a >> 2) ** 2 + (small as i256) + bits + (!a)
   let v11 ← IntTy.pow (.i 256) (IntTy.shr (.i 256) a (UInt256.ofNat 2)) (UInt256.ofNat 2)
   let v13 ← IntTy.add (.i 256) v11 small
   let v14 ← IntTy.add (.i 256) v13 bits
@@ -47,6 +56,7 @@ def recv_Context : FeM UInt256 := do
   let mut r1 : UInt256 := default
   let mut r2 : Wei := default
   let mut r3 : UInt256 := default
+  -- evm.address().word() ^ evm.value().as_wei() ^ evm.origin().word() ^ evm.block_number()
   let v1 ← Evm_address
   r1 := v1
   let v3 ← Address_word r1

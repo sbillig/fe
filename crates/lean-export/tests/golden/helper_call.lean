@@ -20,9 +20,12 @@ def init : FeM Unit := do
 
 /-- `helper_call::add<Store>` -/
 def add_Store («by» : UInt256) : FeM UInt256 := do
+  -- let next = store.total + by
   let v1 ← load Field.store.total
   let next ← checkedAdd v1 «by»
+  -- store.total = next
   store Field.store.total next
+  -- store.hits[by] += 1
   let hits_by ← StorageMap_locate_u256_u256 Field.store.hits Field.store.hits.slot «by»
   let v8 ← load (Place.mk .storage hits_by.slot)
   let v9 ← checkedAdd v8 (UInt256.ofNat 1)
@@ -32,6 +35,7 @@ def add_Store («by» : UInt256) : FeM UInt256 := do
 
 /-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
+  -- add(by)
   let v1 ← add_Store «by»
   return v1
 

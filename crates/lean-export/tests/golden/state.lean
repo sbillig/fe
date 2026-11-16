@@ -117,34 +117,45 @@ def init : FeM Unit := do
 
 /-- `SetDelta { delta } -> i16`, selector `0x36899e92` (`setDelta(int16)`) -/
 def recv_SetDelta (delta : UInt256) : FeM UInt256 := do
+  -- let old = packed.delta
   let old ← loadIntAt (.i 16) Field.packed.delta ⟨2, 2, true⟩
+  -- packed.delta = delta
   storeIntAt (.i 16) Field.packed.delta ⟨2, 2, true⟩ delta
   return old
 
 /-- `Replace { flag, small, delta, owner, total } -> u256`, selector `0x1e84534a` (`replace(bool,uint8,int16,address,uint256)`) -/
 def recv_Replace (flag : Bool) (small : UInt256) (delta : UInt256) (owner : UInt256) (total : UInt256) : FeM UInt256 := do
+  -- let old = packed
   let packed_1 ← load_Packed Field.packed
+  -- packed = Packed { flag, small, delta, owner, total }
   store_Packed Field.packed (Packed.mk flag small delta owner total)
   return packed_1.total
 
 /-- `Advance { by } -> u256`, selector `0x71d6ddd6` (`advance(uint256)`) -/
 def recv_Advance («by» : UInt256) : FeM UInt256 := do
+  -- match phase {
   let v3 ← load_Phase Field.phase
   let join : UInt256 → FeM UInt256 := fun v1 => do
     return v1
+  -- match phase {
   match v3 with
   | .Idle =>
+    -- phase = Phase::Running(1, by)
     store_Phase Field.phase (Phase.Running (UInt256.ofNat 1) «by»)
     join (UInt256.ofNat 0)
   | .Running .. =>
+    -- match phase {
     let count ← loadInt (.u 64) (Field.phase.offset 1)
     let sum ← load (Field.phase.offset 2)
+    -- phase = Phase::Done { ok: sum > by }
     store_Phase Field.phase (Phase.Done (decide («by».toNat < sum.toNat)))
     join sum
   | .Done .. =>
+    -- match phase {
     let ok ← loadBool (Field.phase.offset 1)
     let join_1 : UInt256 → FeM UInt256 := fun v2 => do
       join v2
+    -- if ok { 1 } else { 2 }
     if ok then
       join_1 (UInt256.ofNat 1)
     else
@@ -152,18 +163,24 @@ def recv_Advance («by» : UInt256) : FeM UInt256 := do
 
 /-- `Mark { at, level } -> u8`, selector `0x0a774e1e` (`mark(uint256,uint8)`) -/
 def recv_Mark («at» : UInt256) (level : UInt256) : FeM UInt256 := do
+  -- let old = levels[at]
   checkIndex «at» 3
   let old ← loadInt (.u 8) (Field.levels.index 1 «at»)
+  -- levels[at] = level
   checkIndex «at» 3
   storeInt (.u 8) (Field.levels.index 1 «at») level
+  -- narrow = old
   storeIntAt (.u 8) Field.narrow ⟨1, 1, true⟩ old
   let narrow ← loadIntAt (.u 8) Field.narrow ⟨1, 1, true⟩
   return narrow
 
 /-- `Lock -> bool`, selector `0xf83d08ba` (`lock()`) -/
 def recv_Lock : FeM Bool := do
+  -- let was = lock.value
   let was ← loadBoolAt ((Field.lock.pin .transient).field Layout.TSlot_bool 0) ⟨0, 1, false⟩
+  -- lock.value = true
   storeBoolAt ((Field.lock.pin .transient).field Layout.TSlot_bool 0) ⟨0, 1, false⟩ true
+  -- alone = was
   storeBoolAt Field.alone ⟨0, 1, true⟩ was
   let alone ← loadBoolAt Field.alone ⟨0, 1, true⟩
   return alone

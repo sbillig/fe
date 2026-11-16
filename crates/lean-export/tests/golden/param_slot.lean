@@ -13,19 +13,23 @@ def make (pos : UInt256) : FeM Cursor := do
 
 /-- `Cursor::end` -/
 def Cursor_end (self : Cursor) : FeM UInt256 := do
+  -- self.pos + self.base
   let v3 ← checkedAdd self.pos self.base
   return v3
 
 /-- `Cursor::advance` -/
 def Cursor_advance (self : Cursor) («by» : UInt256) : FeM (UInt256 × Cursor) := do
   let mut self := self
+  -- let at = self.pos
   let «at» := self.pos
+  -- self.pos = at + by
   let v5 ← checkedAdd «at» «by»
   self := { self with pos := v5 }
   return («at», self)
 
 /-- `param_slot::c_end` -/
 def c_end (c : Cursor) : FeM UInt256 := do
+  -- c.end()
   let v1 ← Cursor_end c
   return v1
 
@@ -33,6 +37,7 @@ def c_end (c : Cursor) : FeM UInt256 := do
 def consume (c : Cursor) («by» : UInt256) : FeM UInt256 := do
   let mut c := c
   let mut r1 : Cursor := default
+  -- c.advance(by) + c_end(c: make(pos: by))
   let (v2, v2_0) ← Cursor_advance c «by»
   c := v2_0
   let v3 ← make «by»
@@ -44,6 +49,7 @@ def consume (c : Cursor) («by» : UInt256) : FeM UInt256 := do
 /-- `param_slot::bump` -/
 def bump («by» : UInt256) : FeM UInt256 := do
   let mut «by» := «by»
+  -- by += 1
   let by_2 ← checkedAdd «by» (UInt256.ofNat 1)
   «by» := by_2
   return «by»
@@ -51,6 +57,7 @@ def bump («by» : UInt256) : FeM UInt256 := do
 /-- `Sum { step } -> u256`, selector `0x188b85b4` (`sum(uint256)`) -/
 def recv_Sum (step : UInt256) : FeM UInt256 := do
   let mut r0 : Cursor := default
+  -- make(pos: step).end() + consume(make(pos: 1), by: step) + bump(by: step)
   let v1 ← make step
   r0 := v1
   let v3 ← Cursor_end r0

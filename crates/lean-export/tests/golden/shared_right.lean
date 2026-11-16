@@ -12,6 +12,7 @@ def init : FeM Unit := do
 /-- `lib::right` -/
 def right (x : UInt256) : FeM UInt256 := do
   let mut r0 : Pair := default
+  -- sum(Pair { a: 1, b: x }) * 2
   r0 := (Pair.mk (UInt256.ofNat 1) x)
   let v5 ← sum r0
   let v7 ← checkedMul v5 (UInt256.ofNat 2)
@@ -19,6 +20,7 @@ def right (x : UInt256) : FeM UInt256 := do
 
 /-- `Right { x } -> u256`, selector `0xad5f32c7` (`right(uint256)`) -/
 def recv_Right (x : UInt256) : FeM UInt256 := do
+  -- right(x)
   let v1 ← right x
   return v1
 
@@ -36,18 +38,24 @@ def Right_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Right := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Right, Sol, CallData>` -/
 def decode_from_prechecked_head_Right_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Right := do
+  -- Self::decode_from(input, pos)
   let v3 ← Right_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Right>` -/
 def decode_runtime_args_Evm_Sol_Right : FeM Right := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Right_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Right_Sol_CallData input base len
   return v12
 

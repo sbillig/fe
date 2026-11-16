@@ -13,10 +13,13 @@ def init : FeM Unit := do
 /-- `lib::input<Evm>` -/
 def input_Evm_4 : FeM MemBuffer := do
   let mut input : MemBuffer := default
+  -- let len = raw.calldatasize()
   let len ← Evm_calldatasize
+  -- var input = MemBuffer::new(len.downcast_unchecked())
   let v3 ← downcast_unchecked_u256_usize len
   let input_4 ← MemBuffer_new v3
   input := input_4
+  -- raw.calldatacopy(dest: mut input, dest_offset: 0, src_offset: 0, len)
   let (v10, v10_0) ← Evm_calldatacopy input (UInt256.ofNat 0) (UInt256.ofNat 0) len
   input := v10_0
   return input
@@ -25,33 +28,42 @@ def input_Evm_4 : FeM MemBuffer := do
 def words_1 (values : (Vector UInt256 1)) (gas_used : UInt256) : FeM Output := do
   let mut output : MemBuffer := default
   let mut r1 : Range_Known_0_Unknown := default
+  -- let Option::Some(var output) = MemBuffer::try_new(N * 32) else { return host_allocation(gas_used) }
   let v5 ← checkedMul (UInt256.ofNat 1) (UInt256.ofNat 32)
   let v6 ← MemBuffer_try_new v5
   match (← pure v6) with
   | .Some .. =>
+    -- let Option::Some(var output) = MemBuffer::try_new(N * 32) else { return host_allocation(gas_used) }
     output := v6.Some_0
+    -- for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
     r1 := (Range_Known_0_Unknown.mk () (UInt256.ofNat 1))
     let v15 ← Range_start_0 r1
     let rec loop (output : MemBuffer) (r1 : Range_Known_0_Unknown) (v2 : UInt256) : FeM Output := do
       let mut output := output
       let mut r1 := r1
+      -- for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
       let v18 ← Range_has_0 r1 v2
       if v18 then
+        -- for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
         let v20 ← Range_at_0 r1 v2
         let i := v20
+        -- output.write_word(offset: i * 32, value: values[i])
         let v23 ← checkedMul i (UInt256.ofNat 32)
         checkIndex i 1
         let (v26, v26_0) ← MemBuffer_write_word output v23 values[i.toNat]!
         output := v26_0
+        -- for i in 0..N { output.write_word(offset: i * 32, value: values[i]) }
         let v28 ← Range_next_0 r1 v2
         loop output r1 v28
       else
+        -- Output { status: SUCCESS, gas_used, output }
         let v30 ← SUCCESS
         let v33 := (Output.mk v30 gas_used output)
         return v33
     partial_fixpoint
     loop output r1 v15
   | _ =>
+    -- return host_allocation(gas_used)
     let v34 ← host_allocation gas_used
     match (← pure v6) with
     | .Some .. =>
@@ -62,6 +74,7 @@ def words_1 (values : (Vector UInt256 1)) (gas_used : UInt256) : FeM Output := d
 
 /-- `Keccak256::new` -/
 def Keccak256_new : FeM Keccak256 := do
+  -- Self { lanes: [0; 25], position: 0 }
   let v3 := (Keccak256.mk (Vector.replicate 25 (UInt256.ofNat 0)) (UInt256.ofNat 0))
   return v3
 
@@ -72,6 +85,7 @@ def ROUND_CONSTANTS : FeM (Vector UInt256 24) := do
 
 /-- `lib::permutation::rotate` -/
 def rotate (value : UInt256) («by» : UInt256) : FeM UInt256 := do
+  -- (value << by) | (value >> (64 - by))
   let v8 ← IntTy.sub (.u 64) (UInt256.ofNat 64) «by»
   return (IntTy.shl (.u 64) value «by») ||| (value >>> v8)
 
@@ -79,6 +93,7 @@ def keccak_round_k9 (b20 : UInt256) (b21 : UInt256) (b23 : UInt256) (b24 : UInt2
   let mut e := e
   checkIndex v366 25
   e := (e.set! v366.toNat (b23 ^^^ ((IntTy.not (.u 64) b24) &&& b20)))
+  -- e[24] = b24 ^ (!b20 & b21)
   let v371 := (UInt256.ofNat 24)
   checkIndex v371 25
   e := (e.set! v371.toNat (b24 ^^^ ((IntTy.not (.u 64) b20) &&& b21)))
@@ -88,27 +103,35 @@ def keccak_round_k8 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   let mut e := e
   checkIndex v318 25
   let b20 ← rotate (a[v318.toNat]! ^^^ d2) (UInt256.ofNat 62)
+  -- let b21 = rotate(a[8] ^ d3, by: 55)
   let v324 := (UInt256.ofNat 8)
   checkIndex v324 25
   let b21 ← rotate (a[v324.toNat]! ^^^ d3) (UInt256.ofNat 55)
+  -- let b22 = rotate(a[14] ^ d4, by: 39)
   let v330 := (UInt256.ofNat 14)
   checkIndex v330 25
   let b22 ← rotate (a[v330.toNat]! ^^^ d4) (UInt256.ofNat 39)
+  -- let b23 = rotate(a[15] ^ d0, by: 41)
   let v336 := (UInt256.ofNat 15)
   checkIndex v336 25
   let b23 ← rotate (a[v336.toNat]! ^^^ d0) (UInt256.ofNat 41)
+  -- let b24 = rotate(a[21] ^ d1, by: 2)
   let v342 := (UInt256.ofNat 21)
   checkIndex v342 25
   let b24 ← rotate (a[v342.toNat]! ^^^ d1) (UInt256.ofNat 2)
+  -- e[20] = b20 ^ (!b21 & b22)
   let v351 := (UInt256.ofNat 20)
   checkIndex v351 25
   e := (e.set! v351.toNat (b20 ^^^ ((IntTy.not (.u 64) b21) &&& b22)))
+  -- e[21] = b21 ^ (!b22 & b23)
   let v356 := (UInt256.ofNat 21)
   checkIndex v356 25
   e := (e.set! v356.toNat (b21 ^^^ ((IntTy.not (.u 64) b22) &&& b23)))
+  -- e[22] = b22 ^ (!b23 & b24)
   let v361 := (UInt256.ofNat 22)
   checkIndex v361 25
   e := (e.set! v361.toNat (b22 ^^^ ((IntTy.not (.u 64) b23) &&& b24)))
+  -- e[23] = b23 ^ (!b24 & b20)
   let v366 := (UInt256.ofNat 23)
   keccak_round_k9 b20 b21 b23 b24 v366 e
 
@@ -116,27 +139,35 @@ def keccak_round_k7 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   let mut e := e
   checkIndex v275 25
   let b17 ← rotate (a[v275.toNat]! ^^^ d1) (UInt256.ofNat 10)
+  -- let b18 = rotate(a[17] ^ d2, by: 15)
   let v281 := (UInt256.ofNat 17)
   checkIndex v281 25
   let b18 ← rotate (a[v281.toNat]! ^^^ d2) (UInt256.ofNat 15)
+  -- let b19 = rotate(a[23] ^ d3, by: 56)
   let v287 := (UInt256.ofNat 23)
   checkIndex v287 25
   let b19 ← rotate (a[v287.toNat]! ^^^ d3) (UInt256.ofNat 56)
+  -- e[15] = b15 ^ (!b16 & b17)
   let v296 := (UInt256.ofNat 15)
   checkIndex v296 25
   e := (e.set! v296.toNat (b15 ^^^ ((IntTy.not (.u 64) b16) &&& b17)))
+  -- e[16] = b16 ^ (!b17 & b18)
   let v301 := (UInt256.ofNat 16)
   checkIndex v301 25
   e := (e.set! v301.toNat (b16 ^^^ ((IntTy.not (.u 64) b17) &&& b18)))
+  -- e[17] = b17 ^ (!b18 & b19)
   let v306 := (UInt256.ofNat 17)
   checkIndex v306 25
   e := (e.set! v306.toNat (b17 ^^^ ((IntTy.not (.u 64) b18) &&& b19)))
+  -- e[18] = b18 ^ (!b19 & b15)
   let v311 := (UInt256.ofNat 18)
   checkIndex v311 25
   e := (e.set! v311.toNat (b18 ^^^ ((IntTy.not (.u 64) b19) &&& b15)))
+  -- e[19] = b19 ^ (!b15 & b16)
   let v316 := (UInt256.ofNat 19)
   checkIndex v316 25
   e := (e.set! v316.toNat (b19 ^^^ ((IntTy.not (.u 64) b15) &&& b16)))
+  -- let b20 = rotate(a[2] ^ d2, by: 62)
   let v318 := (UInt256.ofNat 2)
   keccak_round_k8 a d0 d1 d2 d3 d4 v318 e
 
@@ -144,27 +175,35 @@ def keccak_round_k6 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   let mut e := e
   checkIndex v232 25
   let b14 ← rotate (a[v232.toNat]! ^^^ d0) (UInt256.ofNat 18)
+  -- e[10] = b10 ^ (!b11 & b12)
   let v241 := (UInt256.ofNat 10)
   checkIndex v241 25
   e := (e.set! v241.toNat (b10 ^^^ ((IntTy.not (.u 64) b11) &&& b12)))
+  -- e[11] = b11 ^ (!b12 & b13)
   let v246 := (UInt256.ofNat 11)
   checkIndex v246 25
   e := (e.set! v246.toNat (b11 ^^^ ((IntTy.not (.u 64) b12) &&& b13)))
+  -- e[12] = b12 ^ (!b13 & b14)
   let v251 := (UInt256.ofNat 12)
   checkIndex v251 25
   e := (e.set! v251.toNat (b12 ^^^ ((IntTy.not (.u 64) b13) &&& b14)))
+  -- e[13] = b13 ^ (!b14 & b10)
   let v256 := (UInt256.ofNat 13)
   checkIndex v256 25
   e := (e.set! v256.toNat (b13 ^^^ ((IntTy.not (.u 64) b14) &&& b10)))
+  -- e[14] = b14 ^ (!b10 & b11)
   let v261 := (UInt256.ofNat 14)
   checkIndex v261 25
   e := (e.set! v261.toNat (b14 ^^^ ((IntTy.not (.u 64) b10) &&& b11)))
+  -- let b15 = rotate(a[4] ^ d4, by: 27)
   let v263 := (UInt256.ofNat 4)
   checkIndex v263 25
   let b15 ← rotate (a[v263.toNat]! ^^^ d4) (UInt256.ofNat 27)
+  -- let b16 = rotate(a[5] ^ d0, by: 36)
   let v269 := (UInt256.ofNat 5)
   checkIndex v269 25
   let b16 ← rotate (a[v269.toNat]! ^^^ d0) (UInt256.ofNat 36)
+  -- let b17 = rotate(a[11] ^ d1, by: 10)
   let v275 := (UInt256.ofNat 11)
   keccak_round_k7 a d0 d1 d2 d3 d4 b15 b16 v275 e
 
@@ -172,27 +211,35 @@ def keccak_round_k5 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   let mut e := e
   checkIndex v191 25
   e := (e.set! v191.toNat (b6 ^^^ ((IntTy.not (.u 64) b7) &&& b8)))
+  -- e[7] = b7 ^ (!b8 & b9)
   let v196 := (UInt256.ofNat 7)
   checkIndex v196 25
   e := (e.set! v196.toNat (b7 ^^^ ((IntTy.not (.u 64) b8) &&& b9)))
+  -- e[8] = b8 ^ (!b9 & b5)
   let v201 := (UInt256.ofNat 8)
   checkIndex v201 25
   e := (e.set! v201.toNat (b8 ^^^ ((IntTy.not (.u 64) b9) &&& b5)))
+  -- e[9] = b9 ^ (!b5 & b6)
   let v206 := (UInt256.ofNat 9)
   checkIndex v206 25
   e := (e.set! v206.toNat (b9 ^^^ ((IntTy.not (.u 64) b5) &&& b6)))
+  -- let b10 = rotate(a[1] ^ d1, by: 1)
   let v208 := (UInt256.ofNat 1)
   checkIndex v208 25
   let b10 ← rotate (a[v208.toNat]! ^^^ d1) (UInt256.ofNat 1)
+  -- let b11 = rotate(a[7] ^ d2, by: 6)
   let v214 := (UInt256.ofNat 7)
   checkIndex v214 25
   let b11 ← rotate (a[v214.toNat]! ^^^ d2) (UInt256.ofNat 6)
+  -- let b12 = rotate(a[13] ^ d3, by: 25)
   let v220 := (UInt256.ofNat 13)
   checkIndex v220 25
   let b12 ← rotate (a[v220.toNat]! ^^^ d3) (UInt256.ofNat 25)
+  -- let b13 = rotate(a[19] ^ d4, by: 8)
   let v226 := (UInt256.ofNat 19)
   checkIndex v226 25
   let b13 ← rotate (a[v226.toNat]! ^^^ d4) (UInt256.ofNat 8)
+  -- let b14 = rotate(a[20] ^ d0, by: 18)
   let v232 := (UInt256.ofNat 20)
   keccak_round_k6 a d0 d1 d2 d3 d4 b10 b11 b12 b13 v232 e
 
@@ -200,60 +247,77 @@ def keccak_round_k4 (a : (Vector UInt256 25)) (d0 : UInt256) (d1 : UInt256) (d2 
   let mut e := e
   checkIndex v146 25
   e := (e.set! v146.toNat (b3 ^^^ ((IntTy.not (.u 64) b4) &&& b0)))
+  -- e[4] = b4 ^ (!b0 & b1)
   let v151 := (UInt256.ofNat 4)
   checkIndex v151 25
   e := (e.set! v151.toNat (b4 ^^^ ((IntTy.not (.u 64) b0) &&& b1)))
+  -- let b5 = rotate(a[3] ^ d3, by: 28)
   let v153 := (UInt256.ofNat 3)
   checkIndex v153 25
   let b5 ← rotate (a[v153.toNat]! ^^^ d3) (UInt256.ofNat 28)
+  -- let b6 = rotate(a[9] ^ d4, by: 20)
   let v159 := (UInt256.ofNat 9)
   checkIndex v159 25
   let b6 ← rotate (a[v159.toNat]! ^^^ d4) (UInt256.ofNat 20)
+  -- let b7 = rotate(a[10] ^ d0, by: 3)
   let v165 := (UInt256.ofNat 10)
   checkIndex v165 25
   let b7 ← rotate (a[v165.toNat]! ^^^ d0) (UInt256.ofNat 3)
+  -- let b8 = rotate(a[16] ^ d1, by: 45)
   let v171 := (UInt256.ofNat 16)
   checkIndex v171 25
   let b8 ← rotate (a[v171.toNat]! ^^^ d1) (UInt256.ofNat 45)
+  -- let b9 = rotate(a[22] ^ d2, by: 61)
   let v177 := (UInt256.ofNat 22)
   checkIndex v177 25
   let b9 ← rotate (a[v177.toNat]! ^^^ d2) (UInt256.ofNat 61)
+  -- e[5] = b5 ^ (!b6 & b7)
   let v186 := (UInt256.ofNat 5)
   checkIndex v186 25
   e := (e.set! v186.toNat (b5 ^^^ ((IntTy.not (.u 64) b6) &&& b7)))
+  -- e[6] = b6 ^ (!b7 & b8)
   let v191 := (UInt256.ofNat 6)
   keccak_round_k5 a d0 d1 d2 d3 d4 b5 b6 b7 b8 b9 v191 e
 
 def keccak_round_k3 (a : (Vector UInt256 25)) (constant : UInt256) (d0 : UInt256) (d1 : UInt256) (d2 : UInt256) (d3 : UInt256) (d4 : UInt256) (v98 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
   let b0 := a[v98.toNat]! ^^^ d0
+  -- let b1 = rotate(a[6] ^ d1, by: 44)
   let v102 := (UInt256.ofNat 6)
   checkIndex v102 25
   let b1 ← rotate (a[v102.toNat]! ^^^ d1) (UInt256.ofNat 44)
+  -- let b2 = rotate(a[12] ^ d2, by: 43)
   let v108 := (UInt256.ofNat 12)
   checkIndex v108 25
   let b2 ← rotate (a[v108.toNat]! ^^^ d2) (UInt256.ofNat 43)
+  -- let b3 = rotate(a[18] ^ d3, by: 21)
   let v114 := (UInt256.ofNat 18)
   checkIndex v114 25
   let b3 ← rotate (a[v114.toNat]! ^^^ d3) (UInt256.ofNat 21)
+  -- let b4 = rotate(a[24] ^ d4, by: 14)
   let v120 := (UInt256.ofNat 24)
   checkIndex v120 25
   let b4 ← rotate (a[v120.toNat]! ^^^ d4) (UInt256.ofNat 14)
+  -- e[0] = b0 ^ (!b1 & b2) ^ constant
   let v130 := (b0 ^^^ ((IntTy.not (.u 64) b1) &&& b2)) ^^^ constant
   let v131 := (UInt256.ofNat 0)
   checkIndex v131 25
   e := (e.set! v131.toNat v130)
+  -- e[1] = b1 ^ (!b2 & b3)
   let v136 := (UInt256.ofNat 1)
   checkIndex v136 25
   e := (e.set! v136.toNat (b1 ^^^ ((IntTy.not (.u 64) b2) &&& b3)))
+  -- e[2] = b2 ^ (!b3 & b4)
   let v141 := (UInt256.ofNat 2)
   checkIndex v141 25
   e := (e.set! v141.toNat (b2 ^^^ ((IntTy.not (.u 64) b3) &&& b4)))
+  -- e[3] = b3 ^ (!b4 & b0)
   let v146 := (UInt256.ofNat 3)
   keccak_round_k4 a d0 d1 d2 d3 d4 b0 b1 b3 b4 v146 e
 
 def keccak_round_k2 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (c2 : UInt256) (c3 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  -- let c4 = a[4] ^ a[9] ^ a[14] ^ a[19] ^ a[24]
   let v63 := (UInt256.ofNat 4)
   checkIndex v63 25
   let v65 := (UInt256.ofNat 9)
@@ -266,22 +330,29 @@ def keccak_round_k2 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
   let v74 := (UInt256.ofNat 24)
   checkIndex v74 25
   let c4 := (v70 ^^^ a[v71.toNat]!) ^^^ a[v74.toNat]!
+  -- let d0 = c4 ^ rotate(c1, by: 1)
   let v79 ← rotate c1 (UInt256.ofNat 1)
   let d0 := c4 ^^^ v79
+  -- let d1 = c0 ^ rotate(c2, by: 1)
   let v83 ← rotate c2 (UInt256.ofNat 1)
   let d1 := c0 ^^^ v83
+  -- let d2 = c1 ^ rotate(c3, by: 1)
   let v87 ← rotate c3 (UInt256.ofNat 1)
   let d2 := c1 ^^^ v87
+  -- let d3 = c2 ^ rotate(c4, by: 1)
   let v91 ← rotate c4 (UInt256.ofNat 1)
   let d3 := c2 ^^^ v91
+  -- let d4 = c3 ^ rotate(c0, by: 1)
   let v95 ← rotate c0 (UInt256.ofNat 1)
   let d4 := c3 ^^^ v95
+  -- let b0 = a[0] ^ d0
   let v98 := (UInt256.ofNat 0)
   checkIndex v98 25
   keccak_round_k3 a constant d0 d1 d2 d3 d4 v98 e
 
 def keccak_round_k1 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256) (c1 : UInt256) (e : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  -- let c2 = a[2] ^ a[7] ^ a[12] ^ a[17] ^ a[22]
   let v33 := (UInt256.ofNat 2)
   checkIndex v33 25
   let v35 := (UInt256.ofNat 7)
@@ -294,6 +365,7 @@ def keccak_round_k1 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
   let v44 := (UInt256.ofNat 22)
   checkIndex v44 25
   let c2 := (v40 ^^^ a[v41.toNat]!) ^^^ a[v44.toNat]!
+  -- let c3 = a[3] ^ a[8] ^ a[13] ^ a[18] ^ a[23]
   let v48 := (UInt256.ofNat 3)
   checkIndex v48 25
   let v50 := (UInt256.ofNat 8)
@@ -311,6 +383,7 @@ def keccak_round_k1 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
 /-- `lib::permutation::keccak_round` -/
 def keccak_round (a : (Vector UInt256 25)) (e : (Vector UInt256 25)) (constant : UInt256) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
+  -- let c0 = a[0] ^ a[5] ^ a[10] ^ a[15] ^ a[20]
   let v3 := (UInt256.ofNat 0)
   checkIndex v3 25
   let v5 := (UInt256.ofNat 5)
@@ -323,6 +396,7 @@ def keccak_round (a : (Vector UInt256 25)) (e : (Vector UInt256 25)) (constant :
   let v14 := (UInt256.ofNat 20)
   checkIndex v14 25
   let c0 := v13 ^^^ a[v14.toNat]!
+  -- let c1 = a[1] ^ a[6] ^ a[11] ^ a[16] ^ a[21]
   let v18 := (UInt256.ofNat 1)
   checkIndex v18 25
   let v20 := (UInt256.ofNat 6)
@@ -343,24 +417,31 @@ def permute (state : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) :=
   let mut round : UInt256 := default
   let mut r2 : (Vector UInt256 25) := default
   let mut state := state
+  -- var other: [u64; 25] = [0; 25]
   other := (Vector.replicate 25 (UInt256.ofNat 0))
+  -- var round: usize = 0
   round := (UInt256.ofNat 0)
   let rec loop (other : (Vector UInt256 25)) (round : UInt256) (r2 : (Vector UInt256 25)) (state : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
     let mut other := other
     let mut round := round
     let mut r2 := r2
     let mut state := state
+    -- while round < 24 {
     if decide (round.toNat < (UInt256.ofNat 24).toNat) then
+      -- if round % 2 == 0 {
       let v13 ← checkedRem round (UInt256.ofNat 2)
       let join : (Vector UInt256 25) → UInt256 → (Vector UInt256 25) → (Vector UInt256 25) → FeM (Unit × (Vector UInt256 25)) := fun other round r2 state => do
         let mut other := other
         let mut round := round
         let mut r2 := r2
         let mut state := state
+        -- round += 1
         let round_35 ← checkedAdd round (UInt256.ofNat 1)
         round := round_35
         loop other round r2 state
+      -- if round % 2 == 0 {
       if decide (v13 = (UInt256.ofNat 0)) then
+        -- keccak_round(state, mut other, ROUND_CONSTANTS[round])
         let v18 ← ROUND_CONSTANTS
         let round_19 := round
         checkIndex round_19 24
@@ -368,6 +449,7 @@ def permute (state : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) :=
         other := v22_0
         join other round r2 state
       else
+        -- keccak_round(other, mut state, ROUND_CONSTANTS[round])
         r2 := other
         let v27 ← ROUND_CONSTANTS
         let round_28 := round
@@ -383,14 +465,18 @@ def permute (state : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) :=
 /-- `Keccak256::advance` -/
 def Keccak256_advance (self : Keccak256) (bytes : UInt256) : FeM (Unit × Keccak256) := do
   let mut self := self
+  -- self.position += bytes
   let v4 ← checkedAdd self.position bytes
   self := { self with position := v4 }
   let join : Keccak256 → FeM (Unit × Keccak256) := fun self => do
     let mut self := self
     return ((), self)
+  -- if self.position == 136 {
   if decide (self.position = (UInt256.ofNat 136)) then
+    -- permute(mut self.lanes)
     let (v10, v10_0) ← permute self.lanes
     self := { self with lanes := v10_0 }
+    -- self.position = 0
     self := { self with position := (UInt256.ofNat 0) }
     join self
   else
@@ -401,33 +487,42 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
   let mut start : UInt256 := default
   let mut remaining : UInt256 := default
   let mut self := self
+  -- core::assert(len <= 32)
   let _ ← «assert» (decide (len.toNat ≤ (UInt256.ofNat 32).toNat))
   let join : UInt256 → UInt256 → Keccak256 → FeM (Unit × Keccak256) := fun start remaining self => do
     let mut start := start
     let mut remaining := remaining
     let mut self := self
+    -- let words: [u64; 5] = [
     let v134 ← downcast_truncate_u256_u64 (value >>> (UInt256.ofNat 192))
     let v139 ← downcast_truncate_u256_u64 (value >>> (UInt256.ofNat 128))
     let v144 ← downcast_truncate_u256_u64 (value >>> (UInt256.ofNat 64))
     let v146 ← downcast_truncate_u256_u64 value
     let words := #v[(IntTy.swapBytes (.u 64) v134), (IntTy.swapBytes (.u 64) v139), (IntTy.swapBytes (.u 64) v144), (IntTy.swapBytes (.u 64) v146), (UInt256.ofNat 0)]
+    -- var start = 32 - len
     let start_153 ← checkedSub (UInt256.ofNat 32) len
     start := start_153
+    -- var remaining = len
     remaining := len
     let rec loop (start : UInt256) (remaining : UInt256) (self : Keccak256) : FeM (Unit × Keccak256) := do
       let mut start := start
       let mut remaining := remaining
       let mut self := self
+      -- while remaining > 0 {
       if decide ((UInt256.ofNat 0).toNat < remaining.toNat) then
+        -- let offset = self.position % 8
         let offset ← checkedRem self.position (UInt256.ofNat 8)
+        -- let take = if remaining < 8 - offset { remaining } else { 8 - offset }
         let v168 ← checkedSub (UInt256.ofNat 8) offset
         let join_1 : UInt256 → UInt256 → Keccak256 → UInt256 → FeM (Unit × Keccak256) := fun start remaining self take => do
           let mut start := start
           let mut remaining := remaining
           let mut self := self
+          -- let shift: u64 = ((start % 8) * 8).downcast_unchecked()
           let v180 ← checkedRem start (UInt256.ofNat 8)
           let v182 ← checkedMul v180 (UInt256.ofNat 8)
           let shift_183 ← downcast_unchecked_usize_u64 v182
+          -- let low = words[start / 8] >> shift
           let v188 ← checkedDiv start (UInt256.ofNat 8)
           checkIndex v188 5
           let low := words[v188.toNat]! >>> shift_183
@@ -435,11 +530,13 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
             let mut start := start
             let mut remaining := remaining
             let mut self := self
+            -- let all: u64 = 0xffffffffffffffff
             let all := (UInt256.ofNat 18446744073709551615)
             let join_3 : UInt256 → UInt256 → Keccak256 → UInt256 → FeM (Unit × Keccak256) := fun start remaining self mask => do
               let mut start := start
               let mut remaining := remaining
               let mut self := self
+              -- self.lanes[self.position / 8] ^= ((low | high) & mask) << (offset * 8).downcast_unchecked()
               let v224 ← checkedMul offset (UInt256.ofNat 8)
               let v225 ← downcast_unchecked_usize_u64 v224
               let v229 ← checkedDiv self.position (UInt256.ofNat 8)
@@ -447,52 +544,70 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
               let v231 := self.lanes[v229.toNat]! ^^^ (IntTy.shl (.u 64) ((low ||| high) &&& mask) v225)
               checkIndex v229 25
               self := { self with lanes := (self.lanes.set! v229.toNat v231) }
+              -- start += take
               let start_234 ← checkedAdd start take
               start := start_234
+              -- remaining -= take
               let remaining_238 ← checkedSub remaining take
               remaining := remaining_238
+              -- self.advance(take)
               let (v241, v241_0) ← Keccak256_advance self take
               self := v241_0
               loop start remaining self
+            -- let mask = if take == 8 { all } else { all >> (64 - take * 8).downcast_unchecked() }
             if decide (take = (UInt256.ofNat 8)) then
               join_3 start remaining self all
             else
+              -- all >> (64 - take * 8).downcast_unchecked()
               let v215 ← checkedMul take (UInt256.ofNat 8)
               let v216 ← checkedSub (UInt256.ofNat 64) v215
               let v217 ← downcast_unchecked_usize_u64 v216
               join_3 start remaining self (all >>> v217)
+          -- let high = if shift == 0 { 0 } else { words[start / 8 + 1] << (64 - shift) }
           if decide (shift_183 = (UInt256.ofNat 0)) then
             join_2 start remaining self (UInt256.ofNat 0)
           else
+            -- words[start / 8 + 1] << (64 - shift)
             let v199 ← checkedDiv start (UInt256.ofNat 8)
             let v201 ← checkedAdd v199 (UInt256.ofNat 1)
             checkIndex v201 5
             let v204 ← IntTy.sub (.u 64) (UInt256.ofNat 64) shift_183
             join_2 start remaining self (IntTy.shl (.u 64) words[v201.toNat]! v204)
+        -- let take = if remaining < 8 - offset { remaining } else { 8 - offset }
         if decide (remaining.toNat < v168.toNat) then
           join_1 start remaining self remaining
         else
+          -- 8 - offset
           let v174 ← checkedSub (UInt256.ofNat 8) offset
           join_1 start remaining self v174
       else
         return ((), self)
     partial_fixpoint
     loop start remaining self
+  -- if len != 0 && self.position + len <= 136 {
   if decide (len ≠ (UInt256.ofNat 0)) then
+    -- if len != 0 && self.position + len <= 136 {
     let v15 ← checkedAdd self.position len
     if decide (v15.toNat ≤ (UInt256.ofNat 136).toNat) then
+      -- let leading = value << ((32 - len) * 8) as u256
       let v21 ← checkedSub (UInt256.ofNat 32) len
       let v23 ← checkedMul v21 (UInt256.ofNat 8)
       let leading := value <<< v23
+      -- let w0 = swap_bytes((leading >> 192).downcast_truncate())
       let v29 ← downcast_truncate_u256_u64 (leading >>> (UInt256.ofNat 192))
       let w0 := IntTy.swapBytes (.u 64) v29
+      -- let w1 = swap_bytes((leading >> 128).downcast_truncate())
       let v34 ← downcast_truncate_u256_u64 (leading >>> (UInt256.ofNat 128))
       let w1 := IntTy.swapBytes (.u 64) v34
+      -- let w2 = swap_bytes((leading >> 64).downcast_truncate())
       let v39 ← downcast_truncate_u256_u64 (leading >>> (UInt256.ofNat 64))
       let w2 := IntTy.swapBytes (.u 64) v39
+      -- let w3 = swap_bytes(leading.downcast_truncate())
       let v42 ← downcast_truncate_u256_u64 leading
       let w3 := IntTy.swapBytes (.u 64) v42
+      -- let lane = self.position / 8
       let lane ← checkedDiv self.position (UInt256.ofNat 8)
+      -- let shift: u64 = ((self.position % 8) * 8).downcast_unchecked()
       let v51 ← checkedRem self.position (UInt256.ofNat 8)
       let v53 ← checkedMul v51 (UInt256.ofNat 8)
       let shift_54 ← downcast_unchecked_usize_u64 v53
@@ -500,6 +615,7 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
         let mut start := start
         let mut remaining := remaining
         let mut self := self
+        -- self.position += len
         let v117 ← checkedAdd self.position len
         self := { self with position := v117 }
         let join_5 : UInt256 → UInt256 → Keccak256 → FeM (Unit × Keccak256) := fun start remaining self => do
@@ -507,51 +623,65 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
           let mut remaining := remaining
           let mut self := self
           return ((), self)
+        -- if self.position == 136 {
         if decide (self.position = (UInt256.ofNat 136)) then
+          -- permute(mut self.lanes)
           let (v123, v123_0) ← permute self.lanes
           self := { self with lanes := v123_0 }
+          -- self.position = 0
           self := { self with position := (UInt256.ofNat 0) }
           join_5 start remaining self
         else
           join_5 start remaining self
+      -- if shift == 0 {
       if decide (shift_54 = (UInt256.ofNat 0)) then
+        -- self.lanes[lane] ^= w0
         checkIndex lane 25
         checkIndex lane 25
         self := { self with lanes := (self.lanes.set! lane.toNat (self.lanes[lane.toNat]! ^^^ w0)) }
+        -- self.lanes[lane + 1] ^= w1
         let v62 ← checkedAdd lane (UInt256.ofNat 1)
         checkIndex v62 25
         checkIndex v62 25
         self := { self with lanes := (self.lanes.set! v62.toNat (self.lanes[v62.toNat]! ^^^ w1)) }
+        -- self.lanes[lane + 2] ^= w2
         let v67 ← checkedAdd lane (UInt256.ofNat 2)
         checkIndex v67 25
         checkIndex v67 25
         self := { self with lanes := (self.lanes.set! v67.toNat (self.lanes[v67.toNat]! ^^^ w2)) }
+        -- self.lanes[lane + 3] ^= w3
         let v72 ← checkedAdd lane (UInt256.ofNat 3)
         checkIndex v72 25
         checkIndex v72 25
         self := { self with lanes := (self.lanes.set! v72.toNat (self.lanes[v72.toNat]! ^^^ w3)) }
         join_4 start remaining self
       else
+        -- let back = 64 - shift
         let back ← IntTy.sub (.u 64) (UInt256.ofNat 64) shift_54
+        -- self.lanes[lane] ^= w0 << shift
         checkIndex lane 25
         let v82 := self.lanes[lane.toNat]! ^^^ (IntTy.shl (.u 64) w0 shift_54)
         checkIndex lane 25
         self := { self with lanes := (self.lanes.set! lane.toNat v82) }
+        -- self.lanes[lane + 1] ^= (w1 << shift) | (w0 >> back)
         let v88 ← checkedAdd lane (UInt256.ofNat 1)
         checkIndex v88 25
         let v90 := self.lanes[v88.toNat]! ^^^ ((IntTy.shl (.u 64) w1 shift_54) ||| (w0 >>> back))
         checkIndex v88 25
         self := { self with lanes := (self.lanes.set! v88.toNat v90) }
+        -- self.lanes[lane + 2] ^= (w2 << shift) | (w1 >> back)
         let v96 ← checkedAdd lane (UInt256.ofNat 2)
         checkIndex v96 25
         let v98 := self.lanes[v96.toNat]! ^^^ ((IntTy.shl (.u 64) w2 shift_54) ||| (w1 >>> back))
         checkIndex v96 25
         self := { self with lanes := (self.lanes.set! v96.toNat v98) }
+        -- self.lanes[lane + 3] ^= (w3 << shift) | (w2 >> back)
         let v104 ← checkedAdd lane (UInt256.ofNat 3)
         checkIndex v104 25
         let v106 := self.lanes[v104.toNat]! ^^^ ((IntTy.shl (.u 64) w3 shift_54) ||| (w2 >>> back))
         checkIndex v104 25
         self := { self with lanes := (self.lanes.set! v104.toNat v106) }
+        -- self.lanes[lane + 4] ^= w3 >> back
         let v110 ← checkedAdd lane (UInt256.ofNat 4)
         checkIndex v110 25
         checkIndex v110 25
@@ -565,6 +695,7 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
 /-- `Keccak256::pad` -/
 def Keccak256_pad (self : Keccak256) : FeM (Unit × Keccak256) := do
   let mut self := self
+  -- self.lanes[self.position / 8] ^= 1 << ((self.position % 8) * 8).downcast_unchecked()
   let v4 ← checkedRem self.position (UInt256.ofNat 8)
   let v6 ← checkedMul v4 (UInt256.ofNat 8)
   let v7 ← downcast_unchecked_usize_u64 v6
@@ -573,11 +704,13 @@ def Keccak256_pad (self : Keccak256) : FeM (Unit × Keccak256) := do
   let v13 := self.lanes[v11.toNat]! ^^^ (IntTy.shl (.u 64) (UInt256.ofNat 1) v7)
   checkIndex v11 25
   self := { self with lanes := (self.lanes.set! v11.toNat v13) }
+  -- self.lanes[16] ^= 0x8000000000000000
   let v16 := (UInt256.ofNat 16)
   checkIndex v16 25
   let v18 := self.lanes[v16.toNat]! ^^^ (UInt256.ofNat 9223372036854775808)
   checkIndex v16 25
   self := { self with lanes := (self.lanes.set! v16.toNat v18) }
+  -- permute(mut self.lanes)
   let (v21, v21_0) ← permute self.lanes
   self := { self with lanes := v21_0 }
   return ((), self)
@@ -585,8 +718,10 @@ def Keccak256_pad (self : Keccak256) : FeM (Unit × Keccak256) := do
 /-- `Keccak256::finish_word` -/
 def Keccak256_finish_word (self : Keccak256) : FeM UInt256 := do
   let mut self := self
+  -- self.pad()
   let (v1, v1_0) ← Keccak256_pad self
   self := v1_0
+  -- ((swap_bytes(self.lanes[0]) as u256) << 192)
   let v2 := (UInt256.ofNat 0)
   checkIndex v2 25
   let v7 := (IntTy.swapBytes (.u 64) self.lanes[v2.toNat]!) <<< (UInt256.ofNat 192)
@@ -604,16 +739,22 @@ def Keccak256_finish_word (self : Keccak256) : FeM UInt256 := do
 /-- `lib::recover_signer` -/
 def recover_signer (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256) : FeM Option_u256 := do
   let mut digest : Keccak256 := default
+  -- let Option::Some(key) = secp256k1::recover(hash, recovery_id, r, s) else { return Option::None }
   let v4 ← recover hash recovery_id r s
   match v4 with
   | .Some .. =>
+    -- let Option::Some(key) = secp256k1::recover(hash, recovery_id, r, s) else { return Option::None }
     let key := v4.Some_0
+    -- var digest = Keccak256::new()
     let digest_7 ← Keccak256_new
     digest := digest_7
+    -- digest.update_word(key.x, len: 32)
     let (v12, v12_0) ← Keccak256_update_word digest key.x (UInt256.ofNat 32)
     digest := v12_0
+    -- digest.update_word(key.y, len: 32)
     let (v16, v16_0) ← Keccak256_update_word digest key.y (UInt256.ofNat 32)
     digest := v16_0
+    -- Option::Some(digest.finish_word() & 0xffffffffffffffffffffffffffffffffffffffff)
     let v19 ← Keccak256_finish_word digest
     let v21 := v19 &&& (UInt256.ofNat 1461501637330902918203684832716283019655932542975)
     return Option_u256.Some v21
@@ -623,9 +764,13 @@ def recover_signer (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : U
 /-- `lib::ecrecover<MemBuffer>` -/
 def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
   let mut r0 : (Vector UInt256 1) := default
+  -- let hash = word_at(input, offset: 0)
   let hash ← word_at_MemBuffer input (UInt256.ofNat 0)
+  -- let v = word_at(input, offset: 32)
   let v_1 ← word_at_MemBuffer input (UInt256.ofNat 32)
+  -- let r = word_at(input, offset: 64)
   let r ← word_at_MemBuffer input (UInt256.ofNat 64)
+  -- let s = word_at(input, offset: 96)
   let s ← word_at_MemBuffer input (UInt256.ofNat 96)
   let join : (Vector UInt256 1) → Bool → FeM Output := fun r0 malformed => do
     let mut r0 := r0
@@ -634,19 +779,24 @@ def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
       let join_2 : (Vector UInt256 1) → Output → FeM Output := fun r0 v3 => do
         let mut r0 := r0
         return v3
+      -- match signer {
       match signer with
       | .Some .. =>
+        -- match signer {
         r0 := #v[signer.Some_0]
         let v45 ← words_1 r0 (UInt256.ofNat 3000)
         join_2 r0 v45
       | .None =>
+        -- match signer {
         let v47 ← SUCCESS
         let v49 ← MemBuffer_empty
         let v50 := (Output.mk v47 (UInt256.ofNat 3000) v49)
         join_2 r0 v50
+    -- let signer = if malformed { Option::None } else { recover_signer(hash, recovery_id: v - 27, r, s) }
     if malformed then
       join_1 r0 Option_u256.None
     else
+      -- recover_signer(hash, recovery_id: v - 27, r, s)
       let v36 ← checkedSub v_1 (UInt256.ofNat 27)
       let v37 ← recover_signer hash v36 r s
       join_1 r0 v37
@@ -655,22 +805,28 @@ def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
     join r0 true
   let join_4 : (Vector UInt256 1) → FeM Output := fun r0 => do
     let mut r0 := r0
+    -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
     if decide (r = (UInt256.ofNat 0)) then
       join_3 r0
     else
+      -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
       let v22 ← N
       if decide (v22.toNat ≤ r.toNat) then
         join_3 r0
       else
+        -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
         if decide (s = (UInt256.ofNat 0)) then
           join_3 r0
         else
+          -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
           let v26 ← N
           if decide (v26.toNat ≤ s.toNat) then
             join_3 r0
           else
             join r0 false
+  -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
   if decide (v_1 ≠ (UInt256.ofNat 27)) then
+    -- let malformed = (v != 27 && v != 28) || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N
     if decide (v_1 ≠ (UInt256.ofNat 28)) then
       join_3 r0
     else
@@ -682,11 +838,13 @@ def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
 def recv_fallback : FeM Empty := do
   let mut result : Output := default
   let mut r2 : MemBuffer := default
+  -- let result = ecrecover(input())
   let v0 ← input_Evm_4
   r2 := v0
   let result_2 ← ecrecover_MemBuffer r2
   result := result_2
   let _ ← MemBuffer_drop r2
+  -- raw.return_data(data: result.output.span())
   let v6 ← MemBuffer_span_ref result.output
   let v9 ← Evm_return_data v6
   nomatch v9

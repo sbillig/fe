@@ -19,6 +19,7 @@ def init : FeM Unit := do
 
 /-- `Sum { a, b, c, d, e, f, g, h, i, j } -> u256`, selector `0x460e9674` (`sum(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)`) -/
 def recv_Sum (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (e : UInt256) (f : UInt256) (g : UInt256) (h : UInt256) (i : UInt256) (j : UInt256) : FeM UInt256 := do
+  -- a + b + c + d + e + f + g + h + i + j
   let v10 ← checkedAdd a b
   let v11 ← checkedAdd v10 c
   let v12 ← checkedAdd v11 d
@@ -173,18 +174,24 @@ def Sum_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Sum := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Sum, Sol, CallData>` -/
 def decode_from_prechecked_head_Sum_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Sum := do
+  -- Self::decode_from(input, pos)
   let v3 ← Sum_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Sum>` -/
 def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Sum_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Sum_Sol_CallData input base len
   return v12
 

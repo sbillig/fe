@@ -45,10 +45,11 @@ use hir::{
             NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue, NExpr,
             NIndex, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatement, NStatementKind,
             NSuccessor, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody, Overflow,
-            SConst, SemConstId, SemConstScalar, SemConstValue, SemanticAccessAnalysisPass,
-            SemanticInstance, SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key,
-            drop_elaboration, eval_const_ref, generated_callee_key, identity_semantic_instance_key,
-            normalize_semantic_body, projection_component_spaces, runtime_size_bytes,
+            SConst, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+            SemanticAccessAnalysisPass, SemanticInstance, SemanticInstanceKey, UnaryOp,
+            VariantIndex, core_method_callee_key, drop_elaboration, eval_const_ref,
+            generated_callee_key, identity_semantic_instance_key, normalize_semantic_body,
+            projection_component_spaces, runtime_size_bytes,
         },
         ty::{
             AddressSpace,
@@ -76,8 +77,8 @@ use hir::{
         },
     },
     hir_def::{
-        BlockKind, Body, Contract, EnumVariant, Expr, FieldParent, GenericParamOwner, HirIngot,
-        IdentId, ItemKind, Partial, PatId,
+        BlockKind, Body, Contract, EnumVariant, Expr, ExprId, FieldParent, GenericParamOwner,
+        HirIngot, IdentId, ItemKind, Partial, Pat, PatId, Stmt, StmtId,
         expr::{ArithBinOp, BinOp, CompBinOp},
         scope_graph::ScopeId,
     },
@@ -85,7 +86,8 @@ use hir::{
         ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_placements,
         storage_lane_bytes, storage_slot_span,
     },
-    span::LazySpan,
+    span::{LazySpan, expr::LazyExprSpan, pat::LazyPatSpan, stmt::LazyStmtSpan},
+    visitor::prelude::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_stmt},
 };
 use num_bigint::BigUint;
 use num_traits::Signed;
@@ -684,6 +686,7 @@ impl<'db> IngotExport<'db> {
         }
         let mut module = Module {
             db,
+            spans: self.spans,
             root: SemanticInstance::new(
                 db,
                 identity_semantic_instance_key(db, BodyOwner::ContractInit { contract }),
@@ -1085,6 +1088,8 @@ impl<'db> IngotExport<'db> {
 #[derive(Clone)]
 struct Module<'db> {
     db: &'db dyn HirAnalysisDb,
+    /// The database, for the source text of a span.
+    spans: &'db dyn SpannedHirDb,
     /// The contract's `init`, which types are normalized in.
     root: SemanticInstance<'db>,
     /// The Lean name of each exported function or constant instance, for
@@ -1183,6 +1188,8 @@ impl<'db> Module<'db> {
             uses: Vec::new(),
             held_values: FxHashSet::default(),
             copied: Vec::new(),
+            statements: Statements::default(),
+            commented: None,
         }
         .export();
         let refs = self.end(depth);
@@ -2960,6 +2967,68 @@ struct BodyExporter<'a, 'db> {
     held_values: FxHashSet<NValueId>,
     /// The value each copy copies.
     copied: Vec<Option<NValueId>>,
+    /// The statement the source writes that each of the body's expressions
+    /// and patterns lies in, and the statement whose text the comment
+    /// printed last in the block being printed says.
+    statements: Statements<'db>,
+    commented: Option<StmtId>,
+}
+
+/// The innermost statement the source writes that each expression and
+/// pattern of a body lies in, as `Visitor` finds them: not one desugaring
+/// makes.
+#[derive(Default)]
+struct Statements<'db> {
+    body: Option<Body<'db>>,
+    within: Vec<StmtId>,
+    exprs: FxHashMap<ExprId, StmtId>,
+    pats: FxHashMap<PatId, StmtId>,
+}
+
+impl<'db> Visitor<'db> for Statements<'db> {
+    fn visit_stmt(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyStmtSpan<'db>>,
+        stmt: StmtId,
+        _: &Stmt<'db>,
+    ) {
+        let written = self.body == Some(ctxt.body()) && ctxt.body().is_written(ctxt.db(), stmt);
+        if written {
+            self.within.push(stmt);
+        }
+        walk_stmt(self, ctxt, stmt);
+        if written {
+            self.within.pop();
+        }
+    }
+
+    fn visit_expr(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyExprSpan<'db>>,
+        expr: ExprId,
+        _: &Expr<'db>,
+    ) {
+        if let Some(stmt) = self.within.last()
+            && self.body == Some(ctxt.body())
+        {
+            self.exprs.insert(expr, *stmt);
+        }
+        walk_expr(self, ctxt, expr);
+    }
+
+    fn visit_pat(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyPatSpan<'db>>,
+        pat: PatId,
+        _: &Pat<'db>,
+    ) {
+        if let Some(stmt) = self.within.last()
+            && self.body == Some(ctxt.body())
+        {
+            self.pats.insert(pat, *stmt);
+        }
+        walk_pat(self, ctxt, pat);
+    }
 }
 
 impl<'db> BodyExporter<'_, 'db> {
@@ -3223,6 +3292,13 @@ impl<'db> BodyExporter<'_, 'db> {
                 Some((binding.provider_idx, name.to_string()))
             })
             .collect();
+        if let Some(body) = hir
+            && let Partial::Present(expr) = body.expr(db).data(db, body)
+        {
+            let mut ctxt = VisitorCtxt::with_expr(db, body.scope(), body, body.expr(db));
+            self.statements.body = Some(body);
+            self.statements.visit_expr(&mut ctxt, body.expr(db), expr);
+        }
         let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
             let NValueDefinition::EntryParam { param } = value.definition else {
@@ -3699,6 +3775,7 @@ impl<'db> BodyExporter<'_, 'db> {
         if !start.is_empty() {
             printed.push((start, None));
         }
+        self.commented = None;
         for (position, statement) in data.statements.iter().enumerate() {
             let text = match (&statement.kind, self.statement(statement)?) {
                 (NStatementKind::Define { result, .. }, Some(text)) => {
@@ -3709,6 +3786,10 @@ impl<'db> BodyExporter<'_, 'db> {
             let located = std::mem::take(&mut self.located);
             let lines = located.iter().chain(&text).flat_map(|text| text.lines());
             let mut text: String = lines.map(|line| format!("{pad}{line}\n")).collect();
+            // The first lines of each statement the source writes say it.
+            if !text.is_empty() {
+                text.insert_str(0, &self.comment(statement.origin, &pad));
+            }
             text.push_str(&flags(
                 self.flag_updates(DropFlagPoint::After(statement.id)),
             ));
@@ -3914,6 +3995,8 @@ impl<'db> BodyExporter<'_, 'db> {
                 then_target,
                 else_target,
             } => {
+                let origin = cond.origin.map_or(data.terminator.origin, SemOrigin::Expr);
+                out.push_str(&self.comment(origin, &pad));
                 writeln!(out, "{pad}if {} then", bare(&self.value(cond.value))).unwrap();
                 self.jump(then_target, depth + 1, out)?;
                 writeln!(out, "{pad}else").unwrap();
@@ -3931,7 +4014,9 @@ impl<'db> BodyExporter<'_, 'db> {
                 // Lean cannot show a recursive function monotone through a
                 // match on a `let`-bound value, so a body with a loop binds
                 // the value first.
+                let origin = value.origin.map_or(data.terminator.origin, SemOrigin::Expr);
                 let (load, value) = self.enum_value(value)?;
+                out.push_str(&self.comment(origin, &pad));
                 if let Some(load) = load {
                     writeln!(out, "{pad}{load}").unwrap();
                 }
@@ -4169,6 +4254,46 @@ impl<'db> BodyExporter<'_, 'db> {
         };
         self.dropped.insert(value);
         None
+    }
+
+    /// A comment with the first line of the statement the source writes
+    /// that what `origin` is the origin of does part of, if the comment
+    /// printed last in the block says another: on a line of its own after
+    /// `pad`.
+    fn comment(&mut self, origin: SemOrigin<'db>, pad: &str) -> String {
+        let Some(stmt) = self.source_statement(origin) else {
+            return String::new();
+        };
+        if self.commented == Some(stmt) {
+            return String::new();
+        }
+        self.commented = Some(stmt);
+        self.statement_text(stmt)
+            .map_or_else(String::new, |text| format!("{pad}-- {text}\n"))
+    }
+
+    /// The statement the source writes that what `origin` is the origin of
+    /// does part of.
+    fn source_statement(&self, origin: SemOrigin<'db>) -> Option<StmtId> {
+        match origin {
+            SemOrigin::Expr(expr) => self.statements.exprs.get(&expr).copied(),
+            SemOrigin::Pat(pat) => self.statements.pats.get(&pat).copied(),
+            SemOrigin::Stmt(stmt) => {
+                let body = self.statements.body?;
+                body.is_written(self.module.db, stmt).then_some(stmt)
+            }
+            SemOrigin::Body(_) | SemOrigin::Synthetic => None,
+        }
+    }
+
+    /// The first line of `stmt`'s text, as the source writes it.
+    fn statement_text(&self, stmt: StmtId) -> Option<String> {
+        let body = self.statements.body?;
+        let span = stmt.span(body).resolve(self.module.spans)?;
+        let text = span.file.text(self.module.spans);
+        let text = text.get(usize::from(span.range.start())..usize::from(span.range.end()))?;
+        let line = text.lines().next()?.trim();
+        Some(line.chars().filter(|c| !c.is_control()).collect())
     }
 
     /// The lines of `statement`, if it prints any.

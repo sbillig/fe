@@ -5,6 +5,7 @@ def init : FeM Unit := do
 /-- `arrays::bump` -/
 def bump (items : (Vector UInt256 4)) («at» : UInt256) («by» : UInt256) : FeM (Unit × (Vector UInt256 4)) := do
   let mut items := items
+  -- items[at] += by
   checkIndex «at» 4
   let v6 ← checkedAdd items[«at».toNat]! «by»
   checkIndex «at» 4
@@ -14,12 +15,16 @@ def bump (items : (Vector UInt256 4)) («at» : UInt256) («by» : UInt256) : Fe
 /-- `Pick { index, value } -> u256`, selector `0xa62f4550` (`pick(uint256,uint256)`) -/
 def recv_Pick (index : UInt256) (value : UInt256) : FeM UInt256 := do
   let mut items : (Vector UInt256 4) := default
+  -- var items: [u256; 4] = [value; 4]
   items := (Vector.replicate 4 value)
+  -- items[0] = 7
   let v5 := (UInt256.ofNat 0)
   checkIndex v5 4
   items := (items.set! v5.toNat (UInt256.ofNat 7))
+  -- bump(mut items, at: index, by: 1)
   let (v9, v9_0) ← bump items index (UInt256.ofNat 1)
   items := v9_0
+  -- items[index] + items[3]
   checkIndex index 4
   let v11 := (UInt256.ofNat 3)
   checkIndex v11 4
@@ -35,12 +40,16 @@ def WEIGHTS : FeM (Vector UInt256 3) := do
 def recv_Weigh (values : (Vector UInt256 3)) : FeM UInt256 := do
   let mut total : UInt256 := default
   let mut i : UInt256 := default
+  -- var total: u256 = 0
   total := (UInt256.ofNat 0)
+  -- var i: usize = 0
   i := (UInt256.ofNat 0)
   let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
+    -- while i < 3 {
     if decide (i.toNat < (UInt256.ofNat 3).toNat) then
+      -- total += values[i] * WEIGHTS[i]
       let i_9 := i
       checkIndex i_9 3
       let v11 ← WEIGHTS
@@ -49,6 +58,7 @@ def recv_Weigh (values : (Vector UInt256 3)) : FeM UInt256 := do
       let v14 ← checkedMul values[i_9.toNat]! v11[i_12.toNat]!
       let total_16 ← checkedAdd total v14
       total := total_16
+      -- i += 1
       let i_21 ← checkedAdd i (UInt256.ofNat 1)
       i := i_21
       loop total i

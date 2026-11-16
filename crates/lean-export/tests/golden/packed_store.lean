@@ -28,32 +28,38 @@ def init : FeM Unit := do
 
 /-- `Get0 -> u256`, selector `0x90bb7b44` (`get0()`) -/
 def recv_Get0 : FeM UInt256 := do
+  -- pack.get(0)
   let v1 := Field.pack
   let v3 ← StoragePackedArray_get_8 v1 (UInt256.ofNat 0)
   return v3
 
 /-- `Get1 -> u256`, selector `0x054c1a75` (`get1()`) -/
 def recv_Get1 : FeM UInt256 := do
+  -- pack.get(1)
   let v1 := Field.pack
   let v3 ← StoragePackedArray_get_8 v1 (UInt256.ofNat 1)
   return v3
 
 /-- `Set0 { value }`, selector `0xf26feec9` (`set0(uint256)`) -/
 def recv_Set0 (value : UInt256) : FeM Unit := do
+  -- pack.set(i: 0, value)
   let v2 := Field.pack
   let _ ← StoragePackedArray_set_8 v2 (UInt256.ofNat 0) value
   return ()
 
 /-- `Set1 { value }`, selector `0x9bc39d3c` (`set1(uint256)`) -/
 def recv_Set1 (value : UInt256) : FeM Unit := do
+  -- pack.set(i: 1, value)
   let v2 := Field.pack
   let _ ← StoragePackedArray_set_8 v2 (UInt256.ofNat 1) value
   return ()
 
 /-- `SetBoth { first, second }`, selector `0x92cf1ef5` (`setBoth(uint256,uint256)`) -/
 def recv_SetBoth (first : UInt256) (second : UInt256) : FeM Unit := do
+  -- pack.set(i: 0, value: first)
   let v3 := Field.pack
   let _ ← StoragePackedArray_set_8 v3 (UInt256.ofNat 0) first
+  -- pack.set(i: 1, value: second)
   let v6 := Field.pack
   let _ ← StoragePackedArray_set_8 v6 (UInt256.ofNat 1) second
   return ()
@@ -68,18 +74,24 @@ def Get0_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get0 := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Get0, Sol, CallData>` -/
 def decode_from_prechecked_head_Get0_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Get0 := do
+  -- Self::decode_from(input, pos)
   let v3 ← Get0_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Get0>` -/
 def decode_runtime_args_Evm_Sol_Get0 : FeM Get0 := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Get0_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Get0_Sol_CallData input base len
   return v12
 
@@ -100,18 +112,24 @@ def Get1_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get1 := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Get1, Sol, CallData>` -/
 def decode_from_prechecked_head_Get1_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Get1 := do
+  -- Self::decode_from(input, pos)
   let v3 ← Get1_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Get1>` -/
 def decode_runtime_args_Evm_Sol_Get1 : FeM Get1 := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Get1_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Get1_Sol_CallData input base len
   return v12
 
@@ -136,18 +154,24 @@ def Set0_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Set0 := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Set0, Sol, CallData>` -/
 def decode_from_prechecked_head_Set0_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Set0 := do
+  -- Self::decode_from(input, pos)
   let v3 ← Set0_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Set0>` -/
 def decode_runtime_args_Evm_Sol_Set0 : FeM Set0 := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Set0_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Set0_Sol_CallData input base len
   return v12
 
@@ -172,18 +196,24 @@ def Set1_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Set1 := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Set1, Sol, CallData>` -/
 def decode_from_prechecked_head_Set1_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Set1 := do
+  -- Self::decode_from(input, pos)
   let v3 ← Set1_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Set1>` -/
 def decode_runtime_args_Evm_Sol_Set1 : FeM Set1 := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Set1_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Set1_Sol_CallData input base len
   return v12
 
@@ -213,18 +243,24 @@ def SetBoth_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM SetBoth :=
 
 /-- `core::abi::Decode::decode_from_prechecked_head<SetBoth, Sol, CallData>` -/
 def decode_from_prechecked_head_SetBoth_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM SetBoth := do
+  -- Self::decode_from(input, pos)
   let v3 ← SetBoth_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, SetBoth>` -/
 def decode_runtime_args_Evm_Sol_SetBoth : FeM SetBoth := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← SetBoth_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_SetBoth_Sol_CallData input base len
   return v12
 

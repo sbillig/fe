@@ -12,6 +12,7 @@ deriving Inhabited
 
 /-- `init(initial: u256)` of contract `FeScalarStore` -/
 def init (initial : UInt256) : FeM Unit := do
+  -- stored = initial
   store Field.stored initial
   return ()
 
@@ -22,6 +23,7 @@ def recv_Get : FeM UInt256 := do
 
 /-- `Set { value }`, selector `0x60fe47b1` (`set(uint256)`) -/
 def recv_Set (value : UInt256) : FeM Unit := do
+  -- stored = value
   store Field.stored value
   return ()
 
@@ -35,18 +37,24 @@ def Get_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Get := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Get, Sol, CallData>` -/
 def decode_from_prechecked_head_Get_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Get := do
+  -- Self::decode_from(input, pos)
   let v3 ← Get_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Get>` -/
 def decode_runtime_args_Evm_Sol_Get : FeM Get := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Get_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Get_Sol_CallData input base len
   return v12
 
@@ -71,18 +79,24 @@ def Set_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Set := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Set, Sol, CallData>` -/
 def decode_from_prechecked_head_Set_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Set := do
+  -- Self::decode_from(input, pos)
   let v3 ← Set_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Set>` -/
 def decode_runtime_args_Evm_Sol_Set : FeM Set := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Set_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Set_Sol_CallData input base len
   return v12
 

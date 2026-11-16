@@ -20,19 +20,23 @@ def init : FeM Unit := do
 
 /-- `Vote { voter, proposal } -> bool`, selector `0xb384abef` (`vote(uint256,uint256)`) -/
 def recv_Vote (voter : UInt256) (proposal : UInt256) : FeM Bool := do
+  -- let before = store.voted[(voter, proposal)]
   let voted_entry ← StorageMap_locate_tuple_u256_u256_bool Field.store.voted Field.store.voted.slot (voter, proposal)
   let before ← loadBool (Place.mk .storage voted_entry.slot)
+  -- store.voted[(voter, proposal)] = true
   let voted_entry_1 ← StorageMap_locate_tuple_u256_u256_bool Field.store.voted Field.store.voted.slot (voter, proposal)
   storeBool (Place.mk .storage voted_entry_1.slot) true
   return before
 
 /-- `Flag { on } -> u256`, selector `0xa92a4c3b` (`flag(bool)`) -/
 def recv_Flag (on : Bool) : FeM UInt256 := do
+  -- store.flags[on] += 1
   let flags_on ← StorageMap_locate_bool_u256 Field.store.flags Field.store.flags.slot on
   let v2 ← load (Place.mk .storage flags_on.slot)
   let v3 ← checkedAdd v2 (UInt256.ofNat 1)
   let flags_on_1 ← StorageMap_locate_bool_u256 Field.store.flags Field.store.flags.slot on
   store (Place.mk .storage flags_on_1.slot) v3
+  -- store.flags[on]
   let flags_on_2 ← StorageMap_locate_bool_u256 Field.store.flags Field.store.flags.slot on
   let v5 ← load (Place.mk .storage flags_on_2.slot)
   return v5

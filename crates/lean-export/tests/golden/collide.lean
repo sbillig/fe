@@ -21,11 +21,13 @@ def init : FeM Unit := do
 
 /-- `collide::double` -/
 def double (x : UInt256) : FeM UInt256 := do
+  -- x * 2
   let v3_1 ← checkedMul x (UInt256.ofNat 2)
   return v3_1
 
 /-- `collide::v3` -/
 def v3 (x : UInt256) : FeM UInt256 := do
+  -- x + 3
   let v3_1 ← checkedAdd x (UInt256.ofNat 3)
   return v3_1
 
@@ -39,12 +41,18 @@ def size : FeM UInt256 := do
 
 /-- `Run { x } -> u256`, selector `0xa444f5e9` (`run(uint256)`) -/
 def recv_CollideMsg_Run (x : UInt256) : FeM UInt256 := do
+  -- let limit = x * 2
   let limit_1 ← checkedMul x (UInt256.ofNat 2)
+  -- let double = limit + 1
   let double_1 ← checkedAdd limit_1 (UInt256.ofNat 1)
+  -- let load = double + count
   let count_7 ← load Field.count
   let load_1 ← checkedAdd double_1 count_7
+  -- let store = load + 1
   let store_1 ← checkedAdd load_1 (UInt256.ofNat 1)
+  -- count = total
   store Field.count store_1
+  -- v3(double(total)) + bounds::limit + size + count
   let v15 ← double store_1
   let v16 ← v3 v15
   let v17 ← limit
@@ -57,6 +65,7 @@ def recv_CollideMsg_Run (x : UInt256) : FeM UInt256 := do
 
 /-- `collide::b1` -/
 def b1 (total : UInt256) (i : UInt256) : FeM UInt256 := do
+  -- total + i
   let v4 ← checkedAdd total i
   return v4
 
@@ -64,14 +73,19 @@ def b1 (total : UInt256) (i : UInt256) : FeM UInt256 := do
 def recv_Spin (n : UInt256) : FeM UInt256 := do
   let mut total : UInt256 := default
   let mut i : UInt256 := default
+  -- var total: u256 = 0
   total := (UInt256.ofNat 0)
+  -- var i: u256 = 0
   i := (UInt256.ofNat 0)
   let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
+    -- while i < n {
     if decide (i.toNat < n.toNat) then
+      -- i += 1
       let i_10 ← checkedAdd i (UInt256.ofNat 1)
       i := i_10
+      -- total = b1(total, i)
       let total_17 ← b1 total i
       total := total_17
       loop total i
@@ -86,6 +100,7 @@ def recv_OtherMsg_Run (x : UInt256) : FeM UInt256 := do
 
 /-- `Pairs { t: (a, b) } -> u256`, selector `0x6a530d0d` (`pairs((uint256,uint256))`) -/
 def recv_Pairs (v0 : (UInt256 × UInt256)) : FeM UInt256 := do
+  -- a + b
   let v5 ← checkedAdd v0.fst v0.snd
   return v5
 
@@ -103,18 +118,24 @@ def Run_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Run := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Run, Sol, CallData>` -/
 def decode_from_prechecked_head_Run_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Run := do
+  -- Self::decode_from(input, pos)
   let v3_1 ← Run_decode_from_CallData input pos
   return v3_1
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Run>` -/
 def decode_runtime_args_Evm_Sol_Run : FeM Run := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Run_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Run_Sol_CallData input base len
   return v12
 
@@ -139,18 +160,24 @@ def Spin_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Spin := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Spin, Sol, CallData>` -/
 def decode_from_prechecked_head_Spin_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Spin := do
+  -- Self::decode_from(input, pos)
   let v3_1 ← Spin_decode_from_CallData input pos
   return v3_1
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Spin>` -/
 def decode_runtime_args_Evm_Sol_Spin : FeM Spin := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Spin_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Spin_Sol_CallData input base len
   return v12
 
@@ -182,18 +209,24 @@ def Pairs_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Pairs := do
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Pairs, Sol, CallData>` -/
 def decode_from_prechecked_head_Pairs_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Pairs := do
+  -- Self::decode_from(input, pos)
   let v3_1 ← Pairs_decode_from_CallData input pos
   return v3_1
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Pairs>` -/
 def decode_runtime_args_Evm_Sol_Pairs : FeM Pairs := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Pairs_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Pairs_Sol_CallData input base len
   return v12
 

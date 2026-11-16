@@ -14,31 +14,40 @@ def init : FeM Unit := do
 
 /-- `Recover { hash, recovery_id, r, s } -> (bool, u256, u256)`, selector `0x2aa6d351` (`recover(uint256,uint256,uint256,uint256)`) -/
 def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256) : FeM (Bool × UInt256 × UInt256) := do
+  -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
   let v6 := decide ((UInt256.ofNat 1).toNat < recovery_id.toNat)
   let join : FeM (Bool × UInt256 × UInt256) := do
     return (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
+  -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
   if v6 then
     join
   else
+    -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
     if decide (r = (UInt256.ofNat 0)) then
       join
     else
+      -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
       let v9 ← N
       if decide (v9.toNat ≤ r.toNat) then
         join
       else
+        -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
         if decide (s = (UInt256.ofNat 0)) then
           join
         else
+          -- if recovery_id > 1 || r == 0 || r >= secp256k1::N || s == 0 || s >= secp256k1::N {
           let v13 ← N
           if decide (v13.toNat ≤ s.toNat) then
             join
           else
+            -- match secp256k1::recover(hash, recovery_id, r, s) {
             let v17 ← recover hash recovery_id r s
             let join_1 : (Bool × UInt256 × UInt256) → FeM (Bool × UInt256 × UInt256) := fun v4 => do
               return v4
+            -- match secp256k1::recover(hash, recovery_id, r, s) {
             match v17 with
             | .Some .. =>
+              -- match secp256k1::recover(hash, recovery_id, r, s) {
               let key := v17.Some_0
               join_1 (true, key.x, key.y)
             | .None =>
@@ -79,18 +88,24 @@ def Recover_decode_from_CallData (v0 : CallData) (v1 : UInt256) : FeM Recover :=
 
 /-- `core::abi::Decode::decode_from_prechecked_head<Recover, Sol, CallData>` -/
 def decode_from_prechecked_head_Recover_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Recover := do
+  -- Self::decode_from(input, pos)
   let v3 ← Recover_decode_from_CallData input pos
   return v3
 
 /-- `core::contracts::decode_runtime_args<Evm, Sol, Recover>` -/
 def decode_runtime_args_Evm_Sol_Recover : FeM Recover := do
   let mut input : CallData := default
+  -- let input = host.input()
   let input_2 ← Evm_input
   input := input_2
+  -- let base = A::SELECTOR_SIZE
   let base ← Sol_SELECTOR_SIZE
+  -- let len = input.len()
   let len ← len_CallData input
+  -- A::validate_runtime_head(input_len: len, base, head_size: T::HEAD_SIZE)
   let v9 ← Recover_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
+  -- T::decode_from_prechecked_head(input, base, len)
   let v12 ← decode_from_prechecked_head_Recover_Sol_CallData input base len
   return v12
 
