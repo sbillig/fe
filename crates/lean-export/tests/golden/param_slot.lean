@@ -54,7 +54,7 @@ def bump (r0 : UInt256) : FeM UInt256 := do
   let v5 := r0
   return v5
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Sum (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : Cursor := default
   let v1 ← make v0
   r0 := v1

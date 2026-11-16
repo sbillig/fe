@@ -16,7 +16,7 @@ deriving Inhabited
 def init : FeM Unit := do
   return ()
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) (v5 : UInt256) (v6 : UInt256) (v7 : UInt256) (v8 : UInt256) (v9 : UInt256) : FeM UInt256 := do
+def recv_Sum (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) (v5 : UInt256) (v6 : UInt256) (v7 : UInt256) (v8 : UInt256) (v9 : UInt256) : FeM UInt256 := do
   let v10 ← checkedAdd v0 v1
   let v11 ← checkedAdd v10 v2
   let v12 ← checkedAdd v11 v3
@@ -212,10 +212,10 @@ def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let v12 ← decode_from_prechecked_head_Sum_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Sum_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Sum
-  let result ← recv0_arm0 message.a message.b message.c message.d message.e message.f message.g message.h message.i message.j
+  let result ← recv_Sum message.a message.b message.c message.d message.e message.f message.g message.h message.i message.j
   Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
@@ -225,7 +225,7 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x460e9674 then
-      recv0_arm0_entry
+      recv_Sum_entry
     else
       revertEmpty
 

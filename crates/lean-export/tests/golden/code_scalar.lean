@@ -10,7 +10,7 @@ def init (v0 : UInt256) (e0 : UInt256) : FeM (Unit × UInt256) := do
   let v2 := ()
   return ((), e0)
 
-def recv0_arm0 : FeM UInt256 := do
+def recv_Get : FeM UInt256 := do
   let e0 ← cload (← immutableAt 1 0)
   let v0 := e0
   return v0
@@ -43,10 +43,10 @@ def decode_runtime_args_Evm_Sol_Get : FeM Get := do
   let v12 ← decode_from_prechecked_head_Get_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Get_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Get
-  let result ← recv0_arm0
+  let result ← recv_Get
   Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
@@ -56,7 +56,7 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x6d4ce63c then
-      recv0_arm0_entry
+      recv_Get_entry
     else
       revertEmpty
 

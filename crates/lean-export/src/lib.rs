@@ -72,7 +72,7 @@ use hir::{
         scope_graph::ScopeId,
     },
     semantic::{
-        ContractFieldId, FieldStorageLayout, ProviderSource, storage_field_placements,
+        ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_placements,
         storage_lane_bytes, storage_slot_span,
     },
 };
@@ -606,19 +606,16 @@ impl<'db> IngotExport<'db> {
         library: &mut Library,
     ) -> Result<(), Unsupported> {
         let db = self.db;
+        let arms = arm_names(db, contract);
         let mut entries = vec![("init".to_string(), BodyOwner::ContractInit { contract })];
-        for (recv_idx, recv) in contract.recv_views(db).enumerate() {
-            entries.extend(recv.arms(db).enumerate().map(|(arm_idx, _)| {
-                (
-                    format!("recv{recv_idx}_arm{arm_idx}"),
-                    BodyOwner::ContractRecvArm {
-                        contract,
-                        recv_idx: recv_idx as u32,
-                        arm_idx: arm_idx as u32,
-                    },
-                )
-            }));
-        }
+        entries.extend(arms.iter().map(|(arm, name)| {
+            let owner = BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx: arm.recv(db).recv_idx(db),
+                arm_idx: arm.arm_idx(db),
+            };
+            (name.clone(), owner)
+        }));
         let mut module = Module {
             db,
             root: SemanticInstance::new(
@@ -665,7 +662,7 @@ impl<'db> IngotExport<'db> {
             defined.entry(key).or_default().push(name);
         }
         if with_entries {
-            module.runtime(contract)?;
+            module.runtime(contract, &arms)?;
             module.init_entry(contract)?;
         }
         // A definition is shared no further than what it names: the
@@ -1172,7 +1169,11 @@ impl<'db> Module<'db> {
     /// the arm on the fields it binds, and returns through the host's
     /// `return_value`, or with no data. `runtime` reverts on calldata shorter
     /// than a selector or with an unknown one, unless there is a fallback.
-    fn runtime(&mut self, contract: Contract<'db>) -> Result<(), Unsupported> {
+    fn runtime(
+        &mut self,
+        contract: Contract<'db>,
+        arms: &[(RecvArmView<'db>, String)],
+    ) -> Result<(), Unsupported> {
         let db = self.db;
         let scope = contract.scope();
         let missing = |what: &str| Unsupported(format!("runtime: missing `{what}`"));
@@ -1185,115 +1186,113 @@ impl<'db> Module<'db> {
         let generated = |error| Unsupported(format!("runtime: generated call: {error:?}"));
         let mut cases = Vec::new();
         let mut default = "revertEmpty".to_string();
-        for (recv_idx, recv) in contract.recv_views(db).enumerate() {
-            for (arm_idx, arm) in recv.arms(db).enumerate() {
-                let name = format!("recv{recv_idx}_arm{arm_idx}");
-                let depth = self.begin();
-                let owner = BodyOwner::ContractRecvArm {
-                    contract,
-                    recv_idx: recv_idx as u32,
-                    arm_idx: arm_idx as u32,
-                };
-                let site = EffectParamSite::ContractRecvArm {
-                    contract,
-                    recv_idx: recv_idx as u32,
-                    arm_idx: arm_idx as u32,
-                };
-                let host = registered_root_providers(db, site)
-                    .first()
-                    .ok_or_else(|| missing("root provider"))?
-                    .provider_ty;
-                let info = arm.abi_info(db, abi);
-                let mut lines = String::new();
-                if !arm.arm(db).is_some_and(|arm| arm.is_payable(db)) {
-                    lines.push_str("  nonPayable\n");
+        for (arm, name) in arms {
+            let (recv_idx, arm_idx) = (arm.recv(db).recv_idx(db), arm.arm_idx(db));
+            let depth = self.begin();
+            let owner = BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            };
+            let site = EffectParamSite::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            };
+            let host = registered_root_providers(db, site)
+                .first()
+                .ok_or_else(|| missing("root provider"))?
+                .provider_ty;
+            let info = arm.abi_info(db, abi);
+            let mut lines = String::new();
+            if !arm.arm(db).is_some_and(|arm| arm.is_payable(db)) {
+                lines.push_str("  nonPayable\n");
+            }
+            // The arguments the arm's body takes, by their place among
+            // the arm's bindings.
+            let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
+            let normalized = normalize_semantic_body(db, instance)
+                .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
+            let pats = self.arg_pats(owner);
+            let values = normalized
+                .body
+                .values
+                .iter()
+                .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+                .map(|value| arg_position(value.source, &pats));
+            let slots = normalized
+                .body
+                .roots
+                .iter()
+                .filter_map(|root| match root.kind {
+                    NRootKind::LocalSlot { binding } => arg_position(binding, &pats).map(Some),
+                    _ => None,
+                });
+            let mut positions = values
+                .chain(slots)
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| Unsupported(format!("{name}: argument bound by no field")))?;
+            positions.sort_unstable();
+            let mut args = String::new();
+            let (message, result) = (var("message"), var("result"));
+            if info.args_ty != TyId::unit(db) {
+                let key = generated_callee_key(
+                    db,
+                    scope,
+                    PredicateListId::empty_list(db),
+                    decode,
+                    None,
+                    &[host, abi, info.args_ty],
+                )
+                .map_err(generated)?;
+                let decode = self.instance(key, vec![Some(Carrier::Erased)].into())?;
+                writeln!(lines, "  let {message} ← {decode}").unwrap();
+                let fields = self.fields(info.args_ty)?;
+                let bindings = arm.arg_bindings(db);
+                for position in positions {
+                    let (steps, _) = &fields[bindings[position].tuple_index as usize];
+                    write!(args, " {message}.{}", steps.join(".")).unwrap();
                 }
-                // The arguments the arm's body takes, by their place among
-                // the arm's bindings.
-                let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
-                let normalized = normalize_semantic_body(db, instance)
-                    .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
-                let pats = self.arg_pats(owner);
-                let values = normalized
-                    .body
-                    .values
-                    .iter()
-                    .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
-                    .map(|value| arg_position(value.source, &pats));
-                let slots = normalized
-                    .body
-                    .roots
-                    .iter()
-                    .filter_map(|root| match root.kind {
-                        NRootKind::LocalSlot { binding } => arg_position(binding, &pats).map(Some),
-                        _ => None,
-                    });
-                let mut positions = values
-                    .chain(slots)
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| Unsupported(format!("{name}: argument bound by no field")))?;
-                positions.sort_unstable();
-                let mut args = String::new();
-                let (message, result) = (var("message"), var("result"));
-                if info.args_ty != TyId::unit(db) {
+            }
+            match info.ret_ty {
+                None => {
+                    writeln!(lines, "  let _ ← {name}{args}").unwrap();
+                    lines.push_str("  returnData (UInt256.ofNat 0) (UInt256.ofNat 0)\n");
+                }
+                Some(ret_ty) => {
+                    let inst = TraitInstId::new_simple(db, host_trait, vec![host]);
+                    let method = IdentId::new(db, "return_value".to_string());
+                    let func = host_trait
+                        .method_defs(db)
+                        .get(&method)
+                        .copied()
+                        .ok_or_else(|| missing("ContractHost::return_value"))?;
                     let key = generated_callee_key(
                         db,
                         scope,
                         PredicateListId::empty_list(db),
-                        decode,
-                        None,
-                        &[host, abi, info.args_ty],
+                        func,
+                        Some(inst),
+                        &[abi, ret_ty],
                     )
                     .map_err(generated)?;
-                    let decode = self.instance(key, vec![Some(Carrier::Erased)].into())?;
-                    writeln!(lines, "  let {message} ← {decode}").unwrap();
-                    let fields = self.fields(info.args_ty)?;
-                    let bindings = arm.arg_bindings(db);
-                    for position in positions {
-                        let (steps, _) = &fields[bindings[position].tuple_index as usize];
-                        write!(args, " {message}.{}", steps.join(".")).unwrap();
-                    }
+                    let carriers = vec![Some(Carrier::Erased), None];
+                    let return_value = self.instance(key, carriers.into())?;
+                    writeln!(lines, "  let {result} ← {name}{args}").unwrap();
+                    writeln!(lines, "  {return_value} {result}").unwrap();
                 }
-                match info.ret_ty {
-                    None => {
-                        writeln!(lines, "  let _ ← {name}{args}").unwrap();
-                        lines.push_str("  returnData (UInt256.ofNat 0) (UInt256.ofNat 0)\n");
-                    }
-                    Some(ret_ty) => {
-                        let inst = TraitInstId::new_simple(db, host_trait, vec![host]);
-                        let method = IdentId::new(db, "return_value".to_string());
-                        let func = host_trait
-                            .method_defs(db)
-                            .get(&method)
-                            .copied()
-                            .ok_or_else(|| missing("ContractHost::return_value"))?;
-                        let key = generated_callee_key(
-                            db,
-                            scope,
-                            PredicateListId::empty_list(db),
-                            func,
-                            Some(inst),
-                            &[abi, ret_ty],
-                        )
-                        .map_err(generated)?;
-                        let carriers = vec![Some(Carrier::Erased), None];
-                        let return_value = self.instance(key, carriers.into())?;
-                        writeln!(lines, "  let {result} ← {name}{args}").unwrap();
-                        writeln!(lines, "  {return_value} {result}").unwrap();
-                    }
-                }
-                let refs = self.end(depth);
-                self.defs.push(Item {
-                    names: vec![format!("{name}_entry")],
-                    text: format!("def {name}_entry : FeM Empty := do\n{lines}\n"),
-                    scope: Scope::Contract,
-                    refs,
-                });
-                match info.selector_value {
-                    _ if info.is_fallback => default = format!("{name}_entry"),
-                    Some(selector) => cases.push((selector, name)),
-                    None => return Err(Unsupported(format!("{name}: no selector"))),
-                }
+            }
+            let refs = self.end(depth);
+            self.defs.push(Item {
+                names: vec![format!("{name}_entry")],
+                text: format!("def {name}_entry : FeM Empty := do\n{lines}\n"),
+                scope: Scope::Contract,
+                refs,
+            });
+            match info.selector_value {
+                _ if info.is_fallback => default = format!("{name}_entry"),
+                Some(selector) => cases.push((selector, name)),
+                None => return Err(Unsupported(format!("{name}: no selector"))),
             }
         }
         cases.sort_unstable();
@@ -5870,6 +5869,67 @@ fn assoc_const_name<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<
         .iter()
         .find(|constant| constant.value.to_opt() == Some(body))?;
     Some(constant.name.to_opt()?.data(db))
+}
+
+/// Each recv arm of `contract` with its Lean name: `recv_` and the name of
+/// the msg variant it handles, with the msg's name before the variant's if
+/// another arm handles a variant of the same name. An arm that handles no
+/// variant, or whose name or entry's name is still another arm's, is named
+/// by its place, `recv<n>_arm<m>`.
+fn arm_names<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Vec<(RecvArmView<'db>, String)> {
+    let arms: Vec<_> = contract
+        .recv_views(db)
+        .flat_map(|recv| recv.arms(db))
+        .collect();
+    let variants: Vec<_> = arms
+        .iter()
+        .map(|arm| {
+            let variant = arm.resolution(db).variant?.variant_struct;
+            let msg = match variant.scope().parent_item(db) {
+                Some(ItemKind::Mod(module)) => module.name(db).to_opt(),
+                _ => None,
+            };
+            Some((msg, variant.name(db).to_opt()?))
+        })
+        .collect();
+    let short: Vec<_> = variants
+        .iter()
+        .map(|variant| variant.map(|(_, variant)| format!("recv_{}", variant.data(db))))
+        .collect();
+    let chosen: Vec<_> = variants
+        .iter()
+        .zip(&short)
+        .map(|(variant, name)| {
+            if short.iter().filter(|other| *other == name).count() == 1 {
+                return name.clone();
+            }
+            let (msg, variant) = (*variant)?;
+            Some(format!("recv_{}_{}", msg?.data(db), variant.data(db)))
+        })
+        .collect();
+    arms.iter()
+        .zip(&chosen)
+        .map(|(arm, name)| {
+            let clashes = |name: &str| {
+                chosen.iter().flatten().any(|other| {
+                    *other == format!("{name}_entry") || name == format!("{other}_entry")
+                }) || chosen
+                    .iter()
+                    .flatten()
+                    .filter(|other| *other == name)
+                    .count()
+                    > 1
+            };
+            let name = match name {
+                Some(name) if !clashes(name) => name.clone(),
+                _ => format!("recv{}_arm{}", arm.recv(db).recv_idx(db), arm.arm_idx(db)),
+            };
+            (*arm, name)
+        })
+        .collect()
 }
 
 /// Whether `ingot` is core or std, whose definitions exports share.

@@ -136,7 +136,7 @@ def windows (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 r0 r1 r2 r3
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Windows (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v2 ← downcast_truncate_u256_usize v0
   let v3 ← downcast_truncate_u256_usize v1
   let v4 ← windows v2 v3
@@ -244,7 +244,7 @@ def break_both (v0 : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 r0 r1 r2 r3
 
-def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
+def recv_BreakBoth (v0 : UInt256) : FeM UInt256 := do
   let v1 ← break_both v0
   return v1
 
@@ -340,7 +340,7 @@ def continue_outer (v0 : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 r0 r1 r2 r3
 
-def recv0_arm2 (v0 : UInt256) : FeM UInt256 := do
+def recv_ContinueOuter (v0 : UInt256) : FeM UInt256 := do
   let v1 ← continue_outer v0
   return v1
 
@@ -409,7 +409,7 @@ def return_inner (v0 : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 r0 r1
 
-def recv0_arm3 (v0 : UInt256) : FeM UInt256 := do
+def recv_ReturnInner (v0 : UInt256) : FeM UInt256 := do
   let v1 ← return_inner v0
   return v1
 
@@ -542,7 +542,7 @@ def three_levels (v0 : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 r0 r1 r2 r3 v11
 
-def recv0_arm4 (v0 : UInt256) : FeM UInt256 := do
+def recv_ThreeLevels (v0 : UInt256) : FeM UInt256 := do
   let v1 ← downcast_truncate_u256_usize v0
   let v2 ← three_levels v1
   return v2

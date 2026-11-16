@@ -1,14 +1,14 @@
 own Approval_emit_Evm folded-constant Approval::TOPIC0 = (UInt256.ofNat 63486140976153616755203102783360879283472101686154884697241723088393386309925) (Approval_TOPIC0: constant of 8 bytes of type `[u8; 8]`)
 own Transfer_emit_Evm folded-constant Transfer::TOPIC0 = (UInt256.ofNat 100389287136786176327247604509743168900146139575972864366142685224231313322991) (Transfer_TOPIC0: constant of 8 bytes of type `[u8; 8]`)
 own init unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm0 unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm1 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
-own recv0_arm1 unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm2 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
-own recv0_arm2 unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm3 unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm4 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
-own recv0_arm4 unsafe-impl entry of StorageMap<Address, u256>
+own recv_Allowance unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv_Allowance unsafe-impl entry of StorageMap<Address, u256>
+own recv_Approve unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv_Approve unsafe-impl entry of StorageMap<Address, u256>
+own recv_BalanceOf unsafe-impl entry of StorageMap<Address, u256>
+own recv_Transfer unsafe-impl entry of StorageMap<Address, u256>
+own recv_TransferFrom unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv_TransferFrom unsafe-impl entry of StorageMap<Address, u256>
 core AbiFrame_from_raw_parts unsafe-fn the whole body
 core AbiFrame_slice unsafe-block 1 of 1
 core AbiFrame_store_word unsafe-block 1 of 1

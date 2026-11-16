@@ -3,7 +3,7 @@ export Lib (Option_u256 Option_u256.None Option_u256.Some)
 def init : FeM Unit := do
   return ()
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Triangle (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : UInt256 := default
   let mut r1 : UInt256 := default
   let v1 := (UInt256.ofNat 0)
@@ -75,7 +75,7 @@ def step (v0 : UInt256) : FeM Option_u256 := do
       let v24 := v23
       b6 v24
 
-def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Collatz (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let mut r0 : UInt256 := default
   let mut r1 : UInt256 := default
   let v2 := v0

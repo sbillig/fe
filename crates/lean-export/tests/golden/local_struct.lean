@@ -56,7 +56,7 @@ def Cursor_end (v0 : Cursor) : FeM UInt256 := do
   let v3 ← checkedAdd v1 v2
   return v3
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Sum (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : Cursor := default
   let mut r1 : Span := default
   let v1 := (UInt256.ofNat 0)
@@ -92,7 +92,7 @@ def Cursor_advance_1 (v0 : Place) (v1 : UInt256) : FeM UInt256 := do
   let v6 := ()
   return v3
 
-def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
+def recv_Bump (v0 : UInt256) : FeM UInt256 := do
   let v1 := Field.saved
   let v2 ← Cursor_advance_1 v1 v0
   return v2

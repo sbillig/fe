@@ -430,7 +430,7 @@ def SolString_load (v0 : Place) : FeM DynString := do
     partial_fixpoint
     b7 r0
 
-def recv0_arm0 : FeM DynString := do
+def recv_Name : FeM DynString := do
   let v0 := (Field.store.field Layout.Weth9Store 0)
   let v1 := v0
   let v2 ← SolString_load v1
@@ -463,7 +463,7 @@ def emit_Evm_Approval (v1 : Approval) : FeM Unit := do
   let v4 ← Approval_emit_Evm v3
   return ()
 
-def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
+def recv_Approve (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   let v3 ← Evm_caller
   let v4 := v3
   let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot v4
@@ -475,7 +475,7 @@ def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   let v9 := true
   return v9
 
-def recv0_arm2 : FeM UInt256 := do
+def recv_TotalSupply : FeM UInt256 := do
   let mut r1 : Wei := default
   let v1 ← Evm_selfbalance
   r1 := v1
@@ -595,7 +595,7 @@ def transfer_from_Weth9Store_Evm_Evm (v0 : UInt256) (v1 : UInt256) (v2 : UInt256
   else
     M.panic 0x01
 
-def recv0_arm3 (r0 : UInt256) (r1 : UInt256) (v0 : UInt256) : FeM Bool := do
+def recv_TransferFrom (r0 : UInt256) (r1 : UInt256) (v0 : UInt256) : FeM Bool := do
   let mut r0 := r0
   let mut r1 := r1
   let v1 := r0
@@ -625,7 +625,7 @@ def emit_Evm_Withdrawal (v1 : Withdrawal) : FeM Unit := do
   let v4 ← Withdrawal_emit_Evm v3
   return ()
 
-def recv0_arm4 (v0 : UInt256) : FeM Unit := do
+def recv_Withdraw (v0 : UInt256) : FeM Unit := do
   let mut r2 : Wei := default
   let mut r3 : RawCallOutcome := default
   let v3 ← Evm_caller
@@ -680,25 +680,25 @@ def SolSlot_read_u8 (v0 : Place) (v1 : UInt256) : FeM UInt256 := do
   let v5 ← SolWord_get_u8 v4 v1
   return v5
 
-def recv0_arm5 : FeM UInt256 := do
+def recv_Decimals : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   let v1 := (Field.store.field Layout.Weth9Store 2)
   let v2 := v1
   let v3 ← SolSlot_read_u8 v2 v0
   return v3
 
-def recv0_arm6 (v0 : UInt256) : FeM UInt256 := do
+def recv_BalanceOf (v0 : UInt256) : FeM UInt256 := do
   let l0 ← StorageMap_locate_Address_u256 (Field.store.field Layout.Weth9Store 3) (Field.store.field Layout.Weth9Store 3).slot v0
   let v1 ← load (Place.mk .storage l0.slot)
   return v1
 
-def recv0_arm7 : FeM DynString := do
+def recv_Symbol : FeM DynString := do
   let v0 := (Field.store.field Layout.Weth9Store 1)
   let v1 := v0
   let v2 ← SolString_load v1
   return v2
 
-def recv0_arm8 (r0 : UInt256) (v0 : UInt256) : FeM Bool := do
+def recv_Transfer (r0 : UInt256) (v0 : UInt256) : FeM Bool := do
   let mut r0 := r0
   let mut r3 : UInt256 := default
   let v2 ← Evm_caller
@@ -749,11 +749,11 @@ def deposit_Weth9Store_Evm_Evm : FeM Unit := do
   let v13 ← emit_Evm_Deposit v11
   return ()
 
-def recv0_arm9 : FeM Unit := do
+def recv_Deposit : FeM Unit := do
   let v0 ← deposit_Weth9Store_Evm_Evm
   return ()
 
-def recv0_arm10 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Allowance (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.Weth9Store 4) (Field.store.field Layout.Weth9Store 4).slot v0
   let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot v1
   let v2 ← load (Place.mk .storage l1.slot)
@@ -791,10 +791,10 @@ def decode_runtime_args_Evm_Sol_Name : FeM Name := do
   let v12 ← decode_from_prechecked_head_Name_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Name_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Name
-  let result ← recv0_arm0
+  let result ← recv_Name
   Evm_return_value_Sol_DynString result
 
 def Approve_HEAD_SIZE : FeM UInt256 := do
@@ -838,10 +838,10 @@ def decode_runtime_args_Evm_Sol_Approve : FeM Approve := do
   let v12 ← decode_from_prechecked_head_Approve_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm1_entry : FeM Empty := do
+def recv_Approve_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Approve
-  let result ← recv0_arm1 message.guy message.wad
+  let result ← recv_Approve message.guy message.wad
   Evm_return_value_Sol_bool result
 
 def TotalSupply_HEAD_SIZE : FeM UInt256 := do
@@ -872,10 +872,10 @@ def decode_runtime_args_Evm_Sol_TotalSupply : FeM TotalSupply := do
   let v12 ← decode_from_prechecked_head_TotalSupply_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm2_entry : FeM Empty := do
+def recv_TotalSupply_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_TotalSupply
-  let result ← recv0_arm2
+  let result ← recv_TotalSupply
   Evm_return_value_Sol_u256 result
 
 def TransferFrom_HEAD_SIZE : FeM UInt256 := do
@@ -928,10 +928,10 @@ def decode_runtime_args_Evm_Sol_TransferFrom : FeM TransferFrom := do
   let v12 ← decode_from_prechecked_head_TransferFrom_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm3_entry : FeM Empty := do
+def recv_TransferFrom_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_TransferFrom
-  let result ← recv0_arm3 message.src message.dst message.wad
+  let result ← recv_TransferFrom message.src message.dst message.wad
   Evm_return_value_Sol_bool result
 
 def Withdraw_HEAD_SIZE : FeM UInt256 := do
@@ -968,10 +968,10 @@ def decode_runtime_args_Evm_Sol_Withdraw : FeM Withdraw := do
   let v12 ← decode_from_prechecked_head_Withdraw_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm4_entry : FeM Empty := do
+def recv_Withdraw_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Withdraw
-  let _ ← recv0_arm4 message.wad
+  let _ ← recv_Withdraw message.wad
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 def Decimals_HEAD_SIZE : FeM UInt256 := do
@@ -1002,10 +1002,10 @@ def decode_runtime_args_Evm_Sol_Decimals : FeM Decimals := do
   let v12 ← decode_from_prechecked_head_Decimals_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm5_entry : FeM Empty := do
+def recv_Decimals_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Decimals
-  let result ← recv0_arm5
+  let result ← recv_Decimals
   Evm_return_value_Sol_u8 result
 
 def BalanceOf_HEAD_SIZE : FeM UInt256 := do
@@ -1042,10 +1042,10 @@ def decode_runtime_args_Evm_Sol_BalanceOf : FeM BalanceOf := do
   let v12 ← decode_from_prechecked_head_BalanceOf_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm6_entry : FeM Empty := do
+def recv_BalanceOf_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_BalanceOf
-  let result ← recv0_arm6 message.owner
+  let result ← recv_BalanceOf message.owner
   Evm_return_value_Sol_u256 result
 
 def Symbol_HEAD_SIZE : FeM UInt256 := do
@@ -1076,10 +1076,10 @@ def decode_runtime_args_Evm_Sol_Symbol : FeM Symbol := do
   let v12 ← decode_from_prechecked_head_Symbol_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm7_entry : FeM Empty := do
+def recv_Symbol_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Symbol
-  let result ← recv0_arm7
+  let result ← recv_Symbol
   Evm_return_value_Sol_DynString result
 
 def Transfer_HEAD_SIZE : FeM UInt256 := do
@@ -1123,10 +1123,10 @@ def decode_runtime_args_Evm_Sol_Transfer : FeM Transfer_1 := do
   let v12 ← decode_from_prechecked_head_Transfer_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm8_entry : FeM Empty := do
+def recv_Transfer_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Transfer
-  let result ← recv0_arm8 message.dst message.wad
+  let result ← recv_Transfer message.dst message.wad
   Evm_return_value_Sol_bool result
 
 def Deposit_HEAD_SIZE : FeM UInt256 := do
@@ -1157,9 +1157,9 @@ def decode_runtime_args_Evm_Sol_Deposit : FeM Deposit_1 := do
   let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm9_entry : FeM Empty := do
+def recv_Deposit_entry : FeM Empty := do
   let message ← decode_runtime_args_Evm_Sol_Deposit
-  let _ ← recv0_arm9
+  let _ ← recv_Deposit
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 def Allowance_HEAD_SIZE : FeM UInt256 := do
@@ -1203,10 +1203,10 @@ def decode_runtime_args_Evm_Sol_Allowance : FeM Allowance := do
   let v12 ← decode_from_prechecked_head_Allowance_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm10_entry : FeM Empty := do
+def recv_Allowance_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Allowance
-  let result ← recv0_arm10 message.owner message.guy
+  let result ← recv_Allowance message.owner message.guy
   Evm_return_value_Sol_u256 result
 
 def recv1_arm0_entry : FeM Empty := do
@@ -1220,27 +1220,27 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x06fdde03 then
-      recv0_arm0_entry
+      recv_Name_entry
     else if selector = UInt256.ofNat 0x095ea7b3 then
-      recv0_arm1_entry
+      recv_Approve_entry
     else if selector = UInt256.ofNat 0x18160ddd then
-      recv0_arm2_entry
+      recv_TotalSupply_entry
     else if selector = UInt256.ofNat 0x23b872dd then
-      recv0_arm3_entry
+      recv_TransferFrom_entry
     else if selector = UInt256.ofNat 0x2e1a7d4d then
-      recv0_arm4_entry
+      recv_Withdraw_entry
     else if selector = UInt256.ofNat 0x313ce567 then
-      recv0_arm5_entry
+      recv_Decimals_entry
     else if selector = UInt256.ofNat 0x70a08231 then
-      recv0_arm6_entry
+      recv_BalanceOf_entry
     else if selector = UInt256.ofNat 0x95d89b41 then
-      recv0_arm7_entry
+      recv_Symbol_entry
     else if selector = UInt256.ofNat 0xa9059cbb then
-      recv0_arm8_entry
+      recv_Transfer_entry
     else if selector = UInt256.ofNat 0xd0e30db0 then
-      recv0_arm9_entry
+      recv_Deposit_entry
     else if selector = UInt256.ofNat 0xdd62ed3e then
-      recv0_arm10_entry
+      recv_Allowance_entry
     else
       recv1_arm0_entry
 

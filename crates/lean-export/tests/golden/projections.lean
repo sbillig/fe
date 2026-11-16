@@ -11,7 +11,7 @@ def Cell_slot (v0 : Place) : FeM Place := do
   let v1 := (v0.field Layout.Cell 0)
   return v1
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Direct (v0 : UInt256) : FeM UInt256 := do
   let v1 := Field.cell
   let v2 ← Cell_slot v1
   let v3 ← load v2
@@ -46,7 +46,7 @@ def Cell_cached (v0 : Place) : FeM (UInt256 × (UInt256 → FeM Unit)) := do
     return ()
   return (r0, slide)
 
-def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
+def recv_Slide (v0 : UInt256) : FeM UInt256 := do
   let mut v2 : UInt256 := default
   let v1 := Field.cell
   let (v2_g, v2_k) ← Cell_cached v1
@@ -67,7 +67,7 @@ def first (v0 : (UInt256 × UInt256)) : FeM (UInt256 × (UInt256 → FeM (UInt25
     return v0
   return (v0.fst, slide)
 
-def recv0_arm2 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Local (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let mut r0 : (UInt256 × UInt256) := default
   let mut v5 : UInt256 := default
   let v2 := (v0, v1)

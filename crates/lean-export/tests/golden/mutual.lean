@@ -77,7 +77,7 @@ partial_fixpoint
 
 end
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Walk (v0 : UInt256) : FeM UInt256 := do
   let v1 ← left v0
   return v1
 

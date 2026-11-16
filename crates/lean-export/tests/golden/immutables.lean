@@ -59,7 +59,7 @@ def init (v0 : UInt256) (e0 : Config) (e1 : (Vector UInt256 2)) : FeM (Unit × C
   let v13 := ()
   return ((), e0, e1)
 
-def recv0_arm0 : FeM UInt256 := do
+def recv_Limit : FeM UInt256 := do
   let e0 ← cload_Config (← immutableAt 4 0)
   let v1 := e0.on
   let b3 : UInt256 → FeM UInt256 := fun v0 => do
@@ -76,7 +76,7 @@ def recv0_arm0 : FeM UInt256 := do
     let v8 := v7
     b3 v8
 
-def recv0_arm1 : FeM UInt256 := do
+def recv_Sum : FeM UInt256 := do
   let e1 ← cloadArray 32 (fun q => cload q) (← immutableAt 4 2) 2
   let v0 := (UInt256.ofNat 0)
   checkIndex v0 2
@@ -103,7 +103,7 @@ def capped_Config (v0 : UInt256) : FeM UInt256 := do
     let v8 := v7
     b3 v8
 
-def recv0_arm2 (v0 : UInt256) : FeM UInt256 := do
+def recv_Bump (v0 : UInt256) : FeM UInt256 := do
   let e0 ← cload_Config (← immutableAt 4 0)
   let v1 ← capped_Config v0
   let v2 ← load Field.count
@@ -141,10 +141,10 @@ def decode_runtime_args_Evm_Sol_Limit : FeM Limit := do
   let v12 ← decode_from_prechecked_head_Limit_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Limit_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Limit
-  let result ← recv0_arm0
+  let result ← recv_Limit
   Evm_return_value_Sol_u256 result
 
 def Sum_HEAD_SIZE : FeM UInt256 := do
@@ -175,10 +175,10 @@ def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let v12 ← decode_from_prechecked_head_Sum_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm1_entry : FeM Empty := do
+def recv_Sum_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Sum
-  let result ← recv0_arm1
+  let result ← recv_Sum
   Evm_return_value_Sol_u256 result
 
 def Bump_HEAD_SIZE : FeM UInt256 := do
@@ -215,10 +215,10 @@ def decode_runtime_args_Evm_Sol_Bump : FeM Bump := do
   let v12 ← decode_from_prechecked_head_Bump_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm2_entry : FeM Empty := do
+def recv_Bump_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Bump
-  let result ← recv0_arm2 message.«by»
+  let result ← recv_Bump message.«by»
   Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
@@ -228,11 +228,11 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x853255cc then
-      recv0_arm1_entry
+      recv_Sum_entry
     else if selector = UInt256.ofNat 0xa4d66daf then
-      recv0_arm0_entry
+      recv_Limit_entry
     else if selector = UInt256.ofNat 0xb20eb4c4 then
-      recv0_arm2_entry
+      recv_Bump_entry
     else
       revertEmpty
 

@@ -47,7 +47,7 @@ def take (v0 : Guard) : FeM UInt256 := do
   let _ ← Guard_drop v0
   return v1
 
-def recv0_arm0 (v0 : Bool) : FeM UInt256 := do
+def recv_Moved (v0 : Bool) : FeM UInt256 := do
   let mut f0 := true
   let v2 := (UInt256.ofNat 1)
   let v3 := (Guard.mk v2)
@@ -84,7 +84,7 @@ def Option_is_some_Guard (v0 : Option_Guard) : FeM Bool := do
     let v6 := v5
     b1 v6
 
-def recv0_arm1 (v0 : Bool) : FeM UInt256 := do
+def recv_Payload (v0 : Bool) : FeM UInt256 := do
   let mut r0 : Option_Guard := default
   let b3 : Option_Guard → Option_Guard → FeM UInt256 := fun r0 v1 => do
     let mut r0 := r0
@@ -109,7 +109,7 @@ def recv0_arm1 (v0 : Bool) : FeM UInt256 := do
     let v7 := v6
     b3 r0 v7
 
-def recv0_arm2 (v0 : UInt256) : FeM UInt256 := do
+def recv_Stored (v0 : UInt256) : FeM UInt256 := do
   let v1 := (Pair.mk v0 v0)
   store_Pair Field.pair v1
   let v2 := ()

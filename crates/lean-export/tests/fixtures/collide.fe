@@ -3,7 +3,8 @@
 // `store`, each bound in a block that ends before the use, which the
 // export's one sequence of `let`s would keep in scope. And top-level
 // names spelled like the exporter's own binders: `v3` and `size`, and `b1`,
-// a loop's local function.
+// a loop's local function. Two msgs have a `Run` variant, whose arms are
+// named with the msg's name.
 use std::abi::sol
 
 msg CollideMsg {
@@ -11,6 +12,11 @@ msg CollideMsg {
     Run { x: u256 } -> u256,
     #[selector = sol("spin(uint256)")]
     Spin { n: u256 } -> u256,
+}
+
+msg OtherMsg {
+    #[selector = sol("rerun(uint256)")]
+    Run { x: u256 } -> u256,
 }
 
 mod bounds {
@@ -55,6 +61,12 @@ pub contract Collide {
                 total = b1(total, i)
             }
             total
+        }
+    }
+
+    recv OtherMsg {
+        Run { x } -> u256 {
+            x
         }
     }
 }

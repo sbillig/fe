@@ -1,5 +1,5 @@
-own recv0_arm0 unsafe-impl entry of StorageMap<(u256, u256), bool>
-own recv0_arm1 unsafe-impl entry of StorageMap<bool, u256>
+own recv_Flag unsafe-impl entry of StorageMap<bool, u256>
+own recv_Vote unsafe-impl entry of StorageMap<(u256, u256), bool>
 core MemBuffer_drop unsafe-block 1 of 1
 core MemBuffer_new_uninit unsafe-fn the whole body
 core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body

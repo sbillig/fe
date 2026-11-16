@@ -25,33 +25,33 @@ deriving Inhabited
 def init : FeM Unit := do
   return ()
 
-def recv0_arm0 : FeM UInt256 := do
+def recv_Get0 : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   let v1 := Field.pack
   let v2 := v1
   let v3 ← StoragePackedArray_get_8 v2 v0
   return v3
 
-def recv0_arm1 : FeM UInt256 := do
+def recv_Get1 : FeM UInt256 := do
   let v0 := (UInt256.ofNat 1)
   let v1 := Field.pack
   let v2 := v1
   let v3 ← StoragePackedArray_get_8 v2 v0
   return v3
 
-def recv0_arm2 (v0 : UInt256) : FeM Unit := do
+def recv_Set0 (v0 : UInt256) : FeM Unit := do
   let v1 := (UInt256.ofNat 0)
   let v2 := Field.pack
   let v3 ← StoragePackedArray_set_8 v2 v1 v0
   return ()
 
-def recv0_arm3 (v0 : UInt256) : FeM Unit := do
+def recv_Set1 (v0 : UInt256) : FeM Unit := do
   let v1 := (UInt256.ofNat 1)
   let v2 := Field.pack
   let v3 ← StoragePackedArray_set_8 v2 v1 v0
   return ()
 
-def recv0_arm4 (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
+def recv_SetBoth (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
   let v2 := (UInt256.ofNat 0)
   let v3 := Field.pack
   let v4 ← StoragePackedArray_set_8 v3 v2 v0
@@ -88,10 +88,10 @@ def decode_runtime_args_Evm_Sol_Get0 : FeM Get0 := do
   let v12 ← decode_from_prechecked_head_Get0_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Get0_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Get0
-  let result ← recv0_arm0
+  let result ← recv_Get0
   Evm_return_value_Sol_u256 result
 
 def Get1_HEAD_SIZE : FeM UInt256 := do
@@ -122,10 +122,10 @@ def decode_runtime_args_Evm_Sol_Get1 : FeM Get1 := do
   let v12 ← decode_from_prechecked_head_Get1_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm1_entry : FeM Empty := do
+def recv_Get1_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Get1
-  let result ← recv0_arm1
+  let result ← recv_Get1
   Evm_return_value_Sol_u256 result
 
 def Set0_HEAD_SIZE : FeM UInt256 := do
@@ -162,10 +162,10 @@ def decode_runtime_args_Evm_Sol_Set0 : FeM Set0 := do
   let v12 ← decode_from_prechecked_head_Set0_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm2_entry : FeM Empty := do
+def recv_Set0_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Set0
-  let _ ← recv0_arm2 message.value
+  let _ ← recv_Set0 message.value
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 def Set1_HEAD_SIZE : FeM UInt256 := do
@@ -202,10 +202,10 @@ def decode_runtime_args_Evm_Sol_Set1 : FeM Set1 := do
   let v12 ← decode_from_prechecked_head_Set1_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm3_entry : FeM Empty := do
+def recv_Set1_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Set1
-  let _ ← recv0_arm3 message.value
+  let _ ← recv_Set1 message.value
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 def SetBoth_HEAD_SIZE : FeM UInt256 := do
@@ -249,10 +249,10 @@ def decode_runtime_args_Evm_Sol_SetBoth : FeM SetBoth := do
   let v12 ← decode_from_prechecked_head_SetBoth_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm4_entry : FeM Empty := do
+def recv_SetBoth_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_SetBoth
-  let _ ← recv0_arm4 message.first message.second
+  let _ ← recv_SetBoth message.first message.second
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 def runtime : FeM Empty := do
@@ -262,15 +262,15 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x054c1a75 then
-      recv0_arm1_entry
+      recv_Get1_entry
     else if selector = UInt256.ofNat 0x90bb7b44 then
-      recv0_arm0_entry
+      recv_Get0_entry
     else if selector = UInt256.ofNat 0x92cf1ef5 then
-      recv0_arm4_entry
+      recv_SetBoth_entry
     else if selector = UInt256.ofNat 0x9bc39d3c then
-      recv0_arm3_entry
+      recv_Set1_entry
     else if selector = UInt256.ofNat 0xf26feec9 then
-      recv0_arm2_entry
+      recv_Set0_entry
     else
       revertEmpty
 

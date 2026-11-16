@@ -13,7 +13,7 @@ def bump (v0 : (Vector UInt256 4)) (v1 : UInt256) (v2 : UInt256) : FeM (Unit × 
   let v7 := ()
   return ((), v0)
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Pick (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let mut r0 : (Vector UInt256 4) := default
   let v2 := Vector.replicate 4 v1
   let v3 := v2
@@ -41,7 +41,7 @@ def WEIGHTS : FeM (Vector UInt256 3) := do
   let v3 := #v[v0, v1, v2]
   return v3
 
-def recv0_arm1 (v0 : (Vector UInt256 3)) : FeM UInt256 := do
+def recv_Weigh (v0 : (Vector UInt256 3)) : FeM UInt256 := do
   let mut r0 : UInt256 := default
   let mut r1 : UInt256 := default
   let v1 := (UInt256.ofNat 0)

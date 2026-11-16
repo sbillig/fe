@@ -3,7 +3,7 @@ export Lib (Address_word Evm_address Evm_block_number Evm_origin Evm_value Wei W
 def init : FeM Unit := do
   return ()
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Narrow (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v2 ← IntTy.add (.u 8) v0 v1
   let v3 := v2
   let v4 := (UInt256.ofNat 1)
@@ -27,7 +27,7 @@ def wrapping (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v6 := IntTy.shl (.i 32) v4 v5
   return v6
 
-def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Signed (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v2 := UInt256.sltBool v0 v1
   if v2 then
     let v3 ← IntTy.neg (.i 32) v0
@@ -44,7 +44,7 @@ def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
     let v12 ← IntTy.add (.i 32) v10 v11
     return v12
 
-def recv0_arm2 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Mixed (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v2 := v1
   let v3 := v2
   let v4 ← downcast_truncate_i256_i8 v0
@@ -62,7 +62,7 @@ def recv0_arm2 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v16 ← IntTy.add (.i 256) v14 v15
   return v16
 
-def recv0_arm3 : FeM UInt256 := do
+def recv_Context : FeM UInt256 := do
   let mut r1 : UInt256 := default
   let mut r2 : Wei := default
   let mut r3 : UInt256 := default

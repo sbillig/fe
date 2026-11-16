@@ -25,7 +25,7 @@ def credit (v0 : Place) (v1 : UInt256) (v2 : UInt256) : FeM Unit := do
   let v7 := ()
   return ()
 
-def recv0_arm0 (r0 : UInt256) (v0 : UInt256) : FeM UInt256 := do
+def recv_Credit (r0 : UInt256) (v0 : UInt256) : FeM UInt256 := do
   let mut r0 := r0
   let v1 := (Field.ledger.field Layout.Ledger 0)
   let v2 := r0
@@ -85,10 +85,10 @@ def decode_runtime_args_Evm_Sol_Credit : FeM Credit := do
   let v12 ← decode_from_prechecked_head_Credit_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Credit_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Credit
-  let result ← recv0_arm0 message.who message.amount
+  let result ← recv_Credit message.who message.amount
   Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
@@ -98,7 +98,7 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x00000001 then
-      recv0_arm0_entry
+      recv_Credit_entry
     else
       revertEmpty
 

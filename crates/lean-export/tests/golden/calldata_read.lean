@@ -10,7 +10,7 @@ def second_array_u256_2 (e0 : (Vector UInt256 2)) : FeM UInt256 := do
   let v1 := e0[v0.toNat]!
   return v1
 
-def recv0_arm0 : FeM UInt256 := do
+def recv_Second : FeM UInt256 := do
   let mut r1 : UInt256 := default
   let v0 := (UInt256.ofNat 4)
   let v2 ← calldata_ptr_Evm_array_u256_2 v0

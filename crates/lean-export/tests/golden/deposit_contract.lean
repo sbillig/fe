@@ -127,7 +127,7 @@ def MAX_DEPOSIT_COUNT : FeM UInt256 := do
   let v5 ← checkedSub v3 v4
   return v5
 
-def recv0_arm0 (r0 : Bytes) (r1 : Bytes) (r2 : Bytes) (v0 : FixedBytes_32) : FeM Unit := do
+def recv_Deposit (r0 : Bytes) (r1 : Bytes) (r2 : Bytes) (v0 : FixedBytes_32) : FeM Unit := do
   let mut r0 := r0
   let mut r1 := r1
   let mut r2 := r2
@@ -303,7 +303,7 @@ def recv0_arm0 (r0 : Bytes) (r1 : Bytes) (r2 : Bytes) (v0 : FixedBytes_32) : FeM
   else
     M.revert (assertData "DepositContract: invalid pubkey length")
 
-def recv0_arm1 : FeM UInt256 := do
+def recv_GetDepositRoot : FeM UInt256 := do
   let mut r1 : UInt256 := default
   let mut r2 : UInt256 := default
   let mut r3 : Range_Known_0_Unknown := default
@@ -380,14 +380,14 @@ def recv0_arm1 : FeM UInt256 := do
   partial_fixpoint
   b1 r1 r2 r3 v11
 
-def recv0_arm2 : FeM Bytes := do
+def recv_GetDepositCount : FeM Bytes := do
   let v0 ← load (Field.store.field Layout.DepositStore 1)
   let v1 ← downcast_truncate_u256_u64 v0
   let v2 := v1
   let v3 ← serialize_u64 v2
   return v3
 
-def recv0_arm3 (v0 : FixedBytes_4) : FeM Bool := do
+def recv_SupportsInterface (v0 : FixedBytes_4) : FeM Bool := do
   let v2 := v0.val
   let v3 := (UInt256.ofNat 33540519)
   let v4 := decide (v2 = v3)
@@ -474,9 +474,9 @@ def decode_runtime_args_Evm_Sol_Deposit : FeM Deposit := do
   let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Deposit_entry : FeM Empty := do
   let message ← decode_runtime_args_Evm_Sol_Deposit
-  let _ ← recv0_arm0 message.pubkey message.withdrawal_credentials message.signature message.deposit_data_root
+  let _ ← recv_Deposit message.pubkey message.withdrawal_credentials message.signature message.deposit_data_root
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 def GetDepositRoot_HEAD_SIZE : FeM UInt256 := do
@@ -507,10 +507,10 @@ def decode_runtime_args_Evm_Sol_GetDepositRoot : FeM GetDepositRoot := do
   let v12 ← decode_from_prechecked_head_GetDepositRoot_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm1_entry : FeM Empty := do
+def recv_GetDepositRoot_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_GetDepositRoot
-  let result ← recv0_arm1
+  let result ← recv_GetDepositRoot
   Evm_return_value_Sol_u256 result
 
 def GetDepositCount_HEAD_SIZE : FeM UInt256 := do
@@ -541,10 +541,10 @@ def decode_runtime_args_Evm_Sol_GetDepositCount : FeM GetDepositCount := do
   let v12 ← decode_from_prechecked_head_GetDepositCount_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm2_entry : FeM Empty := do
+def recv_GetDepositCount_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_GetDepositCount
-  let result ← recv0_arm2
+  let result ← recv_GetDepositCount
   Evm_return_value_Sol_Bytes result
 
 def SupportsInterface_HEAD_SIZE : FeM UInt256 := do
@@ -581,10 +581,10 @@ def decode_runtime_args_Evm_Sol_SupportsInterface : FeM SupportsInterface := do
   let v12 ← decode_from_prechecked_head_SupportsInterface_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm3_entry : FeM Empty := do
+def recv_SupportsInterface_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_SupportsInterface
-  let result ← recv0_arm3 message.interface_id
+  let result ← recv_SupportsInterface message.interface_id
   Evm_return_value_Sol_bool result
 
 def runtime : FeM Empty := do
@@ -594,13 +594,13 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x01ffc9a7 then
-      recv0_arm3_entry
+      recv_SupportsInterface_entry
     else if selector = UInt256.ofNat 0x22895118 then
-      recv0_arm0_entry
+      recv_Deposit_entry
     else if selector = UInt256.ofNat 0x621fd130 then
-      recv0_arm2_entry
+      recv_GetDepositCount_entry
     else if selector = UInt256.ofNat 0xc5f2892f then
-      recv0_arm1_entry
+      recv_GetDepositRoot_entry
     else
       revertEmpty
 

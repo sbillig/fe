@@ -26,7 +26,7 @@ def add (v0 : UInt256) (v1 : UInt256) : FeM Unit := do
   let v5 := ()
   return ()
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Bump (v0 : UInt256) : FeM UInt256 := do
   let v1 ← alloc_Cell
   let v2 := v1
   let v3 ← word_of v2

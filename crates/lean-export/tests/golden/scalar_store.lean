@@ -16,11 +16,11 @@ def init (v0 : UInt256) : FeM Unit := do
   let v2 := ()
   return ()
 
-def recv0_arm0 : FeM UInt256 := do
+def recv_Get : FeM UInt256 := do
   let v0 ← load Field.stored
   return v0
 
-def recv0_arm1 (v0 : UInt256) : FeM Unit := do
+def recv_Set (v0 : UInt256) : FeM Unit := do
   store Field.stored v0
   let v1 := ()
   return ()
@@ -53,10 +53,10 @@ def decode_runtime_args_Evm_Sol_Get : FeM Get := do
   let v12 ← decode_from_prechecked_head_Get_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Get_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Get
-  let result ← recv0_arm0
+  let result ← recv_Get
   Evm_return_value_Sol_u256 result
 
 def Set_HEAD_SIZE : FeM UInt256 := do
@@ -93,10 +93,10 @@ def decode_runtime_args_Evm_Sol_Set : FeM Set := do
   let v12 ← decode_from_prechecked_head_Set_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm1_entry : FeM Empty := do
+def recv_Set_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Set
-  let _ ← recv0_arm1 message.value
+  let _ ← recv_Set message.value
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
 def runtime : FeM Empty := do
@@ -106,9 +106,9 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x60fe47b1 then
-      recv0_arm1_entry
+      recv_Set_entry
     else if selector = UInt256.ofNat 0x6d4ce63c then
-      recv0_arm0_entry
+      recv_Get_entry
     else
       revertEmpty
 

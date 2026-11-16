@@ -42,7 +42,7 @@ def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
   let v9 := ()
   return ((), v0)
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Parts (v0 : UInt256) : FeM UInt256 := do
   let mut r1 : UInt256 := default
   let v1 := v0
   r1 := v1
@@ -93,7 +93,7 @@ def bump_1 (v0 : UInt256) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
   let v9 := v1
   return (v9, v1)
 
-def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
+def recv_Granted (v0 : UInt256) : FeM UInt256 := do
   let mut r1 : Pair := default
   let mut v12 : (UInt256 × UInt256) := default
   let v1 := Field.pair
@@ -135,7 +135,7 @@ def Small_maybe (v0 : Place) (v1 : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 
       return ()
     return (Option_mut_u8.None, slide)
 
-def recv0_arm2 (v0 : Bool) : FeM UInt256 := do
+def recv_Lane (v0 : Bool) : FeM UInt256 := do
   let mut v2 : Option_mut_u8 := default
   let v1 := Field.small
   let (v2_g, v2_k) ← Small_maybe v1 v0

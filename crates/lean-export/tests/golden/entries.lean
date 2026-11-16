@@ -9,7 +9,7 @@ def Layout.Store : Layout :=
 def init : FeM Unit := do
   return ()
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
+def recv_Vote (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   let v2 := (v0, v1)
   let l0 ← StorageMap_locate_tuple_u256_u256_bool (Field.store.field Layout.Store 0) (Field.store.field Layout.Store 0).slot v2
   let v3 ← loadBool (Place.mk .storage l0.slot)
@@ -21,7 +21,7 @@ def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM Bool := do
   let v7 := ()
   return v4
 
-def recv0_arm1 (v0 : Bool) : FeM UInt256 := do
+def recv_Flag (v0 : Bool) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 1)
   let l0 ← StorageMap_locate_bool_u256 (Field.store.field Layout.Store 1) (Field.store.field Layout.Store 1).slot v0
   let v2 ← load (Place.mk .storage l0.slot)

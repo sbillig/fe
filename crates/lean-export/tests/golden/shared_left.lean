@@ -32,7 +32,7 @@ def bump_Store (v0 : UInt256) : FeM UInt256 := do
   let v5 ← load (Field.store.field Layout.Store 0)
   return v5
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Left (v0 : UInt256) : FeM UInt256 := do
   let v1 ← bump_Store v0
   return v1
 
@@ -70,10 +70,10 @@ def decode_runtime_args_Evm_Sol_Left : FeM Left := do
   let v12 ← decode_from_prechecked_head_Left_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Left_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Left
-  let result ← recv0_arm0 message.x
+  let result ← recv_Left message.x
   Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
@@ -83,7 +83,7 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x1bb95617 then
-      recv0_arm0_entry
+      recv_Left_entry
     else
       revertEmpty
 

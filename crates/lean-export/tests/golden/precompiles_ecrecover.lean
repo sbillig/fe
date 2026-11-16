@@ -11,7 +11,7 @@ deriving Inhabited
 def init : FeM Unit := do
   return ()
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM (Bool × UInt256 × UInt256) := do
+def recv_Recover (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) : FeM (Bool × UInt256 × UInt256) := do
   let v5 := (UInt256.ofNat 1)
   let v6 := decide (v5.toNat < v1.toNat)
   let b1 : FeM (Bool × UInt256 × UInt256) := do
@@ -127,10 +127,10 @@ def decode_runtime_args_Evm_Sol_Recover : FeM Recover := do
   let v12 ← decode_from_prechecked_head_Recover_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Recover_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Recover
-  let result ← recv0_arm0 message.hash message.recovery_id message.r message.s
+  let result ← recv_Recover message.hash message.recovery_id message.r message.s
   Evm_return_value_Sol_tuple_bool_u256_u256 result
 
 def runtime : FeM Empty := do
@@ -140,7 +140,7 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x2aa6d351 then
-      recv0_arm0_entry
+      recv_Recover_entry
     else
       revertEmpty
 

@@ -100,7 +100,7 @@ def create2_Evm_Child (v1 : Wei) (v2 : Unit) (v3 : UInt256) : FeM UInt256 := do
     let _ ← MemBuffer_drop r0
     return v10
 
-def recv0_arm0 : FeM UInt256 := do
+def recv_Deploy : FeM UInt256 := do
   let mut r1 : Wei := default
   let v0 ← Wei_zero
   r1 := v0
@@ -229,7 +229,7 @@ def Address_call_Evm_Get (v0 : UInt256) (v1 : Get) : FeM UInt256 := do
   let v8 ← call_Evm_Get v2 v3 v7 v5
   return v8
 
-def recv0_arm1 (r0 : UInt256) : FeM UInt256 := do
+def recv_Ask (r0 : UInt256) : FeM UInt256 := do
   let mut r0 := r0
   let v0 := (Get.mk)
   let v1 := r0
@@ -256,7 +256,7 @@ def spare_Evm (v0 : UInt256) : FeM Place := do
   let v2 := v1
   return v2
 
-def recv0_arm2 (v0 : UInt256) : FeM UInt256 := do
+def recv_Poke (v0 : UInt256) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 1)
   let l0 ← Words_locate Field.words Field.words.slot v0
   store (Place.mk .storage l0.slot) v1
@@ -306,10 +306,10 @@ def decode_runtime_args_Evm_Sol_Deploy : FeM Deploy := do
   let v12 ← decode_from_prechecked_head_Deploy_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_Deploy_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Deploy
-  let result ← recv0_arm0
+  let result ← recv_Deploy
   Evm_return_value_Sol_Address result
 
 def Ask_HEAD_SIZE : FeM UInt256 := do
@@ -346,10 +346,10 @@ def decode_runtime_args_Evm_Sol_Ask : FeM Ask := do
   let v12 ← decode_from_prechecked_head_Ask_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm1_entry : FeM Empty := do
+def recv_Ask_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Ask
-  let result ← recv0_arm1 message.target
+  let result ← recv_Ask message.target
   Evm_return_value_Sol_u256 result
 
 def Poke_HEAD_SIZE : FeM UInt256 := do
@@ -386,10 +386,10 @@ def decode_runtime_args_Evm_Sol_Poke : FeM Poke := do
   let v12 ← decode_from_prechecked_head_Poke_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm2_entry : FeM Empty := do
+def recv_Poke_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Poke
-  let result ← recv0_arm2 message.key
+  let result ← recv_Poke message.key
   Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
@@ -399,11 +399,11 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0x00000010 then
-      recv0_arm0_entry
+      recv_Deploy_entry
     else if selector = UInt256.ofNat 0x00000011 then
-      recv0_arm1_entry
+      recv_Ask_entry
     else if selector = UInt256.ofNat 0x00000012 then
-      recv0_arm2_entry
+      recv_Poke_entry
     else
       revertEmpty
 

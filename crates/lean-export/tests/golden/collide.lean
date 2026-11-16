@@ -34,7 +34,7 @@ def size : FeM UInt256 := do
   let v0 := (UInt256.ofNat 4)
   return v0
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_CollideMsg_Run (v0 : UInt256) : FeM UInt256 := do
   let v1 := (UInt256.ofNat 2)
   let v2 ← checkedMul v0 v1
   let v3_1 := v2
@@ -66,7 +66,7 @@ def b1 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v4 ← checkedAdd v2 v3_1
   return v4
 
-def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
+def recv_Spin (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : UInt256 := default
   let mut r1 : UInt256 := default
   let v1 := (UInt256.ofNat 0)
@@ -103,6 +103,9 @@ def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1_1 r0 r1
 
+def recv_OtherMsg_Run (v0 : UInt256) : FeM UInt256 := do
+  return v0
+
 def Run_HEAD_SIZE : FeM UInt256 := do
   let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_u256
@@ -137,10 +140,10 @@ def decode_runtime_args_Evm_Sol_Run : FeM Run := do
   let v12 ← decode_from_prechecked_head_Run_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm0_entry : FeM Empty := do
+def recv_CollideMsg_Run_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Run
-  let result ← recv0_arm0 message.x
+  let result ← recv_CollideMsg_Run message.x
   Evm_return_value_Sol_u256 result
 
 def Spin_HEAD_SIZE : FeM UInt256 := do
@@ -177,10 +180,16 @@ def decode_runtime_args_Evm_Sol_Spin : FeM Spin := do
   let v12 ← decode_from_prechecked_head_Spin_Sol_CallData v11 v5 v8
   return v12
 
-def recv0_arm1_entry : FeM Empty := do
+def recv_Spin_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Spin
-  let result ← recv0_arm1 message.n
+  let result ← recv_Spin message.n
+  Evm_return_value_Sol_u256 result
+
+def recv_OtherMsg_Run_entry : FeM Empty := do
+  nonPayable
+  let message ← decode_runtime_args_Evm_Sol_Run
+  let result ← recv_OtherMsg_Run message.x
   Evm_return_value_Sol_u256 result
 
 def runtime : FeM Empty := do
@@ -190,9 +199,11 @@ def runtime : FeM Empty := do
   else
     let selector ← calldataSelector
     if selector = UInt256.ofNat 0xa444f5e9 then
-      recv0_arm0_entry
+      recv_CollideMsg_Run_entry
     else if selector = UInt256.ofNat 0xa5b6ea8f then
-      recv0_arm1_entry
+      recv_Spin_entry
+    else if selector = UInt256.ofNat 0xeb034fa7 then
+      recv_OtherMsg_Run_entry
     else
       revertEmpty
 

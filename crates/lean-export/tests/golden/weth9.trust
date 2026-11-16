@@ -8,12 +8,12 @@ own SolString_store unsafe-impl entry of Payload
 own Transfer_emit_Evm folded-constant Transfer::TOPIC0 = (UInt256.ofNat 100389287136786176327247604509743168900146139575972864366142685224231313322991) (Transfer_TOPIC0: constant of 8 bytes of type `[u8; 8]`)
 own Withdrawal_emit_Evm folded-constant Withdrawal::TOPIC0 = (UInt256.ofNat 57810043145978950376228313794938171962422655018555593468903716172405399886693) (Withdrawal_TOPIC0: constant of 10 bytes of type `[u8; 10]`)
 own deposit_Weth9Store_Evm_Evm unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm1 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
-own recv0_arm1 unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm10 unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
-own recv0_arm10 unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm4 unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm6 unsafe-impl entry of StorageMap<Address, u256>
+own recv_Allowance unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv_Allowance unsafe-impl entry of StorageMap<Address, u256>
+own recv_Approve unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
+own recv_Approve unsafe-impl entry of StorageMap<Address, u256>
+own recv_BalanceOf unsafe-impl entry of StorageMap<Address, u256>
+own recv_Withdraw unsafe-impl entry of StorageMap<Address, u256>
 own transfer_from_Weth9Store_Evm_Evm unsafe-impl entry of StorageMap<Address, StorageMap<Address, u256>>
 own transfer_from_Weth9Store_Evm_Evm unsafe-impl entry of StorageMap<Address, u256>
 core AbiFrame_copy_from unsafe-block 1 of 1

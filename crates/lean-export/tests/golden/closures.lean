@@ -55,7 +55,7 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (v0 : (Vector UInt256 
   partial_fixpoint
   b1 r0 v2 v6
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
+def recv_Scaled (v0 : UInt256) (v1 : UInt256) (v2 : UInt256) : FeM UInt256 := do
   let mut r0 : (Vector UInt256 2) := default
   let mut r1 : UInt256 := default
   let v3 := #v[v0, v1]
@@ -115,7 +115,7 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (v0 : (Vector UInt25
   partial_fixpoint
   b1 r1 v2 v6
 
-def recv0_arm1 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Tally (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let mut r1 : (Vector UInt256 2) := default
   let mut r2 : Unit := default
   let v2 := #v[v0, v1]

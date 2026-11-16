@@ -1,5 +1,5 @@
 own Words_locate unsafe-impl method of unsafe impl StateIndex for Words
-own recv0_arm2 unsafe-impl entry of Words
+own recv_Poke unsafe-impl entry of Words
 own spare_Evm unsafe-block 1 of 1
 own word_at_Evm unsafe-block 1 of 1
 own word_at_Evm unsafe-fn the whole body

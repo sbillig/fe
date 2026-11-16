@@ -110,14 +110,14 @@ def Field.alone : Place :=
 def init : FeM Unit := do
   return ()
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_SetDelta (v0 : UInt256) : FeM UInt256 := do
   let v1 ← loadIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩
   let v2 := v1
   storeIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩ v0
   let v3 := ()
   return v2
 
-def recv0_arm1 (v0 : Bool) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) : FeM UInt256 := do
+def recv_Replace (v0 : Bool) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UInt256) : FeM UInt256 := do
   let v5 ← load_Packed Field.packed
   let v6 := v5
   let v7 := (Packed.mk v0 v1 v2 v3 v4)
@@ -126,7 +126,7 @@ def recv0_arm1 (v0 : Bool) (v1 : UInt256) (v2 : UInt256) (v3 : UInt256) (v4 : UI
   let v9 := v6.total
   return v9
 
-def recv0_arm2 (v0 : UInt256) : FeM UInt256 := do
+def recv_Advance (v0 : UInt256) : FeM UInt256 := do
   let v3 ← load_Phase Field.phase
   let b1 : UInt256 → FeM UInt256 := fun v1 => do
     return v1
@@ -162,7 +162,7 @@ def recv0_arm2 (v0 : UInt256) : FeM UInt256 := do
       let v19 := v18
       b7 v19
 
-def recv0_arm3 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Mark (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   checkIndex v0 3
   let v2 ← loadInt (.u 8) (Field.levels.index 1 v0)
   let v3 := v2
@@ -174,7 +174,7 @@ def recv0_arm3 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v6 ← loadIntAt (.u 8) Field.narrow ⟨1, 1, true⟩
   return v6
 
-def recv0_arm4 : FeM Bool := do
+def recv_Lock : FeM Bool := do
   let v0 ← loadBoolAt ((Field.lock.pin .transient).field Layout.TSlot_bool 0) ⟨0, 1, false⟩
   let v1 := v0
   let v2 := true

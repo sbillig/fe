@@ -1,5 +1,5 @@
 own credit unsafe-impl entry of StorageMap<Address, u256>
-own recv0_arm0 unsafe-impl entry of StorageMap<Address, u256>
+own recv_Credit unsafe-impl entry of StorageMap<Address, u256>
 core AbiFrame_from_raw_parts unsafe-fn the whole body
 core AbiFrame_slice unsafe-block 1 of 1
 core AbiFrame_store_word unsafe-block 1 of 1

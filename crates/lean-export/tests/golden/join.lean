@@ -39,7 +39,7 @@ def add_Store (v0 : UInt256) : FeM UInt256 := do
     let v12 := v11
     b3 v12
 
-def recv0_arm0 (v0 : UInt256) : FeM UInt256 := do
+def recv_Bump (v0 : UInt256) : FeM UInt256 := do
   let v1 ← add_Store v0
   return v1
 

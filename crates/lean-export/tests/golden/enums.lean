@@ -70,7 +70,7 @@ def shape (v0 : UInt256) (v1 : UInt256) : FeM Shape := do
       let v18 := v17
       b6 v18
 
-def recv0_arm0 (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
+def recv_Area (v0 : UInt256) (v1 : UInt256) : FeM UInt256 := do
   let v3 ← shape v0 v1
   let b1 : UInt256 → FeM UInt256 := fun v2 => do
     return v2
@@ -114,7 +114,7 @@ def halve (v0 : UInt256) : FeM Option_u256 := do
     let v13 := v12
     b3 v13
 
-def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
+def recv_Half (v0 : UInt256) : FeM UInt256 := do
   let v2 ← halve v0
   let b1 : UInt256 → FeM UInt256 := fun v1 => do
     return v1
@@ -128,7 +128,7 @@ def recv0_arm1 (v0 : UInt256) : FeM UInt256 := do
     let v6 := v0
     b1 v6
 
-def recv0_arm2 (v0 : UInt256) : FeM UInt256 := do
+def recv_Grow (v0 : UInt256) : FeM UInt256 := do
   let mut r0 : Shape := default
   let v2 := Shape.Square v0
   let v3 := v2
