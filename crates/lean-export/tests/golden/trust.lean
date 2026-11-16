@@ -192,7 +192,7 @@ def try_call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message_3
   let mut addr := addr
   let mut args : MemBuffer := default
   let mut ret : MemBuffer := default
-  let mut raw : RawCallOutcome := default
+  let mut «raw» : RawCallOutcome := default
   let v4 ← Get_SELECTOR
   let message_5 := message_3
   let v6 ← encode_calldata_Get v4 message_5
@@ -206,8 +206,8 @@ def try_call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message_3
   let (v15, v15_0) ← raw_call_Evm addr_13 gas_1 value v11 ret
   ret := v15_0
   let raw_16 := v15
-  raw := raw_16
-  let v18 ← copy_call_outcome raw
+  «raw» := raw_16
+  let v18 ← copy_call_outcome «raw»
   let _ ← MemBuffer_drop ret
   let _ ← MemBuffer_drop args
   return v18

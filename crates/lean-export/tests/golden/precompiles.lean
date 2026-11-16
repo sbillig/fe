@@ -3272,10 +3272,10 @@ def Point_add_affine_Mont_Base (self : Point_Mont_Base) (x2 : Mont_Base) (y2 : M
       let v101 := (Point_Mont_Base.mk x_100 y v99)
       return v101
 
-def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt256) (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) (prefix : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
+def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt256) (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) («prefix» : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
   let mut g := g
   let mut table := table
-  let mut prefix := prefix
+  let mut «prefix» := «prefix»
   let mut running := running
   let mut inverse := inverse
   let mut k := k
@@ -3315,10 +3315,10 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
   r12 := v41
   let v43 ← array_start_usize_3 r12
   let v44 := v43
-  let rec b1 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) (prefix : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) (v3 : UInt256) : FeM Point_Mont_Base := do
+  let rec b1 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) («prefix» : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) (v3 : UInt256) : FeM Point_Mont_Base := do
     let mut g := g
     let mut table := table
-    let mut prefix := prefix
+    let mut «prefix» := «prefix»
     let mut running := running
     let mut inverse := inverse
     let mut k := k
@@ -3364,10 +3364,10 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
       r13 := v53
       let v55 ← Range_start_1_4 r13
       let v56 := v55
-      let rec b5 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) (prefix : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) (v4 : UInt256) : FeM Point_Mont_Base := do
+      let rec b5 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) («prefix» : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) (v4 : UInt256) : FeM Point_Mont_Base := do
         let mut g := g
         let mut table := table
-        let mut prefix := prefix
+        let mut «prefix» := «prefix»
         let mut running := running
         let mut inverse := inverse
         let mut k := k
@@ -3419,19 +3419,19 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
           let v68 := ()
           let v70 ← Range_next_1_4 r13 v4
           let v71 := v70
-          b5 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v71
+          b5 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v71
         else
           let v72 := ()
           let v74 ← array_next_usize_3 r12 v3
           let v75 := v74
-          b1 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v75
+          b1 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v75
       partial_fixpoint
-      b5 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v56
+      b5 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v56
     else
       let v76 ← Mont_one_Base
       let v77 := Vector.replicate 16 v76
       let prefix_78 := v77
-      prefix := prefix_78
+      «prefix» := prefix_78
       let v79 ← Mont_one_Base
       let running_80 := v79
       running := running_80
@@ -3442,10 +3442,10 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
       r16 := v84
       let v86 ← Range_start_1_16 r16
       let v87 := v86
-      let rec b9 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) (prefix : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) (v5 : UInt256) : FeM Point_Mont_Base := do
+      let rec b9 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) («prefix» : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) (v5 : UInt256) : FeM Point_Mont_Base := do
         let mut g := g
         let mut table := table
-        let mut prefix := prefix
+        let mut «prefix» := «prefix»
         let mut running := running
         let mut inverse := inverse
         let mut k := k
@@ -3487,17 +3487,17 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
           let running_93 := running
           let running_94 := running_93
           checkIndex k_92 16
-          prefix := (prefix.set! k_92.toNat running_94)
+          «prefix» := («prefix».set! k_92.toNat running_94)
           let v95 := ()
           checkIndex k_92 16
           let v96 := table[k_92.toNat]!
           r17 := v96
           let v98 ← Point_is_infinity_Mont_Base r17
           let v99 := !v98
-          let b15 : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
+          let b15 : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
             let mut g := g
             let mut table := table
-            let mut prefix := prefix
+            let mut «prefix» := «prefix»
             let mut running := running
             let mut inverse := inverse
             let mut k := k
@@ -3534,7 +3534,7 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
             let mut r36 := r36
             let v112 ← Range_next_1_16 r16 v5
             let v113 := v112
-            b9 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v113
+            b9 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v113
           if v99 then
             checkIndex k_92 16
             let v100 := table[k_92.toNat]!.z
@@ -3547,11 +3547,11 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
             running := running_106
             let v107 := ()
             let v108 := v107
-            b15 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+            b15 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
           else
             let v109 := ()
             let v110 := v109
-            b15 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+            b15 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
         else
           let running_114 := running
           let running_115 := running_114
@@ -3562,10 +3562,10 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
           let v119 := (UInt256.ofNat 16)
           let k_120 := v119
           k := k_120
-          let rec b16 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) (prefix : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
+          let rec b16 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) («prefix» : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
             let mut g := g
             let mut table := table
-            let mut prefix := prefix
+            let mut «prefix» := «prefix»
             let mut running := running
             let mut inverse := inverse
             let mut k := k
@@ -3618,13 +3618,13 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
               let k_132 := k
               let v134 ← Point_is_infinity_Mont_Base r21
               if v134 then
-                b16 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+                b16 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
               else
                 let v135 := ()
                 let v136 := v135
                 let k_137 := k
                 checkIndex k_137 16
-                let v138 := prefix[k_137.toNat]!
+                let v138 := «prefix»[k_137.toNat]!
                 r22 := v138
                 let inverse_139 := inverse
                 let inverse_140 := inverse_139
@@ -3669,7 +3669,7 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
                 checkIndex k_177 16
                 table := (table.set! k_177.toNat v176)
                 let v178 := ()
-                b16 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+                b16 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
             else
               let v179 ← Point_infinity_Mont_Base
               let result_180 := v179
@@ -3677,10 +3677,10 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
               let v181 := (UInt256.ofNat 256)
               let bit_182 := v181
               bit := bit_182
-              let rec b22 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) (prefix : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
+              let rec b22 (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) («prefix» : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
                 let mut g := g
                 let mut table := table
-                let mut prefix := prefix
+                let mut «prefix» := «prefix»
                 let mut running := running
                 let mut inverse := inverse
                 let mut k := k
@@ -3754,10 +3754,10 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
                   let entry := v215
                   let v217 := (UInt256.ofNat 0)
                   let v218 := decide (entry ≠ v217)
-                  let b27 : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
+                  let b27 : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
                     let mut g := g
                     let mut table := table
-                    let mut prefix := prefix
+                    let mut «prefix» := «prefix»
                     let mut running := running
                     let mut inverse := inverse
                     let mut k := k
@@ -3792,11 +3792,11 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
                     let mut r34 := r34
                     let mut r35 := r35
                     let mut r36 := r36
-                    b22 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
-                  let b26 : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
+                    b22 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+                  let b26 : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
                     let mut g := g
                     let mut table := table
-                    let mut prefix := prefix
+                    let mut «prefix» := «prefix»
                     let mut running := running
                     let mut inverse := inverse
                     let mut k := k
@@ -3833,7 +3833,7 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
                     let mut r36 := r36
                     let v234 := ()
                     let v235 := v234
-                    b27 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+                    b27 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
                   if v218 then
                     checkIndex entry 16
                     let v219 := table[entry.toNat]!
@@ -3855,27 +3855,27 @@ def combination_k2 (u_0 : UInt256) (v_1 : UInt256) (v38 : UInt256) (v39 : UInt25
                       result := result_231
                       let v232 := ()
                       let v233 := v232
-                      b27 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+                      b27 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
                     else
-                      b26 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+                      b26 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
                   else
-                    b26 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+                    b26 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
                 else
                   let result_236 := result
                   return result_236
               partial_fixpoint
-              b22 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+              b22 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
           partial_fixpoint
-          b16 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+          b16 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
       partial_fixpoint
-      b9 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v87
+      b9 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v87
   partial_fixpoint
-  b1 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v44
+  b1 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v44
 
-def combination_k1 (u_0 : UInt256) (v_1 : UInt256) (v20 : Point_Mont_Base) (v21 : UInt256) (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) (prefix : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
+def combination_k1 (u_0 : UInt256) (v_1 : UInt256) (v20 : Point_Mont_Base) (v21 : UInt256) (g : Point_Mont_Base) (table : (Vector Point_Mont_Base 16)) («prefix» : (Vector Mont_Base 16)) (running : Mont_Base) (inverse : Mont_Base) (k : UInt256) (z_inverse : Mont_Base) (z_inverse2 : Mont_Base) (result : Point_Mont_Base) (bit : UInt256) (r10 : Point_Mont_Base) (r11 : Point_Mont_Base) (r12 : (Vector UInt256 3)) (r13 : Range_Known_1_Known_4) (r14 : Point_Mont_Base) (r15 : Point_Mont_Base) (r16 : Range_Known_1_Known_16) (r17 : Point_Mont_Base) (r18 : Mont_Base) (r19 : Mont_Base) (r20 : Mont_Base) (r21 : Point_Mont_Base) (r22 : Mont_Base) (r23 : Mont_Base) (r24 : Mont_Base) (r25 : Mont_Base) (r26 : Mont_Base) (r27 : Mont_Base) (r28 : Mont_Base) (r29 : Mont_Base) (r30 : Mont_Base) (r31 : Point_Mont_Base) (r32 : Point_Mont_Base) (r33 : Point_Mont_Base) (r34 : Mont_Base) (r35 : Mont_Base) (r36 : Point_Mont_Base) : FeM Point_Mont_Base := do
   let mut g := g
   let mut table := table
-  let mut prefix := prefix
+  let mut «prefix» := «prefix»
   let mut running := running
   let mut inverse := inverse
   let mut k := k
@@ -3934,12 +3934,12 @@ def combination_k1 (u_0 : UInt256) (v_1 : UInt256) (v20 : Point_Mont_Base) (v21 
   let v37 := (UInt256.ofNat 4)
   let v38 := v37
   let v39 := (UInt256.ofNat 8)
-  combination_k2 u_0 v_1 v38 v39 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+  combination_k2 u_0 v_1 v38 v39 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
 
 def combination (u_0 : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_Mont_Base := do
   let mut g : Point_Mont_Base := default
   let mut table : (Vector Point_Mont_Base 16) := default
-  let mut prefix : (Vector Mont_Base 16) := default
+  let mut «prefix» : (Vector Mont_Base 16) := default
   let mut running : Mont_Base := default
   let mut inverse : Mont_Base := default
   let mut k : UInt256 := default
@@ -3998,7 +3998,7 @@ def combination (u_0 : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Poin
   let v20 ← Point_add_Mont_Base r10 q
   let v21 := (UInt256.ofNat 3)
   checkIndex v21 16
-  combination_k1 u_0 v_1 v20 v21 g table prefix running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
+  combination_k1 u_0 v_1 v20 v21 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
 
 def Point_to_affine_Mont_Base (self : Point_Mont_Base) : FeM (Mont_Base × Mont_Base) := do
   let mut z_inv : Mont_Base := default

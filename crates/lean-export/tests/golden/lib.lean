@@ -3042,8 +3042,8 @@ def bubble_last_revert : FeM Empty := do
   let v7 ← revertData v3 v6
   nomatch v7
 
-def copy_call_outcome (raw : RawCallOutcome) : FeM CallOutcome := do
-  let v1 ← RawCallOutcome_success raw
+def copy_call_outcome («raw» : RawCallOutcome) : FeM CallOutcome := do
+  let v1 ← RawCallOutcome_success «raw»
   let v2 ← copy_returndata
   let v3 := (CallOutcome.mk v1 v2)
   return v3
