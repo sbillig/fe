@@ -89,9 +89,11 @@ structure Montgomery where
   inverse : UInt256
 deriving Inhabited
 
+/-- The `init` of contract `Modexp`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `lib::input<Evm>` -/
 def input_Evm_6 : FeM MemBuffer := do
   let mut input : MemBuffer := default
   let len ← Evm_calldatasize
@@ -103,6 +105,7 @@ def input_Evm_6 : FeM MemBuffer := do
   let input_11 := input
   return input_11
 
+/-- `lib::modexp::input_word<MemBuffer>` -/
 def input_word_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) : FeM UInt256 := do
   let mut value : UInt256 := default
   let mut i : UInt256 := default
@@ -182,18 +185,22 @@ def input_word_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
     else
       b6 value i len
 
+/-- `lib::modexp::MAX_LENGTH` -/
 def MAX_LENGTH : FeM UInt256 := do
   return (UInt256.ofNat 1024)
 
+/-- `lib::FAILURE` -/
 def FAILURE : FeM UInt256 := do
   return (UInt256.ofNat 1)
 
+/-- `lib::modexp::bit_length` -/
 def bit_length (value : UInt256) : FeM UInt256 := do
   let v2 := IntTy.leadingZeros (.u 256) value
   let v3 ← checkedSub (UInt256.ofNat 256) v2
   let v4 ← downcast_truncate_u256_u64 v3
   return v4
 
+/-- `lib::modexp::gas_cost<MemBuffer>` -/
 def gas_cost_MemBuffer (input : MemBuffer) (base : UInt256) (exponent : UInt256) (modulus : UInt256) : FeM UInt256 := do
   let v13 := decide (modulus.toNat < base.toNat)
   let b3 : UInt256 → FeM UInt256 := fun v4 => do
@@ -253,6 +260,7 @@ def gas_cost_MemBuffer (input : MemBuffer) (base : UInt256) (exponent : UInt256)
   else
     b3 modulus
 
+/-- `lib::modexp::input_byte<MemBuffer>` -/
 def input_byte_MemBuffer (input : MemBuffer) (index : UInt256) : FeM UInt256 := do
   let v4 ← MemBuffer_len_1 input
   let v5 := decide (index.toNat < v4.toNat)
@@ -264,6 +272,7 @@ def input_byte_MemBuffer (input : MemBuffer) (index : UInt256) : FeM UInt256 := 
   else
     b3 (UInt256.ofNat 0)
 
+/-- `lib::modexp::input_limb<MemBuffer>` -/
 def input_limb_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) (index : UInt256) : FeM UInt256 := do
   let mut value : UInt256 := default
   let mut byte : UInt256 := default
@@ -328,6 +337,7 @@ def input_limb_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) 
   else
     b2 value byte
 
+/-- `lib::modexp::input_limbs<MemBuffer>` -/
 def input_limbs_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) (count : UInt256) : FeM Option_MemArray_u64 := do
   let mut limbs : MemArray_u64 := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -378,6 +388,7 @@ def input_limbs_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256)
     | _ => pure ()
     return v43
 
+/-- `Exponent::try_read<MemBuffer>` -/
 def Exponent_try_read_MemBuffer (input : MemBuffer) (start : UInt256) (len : UInt256) : FeM Option_Exponent := do
   let mut limbs : MemArray_u64 := default
   let mut count : UInt256 := default
@@ -452,9 +463,11 @@ def Exponent_try_read_MemBuffer (input : MemBuffer) (start : UInt256) (len : UIn
     | _ => pure ()
     return v72
 
+/-- `lib::bignum::LIMB_BASE` -/
 def LIMB_BASE : FeM UInt256 := do
   return (UInt256.ofNat 18446744073709551616)
 
+/-- `lib::bignum::reciprocal_2by1` -/
 def reciprocal_2by1 (d : UInt256) : FeM UInt256 := do
   let v4 := d
   let v5 ← checkedDiv (UInt256.ofNat 340282366920938463463374607431768211455) v4
@@ -463,6 +476,7 @@ def reciprocal_2by1 (d : UInt256) : FeM UInt256 := do
   let v8 ← downcast_truncate_u128_u64 v7
   return v8
 
+/-- `lib::bignum::reciprocal_3by2` -/
 def reciprocal_3by2 (d1 : UInt256) (d0 : UInt256) : FeM UInt256 := do
   let mut v : UInt256 := default
   let mut p : UInt256 := default
@@ -556,6 +570,7 @@ def reciprocal_3by2 (d1 : UInt256) (d0 : UInt256) : FeM UInt256 := do
   else
     b3 v p
 
+/-- `Modulus::try_new` -/
 def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus := do
   let mut limbs : MemArray_u64 := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -676,6 +691,7 @@ def Modulus_try_new (value : MemArray_u64) (len : UInt256) : FeM Option_Modulus 
   else
     b2 limbs r1
 
+/-- `Wide::of` -/
 def Wide_of (limbs : MemArray_u64) (n : UInt256) : FeM Wide := do
   let v6 ← MemArray_index_ref_u64 limbs (UInt256.ofNat 0)
   let v7 ← mloadInt (.u 64) v6
@@ -706,6 +722,7 @@ def Wide_of (limbs : MemArray_u64) (n : UInt256) : FeM Wide := do
   else
     b3 (UInt256.ofNat 0)
 
+/-- `lib::modexp::window_width` -/
 def window_width (bits : UInt256) : FeM UInt256 := do
   let mut best : UInt256 := default
   let mut best_cost : UInt256 := default
@@ -751,6 +768,7 @@ def window_width (bits : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 best best_cost w
 
+/-- `Small<1>::double` -/
 def Small_double_1 (self : Small_1) (x : Wide) : FeM Wide := do
   let v3 := x.l0
   let s0 := IntTy.shl (.u 64) v3 (UInt256.ofNat 1)
@@ -799,6 +817,7 @@ def Small_double_1 (self : Small_1) (x : Wide) : FeM Wide := do
     let v67 := (Wide.mk d0 d1 d2 d3)
     b3 v67
 
+/-- `lib::montgomery::mac` -/
 def mac (a : UInt256) (b : UInt256) (c : UInt256) (carry : UInt256) : FeM (UInt256 × UInt256) := do
   let v5 := a
   let v7 := b
@@ -813,6 +832,7 @@ def mac (a : UInt256) (b : UInt256) (c : UInt256) (carry : UInt256) : FeM (UInt2
   let v20 := (v16, v19)
   return v20
 
+/-- `Small<1>::row2` -/
 def Small_row2_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -844,6 +864,7 @@ def Small_row2_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v50 := (v48, v49)
   return v50
 
+/-- `Small<1>::row3` -/
 def Small_row3_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -909,6 +930,7 @@ def Small_row4_1_k1 (self : Small_1) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v74 := (v72, v73)
   return v74
 
+/-- `Small<1>::row4` -/
 def Small_row4_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -936,6 +958,7 @@ def Small_row4_1 (self : Small_1) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v40 := self.inverse
   Small_row4_1_k1 self t0 t1 t2 t3 t4 t5 v40
 
+/-- `Small<1>::mul` -/
 def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
   let mut zero : Wide := default
   let mut t_r1 : Wide := default
@@ -1144,6 +1167,7 @@ def Small_mul_1 (self : Small_1) (a : Wide) (b : Wide) : FeM Wide := do
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
           b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
+/-- `Small<1>::r2` -/
 def Small_r2_1 (self : Small_1) : FeM Wide := do
   let mut x : Wide := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -1298,11 +1322,13 @@ def Small_r2_1 (self : Small_1) : FeM Wide := do
         let v25 := self.m.l3
         b9 x r1 r2 r3 r4 r5 v25
 
+/-- `lib::bignum::limb` -/
 def limb (limbs : UInt256) (index : UInt256) : FeM UInt256 := do
   let v4 := index * (UInt256.ofNat 8)
   let v5 := limbs + v4
   return v5
 
+/-- `Exponent::bit` -/
 def Exponent_bit (self : Exponent) (index : UInt256) : FeM UInt256 := do
   let v2 := self.total
   let v4 := v2 - (UInt256.ofNat 1)
@@ -1318,6 +1344,7 @@ def Exponent_bit (self : Exponent) (index : UInt256) : FeM UInt256 := do
   let v22 ← downcast_truncate_u64_usize v21
   return v22
 
+/-- `Exponent::window` -/
 def Exponent_window (self : Exponent) (index : UInt256) (width : UInt256) : FeM Window := do
   let mut «end» : UInt256 := default
   let mut digit : UInt256 := default
@@ -1389,6 +1416,7 @@ def Exponent_window (self : Exponent) (index : UInt256) (width : UInt256) : FeM 
       let v25 := index + width
       b6 «end» digit r2 v25
 
+/-- `lib::modexp::small_power<1>` -/
 def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
   let mut inverse : UInt256 := default
   let mut small : Small_1 := default
@@ -1865,6 +1893,7 @@ def small_power_1 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   partial_fixpoint
   b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
+/-- `Small<2>::double` -/
 def Small_double_2 (self : Small_2) (x : Wide) : FeM Wide := do
   let v3 := x.l0
   let s0 := IntTy.shl (.u 64) v3 (UInt256.ofNat 1)
@@ -1913,6 +1942,7 @@ def Small_double_2 (self : Small_2) (x : Wide) : FeM Wide := do
     let v67 := (Wide.mk d0 d1 d2 d3)
     b3 v67
 
+/-- `Small<2>::row2` -/
 def Small_row2_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -1944,6 +1974,7 @@ def Small_row2_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v50 := (v48, v49)
   return v50
 
+/-- `Small<2>::row3` -/
 def Small_row3_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -2009,6 +2040,7 @@ def Small_row4_2_k1 (self : Small_2) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v74 := (v72, v73)
   return v74
 
+/-- `Small<2>::row4` -/
 def Small_row4_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -2036,6 +2068,7 @@ def Small_row4_2 (self : Small_2) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v40 := self.inverse
   Small_row4_2_k1 self t0 t1 t2 t3 t4 t5 v40
 
+/-- `Small<2>::mul` -/
 def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
   let mut zero : Wide := default
   let mut t_r1 : Wide := default
@@ -2244,6 +2277,7 @@ def Small_mul_2 (self : Small_2) (a : Wide) (b : Wide) : FeM Wide := do
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
           b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
+/-- `Small<2>::r2` -/
 def Small_r2_2 (self : Small_2) : FeM Wide := do
   let mut x : Wide := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -2398,6 +2432,7 @@ def Small_r2_2 (self : Small_2) : FeM Wide := do
         let v25 := self.m.l3
         b9 x r1 r2 r3 r4 r5 v25
 
+/-- `lib::modexp::small_power<2>` -/
 def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
   let mut inverse : UInt256 := default
   let mut small : Small_2 := default
@@ -2874,6 +2909,7 @@ def small_power_2 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   partial_fixpoint
   b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
+/-- `Small<3>::double` -/
 def Small_double_3 (self : Small_3) (x : Wide) : FeM Wide := do
   let v3 := x.l0
   let s0 := IntTy.shl (.u 64) v3 (UInt256.ofNat 1)
@@ -2922,6 +2958,7 @@ def Small_double_3 (self : Small_3) (x : Wide) : FeM Wide := do
     let v67 := (Wide.mk d0 d1 d2 d3)
     b3 v67
 
+/-- `Small<3>::row2` -/
 def Small_row2_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -2953,6 +2990,7 @@ def Small_row2_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v50 := (v48, v49)
   return v50
 
+/-- `Small<3>::row3` -/
 def Small_row3_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -3018,6 +3056,7 @@ def Small_row4_3_k1 (self : Small_3) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v74 := (v72, v73)
   return v74
 
+/-- `Small<3>::row4` -/
 def Small_row4_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -3045,6 +3084,7 @@ def Small_row4_3 (self : Small_3) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v40 := self.inverse
   Small_row4_3_k1 self t0 t1 t2 t3 t4 t5 v40
 
+/-- `Small<3>::mul` -/
 def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
   let mut zero : Wide := default
   let mut t_r1 : Wide := default
@@ -3253,6 +3293,7 @@ def Small_mul_3 (self : Small_3) (a : Wide) (b : Wide) : FeM Wide := do
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
           b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
+/-- `Small<3>::r2` -/
 def Small_r2_3 (self : Small_3) : FeM Wide := do
   let mut x : Wide := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -3407,6 +3448,7 @@ def Small_r2_3 (self : Small_3) : FeM Wide := do
         let v25 := self.m.l3
         b9 x r1 r2 r3 r4 r5 v25
 
+/-- `lib::modexp::small_power<3>` -/
 def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
   let mut inverse : UInt256 := default
   let mut small : Small_3 := default
@@ -3883,6 +3925,7 @@ def small_power_3 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   partial_fixpoint
   b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
+/-- `Small<4>::double` -/
 def Small_double_4 (self : Small_4) (x : Wide) : FeM Wide := do
   let v3 := x.l0
   let s0 := IntTy.shl (.u 64) v3 (UInt256.ofNat 1)
@@ -3931,6 +3974,7 @@ def Small_double_4 (self : Small_4) (x : Wide) : FeM Wide := do
     let v67 := (Wide.mk d0 d1 d2 d3)
     b3 v67
 
+/-- `Small<4>::row2` -/
 def Small_row2_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -3962,6 +4006,7 @@ def Small_row2_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v50 := (v48, v49)
   return v50
 
+/-- `Small<4>::row3` -/
 def Small_row3_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -4027,6 +4072,7 @@ def Small_row4_4_k1 (self : Small_4) (t0 : UInt256) (t1 : UInt256) (t2 : UInt256
   let v74 := (v72, v73)
   return v74
 
+/-- `Small<4>::row4` -/
 def Small_row4_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UInt256) : FeM (Wide × UInt256) := do
   let v5 := a.l0
   let v6 := t.l0
@@ -4054,6 +4100,7 @@ def Small_row4_4 (self : Small_4) (a : Wide) (b : UInt256) (t : Wide) (top : UIn
   let v40 := self.inverse
   Small_row4_4_k1 self t0 t1 t2 t3 t4 t5 v40
 
+/-- `Small<4>::mul` -/
 def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
   let mut zero : Wide := default
   let mut t_r1 : Wide := default
@@ -4262,6 +4309,7 @@ def Small_mul_4 (self : Small_4) (a : Wide) (b : Wide) : FeM Wide := do
           let v232 := (Wide.mk d0_200 d1_207 d2_214 d3)
           b24 zero t_r1 t_r2 t_r3 t_r4 t_r5 t_r6 v232
 
+/-- `Small<4>::r2` -/
 def Small_r2_4 (self : Small_4) : FeM Wide := do
   let mut x : Wide := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -4416,6 +4464,7 @@ def Small_r2_4 (self : Small_4) : FeM Wide := do
         let v25 := self.m.l3
         b9 x r1 r2 r3 r4 r5 v25
 
+/-- `lib::modexp::small_power<4>` -/
 def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) : FeM Option_MemArray_u64 := do
   let mut inverse : UInt256 := default
   let mut small : Small_4 := default
@@ -4892,6 +4941,7 @@ def small_power_4 (exponent : Exponent) (base : MemArray_u64) (value : MemArray_
   partial_fixpoint
   b1 inverse small table squared power index started result r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 v16
 
+/-- `lib::modexp::small_power_of` -/
 def small_power_of (exponent : Exponent) (base : MemArray_u64) (value : MemArray_u64) (n : UInt256) : FeM Option_MemArray_u64 := do
   let v9 := decide (n = (UInt256.ofNat 1))
   let b3 : Option_MemArray_u64 → FeM Option_MemArray_u64 := fun v4 => do
@@ -4917,6 +4967,7 @@ def small_power_of (exponent : Exponent) (base : MemArray_u64) (value : MemArray
         let v22 ← small_power_4 exponent base value
         b9 v22
 
+/-- `Montgomery::new` -/
 def Montgomery_new (value : MemArray_u64) (len : UInt256) : FeM Montgomery := do
   let mut value := value
   let mut inverse : UInt256 := default
@@ -4951,6 +5002,7 @@ def Montgomery_new (value : MemArray_u64) (len : UInt256) : FeM Montgomery := do
   partial_fixpoint
   b1 value inverse r2 v12
 
+/-- `lib::bignum::rem_2by1` -/
 def rem_2by1 (u1 : UInt256) (u0 : UInt256) (d : UInt256) (v : UInt256) : FeM UInt256 := do
   let mut r : UInt256 := default
   let v5 := v
@@ -4993,6 +5045,7 @@ def rem_2by1 (u1 : UInt256) (u0 : UInt256) (d : UInt256) (v : UInt256) : FeM UIn
   else
     b3 r
 
+/-- `lib::bignum::div_3by2` -/
 def div_3by2 (u2 : UInt256) (u1 : UInt256) (u0 : UInt256) (d1 : UInt256) (d0 : UInt256) (v : UInt256) : FeM UInt256 := do
   let mut q1 : UInt256 := default
   let mut r : UInt256 := default
@@ -5061,6 +5114,7 @@ def div_3by2 (u2 : UInt256) (u1 : UInt256) (u0 : UInt256) (d1 : UInt256) (d0 : U
   else
     b3 q1 r
 
+/-- `Modulus::reduce` -/
 def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : FeM (Unit × MemArray_u64) := do
   let mut i_r0 : UInt256 := default
   let mut r : UInt256 := default
@@ -5595,6 +5649,7 @@ def Modulus_reduce (self : Modulus) (work_1 : MemArray_u64) (len : UInt256) : Fe
   else
     b2 i_r0 r i_r2 j carry borrow add r7 r8 r9 r10 r11 work_1
 
+/-- `Montgomery::mul` -/
 def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_3 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
   let mut sum : UInt256 := default
   let mut carry : UInt256 := default
@@ -5969,6 +6024,7 @@ def Montgomery_mul (self : Montgomery) (a : MemSlice_u64) (b : MemSlice_u64) (t_
   else
     b2 sum carry reduced reduced_carry at_least j borrow r7 r8 r9 r10 t_3
 
+/-- `Modulus::mul_mod` -/
 def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work_3 : MemArray_u64) : FeM (Unit × MemArray_u64) := do
   let mut carry : UInt256 := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -6101,6 +6157,7 @@ def Modulus_mul_mod (self : Modulus) (a : MemArray_u64) (b : MemArray_u64) (work
   else
     b2 carry r1 r2 r3 work_3
 
+/-- `lib::modexp::large_power` -/
 def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) (value : MemArray_u64) (size : UInt256) : FeM Option_MemArray_u64 := do
   let mut result : MemArray_u64 := default
   let mut work : MemArray_u64 := default
@@ -6606,6 +6663,7 @@ def large_power (exponent : Exponent) (base : MemArray_u64) (modulus : Modulus) 
     let _ ← MemArray_drop_u64 value
     return v297
 
+/-- `lib::modexp::odd_power` -/
 def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) (value : MemArray_u64) (n : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
   let mut modulus : Modulus := default
   let mut limbs : MemArray_u64 := default
@@ -6701,6 +6759,7 @@ def odd_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) 
   else
     b2 modulus limbs r2 base
 
+/-- `lib::modexp::low_product` -/
 def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : FeM (Unit × MemSlice_u64) := do
   let mut a_len : UInt256 := default
   let mut b_len : UInt256 := default
@@ -6980,6 +7039,7 @@ def low_product (a : MemSlice_u64) (b : MemSlice_u64) (out_2 : MemSlice_u64) : F
   else
     b2 a_len b_len carry «at» r4 r5 r6 out_2
 
+/-- `lib::modexp::low_power` -/
 def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Option_MemArray_u64 := do
   let mut result : MemArray_u64 := default
   let mut power : UInt256 := default
@@ -7453,6 +7513,7 @@ def low_power (exponent : Exponent) (base : MemArray_u64) (k : UInt256) : FeM Op
     let v27 := IntTy.subW (.u 64) v25 (UInt256.ofNat 1)
     b3 result power index_r2 factor work index_r5 zero r7 r8 v193 v208 v217 v27
 
+/-- `lib::modexp::even_power` -/
 def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256) (value : MemArray_u64) (size : UInt256) : FeM (Option_MemArray_u64 × MemArray_u64) := do
   let mut zero_limbs : UInt256 := default
   let mut result : MemArray_u64 := default
@@ -8882,6 +8943,7 @@ def even_power (exponent : Exponent) (base : MemArray_u64) (base_size : UInt256)
   partial_fixpoint
   b1 zero_limbs result y q q_len x t borrow inverse guess scratch correction correct carry_r13 add h work carry_r17 «at» r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 base v320 v321 v398 v399 v409 v410 v424
 
+/-- `lib::modexp::power<MemBuffer>` -/
 def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UInt256) (modulus_len : UInt256) : FeM Option_MemArray_u64 := do
   let mut value : MemArray_u64 := default
   let mut n : UInt256 := default
@@ -9116,6 +9178,7 @@ def power_MemBuffer (input : MemBuffer) (base_len : UInt256) (exponent_len : UIn
     | _ => pure ()
     return v157
 
+/-- `lib::modexp::encoded` -/
 def encoded (result : MemArray_u64) (output : MemBuffer) : FeM MemBuffer := do
   let mut output := output
   let mut r1 : Range_Known_0_Unknown := default
@@ -9198,6 +9261,7 @@ def encoded (result : MemArray_u64) (output : MemBuffer) : FeM MemBuffer := do
   partial_fixpoint
   b1 output r1 r2 v14
 
+/-- `lib::modexp::run<MemBuffer>` -/
 def run_MemBuffer (input : MemBuffer) (gas_1 : UInt256) : FeM Output := do
   let mut result : MemArray_u64 := default
   let base_word ← input_word_MemBuffer input (UInt256.ofNat 0) (UInt256.ofNat 32)
@@ -9274,6 +9338,7 @@ def run_MemBuffer (input : MemBuffer) (gas_1 : UInt256) : FeM Output := do
               | _ => pure ()
               return v59
 
+/-- `_`, for a call no other arm takes -/
 def recv0_arm0 : FeM Empty := do
   let mut result : Output := default
   let mut r2 : MemBuffer := default
@@ -9294,11 +9359,13 @@ def recv0_arm0 : FeM Empty := do
     let v19 ← Evm_return_data v16
     nomatch v19
 
+/-- The entry of `recv0_arm0`, for a call no other arm takes -/
 def recv0_arm0_entry : FeM Empty := do
   nonPayable
   let _ ← recv0_arm0
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
+/-- The runtime entry of contract `Modexp`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -9307,6 +9374,7 @@ def runtime : FeM Empty := do
     let selector ← calldataSelector
     recv0_arm0_entry
 
+/-- The deployment entry of contract `Modexp`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

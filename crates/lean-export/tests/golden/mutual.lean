@@ -1,7 +1,9 @@
+/-- The `init` of contract `Mutual`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
 mutual
+/-- `mutual::left` -/
 def left (n : UInt256) : FeM UInt256 := do
   let v5 := decide (n = (UInt256.ofNat 0))
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
@@ -23,6 +25,7 @@ def left (n : UInt256) : FeM UInt256 := do
       b6 v21
 partial_fixpoint
 
+/-- `mutual::step` -/
 def step (n : UInt256) : FeM UInt256 := do
   let v4 := decide (n = (UInt256.ofNat 0))
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
@@ -35,6 +38,7 @@ def step (n : UInt256) : FeM UInt256 := do
     b3 v10
 partial_fixpoint
 
+/-- `mutual::right` -/
 def right (n : UInt256) : FeM UInt256 := do
   let v4 := decide (n = (UInt256.ofNat 0))
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
@@ -49,6 +53,7 @@ partial_fixpoint
 
 end
 
+/-- `Walk { n } -> u256`, selector `0x0581f59d` (`walk(uint256)`) -/
 def recv_Walk (n : UInt256) : FeM UInt256 := do
   let v1 ← left n
   return v1

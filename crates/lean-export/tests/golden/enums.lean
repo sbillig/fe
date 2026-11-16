@@ -38,9 +38,11 @@ def Shape.set_Rect_1 (x : Shape) (v : UInt256) : Shape :=
   | .Rect f0 f1 => .Rect f0 v
   | x => x
 
+/-- The `init` of contract `Enums`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `enums::shape` -/
 def shape (width : UInt256) (height : UInt256) : FeM Shape := do
   let v6 := decide (width = (UInt256.ofNat 0))
   let b3 : Shape → FeM Shape := fun v2 => do
@@ -59,6 +61,7 @@ def shape (width : UInt256) (height : UInt256) : FeM Shape := do
       let v17 := Shape.Rect width height
       b6 v17
 
+/-- `Area { width, height } -> u256`, selector `0x15529a52` (`area(uint256,uint256)`) -/
 def recv_Area (width_0 : UInt256) (height_1 : UInt256) : FeM UInt256 := do
   let v3 ← shape width_0 height_1
   let b1 : UInt256 → FeM UInt256 := fun v2 => do
@@ -76,6 +79,7 @@ def recv_Area (width_0 : UInt256) (height_1 : UInt256) : FeM UInt256 := do
     let v14 ← checkedMul width_10 height_12
     b1 v14
 
+/-- `enums::halve` -/
 def halve (value : UInt256) : FeM Option_u256 := do
   let v4 ← checkedRem value (UInt256.ofNat 2)
   let v6 := decide (v4 = (UInt256.ofNat 0))
@@ -89,6 +93,7 @@ def halve (value : UInt256) : FeM Option_u256 := do
     let v12 := Option_u256.None
     b3 v12
 
+/-- `Half { value } -> u256`, selector `0xdee6088b` (`half(uint256)`) -/
 def recv_Half (value : UInt256) : FeM UInt256 := do
   let v2 ← halve value
   let b1 : UInt256 → FeM UInt256 := fun v1 => do
@@ -100,6 +105,7 @@ def recv_Half (value : UInt256) : FeM UInt256 := do
   | _ =>
     b1 value
 
+/-- `Grow { side } -> u256`, selector `0x28531f06` (`grow(uint256)`) -/
 def recv_Grow (side_0 : UInt256) : FeM UInt256 := do
   let mut current : Shape := default
   let current_2 := Shape.Square side_0

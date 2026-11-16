@@ -14,9 +14,11 @@ def load_Store (p : Place) : FeM Store := do
 def Layout.Store : Layout :=
   { storage := [0] }
 
+/-- The `init` of contract `Closures`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- A closure in `closures::Closures::{fn_body}` -/
 def closure (self : UInt256) (acc : UInt256) (x : UInt256) : FeM (UInt256 × UInt256) := do
   let mut self := self
   let v4 := self
@@ -24,6 +26,7 @@ def closure (self : UInt256) (acc : UInt256) (x : UInt256) : FeM (UInt256 × UIn
   let v6 ← checkedAdd acc v5
   return (v6, self)
 
+/-- `core::iter::Collection::fold<[u256; 2], (), (), u256, |own u256, u256| -> u256>` -/
 def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt256 2)) (init_1 : UInt256) (f : UInt256) : FeM (UInt256 × UInt256) := do
   let mut acc : UInt256 := default
   let mut f := f
@@ -48,6 +51,7 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt25
   partial_fixpoint
   b1 acc f v5
 
+/-- `Scaled { a, b, by } -> u256`, selector `0x994a2044` (`scaled(uint256,uint256,uint256)`) -/
 def recv_Scaled (a : UInt256) (b : UInt256) («by» : UInt256) : FeM UInt256 := do
   let mut xs : (Vector UInt256 2) := default
   let mut r1 : UInt256 := default
@@ -59,12 +63,14 @@ def recv_Scaled (a : UInt256) (b : UInt256) («by» : UInt256) : FeM UInt256 := 
   r1 := v10_0
   return v10
 
+/-- `closures::bump<Store>` -/
 def bump_Store («by» : UInt256) : FeM Unit := do
   let v2 ← load (Field.store.field Layout.Store 0)
   let v3 ← checkedAdd v2 «by»
   store (Field.store.field Layout.Store 0) v3
   return ()
 
+/-- A closure in `closures::Closures::{fn_body}` -/
 def closure_1 (self : Unit) (acc : UInt256) (x : UInt256) : FeM (UInt256 × Unit) := do
   let mut self := self
   let _ ← bump_Store x
@@ -72,6 +78,7 @@ def closure_1 (self : Unit) (acc : UInt256) (x : UInt256) : FeM (UInt256 × Unit
   let v5 ← checkedAdd acc v4
   return (v5, self)
 
+/-- `core::iter::Collection::fold<[u256; 2], (), (), u256, |own u256, u256| -> u256>` -/
 def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt256 2)) (init_1 : UInt256) (f : Unit) : FeM (UInt256 × Unit) := do
   let mut acc : UInt256 := default
   let mut f := f
@@ -97,6 +104,7 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt
   partial_fixpoint
   b1 acc f v5
 
+/-- `Tally { a, b } -> u256`, selector `0x97c3f4e7` (`tally(uint256,uint256)`) -/
 def recv_Tally (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let mut xs : (Vector UInt256 2) := default
   let mut r2 : Unit := default

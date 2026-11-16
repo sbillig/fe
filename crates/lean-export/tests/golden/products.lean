@@ -17,9 +17,11 @@ def Field.small : Place :=
 def Layout.Small : Layout :=
   { storage := [0, 0] }
 
+/-- The `init` of contract `Products`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `products::add_to` -/
 def add_to (v0 : Place) (v1 : UInt256) : FeM Unit := do
   let v2 := (v0, v1)
   let v3 := v2.fst
@@ -30,6 +32,7 @@ def add_to (v0 : Place) (v1 : UInt256) : FeM Unit := do
   store a v8
   return ()
 
+/-- `products::add_to` -/
 def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
   let mut v0 := v0
   let v2 := (v0, v1)
@@ -40,6 +43,7 @@ def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
   v0 := v8
   return ((), v0)
 
+/-- `Parts { by } -> u256`, selector `0xc9eb4662` (`parts(uint256)`) -/
 def recv_Parts («by» : UInt256) : FeM UInt256 := do
   let mut «local» : UInt256 := default
   «local» := «by»
@@ -51,12 +55,14 @@ def recv_Parts («by» : UInt256) : FeM UInt256 := do
   let local_8 := «local»
   return local_8
 
+/-- `Pair::at` -/
 def Pair_at (self : Place) : FeM (UInt256 × Place) := do
   let v1 ← load (self.field Layout.Pair 0)
   let v2 := (self.field Layout.Pair 1)
   let v3 := (v1, v2)
   return (v1, v2)
 
+/-- `products::bump` -/
 def bump (v0 : UInt256) (v1 : Place) : FeM UInt256 := do
   let v2 := (v0, v1)
   let «by» := v2.fst
@@ -68,6 +74,7 @@ def bump (v0 : UInt256) (v1 : Place) : FeM UInt256 := do
   let v9 ← load x
   return v9
 
+/-- `Pair::at` -/
 def Pair_at_1 (self : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256) → FeM Pair)) := do
   let mut self := self
   let v1 := self.a
@@ -78,6 +85,7 @@ def Pair_at_1 (self : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256)
     return self
   return ((v1, self.b), slide)
 
+/-- `products::bump` -/
 def bump_1 (v0 : UInt256) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
   let mut v1 := v1
   let v2 := (v0, v1)
@@ -88,6 +96,7 @@ def bump_1 (v0 : UInt256) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
   let v9 := v1
   return (v9, v1)
 
+/-- `Granted { by } -> u256`, selector `0x139fda34` (`granted(uint256)`) -/
 def recv_Granted («by» : UInt256) : FeM UInt256 := do
   let mut «local» : Pair := default
   let mut v12 : (UInt256 × UInt256) := default
@@ -109,6 +118,7 @@ def recv_Granted («by» : UInt256) : FeM UInt256 := do
   let v17 ← checkedAdd stored v16
   return v17
 
+/-- `Small::maybe` -/
 def Small_maybe (self : Place) (second : Bool) : FeM (Option_mut_u8 × (Option_mut_u8 → FeM Unit)) := do
   let mut h2 : UInt256 := default
   if second then
@@ -127,6 +137,7 @@ def Small_maybe (self : Place) (second : Bool) : FeM (Option_mut_u8 × (Option_m
       return ()
     return (Option_mut_u8.None, slide)
 
+/-- `Lane { second } -> u256`, selector `0x2a160f7a` (`lane(bool)`) -/
 def recv_Lane (second : Bool) : FeM UInt256 := do
   let mut v2 : Option_mut_u8 := default
   let v1 := Field.small

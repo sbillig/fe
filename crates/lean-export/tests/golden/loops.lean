@@ -1,8 +1,10 @@
 export Lib (Option_u256 Option_u256.None Option_u256.Some)
 
+/-- The `init` of contract `Loops`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `Triangle { n } -> u256`, selector `0x50c2698d` (`triangle(uint256)`) -/
 def recv_Triangle (n : UInt256) : FeM UInt256 := do
   let mut total : UInt256 := default
   let mut i : UInt256 := default
@@ -28,6 +30,7 @@ def recv_Triangle (n : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 total i
 
+/-- `loops::step` -/
 def step (value : UInt256) : FeM Option_u256 := do
   let v5 := decide (value = (UInt256.ofNat 1))
   let b3 : Option_u256 → FeM Option_u256 := fun v1 => do
@@ -50,6 +53,7 @@ def step (value : UInt256) : FeM Option_u256 := do
       let v23 := Option_u256.Some v22
       b6 v23
 
+/-- `Collatz { start, limit } -> u256`, selector `0xea732925` (`collatz(uint256,uint256)`) -/
 def recv_Collatz (start : UInt256) (limit : UInt256) : FeM UInt256 := do
   let mut value : UInt256 := default
   let mut steps : UInt256 := default

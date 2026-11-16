@@ -17,9 +17,11 @@ structure Poke where
   key : UInt256
 deriving Inhabited
 
+/-- The `init` of contract `Trust`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `std::evm::effects::contract_init_code<Child>` -/
 def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
   let mut init_code_r0 : MemBuffer := default
   let mut encoded : MemBuffer := default
@@ -69,6 +71,7 @@ def contract_init_code_Child (args : Unit) : FeM MemBuffer := do
   else
     b2 init_code_r0 encoded init_code_r2
 
+/-- `std::evm::effects::Create::create2<Evm, Child>` -/
 def create2_Evm_Child (value : Wei) (args : Unit) (salt : UInt256) : FeM UInt256 := do
   let mut init_code : MemBuffer := default
   let init_code_4 ← contract_init_code_Child args
@@ -84,6 +87,7 @@ def create2_Evm_Child (value : Wei) (args : Unit) (salt : UInt256) : FeM UInt256
     let _ ← MemBuffer_drop init_code
     return addr
 
+/-- `Deploy -> Address`, selector `0x00000010` -/
 def recv_Deploy : FeM UInt256 := do
   let mut r1 : Wei := default
   let v0 ← Wei_zero
@@ -93,23 +97,29 @@ def recv_Deploy : FeM UInt256 := do
   let v5 ← create2_Evm_Child v4 v1 (UInt256.ofNat 0)
   return v5
 
+/-- `<Get as MsgVariant>::SELECTOR` -/
 def Get_SELECTOR : FeM UInt256 := do
   return (UInt256.ofNat 1)
 
+/-- `<Get as AbiSize>::HEAD_SIZE` -/
 def Get_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
+/-- `<Get as AbiSize>::payload_size` -/
 def Get_payload_size (self : Get) : FeM UInt256 := do
   let v1 ← Get_HEAD_SIZE
   return v1
 
+/-- `core::abi::abi_payload_size<Get>` -/
 def abi_payload_size_Get (value : Get) : FeM UInt256 := do
   let v1 ← Get_payload_size value
   return v1
 
+/-- `<Get as Encode>::encode` -/
 def Get_encode (self : Get) (__fe_out : AbiFrame) : FeM Unit := do
   return ()
 
+/-- `std::evm::effects::encode_calldata<Get>` -/
 def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := do
   let mut message := message
   let mut buffer : MemBuffer := default
@@ -155,6 +165,7 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
   else
     b2 message buffer r2
 
+/-- `std::evm::effects::Call::try_call<Evm, Get>` -/
 def try_call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message : Get) : FeM CallOutcome := do
   let mut addr := addr
   let mut args : MemBuffer := default
@@ -175,11 +186,13 @@ def try_call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message :
   let _ ← MemBuffer_drop args
   return v18
 
+/-- `std::evm::effects::Call::call<Evm, Get>` -/
 def call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message : Get) : FeM UInt256 := do
   let v6 ← try_call_Evm_Get addr gas_1 value message
   let v7 ← CallOutcome_decode_u256 v6
   return v7
 
+/-- `Address::call<Evm, Get>` -/
 def Address_call_Evm_Get (self : UInt256) (message : Get) : FeM UInt256 := do
   let mut r1 : Wei := default
   let v2 := self
@@ -190,6 +203,7 @@ def Address_call_Evm_Get (self : UInt256) (message : Get) : FeM UInt256 := do
   let v8 ← call_Evm_Get v2 v3 v7 message
   return v8
 
+/-- `Ask { target } -> u256`, selector `0x00000011` -/
 def recv_Ask (target : UInt256) : FeM UInt256 := do
   let mut target := target
   let v0 := (Get.mk)
@@ -197,6 +211,7 @@ def recv_Ask (target : UInt256) : FeM UInt256 := do
   let v2 ← Address_call_Evm_Get target_1 v0
   return v2
 
+/-- `<Words as StateIndex>::locate` -/
 def Words_locate (self : Place) (root : UInt256) (key : UInt256) : FeM Location := do
   let mut r0 : (Vector UInt256 2) := default
   let v5 := #v[key, root]
@@ -205,15 +220,18 @@ def Words_locate (self : Place) (root : UInt256) (key : UInt256) : FeM Location 
   let v9 := (Location.mk v7 (UInt256.ofNat 0))
   return v9
 
+/-- `trust::word_at<Evm>` -/
 def word_at_Evm (slot : UInt256) : FeM Place := do
   let v1 ← storage_at_mut_Evm_u256 slot
   return v1
 
+/-- `trust::spare<Evm>` -/
 def spare_Evm (slot : UInt256) : FeM Place := do
   let v1 ← word_at_Evm slot
   let v2 := v1
   return v2
 
+/-- `Poke { key } -> u256`, selector `0x00000012` -/
 def recv_Poke (key : UInt256) : FeM UInt256 := do
   let l0 ← Words_locate Field.words Field.words.slot key
   store (Place.mk .storage l0.slot) (UInt256.ofNat 1)
@@ -230,17 +248,21 @@ def recv_Poke (key : UInt256) : FeM UInt256 := do
   let v15 ← checkedAdd before v14
   return v15
 
+/-- `<Deploy as AbiSize>::HEAD_SIZE` -/
 def Deploy_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
+/-- `<Deploy as Decode>::decode_from<CallData>` -/
 def Deploy_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Deploy := do
   let v2 := (Deploy.mk)
   return v2
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Deploy, Sol, CallData>` -/
 def decode_from_prechecked_head_Deploy_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Deploy := do
   let v3 ← Deploy_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Deploy>` -/
 def decode_runtime_args_Evm_Sol_Deploy : FeM Deploy := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -254,27 +276,32 @@ def decode_runtime_args_Evm_Sol_Deploy : FeM Deploy := do
   let v12 ← decode_from_prechecked_head_Deploy_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Deploy`, for `trust::TrustMsg::Deploy` -/
 def recv_Deploy_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Deploy
   let result ← recv_Deploy
   Evm_return_value_Sol_Address result
 
+/-- `<Ask as AbiSize>::HEAD_SIZE` -/
 def Ask_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Address
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
+/-- `<Ask as Decode>::decode_from<CallData>` -/
 def Ask_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Ask := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (Ask.mk __fe_field_0)
   return v6
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Ask, Sol, CallData>` -/
 def decode_from_prechecked_head_Ask_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Ask := do
   let v3 ← Ask_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Ask>` -/
 def decode_runtime_args_Evm_Sol_Ask : FeM Ask := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -288,27 +315,32 @@ def decode_runtime_args_Evm_Sol_Ask : FeM Ask := do
   let v12 ← decode_from_prechecked_head_Ask_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Ask`, for `trust::TrustMsg::Ask` -/
 def recv_Ask_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Ask
   let result ← recv_Ask message.target
   Evm_return_value_Sol_u256 result
 
+/-- `<Poke as AbiSize>::HEAD_SIZE` -/
 def Poke_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_u256
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
+/-- `<Poke as Decode>::decode_from<CallData>` -/
 def Poke_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Poke := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (Poke.mk __fe_field_0)
   return v6
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Poke, Sol, CallData>` -/
 def decode_from_prechecked_head_Poke_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Poke := do
   let v3 ← Poke_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Poke>` -/
 def decode_runtime_args_Evm_Sol_Poke : FeM Poke := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -322,12 +354,14 @@ def decode_runtime_args_Evm_Sol_Poke : FeM Poke := do
   let v12 ← decode_from_prechecked_head_Poke_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Poke`, for `trust::TrustMsg::Poke` -/
 def recv_Poke_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Poke
   let result ← recv_Poke message.key
   Evm_return_value_Sol_u256 result
 
+/-- The runtime entry of contract `Trust`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -343,6 +377,7 @@ def runtime : FeM Empty := do
     else
       revertEmpty
 
+/-- The deployment entry of contract `Trust`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

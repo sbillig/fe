@@ -1,9 +1,11 @@
 export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data Evm_revert MemBuffer MemBuffer_index_ref MemBuffer_len MemBuffer_new MemBuffer_span_ref MemBuffer_write_le_u64 MemSlice_empty_u8 Range_Known_0_Known_16 Range_Known_0_Known_16.mk Range_Known_0_Known_8 Range_Known_0_Known_8.mk Range_at_0_16 Range_at_0_8 Range_has_0_16 Range_has_0_8 Range_next_0_16 Range_next_0_8 Range_start_0_16 Range_start_0_8 downcast_truncate_u64_usize downcast_unchecked_u256_usize u64_wrapping_add «assert»)
 export Shared (MemBuffer_byte_at MemBuffer_lane_at MemBuffer_len_1)
 
+/-- The `init` of contract `Blake2F`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `lib::input<Evm>` -/
 def input_Evm_1 : FeM MemBuffer := do
   let mut input : MemBuffer := default
   let len ← Evm_calldatasize
@@ -15,13 +17,16 @@ def input_Evm_1 : FeM MemBuffer := do
   let input_11 := input
   return input_11
 
+/-- `lib::blake2f::INPUT_LEN` -/
 def INPUT_LEN : FeM UInt256 := do
   return (UInt256.ofNat 213)
 
+/-- `lib::blake2f::IV` -/
 def IV : FeM (Vector UInt256 8) := do
   let v8 := #v[(UInt256.ofNat 7640891576956012808), (UInt256.ofNat 13503953896175478587), (UInt256.ofNat 4354685564936845355), (UInt256.ofNat 11912009170470909681), (UInt256.ofNat 5840696475078001361), (UInt256.ofNat 11170449401992604703), (UInt256.ofNat 2270897969802886507), (UInt256.ofNat 6620516959819538809)]
   return v8
 
+/-- `lib::blake2f::rounds<MemBuffer>` -/
 def rounds_MemBuffer (input : MemBuffer) : FeM UInt256 := do
   let v1 ← MemBuffer_len_1 input
   let v2 ← INPUT_LEN
@@ -43,6 +48,7 @@ def rounds_MemBuffer (input : MemBuffer) : FeM UInt256 := do
   let v25 := v21 ||| v24
   return v25
 
+/-- `lib::blake2f::rotate_right` -/
 def rotate_right (value : UInt256) («by» : UInt256) : FeM UInt256 := do
   let v4 := value >>> «by»
   let v8 ← IntTy.sub (.u 64) (UInt256.ofNat 64) «by»
@@ -96,6 +102,7 @@ def mix_k1 (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (y : UInt256)
   checkIndex d 16
   mix_k2 b c d v
 
+/-- `lib::blake2f::mix` -/
 def mix (v : (Vector UInt256 16)) (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (x : UInt256) (y : UInt256) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
   checkIndex b 16
@@ -829,6 +836,7 @@ def ten_rounds_k1 (m : (Vector UInt256 16)) (v38 : UInt256) (v : (Vector UInt256
   let v70 := m[v69.toNat]!
   ten_rounds_k2 m v68 v70 v
 
+/-- `lib::blake2f::ten_rounds` -/
 def ten_rounds (v : (Vector UInt256 16)) (m : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
   let v7 := (UInt256.ofNat 0)
@@ -860,10 +868,12 @@ def ten_rounds (v : (Vector UInt256 16)) (m : (Vector UInt256 16)) : FeM (Unit �
   let v38 := m[v37.toNat]!
   ten_rounds_k1 m v38 v
 
+/-- `lib::blake2f::SIGMA` -/
 def SIGMA : FeM (Vector UInt256 160) := do
   let v160 := #v[(UInt256.ofNat 0), (UInt256.ofNat 1), (UInt256.ofNat 2), (UInt256.ofNat 3), (UInt256.ofNat 4), (UInt256.ofNat 5), (UInt256.ofNat 6), (UInt256.ofNat 7), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 10), (UInt256.ofNat 11), (UInt256.ofNat 12), (UInt256.ofNat 13), (UInt256.ofNat 14), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 10), (UInt256.ofNat 4), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 15), (UInt256.ofNat 13), (UInt256.ofNat 6), (UInt256.ofNat 1), (UInt256.ofNat 12), (UInt256.ofNat 0), (UInt256.ofNat 2), (UInt256.ofNat 11), (UInt256.ofNat 7), (UInt256.ofNat 5), (UInt256.ofNat 3), (UInt256.ofNat 11), (UInt256.ofNat 8), (UInt256.ofNat 12), (UInt256.ofNat 0), (UInt256.ofNat 5), (UInt256.ofNat 2), (UInt256.ofNat 15), (UInt256.ofNat 13), (UInt256.ofNat 10), (UInt256.ofNat 14), (UInt256.ofNat 3), (UInt256.ofNat 6), (UInt256.ofNat 7), (UInt256.ofNat 1), (UInt256.ofNat 9), (UInt256.ofNat 4), (UInt256.ofNat 7), (UInt256.ofNat 9), (UInt256.ofNat 3), (UInt256.ofNat 1), (UInt256.ofNat 13), (UInt256.ofNat 12), (UInt256.ofNat 11), (UInt256.ofNat 14), (UInt256.ofNat 2), (UInt256.ofNat 6), (UInt256.ofNat 5), (UInt256.ofNat 10), (UInt256.ofNat 4), (UInt256.ofNat 0), (UInt256.ofNat 15), (UInt256.ofNat 8), (UInt256.ofNat 9), (UInt256.ofNat 0), (UInt256.ofNat 5), (UInt256.ofNat 7), (UInt256.ofNat 2), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 1), (UInt256.ofNat 11), (UInt256.ofNat 12), (UInt256.ofNat 6), (UInt256.ofNat 8), (UInt256.ofNat 3), (UInt256.ofNat 13), (UInt256.ofNat 2), (UInt256.ofNat 12), (UInt256.ofNat 6), (UInt256.ofNat 10), (UInt256.ofNat 0), (UInt256.ofNat 11), (UInt256.ofNat 8), (UInt256.ofNat 3), (UInt256.ofNat 4), (UInt256.ofNat 13), (UInt256.ofNat 7), (UInt256.ofNat 5), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 1), (UInt256.ofNat 9), (UInt256.ofNat 12), (UInt256.ofNat 5), (UInt256.ofNat 1), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 13), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 0), (UInt256.ofNat 7), (UInt256.ofNat 6), (UInt256.ofNat 3), (UInt256.ofNat 9), (UInt256.ofNat 2), (UInt256.ofNat 8), (UInt256.ofNat 11), (UInt256.ofNat 13), (UInt256.ofNat 11), (UInt256.ofNat 7), (UInt256.ofNat 14), (UInt256.ofNat 12), (UInt256.ofNat 1), (UInt256.ofNat 3), (UInt256.ofNat 9), (UInt256.ofNat 5), (UInt256.ofNat 0), (UInt256.ofNat 15), (UInt256.ofNat 4), (UInt256.ofNat 8), (UInt256.ofNat 6), (UInt256.ofNat 2), (UInt256.ofNat 10), (UInt256.ofNat 6), (UInt256.ofNat 15), (UInt256.ofNat 14), (UInt256.ofNat 9), (UInt256.ofNat 11), (UInt256.ofNat 3), (UInt256.ofNat 0), (UInt256.ofNat 8), (UInt256.ofNat 12), (UInt256.ofNat 2), (UInt256.ofNat 13), (UInt256.ofNat 7), (UInt256.ofNat 1), (UInt256.ofNat 4), (UInt256.ofNat 10), (UInt256.ofNat 5), (UInt256.ofNat 10), (UInt256.ofNat 2), (UInt256.ofNat 8), (UInt256.ofNat 4), (UInt256.ofNat 7), (UInt256.ofNat 6), (UInt256.ofNat 1), (UInt256.ofNat 5), (UInt256.ofNat 15), (UInt256.ofNat 11), (UInt256.ofNat 9), (UInt256.ofNat 14), (UInt256.ofNat 3), (UInt256.ofNat 12), (UInt256.ofNat 13), (UInt256.ofNat 0)]
   return v160
 
+/-- `lib::blake2f::compress<MemBuffer>` -/
 def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
   let mut h : (Vector UInt256 8) := default
   let mut m : (Vector UInt256 16) := default
@@ -1251,6 +1261,7 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
   else
     b2 h m v round r4 r5 r6 r7 r8
 
+/-- `_`, for a call no other arm takes -/
 def recv0_arm0 : FeM Empty := do
   let mut input : MemBuffer := default
   let mut output : MemBuffer := default
@@ -1304,11 +1315,13 @@ def recv0_arm0 : FeM Empty := do
       partial_fixpoint
       b5 input output r3 v26
 
+/-- The entry of `recv0_arm0`, for a call no other arm takes -/
 def recv0_arm0_entry : FeM Empty := do
   nonPayable
   let _ ← recv0_arm0
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
+/-- The runtime entry of contract `Blake2F`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -1317,6 +1330,7 @@ def runtime : FeM Empty := do
     let selector ← calldataSelector
     recv0_arm0_entry
 
+/-- The deployment entry of contract `Blake2F`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

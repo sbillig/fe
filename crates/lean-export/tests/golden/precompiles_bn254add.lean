@@ -1,9 +1,11 @@
 export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data Evm_revert MemBuffer MemBuffer_new MemBuffer_span_ref MemBuffer_write_word MemSlice_empty_u8 Option_array_u256_2 Option_array_u256_2.None Option_array_u256_2.Some downcast_unchecked_u256_usize)
 export Shared (Mont_Bn254Base Mont_add_Bn254Base Mont_double_Bn254Base Mont_is_zero_Bn254Base Mont_mul_Bn254Base Mont_square_Bn254Base Mont_sub_Bn254Base Point_Mont_Bn254Base Point_Mont_Bn254Base.mk Point_double_Mont_Bn254Base Point_infinity_Mont_Bn254Base Point_is_infinity_Mont_Bn254Base encode g1_point_MemBuffer)
 
+/-- The `init` of contract `Bn254Add`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `lib::input<Evm>` -/
 def input_Evm : FeM MemBuffer := do
   let mut input : MemBuffer := default
   let len ← Evm_calldatasize
@@ -15,6 +17,7 @@ def input_Evm : FeM MemBuffer := do
   let input_11 := input
   return input_11
 
+/-- `Point<Mont<Bn254Base>>::add` -/
 def Point_add_Mont_Bn254Base (self : Point_Mont_Bn254Base) (other : Point_Mont_Bn254Base) : FeM Point_Mont_Bn254Base := do
   let mut z1z1 : Mont_Bn254Base := default
   let mut z2z2 : Mont_Bn254Base := default
@@ -192,6 +195,7 @@ def Point_add_Mont_Bn254Base (self : Point_Mont_Bn254Base) (other : Point_Mont_B
         let v123 := (Point_Mont_Bn254Base.mk x_122 y v121)
         return v123
 
+/-- `lib::bn254::add<MemBuffer>` -/
 def add_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
   let mut a : Point_Mont_Bn254Base := default
   let mut b : Point_Mont_Bn254Base := default
@@ -226,6 +230,7 @@ def add_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
     let v22 := Option_array_u256_2.None
     b1 a b r2 v22
 
+/-- `_`, for a call no other arm takes -/
 def recv0_arm0 : FeM Empty := do
   let mut output : MemBuffer := default
   let mut r2 : MemBuffer := default
@@ -255,11 +260,13 @@ def recv0_arm0 : FeM Empty := do
     let v26 ← Evm_revert v23
     nomatch v26
 
+/-- The entry of `recv0_arm0`, for a call no other arm takes -/
 def recv0_arm0_entry : FeM Empty := do
   nonPayable
   let _ ← recv0_arm0
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
+/-- The runtime entry of contract `Bn254Add`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -268,6 +275,7 @@ def runtime : FeM Empty := do
     let selector ← calldataSelector
     recv0_arm0_entry
 
+/-- The deployment entry of contract `Bn254Add`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

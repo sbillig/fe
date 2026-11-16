@@ -1,6 +1,8 @@
+/-- The `init` of contract `Pairs`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `tuple::swap` -/
 def swap (pair : (UInt256 × UInt256 × Bool)) : FeM (UInt256 × UInt256 × Bool) := do
   let v1 := pair.snd.fst
   let v2 := pair.fst
@@ -8,6 +10,7 @@ def swap (pair : (UInt256 × UInt256 × Bool)) : FeM (UInt256 × UInt256 × Bool
   let v4 := (v1, v2, v3)
   return v4
 
+/-- `Swap { a, b } -> u256`, selector `0xd96073cf` (`swap(uint256,uint256)`) -/
 def recv_Swap (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let mut pair : (UInt256 × UInt256 × Bool) := default
   let mut r1 : (UInt256 × UInt256 × Bool) := default

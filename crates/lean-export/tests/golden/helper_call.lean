@@ -6,9 +6,11 @@ def Field.store : Place :=
 def Layout.Store : Layout :=
   { storage := [0, 1] }
 
+/-- The `init` of contract `Counter`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `helper_call::add<Store>` -/
 def add_Store («by» : UInt256) : FeM UInt256 := do
   let v1 ← load (Field.store.field Layout.Store 0)
   let next ← checkedAdd v1 «by»
@@ -20,6 +22,7 @@ def add_Store («by» : UInt256) : FeM UInt256 := do
   store (Place.mk .storage l1.slot) v9
   return next
 
+/-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
   let v1 ← add_Store «by»
   return v1

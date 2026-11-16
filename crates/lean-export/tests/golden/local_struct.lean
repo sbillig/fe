@@ -14,9 +14,11 @@ def Field.saved : Place :=
 def Layout.Cursor : Layout :=
   { storage := [0, 1] }
 
+/-- The `init` of contract `Walker`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `Cursor::advance` -/
 def Cursor_advance (self : Cursor) («by» : UInt256) : FeM (UInt256 × Cursor) := do
   let mut self := self
   let «at» := self.pos
@@ -24,6 +26,7 @@ def Cursor_advance (self : Cursor) («by» : UInt256) : FeM (UInt256 × Cursor) 
   self := { self with pos := v5 }
   return («at», self)
 
+/-- `Cursor::skip` -/
 def Cursor_skip (self : Cursor) («by» : UInt256) : FeM (Unit × Cursor) := do
   let mut self := self
   let v4 := decide ((UInt256.ofNat 32).toNat < «by».toNat)
@@ -41,12 +44,14 @@ def Cursor_skip (self : Cursor) («by» : UInt256) : FeM (Unit × Cursor) := do
     self := v8_0
     b3 self
 
+/-- `Cursor::end` -/
 def Cursor_end (self : Cursor) : FeM UInt256 := do
   let v1 := self.pos
   let v2 := self.base
   let v3 ← checkedAdd v1 v2
   return v3
 
+/-- `Sum { step } -> u256`, selector `0x188b85b4` (`sum(uint256)`) -/
 def recv_Sum (step : UInt256) : FeM UInt256 := do
   let mut c : Cursor := default
   let mut s : Span := default
@@ -67,12 +72,14 @@ def recv_Sum (step : UInt256) : FeM UInt256 := do
   let v22 ← checkedAdd v18 v21
   return v22
 
+/-- `Cursor::advance` -/
 def Cursor_advance_1 (self : Place) («by» : UInt256) : FeM UInt256 := do
   let «at» ← load (self.field Layout.Cursor 0)
   let v5 ← checkedAdd «at» «by»
   store (self.field Layout.Cursor 0) v5
   return «at»
 
+/-- `Bump { step } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump (step : UInt256) : FeM UInt256 := do
   let v1 := Field.saved
   let v2 ← Cursor_advance_1 v1 step

@@ -11,9 +11,11 @@ structure Credit where
   amount : UInt256
 deriving Inhabited
 
+/-- The `init` of contract `Case44Bank`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `case44_bank::credit` -/
 def credit (m : Place) (who : UInt256) (amount : UInt256) : FeM Unit := do
   let v4 := who
   let l0 ← StorageMap_locate_Address_u256 m m.slot v4
@@ -23,6 +25,7 @@ def credit (m : Place) (who : UInt256) (amount : UInt256) : FeM Unit := do
   store (Place.mk .storage l1.slot) v6
   return ()
 
+/-- `Credit { who, amount } -> u256`, selector `0x00000001` -/
 def recv_Credit (who : UInt256) (amount : UInt256) : FeM UInt256 := do
   let mut who := who
   let v1 := (Field.ledger.field Layout.Ledger 0)
@@ -41,6 +44,7 @@ def recv_Credit (who : UInt256) (amount : UInt256) : FeM UInt256 := do
   let v13 ← checkedAdd v11 v12
   return v13
 
+/-- `<Credit as AbiSize>::HEAD_SIZE` -/
 def Credit_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Address
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
@@ -48,6 +52,7 @@ def Credit_HEAD_SIZE : FeM UInt256 := do
   let v4 ← checkedAdd v2 v3
   return v4
 
+/-- `<Credit as Decode>::decode_from<CallData>` -/
 def Credit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Credit := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
@@ -57,10 +62,12 @@ def Credit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_dec
   let v11 := (Credit.mk __fe_field_0 __fe_field_1)
   return v11
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Credit, Sol, CallData>` -/
 def decode_from_prechecked_head_Credit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Credit := do
   let v3 ← Credit_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Credit>` -/
 def decode_runtime_args_Evm_Sol_Credit : FeM Credit := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -74,12 +81,14 @@ def decode_runtime_args_Evm_Sol_Credit : FeM Credit := do
   let v12 ← decode_from_prechecked_head_Credit_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Credit`, for `case44_bank::LedgerMsg::Credit` -/
 def recv_Credit_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Credit
   let result ← recv_Credit message.who message.amount
   Evm_return_value_Sol_u256 result
 
+/-- The runtime entry of contract `Case44Bank`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -91,6 +100,7 @@ def runtime : FeM Empty := do
     else
       revertEmpty
 
+/-- The deployment entry of contract `Case44Bank`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

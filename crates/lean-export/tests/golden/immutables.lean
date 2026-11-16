@@ -30,11 +30,13 @@ def mstore_Config (p : UInt256) (v : Config) : FeM Unit := do
   mstoreBool (p + UInt256.ofNat 1) v.on
   mstore (p + UInt256.ofNat 2) v.limit
 
+/-- `immutables::set_small<Config>` -/
 def set_small_Config (v : UInt256) (e0 : Config) : FeM (Unit × Config) := do
   let mut e0 := e0
   e0 := { e0 with small := v }
   return ((), e0)
 
+/-- `init(limit: u256)` of contract `Immutables` -/
 def init (limit : UInt256) (e0 : Config) (e1 : (Vector UInt256 2)) : FeM (Unit × Config × (Vector UInt256 2)) := do
   let mut e0 := e0
   let mut e1 := e1
@@ -47,6 +49,7 @@ def init (limit : UInt256) (e0 : Config) (e1 : (Vector UInt256 2)) : FeM (Unit �
   store Field.count (UInt256.ofNat 1)
   return ((), e0, e1)
 
+/-- `Limit -> u256`, selector `0xa4d66daf` (`limit()`) -/
 def recv_Limit : FeM UInt256 := do
   let e0 ← cload_Config (← immutableAt 4 0)
   let v1 := e0.on
@@ -61,6 +64,7 @@ def recv_Limit : FeM UInt256 := do
   else
     b3 (UInt256.ofNat 0)
 
+/-- `Sum -> u256`, selector `0x853255cc` (`sum()`) -/
 def recv_Sum : FeM UInt256 := do
   let e1 ← cloadArray 32 (fun q => cload q) (← immutableAt 4 2) 2
   let v0 := (UInt256.ofNat 0)
@@ -72,6 +76,7 @@ def recv_Sum : FeM UInt256 := do
   let v4 ← checkedAdd v1 v3
   return v4
 
+/-- `immutables::capped<Config>` -/
 def capped_Config («by» : UInt256) : FeM UInt256 := do
   let e0 ← cload_Config (← immutableAt 4 0)
   let v3 := e0.limit
@@ -84,6 +89,7 @@ def capped_Config («by» : UInt256) : FeM UInt256 := do
   else
     b3 «by»
 
+/-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
   let e0 ← cload_Config (← immutableAt 4 0)
   let v1 ← capped_Config «by»
@@ -93,17 +99,21 @@ def recv_Bump («by» : UInt256) : FeM UInt256 := do
   let count_5 ← load Field.count
   return count_5
 
+/-- `<Limit as AbiSize>::HEAD_SIZE` -/
 def Limit_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
+/-- `<Limit as Decode>::decode_from<CallData>` -/
 def Limit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Limit := do
   let v2 := (Limit.mk)
   return v2
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Limit, Sol, CallData>` -/
 def decode_from_prechecked_head_Limit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Limit := do
   let v3 ← Limit_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Limit>` -/
 def decode_runtime_args_Evm_Sol_Limit : FeM Limit := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -117,23 +127,28 @@ def decode_runtime_args_Evm_Sol_Limit : FeM Limit := do
   let v12 ← decode_from_prechecked_head_Limit_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Limit`, for `immutables::ImmutablesMsg::Limit` -/
 def recv_Limit_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Limit
   let result ← recv_Limit
   Evm_return_value_Sol_u256 result
 
+/-- `<Sum as AbiSize>::HEAD_SIZE` -/
 def Sum_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
+/-- `<Sum as Decode>::decode_from<CallData>` -/
 def Sum_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Sum := do
   let v2 := (Sum.mk)
   return v2
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Sum, Sol, CallData>` -/
 def decode_from_prechecked_head_Sum_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Sum := do
   let v3 ← Sum_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Sum>` -/
 def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -147,27 +162,32 @@ def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let v12 ← decode_from_prechecked_head_Sum_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Sum`, for `immutables::ImmutablesMsg::Sum` -/
 def recv_Sum_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Sum
   let result ← recv_Sum
   Evm_return_value_Sol_u256 result
 
+/-- `<Bump as AbiSize>::HEAD_SIZE` -/
 def Bump_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_u256
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
+/-- `<Bump as Decode>::decode_from<CallData>` -/
 def Bump_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Bump := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (Bump.mk __fe_field_0)
   return v6
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Bump, Sol, CallData>` -/
 def decode_from_prechecked_head_Bump_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Bump := do
   let v3 ← Bump_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Bump>` -/
 def decode_runtime_args_Evm_Sol_Bump : FeM Bump := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -181,12 +201,14 @@ def decode_runtime_args_Evm_Sol_Bump : FeM Bump := do
   let v12 ← decode_from_prechecked_head_Bump_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Bump`, for `immutables::ImmutablesMsg::Bump` -/
 def recv_Bump_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Bump
   let result ← recv_Bump message.«by»
   Evm_return_value_Sol_u256 result
 
+/-- The runtime entry of contract `Immutables`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -202,6 +224,7 @@ def runtime : FeM Empty := do
     else
       revertEmpty
 
+/-- The deployment entry of contract `Immutables`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let size := UInt256.ofNat args.size

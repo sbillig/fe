@@ -4,13 +4,16 @@ def Field.cell : Place :=
 def Layout.Cell : Layout :=
   { storage := [0] }
 
+/-- The `init` of contract `Projections`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `Cell::slot` -/
 def Cell_slot (self : Place) : FeM Place := do
   let v1 := (self.field Layout.Cell 0)
   return v1
 
+/-- `Direct { by } -> u256`, selector `0x9bbc59f9` (`direct(uint256)`) -/
 def recv_Direct («by» : UInt256) : FeM UInt256 := do
   let v1 := Field.cell
   let v2 ← Cell_slot v1
@@ -20,14 +23,17 @@ def recv_Direct («by» : UInt256) : FeM UInt256 := do
   let v6 ← load (Field.cell.field Layout.Cell 0)
   return v6
 
+/-- `Cell::get` -/
 def Cell_get (self : Place) : FeM UInt256 := do
   let v1 ← load (self.field Layout.Cell 0)
   return v1
 
+/-- `Cell::set` -/
 def Cell_set (self : Place) (v : UInt256) : FeM Unit := do
   store (self.field Layout.Cell 0) v
   return ()
 
+/-- `Cell::cached` -/
 def Cell_cached (self_0 : Place) : FeM (UInt256 × (UInt256 → FeM Unit)) := do
   let mut tmp : UInt256 := default
   let self_1 := self_0
@@ -41,6 +47,7 @@ def Cell_cached (self_0 : Place) : FeM (UInt256 × (UInt256 → FeM Unit)) := do
     return ()
   return (tmp, slide)
 
+/-- `Slide { by } -> u256`, selector `0x235361d9` (`slide(uint256)`) -/
 def recv_Slide («by» : UInt256) : FeM UInt256 := do
   let mut v2 : UInt256 := default
   let v1 := Field.cell
@@ -53,6 +60,7 @@ def recv_Slide («by» : UInt256) : FeM UInt256 := do
   let v6 ← load (Field.cell.field Layout.Cell 0)
   return v6
 
+/-- `projections::first` -/
 def first (pair : (UInt256 × UInt256)) : FeM (UInt256 × (UInt256 → FeM (UInt256 × UInt256))) := do
   let mut pair := pair
   let slide : UInt256 → FeM (UInt256 × UInt256) := fun g => do
@@ -61,6 +69,7 @@ def first (pair : (UInt256 × UInt256)) : FeM (UInt256 × (UInt256 → FeM (UInt
     return pair
   return (pair.fst, slide)
 
+/-- `Local { a, b } -> u256`, selector `0xa60eff5e` (`local(uint256,uint256)`) -/
 def recv_Local (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let mut pair : (UInt256 × UInt256) := default
   let mut v5 : UInt256 := default

@@ -33,6 +33,8 @@ use common::{
 };
 use cranelift_entity::EntityRef;
 use hir::{
+    SpannedHirDb,
+    analysis::diagnostics::SpannedHirAnalysisDb,
     analysis::{
         HirAnalysisDb,
         semantic::{
@@ -48,6 +50,7 @@ use hir::{
         ty::{
             AddressSpace,
             adt_def::{AdtField, AdtRef, instantiate_adt_field_shape},
+            binder::Binder,
             closure::closure_regions,
             corelib::{
                 ContractMetadataKind, NumericExternIntrinsic, RuntimeBuiltinFuncKind,
@@ -66,11 +69,12 @@ use hir::{
             },
             ty_def::{BorrowKind, CapabilityKind, TyId, prim_int_bits},
             ty_is_snapshot,
+            ty_lower::{CompleteSubst, ParamSchemaId},
         },
     },
     hir_def::{
-        BlockKind, Body, Contract, EnumVariant, Expr, FieldParent, IdentId, ItemKind, Partial,
-        PatId,
+        BlockKind, Body, Contract, EnumVariant, Expr, FieldParent, GenericParamOwner, IdentId,
+        ItemKind, Partial, PatId,
         expr::{ArithBinOp, BinOp, CompBinOp},
         scope_graph::ScopeId,
     },
@@ -78,6 +82,7 @@ use hir::{
         ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_placements,
         storage_lane_bytes, storage_slot_span,
     },
+    span::LazySpan,
 };
 use num_bigint::BigUint;
 use num_traits::Signed;
@@ -538,6 +543,8 @@ impl Scope {
 /// the others with the one contract that reaches them.
 pub struct IngotExport<'db> {
     db: &'db dyn HirAnalysisDb,
+    /// The database, for the source text of a span.
+    spans: &'db dyn SpannedHirDb,
     /// The Lean name of each instance of the ingot's code exported so far,
     /// for each way it receives its access parameters.
     names: FxHashMap<(SemanticInstanceKey<'db>, Carriers), String>,
@@ -580,9 +587,10 @@ pub struct Exports {
 }
 
 impl<'db> IngotExport<'db> {
-    pub fn new(db: &'db dyn HirAnalysisDb) -> Self {
+    pub fn new(db: &'db dyn SpannedHirAnalysisDb) -> Self {
         Self {
             db,
+            spans: db,
             names: FxHashMap::default(),
             taken: FxHashSet::default(),
             nevers: FxHashSet::default(),
@@ -614,15 +622,50 @@ impl<'db> IngotExport<'db> {
     ) -> Result<(), Unsupported> {
         let db = self.db;
         let arms = arm_names(db, contract);
-        let mut entries = vec![("init".to_string(), BodyOwner::ContractInit { contract })];
-        entries.extend(arms.iter().map(|(arm, name)| {
+        // `init` is documented by its header, and an arm by its pattern and
+        // return type and by the selector it takes.
+        let title = contract_title(db, contract);
+        let init = contract.span().init_block();
+        let doc = match source_text(self.spans, init.clone(), init.params()) {
+            Some(header) => format!("`{header}` of {title}"),
+            None => format!("The `init` of {title}, which its source leaves out"),
+        };
+        let mut entries = vec![(
+            "init".to_string(),
+            doc,
+            BodyOwner::ContractInit { contract },
+        )];
+        let abi = resolve_lib_type_path(db, contract.scope(), "std::abi::Sol");
+        for (arm, name) in &arms {
+            let (recv_idx, arm_idx) = (arm.recv(db).recv_idx(db), arm.arm_idx(db));
+            let span = contract
+                .span()
+                .recv(recv_idx as usize)
+                .arms()
+                .arm(arm_idx as usize);
+            let header = source_text(self.spans, span.clone().pat(), span.clone().ret_ty())
+                .or_else(|| source_text(self.spans, span.clone().pat(), span.pat()))
+                .unwrap_or_default();
+            let mut doc = format!("`{header}`");
+            match abi.map(|abi| arm.abi_info(db, abi)) {
+                Some(info) if info.is_fallback => doc.push_str(", for a call no other arm takes"),
+                Some(info) => {
+                    if let Some(selector) = info.selector_value {
+                        write!(doc, ", selector `{selector:#010x}`").unwrap();
+                    }
+                    if let Some(signature) = info.selector_signature {
+                        write!(doc, " (`{signature}`)").unwrap();
+                    }
+                }
+                None => {}
+            }
             let owner = BodyOwner::ContractRecvArm {
                 contract,
-                recv_idx: arm.recv(db).recv_idx(db),
-                arm_idx: arm.arm_idx(db),
+                recv_idx,
+                arm_idx,
             };
-            (name.clone(), owner)
-        }));
+            entries.push((name.clone(), doc, owner));
+        }
         let mut module = Module {
             db,
             root: SemanticInstance::new(
@@ -632,7 +675,7 @@ impl<'db> IngotExport<'db> {
             names: self.names.clone(),
             taken: entries
                 .iter()
-                .flat_map(|(name, _)| [name.clone(), format!("{name}_entry")])
+                .flat_map(|(name, ..)| [name.clone(), format!("{name}_entry")])
                 .chain(PRELUDE.iter().map(|name| name.to_string()))
                 .chain(library.taken.iter().cloned())
                 .chain(self.taken.iter().cloned())
@@ -662,10 +705,10 @@ impl<'db> IngotExport<'db> {
         };
         // The Lean names of each instance whose body is exported.
         let mut defined = FxHashMap::<_, Vec<String>>::default();
-        for (name, owner) in entries {
+        for (name, doc, owner) in entries {
             let key = identity_semantic_instance_key(db, owner);
             let (body, _, refs) = module.body(&name, key, &Carriers::default())?;
-            module.define(&name, &body, Scope::Contract, refs);
+            module.define(&name, &doc, &body, Scope::Contract, refs);
             defined.entry(key).or_default().push(name);
         }
         if with_entries {
@@ -1292,9 +1335,19 @@ impl<'db> Module<'db> {
                 }
             }
             let refs = self.end(depth);
+            let doc = match arm.resolution(db).variant {
+                Some(variant) => format!(
+                    "The entry of `{name}`, for `{}`",
+                    fe_path(db, variant.variant_struct.scope())
+                ),
+                None => format!("The entry of `{name}`, for a call no other arm takes"),
+            };
             self.defs.push(Item {
                 names: vec![format!("{name}_entry")],
-                text: format!("def {name}_entry : FeM Empty := do\n{lines}\n"),
+                text: format!(
+                    "{}def {name}_entry : FeM Empty := do\n{lines}\n",
+                    doc_comment(&doc)
+                ),
                 scope: Scope::Contract,
                 refs,
             });
@@ -1320,12 +1373,17 @@ impl<'db> Module<'db> {
         } else {
             format!("\n      {default}")
         };
+        let doc = format!(
+            "The runtime entry of {}: the entry of the arm the call's selector picks",
+            contract_title(db, contract)
+        );
         self.defs.push(Item {
             names: vec!["runtime".to_string()],
             text: format!(
-                "def runtime : FeM Empty := do\n  let {size} ← calldatasize\n  \
+                "{}def runtime : FeM Empty := do\n  let {size} ← calldatasize\n  \
                  if {size}.toNat < 4 then\n    {default}\n  else\n    \
-                 let {selector} ← calldataSelector\n    {dispatch}{last}\n\n"
+                 let {selector} ← calldataSelector\n    {dispatch}{last}\n\n",
+                doc_comment(&doc)
             ),
             scope: Scope::Contract,
             refs: Vec::new(),
@@ -1472,10 +1530,15 @@ impl<'db> Module<'db> {
             writeln!(lines, "  memoryBytes {words} (UInt256.ofNat {bytes})").unwrap();
         }
         let refs = self.end(depth);
+        let doc = format!(
+            "The deployment entry of {}: `init` on the arguments after the creation code",
+            contract_title(db, contract)
+        );
         self.defs.push(Item {
             names: vec!["init_entry".to_string()],
             text: format!(
-                "def init_entry ({bytes_in} : ByteArray) : FeM ByteArray := do\n{lines}\n"
+                "{}def init_entry ({bytes_in} : ByteArray) : FeM ByteArray := do\n{lines}\n",
+                doc_comment(&doc)
             ),
             scope: Scope::Contract,
             refs,
@@ -1628,10 +1691,18 @@ impl<'db> Module<'db> {
             (Some(name), _) => {
                 let members = self.members.split_off(open.members);
                 let first = self.defs.len();
-                self.define(&name, &format!("{body}partial_fixpoint\n"), scope, refs);
+                let doc = self.describe(key);
+                self.define(
+                    &name,
+                    &doc,
+                    &format!("{body}partial_fixpoint\n"),
+                    scope,
+                    refs,
+                );
                 for member in &members {
                     let body = format!("{}partial_fixpoint\n", member.body);
-                    self.define(&member.name, &body, member.scope, member.refs.clone());
+                    let doc = self.describe(member.instance.0);
+                    self.define(&member.name, &doc, &body, member.scope, member.refs.clone());
                 }
                 if !members.is_empty() {
                     let defs = self.defs.split_off(first);
@@ -1649,7 +1720,8 @@ impl<'db> Module<'db> {
             (None, Some(name)) => name.clone(),
             (None, None) => {
                 let name = self.fresh(&base);
-                self.define(&name, &body, scope, refs);
+                let doc = self.describe(key);
+                self.define(&name, &doc, &body, scope, refs);
                 self.bodies.insert((base, body), name.clone());
                 name
             }
@@ -1663,6 +1735,81 @@ impl<'db> Module<'db> {
         self.names.insert((key, carriers), name.clone());
         self.note(&name);
         Ok(name)
+    }
+
+    /// What the definition of `key` defines, as Fe names it: the function
+    /// or constant it is an instance of, a method or an associated constant
+    /// by the type its impl is for at the instance's types, and the
+    /// instance's other types.
+    fn describe(&self, key: SemanticInstanceKey<'db>) -> String {
+        let db = self.db;
+        let owner = key.owner(db);
+        let args = key.subst(db).generic_args(db);
+        // The item the instance's types are for, its scope and its name.
+        let (generic, scope, name) = match owner {
+            BodyOwner::Func(func, _) => {
+                let name = func.name(db).to_opt().map(|name| name.data(db).as_str());
+                (Some(GenericParamOwner::Func(func)), func.scope(), name)
+            }
+            BodyOwner::AnonConstBody { body, .. } => {
+                let generic = match body.scope().parent_item(db) {
+                    Some(ItemKind::Impl(item)) => Some(GenericParamOwner::Impl(item)),
+                    Some(ItemKind::ImplTrait(item)) => Some(GenericParamOwner::ImplTrait(item)),
+                    _ => None,
+                };
+                (generic, body.scope(), assoc_const_name(db, body))
+            }
+            BodyOwner::Closure { .. } => {
+                return format!("A closure in `{}`", fe_path(db, owner.scope()));
+            }
+            owner => return format!("`{}`", const_path(db, owner)),
+        };
+        let types: Vec<_> = args
+            .iter()
+            .map(|arg| arg.pretty_print(db).as_str())
+            .collect();
+        let Some(name) = name else {
+            let block = format!("A `const` block in `{}`", fe_path(db, scope));
+            return match types.as_slice() {
+                [] => block,
+                types => format!("{block}, at `<{}>`", types.join(", ")),
+            };
+        };
+        // The type an impl is for, at the instance's types, and the number
+        // of those the impl takes.
+        let instantiated = |ty: TyId<'db>, parent: GenericParamOwner<'db>| {
+            let owner = generic.unwrap_or(parent);
+            let subst = CompleteSubst::for_owner(db, owner, args.to_vec()).ok();
+            let ty = subst
+                .and_then(|subst| Binder::bind(owner, ty).instantiate_subst(db, &subst).ok())
+                .unwrap_or(ty);
+            let taken = ParamSchemaId::full(db, parent).keys(db).len();
+            (ty.pretty_print(db).to_string(), taken)
+        };
+        let (path, taken) = match scope.parent_item(db) {
+            Some(ItemKind::Impl(item)) => {
+                let (ty, taken) = instantiated(item.ty(db), GenericParamOwner::Impl(item));
+                (format!("{ty}::{name}"), taken)
+            }
+            Some(ItemKind::ImplTrait(item)) => {
+                let (ty, taken) = instantiated(item.ty(db), GenericParamOwner::ImplTrait(item));
+                let trait_name = item.trait_def(db).and_then(|def| def.name(db).to_opt());
+                let trait_name = trait_name.map_or("?", |name| name.data(db));
+                (format!("<{ty} as {trait_name}>::{name}"), taken)
+            }
+            _ => (fe_path(db, scope), 0),
+        };
+        let own = match types.get(taken..).unwrap_or_default() {
+            [] => String::new(),
+            own => format!("<{}>", own.join(", ")),
+        };
+        match owner {
+            BodyOwner::Func(_, Some(mode)) => {
+                let mode = format!("{mode:?}").to_lowercase();
+                format!("`{path}{own}`, its `{mode}` body")
+            }
+            _ => format!("`{path}{own}`"),
+        }
     }
 
     /// A Lean name no definition has yet: `base`, or `base` with a number.
@@ -1737,8 +1884,8 @@ impl<'db> Module<'db> {
 
     /// Appends the definition of `name` with the text `body` gives after the
     /// name: the pieces cut from it, last first, each named after it, then
-    /// the definition.
-    fn define(&mut self, name: &str, body: &str, scope: Scope, refs: Vec<String>) {
+    /// the definition, documented by `doc`.
+    fn define(&mut self, name: &str, doc: &str, body: &str, scope: Scope, refs: Vec<String>) {
         let mut texts = body.split(CUT);
         let main = texts.next().unwrap();
         let piece = name.trim_matches(['«', '»']);
@@ -1746,7 +1893,13 @@ impl<'db> Module<'db> {
         for cut in texts.rev() {
             writeln!(text, "{}", cut.replace(SELF, piece)).unwrap();
         }
-        writeln!(text, "def {name}{}", main.replace(SELF, piece)).unwrap();
+        writeln!(
+            text,
+            "{}def {name}{}",
+            doc_comment(doc),
+            main.replace(SELF, piece)
+        )
+        .unwrap();
         self.defs.push(Item {
             names: vec![name.to_string()],
             text,
@@ -6143,6 +6296,22 @@ fn arm_names<'db>(
         .collect()
 }
 
+/// The source text from where `start` begins to where `end` ends, each run
+/// of white space in it one space.
+fn source_text(db: &dyn SpannedHirDb, start: impl LazySpan, end: impl LazySpan) -> Option<String> {
+    let (start, end) = (start.resolve(db)?, end.resolve(db)?);
+    let text = start.file.text(db);
+    let range = usize::from(start.range.start())..usize::from(end.range.end());
+    let text = text.get(range).filter(|_| start.file == end.file)?;
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// `contract` as its documentation names it: "contract `<name>`".
+fn contract_title(db: &dyn HirAnalysisDb, contract: Contract<'_>) -> String {
+    let name = contract.name(db).to_opt();
+    format!("contract `{}`", name.map_or("", |name| name.data(db)))
+}
+
 /// Whether `ingot` is core or std, whose definitions exports share.
 fn shared_ingot(db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> bool {
     matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std)
@@ -6317,6 +6486,16 @@ fn resolve(text: &str, known: &FxHashSet<String>) -> String {
         resolved.push_str(after);
     }
     resolved
+}
+
+/// The doc comment that says `doc`, on a line of its own, or nothing if
+/// `doc` is empty. A comment's delimiters in `doc` are broken up.
+fn doc_comment(doc: &str) -> String {
+    if doc.is_empty() {
+        return String::new();
+    }
+    let doc = doc.replace("-/", "- /").replace("/-", "/ -");
+    format!("/-- {doc} -/\n")
 }
 
 /// The lines of `texts`, each a step further in.

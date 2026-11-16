@@ -6,9 +6,11 @@ structure Keccak256 where
   position : UInt256
 deriving Inhabited
 
+/-- The `init` of contract `EcrecoverPrecompile`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `lib::input<Evm>` -/
 def input_Evm_4 : FeM MemBuffer := do
   let mut input : MemBuffer := default
   let len ← Evm_calldatasize
@@ -20,6 +22,7 @@ def input_Evm_4 : FeM MemBuffer := do
   let input_11 := input
   return input_11
 
+/-- `lib::words<1>` -/
 def words_1 (values : (Vector UInt256 1)) (gas_used : UInt256) : FeM Output := do
   let mut output : MemBuffer := default
   let mut r1 : Range_Known_0_Unknown := default
@@ -62,15 +65,18 @@ def words_1 (values : (Vector UInt256 1)) (gas_used : UInt256) : FeM Output := d
     | _ => pure ()
     return v34
 
+/-- `Keccak256::new` -/
 def Keccak256_new : FeM Keccak256 := do
   let v1 := Vector.replicate 25 (UInt256.ofNat 0)
   let v3 := (Keccak256.mk v1 (UInt256.ofNat 0))
   return v3
 
+/-- `lib::permutation::ROUND_CONSTANTS` -/
 def ROUND_CONSTANTS : FeM (Vector UInt256 24) := do
   let v24 := #v[(UInt256.ofNat 1), (UInt256.ofNat 32898), (UInt256.ofNat 9223372036854808714), (UInt256.ofNat 9223372039002292224), (UInt256.ofNat 32907), (UInt256.ofNat 2147483649), (UInt256.ofNat 9223372039002292353), (UInt256.ofNat 9223372036854808585), (UInt256.ofNat 138), (UInt256.ofNat 136), (UInt256.ofNat 2147516425), (UInt256.ofNat 2147483658), (UInt256.ofNat 2147516555), (UInt256.ofNat 9223372036854775947), (UInt256.ofNat 9223372036854808713), (UInt256.ofNat 9223372036854808579), (UInt256.ofNat 9223372036854808578), (UInt256.ofNat 9223372036854775936), (UInt256.ofNat 32778), (UInt256.ofNat 9223372039002259466), (UInt256.ofNat 9223372039002292353), (UInt256.ofNat 9223372036854808704), (UInt256.ofNat 2147483649), (UInt256.ofNat 9223372039002292232)]
   return v24
 
+/-- `lib::permutation::rotate` -/
 def rotate (value : UInt256) («by» : UInt256) : FeM UInt256 := do
   let v4 := IntTy.shl (.u 64) value «by»
   let v8 ← IntTy.sub (.u 64) (UInt256.ofNat 64) «by»
@@ -494,6 +500,7 @@ def keccak_round_k1 (a : (Vector UInt256 25)) (constant : UInt256) (c0 : UInt256
   let v39 := a[v38.toNat]!
   keccak_round_k2 a constant c0 c1 v37 v39 e
 
+/-- `lib::permutation::keccak_round` -/
 def keccak_round (a : (Vector UInt256 25)) (e : (Vector UInt256 25)) (constant : UInt256) : FeM (Unit × (Vector UInt256 25)) := do
   let mut e := e
   let v3 := (UInt256.ofNat 0)
@@ -522,6 +529,7 @@ def keccak_round (a : (Vector UInt256 25)) (e : (Vector UInt256 25)) (constant :
   checkIndex v20 25
   keccak_round_k1 a constant c0 v19 v20 e
 
+/-- `lib::permutation::permute` -/
 def permute (state : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) := do
   let mut other : (Vector UInt256 25) := default
   let mut round : UInt256 := default
@@ -573,6 +581,7 @@ def permute (state : (Vector UInt256 25)) : FeM (Unit × (Vector UInt256 25)) :=
   partial_fixpoint
   b1 other round r2 state
 
+/-- `Keccak256::advance` -/
 def Keccak256_advance (self : Keccak256) (bytes : UInt256) : FeM (Unit × Keccak256) := do
   let mut self := self
   let v3 := self.position
@@ -591,6 +600,7 @@ def Keccak256_advance (self : Keccak256) (bytes : UInt256) : FeM (Unit × Keccak
   else
     b3 self
 
+/-- `Keccak256::update_word` -/
 def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) : FeM (Unit × Keccak256) := do
   let mut start : UInt256 := default
   let mut remaining : UInt256 := default
@@ -824,6 +834,7 @@ def Keccak256_update_word (self : Keccak256) (value : UInt256) (len : UInt256) :
   else
     b2 start remaining self
 
+/-- `Keccak256::pad` -/
 def Keccak256_pad (self : Keccak256) : FeM (Unit × Keccak256) := do
   let mut self := self
   let v2 := self.position
@@ -848,6 +859,7 @@ def Keccak256_pad (self : Keccak256) : FeM (Unit × Keccak256) := do
   self := { self with lanes := v21_0 }
   return ((), self)
 
+/-- `Keccak256::finish_word` -/
 def Keccak256_finish_word (self : Keccak256) : FeM UInt256 := do
   let mut self := self
   let (v1, v1_0) ← Keccak256_pad self
@@ -880,6 +892,7 @@ def Keccak256_finish_word (self : Keccak256) : FeM UInt256 := do
   let v26 := v21 ||| v25
   return v26
 
+/-- `lib::recover_signer` -/
 def recover_signer (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256) : FeM Option_u256 := do
   let mut digest : Keccak256 := default
   let v4 ← recover hash recovery_id r s
@@ -903,6 +916,7 @@ def recover_signer (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : U
     let v23 := Option_u256.None
     return v23
 
+/-- `lib::ecrecover<MemBuffer>` -/
 def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
   let mut r0 : (Vector UInt256 1) := default
   let hash ← word_at_MemBuffer input (UInt256.ofNat 0)
@@ -969,6 +983,7 @@ def ecrecover_MemBuffer (input : MemBuffer) : FeM Output := do
   else
     b7 r0
 
+/-- `_`, for a call no other arm takes -/
 def recv0_arm0 : FeM Empty := do
   let mut result : Output := default
   let mut r2 : MemBuffer := default
@@ -981,11 +996,13 @@ def recv0_arm0 : FeM Empty := do
   let v9 ← Evm_return_data v6
   nomatch v9
 
+/-- The entry of `recv0_arm0`, for a call no other arm takes -/
 def recv0_arm0_entry : FeM Empty := do
   nonPayable
   let _ ← recv0_arm0
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
+/-- The runtime entry of contract `EcrecoverPrecompile`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -994,6 +1011,7 @@ def runtime : FeM Empty := do
     let selector ← calldataSelector
     recv0_arm0_entry
 
+/-- The deployment entry of contract `EcrecoverPrecompile`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

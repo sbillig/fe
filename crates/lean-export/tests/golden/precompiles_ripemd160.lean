@@ -1,9 +1,11 @@
 export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data MemBuffer MemBuffer_drop MemBuffer_new MemBuffer_span_ref MemBuffer_write_word Range_Known_0_Known_64 Range_Known_0_Known_64.mk Range_Known_0_Known_8 Range_Known_0_Known_8.mk Range_Known_0_Unknown Range_Known_0_Unknown.mk Range_at_0 Range_at_0_64 Range_at_0_8 Range_has_0 Range_has_0_64 Range_has_0_8 Range_next_0 Range_next_0_64 Range_next_0_8 Range_start_0 Range_start_0_64 Range_start_0_8 array_at_ref_u32_5 array_has_u32_5 array_next_u32_5 array_start_u32_5 downcast_truncate_u64_u8 downcast_unchecked_u256_usize downcast_unchecked_usize_u64)
 export Shared (MemBuffer_byte_at MemBuffer_len_1)
 
+/-- The `init` of contract `Ripemd160`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `lib::input<Evm>` -/
 def input_Evm_2 : FeM MemBuffer := do
   let mut input : MemBuffer := default
   let len ← Evm_calldatasize
@@ -15,16 +17,19 @@ def input_Evm_2 : FeM MemBuffer := do
   let input_11 := input
   return input_11
 
+/-- `lib::hashes::RIPEMD_IV` -/
 def RIPEMD_IV : FeM (Vector UInt256 5) := do
   let v5 := #v[(UInt256.ofNat 1732584193), (UInt256.ofNat 4023233417), (UInt256.ofNat 2562383102), (UInt256.ofNat 271733878), (UInt256.ofNat 3285377520)]
   return v5
 
+/-- `lib::hashes::padded_blocks` -/
 def padded_blocks (len : UInt256) : FeM UInt256 := do
   let v3 ← checkedAdd len (UInt256.ofNat 9)
   let v5 ← checkedAdd v3 (UInt256.ofNat 63)
   let v7 ← checkedDiv v5 (UInt256.ofNat 64)
   return v7
 
+/-- `lib::hashes::padded_block<MemBuffer>` -/
 def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256) (block_index : UInt256) (blocks : UInt256) : FeM (Vector UInt256 64) := do
   let mut block : (Vector UInt256 64) := default
   let mut r1 : Range_Known_0_Known_64 := default
@@ -111,11 +116,13 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
   partial_fixpoint
   b1 block r1 r2 v20
 
+/-- `lib::hashes::f0` -/
 def f0 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   let v5 := x ^^^ y
   let v7 := v5 ^^^ z
   return v7
 
+/-- `lib::hashes::rotate_left` -/
 def rotate_left (value : UInt256) («by» : UInt256) : FeM UInt256 := do
   let v4 := IntTy.shl (.u 32) value «by»
   let v8 ← IntTy.sub (.u 32) (UInt256.ofNat 32) «by»
@@ -123,6 +130,7 @@ def rotate_left (value : UInt256) («by» : UInt256) : FeM UInt256 := do
   let v10 := v4 ||| v9
   return v10
 
+/-- `lib::hashes::f1` -/
 def f1 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   let v5 := x &&& y
   let v7 := IntTy.not (.u 32) x
@@ -130,12 +138,14 @@ def f1 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   let v10 := v5 ||| v9
   return v10
 
+/-- `lib::hashes::f2` -/
 def f2 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   let v5 := IntTy.not (.u 32) y
   let v6 := x ||| v5
   let v8 := v6 ^^^ z
   return v8
 
+/-- `lib::hashes::f3` -/
 def f3 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   let v5 := x &&& z
   let v8 := IntTy.not (.u 32) z
@@ -143,6 +153,7 @@ def f3 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   let v10 := v5 ||| v9
   return v10
 
+/-- `lib::hashes::f4` -/
 def f4 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   let v6 := IntTy.not (.u 32) z
   let v7 := y ||| v6
@@ -1868,6 +1879,7 @@ def ripemd_compress_k1 (block : (Vector UInt256 64)) (w0 : UInt256) (v24 : UInt2
   let v48 := v47
   ripemd_compress_k2 block w0 w1 v48 state
 
+/-- `lib::hashes::ripemd_compress` -/
 def ripemd_compress (state : (Vector UInt256 5)) (block : (Vector UInt256 64)) : FeM (Unit × (Vector UInt256 5)) := do
   let mut state := state
   let v2 := (UInt256.ofNat 0)
@@ -1896,6 +1908,7 @@ def ripemd_compress (state : (Vector UInt256 5)) (block : (Vector UInt256 64)) :
   checkIndex v24 64
   ripemd_compress_k1 block w0 v24 state
 
+/-- `lib::hashes::ripemd160<MemBuffer>` -/
 def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
   let mut state : (Vector UInt256 5) := default
   let mut digest : UInt256 := default
@@ -1952,6 +1965,7 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
   partial_fixpoint
   b1 state digest r2 r3 v12
 
+/-- `_`, for a call no other arm takes -/
 def recv0_arm0 : FeM Empty := do
   let mut output : MemBuffer := default
   let mut r2 : MemBuffer := default
@@ -1967,11 +1981,13 @@ def recv0_arm0 : FeM Empty := do
   let v13 ← Evm_return_data v10
   nomatch v13
 
+/-- The entry of `recv0_arm0`, for a call no other arm takes -/
 def recv0_arm0_entry : FeM Empty := do
   nonPayable
   let _ ← recv0_arm0
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
+/-- The runtime entry of contract `Ripemd160`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -1980,6 +1996,7 @@ def runtime : FeM Empty := do
     let selector ← calldataSelector
     recv0_arm0_entry
 
+/-- The deployment entry of contract `Ripemd160`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

@@ -5,9 +5,11 @@ structure Right where
   x : UInt256
 deriving Inhabited
 
+/-- The `init` of contract `Right`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `lib::right` -/
 def right (x : UInt256) : FeM UInt256 := do
   let mut r0 : Pair := default
   let v3 := (Pair.mk (UInt256.ofNat 1) x)
@@ -16,25 +18,30 @@ def right (x : UInt256) : FeM UInt256 := do
   let v7 ← checkedMul v5 (UInt256.ofNat 2)
   return v7
 
+/-- `Right { x } -> u256`, selector `0xad5f32c7` (`right(uint256)`) -/
 def recv_Right (x : UInt256) : FeM UInt256 := do
   let v1 ← right x
   return v1
 
+/-- `<Right as AbiSize>::HEAD_SIZE` -/
 def Right_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_u256
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
+/-- `<Right as Decode>::decode_from<CallData>` -/
 def Right_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Right := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (Right.mk __fe_field_0)
   return v6
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Right, Sol, CallData>` -/
 def decode_from_prechecked_head_Right_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Right := do
   let v3 ← Right_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Right>` -/
 def decode_runtime_args_Evm_Sol_Right : FeM Right := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -48,12 +55,14 @@ def decode_runtime_args_Evm_Sol_Right : FeM Right := do
   let v12 ← decode_from_prechecked_head_Right_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Right`, for `lib::RightMsg::Right` -/
 def recv_Right_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Right
   let result ← recv_Right message.x
   Evm_return_value_Sol_u256 result
 
+/-- The runtime entry of contract `Right`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -65,6 +74,7 @@ def runtime : FeM Empty := do
     else
       revertEmpty
 
+/-- The deployment entry of contract `Right`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

@@ -31,9 +31,11 @@ structure SupportsInterface where
   interface_id : FixedBytes_4
 deriving Inhabited
 
+/-- `deposit_contract::DEPOSIT_CONTRACT_TREE_DEPTH` -/
 def DEPOSIT_CONTRACT_TREE_DEPTH : FeM UInt256 := do
   return (UInt256.ofNat 32)
 
+/-- `init()` of contract `DepositContract` -/
 def init : FeM Unit := do
   let mut r1 : Range_Known_0_Unknown := default
   let v2 ← DEPOSIT_CONTRACT_TREE_DEPTH
@@ -60,6 +62,7 @@ def init : FeM Unit := do
   partial_fixpoint
   b1 r1 v8
 
+/-- `deposit_contract::compute_deposit_data_root` -/
 def compute_deposit_data_root (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (amount_gwei : UInt256) : FeM UInt256 := do
   let mut r0 : (UInt256 × UInt256 × UInt256 × UInt256) := default
   let v4 ← Bytes_len withdrawal_credentials
@@ -82,6 +85,7 @@ def compute_deposit_data_root (pubkey : Bytes) (withdrawal_credentials : Bytes) 
   else
     M.panic 0x01
 
+/-- `<DepositEvent as Event>::emit<Evm>` -/
 def DepositEvent_emit_Evm (self : DepositEvent) : FeM Unit := do
   let mut r0 : MemBuffer := default
   let v2 := self.pubkey
@@ -98,10 +102,12 @@ def DepositEvent_emit_Evm (self : DepositEvent) : FeM Unit := do
   let _ ← MemBuffer_drop r0
   return ()
 
+/-- `std::evm::effects::Log::emit<Evm, DepositEvent>` -/
 def emit_Evm_DepositEvent (event : DepositEvent) : FeM Unit := do
   let _ ← DepositEvent_emit_Evm event
   return ()
 
+/-- `deposit_contract::MAX_DEPOSIT_COUNT` -/
 def MAX_DEPOSIT_COUNT : FeM UInt256 := do
   let v1 ← DEPOSIT_CONTRACT_TREE_DEPTH
   let v2 := v1
@@ -109,6 +115,7 @@ def MAX_DEPOSIT_COUNT : FeM UInt256 := do
   let v5 ← checkedSub v3 (UInt256.ofNat 1)
   return v5
 
+/-- `Deposit { pubkey, withdrawal_credentials, signature, deposit_data_root }`, selector `0x22895118` (`deposit(bytes,bytes,bytes,bytes32)`) -/
 def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : Bytes) (deposit_data_root : FixedBytes_32) : FeM Unit := do
   let mut pubkey := pubkey
   let mut withdrawal_credentials := withdrawal_credentials
@@ -240,6 +247,7 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
   else
     M.revert (assertData "DepositContract: invalid pubkey length")
 
+/-- `GetDepositRoot -> u256`, selector `0xc5f2892f` (`get_deposit_root()`) -/
 def recv_GetDepositRoot : FeM UInt256 := do
   let mut node : UInt256 := default
   let mut size : UInt256 := default
@@ -294,12 +302,14 @@ def recv_GetDepositRoot : FeM UInt256 := do
   partial_fixpoint
   b1 node size r3 v10
 
+/-- `GetDepositCount -> Bytes`, selector `0x621fd130` (`get_deposit_count()`) -/
 def recv_GetDepositCount : FeM Bytes := do
   let v0 ← load (Field.store.field Layout.DepositStore 1)
   let count ← downcast_truncate_u256_u64 v0
   let v3 ← serialize_u64 count
   return v3
 
+/-- `SupportsInterface { interface_id } -> bool`, selector `0x01ffc9a7` (`supportsInterface(bytes4)`) -/
 def recv_SupportsInterface (interface_id : FixedBytes_4) : FeM Bool := do
   let v2 := interface_id.val
   let v4 := decide (v2 = (UInt256.ofNat 33540519))
@@ -317,6 +327,7 @@ def recv_SupportsInterface (interface_id : FixedBytes_4) : FeM Bool := do
     else
       b3 false
 
+/-- `<Deposit as AbiSize>::HEAD_SIZE` -/
 def Deposit_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_Bytes
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
@@ -328,6 +339,7 @@ def Deposit_HEAD_SIZE : FeM UInt256 := do
   let v8 ← checkedAdd v6 v7
   return v8
 
+/-- `<Deposit as Decode>::decode_from<CallData>` -/
 def Deposit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Deposit := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_Bytes_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
@@ -349,10 +361,12 @@ def Deposit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_de
   let v30 := (Deposit.mk __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3)
   return v30
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Deposit, Sol, CallData>` -/
 def decode_from_prechecked_head_Deposit_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Deposit := do
   let v3 ← Deposit_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Deposit>` -/
 def decode_runtime_args_Evm_Sol_Deposit : FeM Deposit := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -366,22 +380,27 @@ def decode_runtime_args_Evm_Sol_Deposit : FeM Deposit := do
   let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Deposit`, for `deposit_contract::DepositMsg::Deposit` -/
 def recv_Deposit_entry : FeM Empty := do
   let message ← decode_runtime_args_Evm_Sol_Deposit
   let _ ← recv_Deposit message.pubkey message.withdrawal_credentials message.signature message.deposit_data_root
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
+/-- `<GetDepositRoot as AbiSize>::HEAD_SIZE` -/
 def GetDepositRoot_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
+/-- `<GetDepositRoot as Decode>::decode_from<CallData>` -/
 def GetDepositRoot_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM GetDepositRoot := do
   let v2 := (GetDepositRoot.mk)
   return v2
 
+/-- `core::abi::Decode::decode_from_prechecked_head<GetDepositRoot, Sol, CallData>` -/
 def decode_from_prechecked_head_GetDepositRoot_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM GetDepositRoot := do
   let v3 ← GetDepositRoot_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, GetDepositRoot>` -/
 def decode_runtime_args_Evm_Sol_GetDepositRoot : FeM GetDepositRoot := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -395,23 +414,28 @@ def decode_runtime_args_Evm_Sol_GetDepositRoot : FeM GetDepositRoot := do
   let v12 ← decode_from_prechecked_head_GetDepositRoot_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_GetDepositRoot`, for `deposit_contract::DepositMsg::GetDepositRoot` -/
 def recv_GetDepositRoot_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_GetDepositRoot
   let result ← recv_GetDepositRoot
   Evm_return_value_Sol_u256 result
 
+/-- `<GetDepositCount as AbiSize>::HEAD_SIZE` -/
 def GetDepositCount_HEAD_SIZE : FeM UInt256 := do
   return (UInt256.ofNat 0)
 
+/-- `<GetDepositCount as Decode>::decode_from<CallData>` -/
 def GetDepositCount_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM GetDepositCount := do
   let v2 := (GetDepositCount.mk)
   return v2
 
+/-- `core::abi::Decode::decode_from_prechecked_head<GetDepositCount, Sol, CallData>` -/
 def decode_from_prechecked_head_GetDepositCount_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM GetDepositCount := do
   let v3 ← GetDepositCount_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, GetDepositCount>` -/
 def decode_runtime_args_Evm_Sol_GetDepositCount : FeM GetDepositCount := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -425,27 +449,32 @@ def decode_runtime_args_Evm_Sol_GetDepositCount : FeM GetDepositCount := do
   let v12 ← decode_from_prechecked_head_GetDepositCount_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_GetDepositCount`, for `deposit_contract::DepositMsg::GetDepositCount` -/
 def recv_GetDepositCount_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_GetDepositCount
   let result ← recv_GetDepositCount
   Evm_return_value_Sol_Bytes result
 
+/-- `<SupportsInterface as AbiSize>::HEAD_SIZE` -/
 def SupportsInterface_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_FixedBytes_4
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
+/-- `<SupportsInterface as Decode>::decode_from<CallData>` -/
 def SupportsInterface_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM SupportsInterface := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_FixedBytes_4_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (SupportsInterface.mk __fe_field_0)
   return v6
 
+/-- `core::abi::Decode::decode_from_prechecked_head<SupportsInterface, Sol, CallData>` -/
 def decode_from_prechecked_head_SupportsInterface_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM SupportsInterface := do
   let v3 ← SupportsInterface_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, SupportsInterface>` -/
 def decode_runtime_args_Evm_Sol_SupportsInterface : FeM SupportsInterface := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -459,12 +488,14 @@ def decode_runtime_args_Evm_Sol_SupportsInterface : FeM SupportsInterface := do
   let v12 ← decode_from_prechecked_head_SupportsInterface_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_SupportsInterface`, for `deposit_contract::DepositMsg::SupportsInterface` -/
 def recv_SupportsInterface_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_SupportsInterface
   let result ← recv_SupportsInterface message.interface_id
   Evm_return_value_Sol_bool result
 
+/-- The runtime entry of contract `DepositContract`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -482,6 +513,7 @@ def runtime : FeM Empty := do
     else
       revertEmpty
 
+/-- The deployment entry of contract `DepositContract`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

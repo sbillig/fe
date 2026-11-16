@@ -1,6 +1,8 @@
+/-- The `init` of contract `Arrays`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `arrays::bump` -/
 def bump (items : (Vector UInt256 4)) («at» : UInt256) («by» : UInt256) : FeM (Unit × (Vector UInt256 4)) := do
   let mut items := items
   checkIndex «at» 4
@@ -10,6 +12,7 @@ def bump (items : (Vector UInt256 4)) («at» : UInt256) («by» : UInt256) : Fe
   items := (items.set! «at».toNat v6)
   return ((), items)
 
+/-- `Pick { index, value } -> u256`, selector `0xa62f4550` (`pick(uint256,uint256)`) -/
 def recv_Pick (index : UInt256) (value : UInt256) : FeM UInt256 := do
   let mut items : (Vector UInt256 4) := default
   let items_2 := Vector.replicate 4 value
@@ -27,10 +30,12 @@ def recv_Pick (index : UInt256) (value : UInt256) : FeM UInt256 := do
   let v13 ← checkedAdd v10 v12
   return v13
 
+/-- `arrays::WEIGHTS` -/
 def WEIGHTS : FeM (Vector UInt256 3) := do
   let v3 := #v[(UInt256.ofNat 1), (UInt256.ofNat 10), (UInt256.ofNat 100)]
   return v3
 
+/-- `Weigh { values } -> u256`, selector `0x2f57374e` (`weigh(uint256[3])`) -/
 def recv_Weigh (values : (Vector UInt256 3)) : FeM UInt256 := do
   let mut total : UInt256 := default
   let mut i : UInt256 := default

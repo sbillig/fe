@@ -107,14 +107,17 @@ def Field.lock : Place :=
 def Field.alone : Place :=
   .storage (UInt256.ofNat 8)
 
+/-- The `init` of contract `State`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `SetDelta { delta } -> i16`, selector `0x36899e92` (`setDelta(int16)`) -/
 def recv_SetDelta (delta : UInt256) : FeM UInt256 := do
   let old ← loadIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩
   storeIntAt (.i 16) (Field.packed.field Layout.Packed 2) ⟨2, 2, true⟩ delta
   return old
 
+/-- `Replace { flag, small, delta, owner, total } -> u256`, selector `0x1e84534a` (`replace(bool,uint8,int16,address,uint256)`) -/
 def recv_Replace (flag : Bool) (small : UInt256) (delta : UInt256) (owner : UInt256) (total : UInt256) : FeM UInt256 := do
   let packed_1 ← load_Packed Field.packed
   let v7 := (Packed.mk flag small delta owner total)
@@ -122,6 +125,7 @@ def recv_Replace (flag : Bool) (small : UInt256) (delta : UInt256) (owner : UInt
   let v9 := packed_1.total
   return v9
 
+/-- `Advance { by } -> u256`, selector `0x71d6ddd6` (`advance(uint256)`) -/
 def recv_Advance («by» : UInt256) : FeM UInt256 := do
   let v3 ← load_Phase Field.phase
   let b1 : UInt256 → FeM UInt256 := fun v1 => do
@@ -147,6 +151,7 @@ def recv_Advance («by» : UInt256) : FeM UInt256 := do
     else
       b7 (UInt256.ofNat 2)
 
+/-- `Mark { at, level } -> u8`, selector `0x0a774e1e` (`mark(uint256,uint8)`) -/
 def recv_Mark («at» : UInt256) (level : UInt256) : FeM UInt256 := do
   checkIndex «at» 3
   let old ← loadInt (.u 8) (Field.levels.index 1 «at»)
@@ -156,6 +161,7 @@ def recv_Mark («at» : UInt256) (level : UInt256) : FeM UInt256 := do
   let narrow ← loadIntAt (.u 8) Field.narrow ⟨1, 1, true⟩
   return narrow
 
+/-- `Lock -> bool`, selector `0xf83d08ba` (`lock()`) -/
 def recv_Lock : FeM Bool := do
   let was ← loadBoolAt ((Field.lock.pin .transient).field Layout.TSlot_bool 0) ⟨0, 1, false⟩
   storeBoolAt ((Field.lock.pin .transient).field Layout.TSlot_bool 0) ⟨0, 1, false⟩ true

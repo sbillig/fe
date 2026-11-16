@@ -13,9 +13,11 @@ structure Sum where
   j : UInt256
 deriving Inhabited
 
+/-- The `init` of contract `Wide`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `Sum { a, b, c, d, e, f, g, h, i, j } -> u256`, selector `0x460e9674` (`sum(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)`) -/
 def recv_Sum (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (e : UInt256) (f : UInt256) (g : UInt256) (h : UInt256) (i : UInt256) (j : UInt256) : FeM UInt256 := do
   let v10 ← checkedAdd a b
   let v11 ← checkedAdd v10 c
@@ -28,6 +30,7 @@ def recv_Sum (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (e : UInt25
   let v18 ← checkedAdd v17 j
   return v18
 
+/-- `<Sum as AbiSize>::HEAD_SIZE` -/
 def Sum_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_u256
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
@@ -141,6 +144,7 @@ def Sum_decode_from_CallData_k1 (__fe_msg_decode_input : CallData) (__fe_msg_dec
   let v62 ← abi_field_head_size_u256
   Sum_decode_from_CallData_k2 __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_input_len __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3 __fe_field_4 __fe_field_5 v61 v62
 
+/-- `<Sum as Decode>::decode_from<CallData>` -/
 def Sum_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Sum := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
@@ -168,10 +172,12 @@ def Sum_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode
   let v34 ← abi_field_head_size_u256
   Sum_decode_from_CallData_k1 __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_input_len __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3 v33 v34
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Sum, Sol, CallData>` -/
 def decode_from_prechecked_head_Sum_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Sum := do
   let v3 ← Sum_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Sum>` -/
 def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -185,12 +191,14 @@ def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let v12 ← decode_from_prechecked_head_Sum_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Sum`, for `wide::WideMsg::Sum` -/
 def recv_Sum_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Sum
   let result ← recv_Sum message.a message.b message.c message.d message.e message.f message.g message.h message.i message.j
   Evm_return_value_Sol_u256 result
 
+/-- The runtime entry of contract `Wide`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -202,6 +210,7 @@ def runtime : FeM Empty := do
     else
       revertEmpty
 
+/-- The deployment entry of contract `Wide`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

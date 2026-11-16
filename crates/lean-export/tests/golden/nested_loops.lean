@@ -1,8 +1,10 @@
 export Lib (Range_Known_0_Unknown Range_Known_0_Unknown.mk Range_Unknown_Unknown Range_Unknown_Unknown.mk Range_Unknown_Unknown_at Range_Unknown_Unknown_has Range_Unknown_Unknown_next Range_Unknown_Unknown_start Range_at_0 Range_has_0 Range_next_0 Range_start_0 downcast_truncate_u256_usize)
 
+/-- The `init` of contract `NestedLoops`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `nested_loops::windows` -/
 def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
   let mut acc : UInt256 := default
   let mut index : UInt256 := default
@@ -91,12 +93,14 @@ def windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 acc index started r3
 
+/-- `Windows { n, width } -> u256`, selector `0x6a39ed49` (`windows(uint256,uint256)`) -/
 def recv_Windows (n : UInt256) (width : UInt256) : FeM UInt256 := do
   let v2 ← downcast_truncate_u256_usize n
   let v3 ← downcast_truncate_u256_usize width
   let v4 ← windows v2 v3
   return v4
 
+/-- `nested_loops::break_both` -/
 def break_both (n : UInt256) : FeM UInt256 := do
   let mut i : UInt256 := default
   let mut found : UInt256 := default
@@ -169,10 +173,12 @@ def break_both (n : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 i found done j
 
+/-- `BreakBoth { n } -> u256`, selector `0x17ea0cd5` (`breakBoth(uint256)`) -/
 def recv_BreakBoth (n : UInt256) : FeM UInt256 := do
   let v1 ← break_both n
   return v1
 
+/-- `nested_loops::continue_outer` -/
 def continue_outer (n : UInt256) : FeM UInt256 := do
   let mut i : UInt256 := default
   let mut total : UInt256 := default
@@ -236,10 +242,12 @@ def continue_outer (n : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 i total j skip
 
+/-- `ContinueOuter { n } -> u256`, selector `0x0dec9eef` (`continueOuter(uint256)`) -/
 def recv_ContinueOuter (n : UInt256) : FeM UInt256 := do
   let v1 ← continue_outer n
   return v1
 
+/-- `nested_loops::return_inner` -/
 def return_inner (n : UInt256) : FeM UInt256 := do
   let mut i : UInt256 := default
   let mut j : UInt256 := default
@@ -284,10 +292,12 @@ def return_inner (n : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 i j
 
+/-- `ReturnInner { n } -> u256`, selector `0x92ba46ad` (`returnInner(uint256)`) -/
 def recv_ReturnInner (n : UInt256) : FeM UInt256 := do
   let v1 ← return_inner n
   return v1
 
+/-- `nested_loops::three_levels` -/
 def three_levels (n : UInt256) : FeM UInt256 := do
   let mut total : UInt256 := default
   let mut k : UInt256 := default
@@ -381,6 +391,7 @@ def three_levels (n : UInt256) : FeM UInt256 := do
   partial_fixpoint
   b1 total k r2 r3 v10
 
+/-- `ThreeLevels { n } -> u256`, selector `0x81037424` (`threeLevels(uint256)`) -/
 def recv_ThreeLevels (n : UInt256) : FeM UInt256 := do
   let v1 ← downcast_truncate_u256_usize n
   let v2 ← three_levels v1

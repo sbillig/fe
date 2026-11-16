@@ -1,8 +1,10 @@
 export Lib (Address_word Evm_address Evm_block_number Evm_origin Evm_value Wei Wei_as_wei downcast_truncate_i256_i8 downcast_unchecked_u256_i256)
 
+/-- The `init` of contract `Ints`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `Narrow { a, b } -> u8`, selector `0x741ef9d5` (`narrow(uint8,uint8)`) -/
 def recv_Narrow (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let sum ← IntTy.add (.u 8) a b
   let v5 := sum >>> (UInt256.ofNat 1)
@@ -13,11 +15,13 @@ def recv_Narrow (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let v14 ← checkedRem v12 (UInt256.ofNat 7)
   return v14
 
+/-- `ints::wrapping` -/
 def wrapping (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let v4 := IntTy.mulW (.i 32) a b
   let v6 := IntTy.shl (.i 32) v4 (UInt256.ofNat 3)
   return v6
 
+/-- `Signed { a, b } -> i32`, selector `0x6effafad` (`signed(int32,int32)`) -/
 def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let v2 := UInt256.sltBool a b
   if v2 then
@@ -32,6 +36,7 @@ def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
     let v12 ← IntTy.add (.i 32) v10 (IntTy.wrap (.i 256) (-5))
     return v12
 
+/-- `Mixed { a, b } -> i256`, selector `0x728ac8e2` (`mixed(int256,uint16)`) -/
 def recv_Mixed (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let wide := b
   let small ← downcast_truncate_i256_i8 a
@@ -45,6 +50,7 @@ def recv_Mixed (a : UInt256) (b : UInt256) : FeM UInt256 := do
   let v16 ← IntTy.add (.i 256) v14 v15
   return v16
 
+/-- `Context -> u256`, selector `0xd0496d6a` (`context()`) -/
 def recv_Context : FeM UInt256 := do
   let mut r1 : UInt256 := default
   let mut r2 : Wei := default

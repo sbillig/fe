@@ -8,9 +8,11 @@ structure Recover where
   s : UInt256
 deriving Inhabited
 
+/-- The `init` of contract `Ecrecover`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `Recover { hash, recovery_id, r, s } -> (bool, u256, u256)`, selector `0x2aa6d351` (`recover(uint256,uint256,uint256,uint256)`) -/
 def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256) : FeM (Bool × UInt256 × UInt256) := do
   let v6 := decide ((UInt256.ofNat 1).toNat < recovery_id.toNat)
   let b1 : FeM (Bool × UInt256 × UInt256) := do
@@ -51,6 +53,7 @@ def recv_Recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UIn
               let v28 := (false, (UInt256.ofNat 0), (UInt256.ofNat 0))
               b8 v28
 
+/-- `<Recover as AbiSize>::HEAD_SIZE` -/
 def Recover_HEAD_SIZE : FeM UInt256 := do
   let v1 ← abi_field_head_size_u256
   let v2 ← checkedAdd (UInt256.ofNat 0) v1
@@ -62,6 +65,7 @@ def Recover_HEAD_SIZE : FeM UInt256 := do
   let v8 ← checkedAdd v6 v7
   return v8
 
+/-- `<Recover as Decode>::decode_from<CallData>` -/
 def Recover_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Recover := do
   let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
   let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
@@ -83,10 +87,12 @@ def Recover_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_de
   let v27 := (Recover.mk __fe_field_0 __fe_field_1 __fe_field_2 __fe_field_3)
   return v27
 
+/-- `core::abi::Decode::decode_from_prechecked_head<Recover, Sol, CallData>` -/
 def decode_from_prechecked_head_Recover_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Recover := do
   let v3 ← Recover_decode_from_CallData input pos
   return v3
 
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Recover>` -/
 def decode_runtime_args_Evm_Sol_Recover : FeM Recover := do
   let mut input : CallData := default
   let input_2 ← Evm_input
@@ -100,12 +106,14 @@ def decode_runtime_args_Evm_Sol_Recover : FeM Recover := do
   let v12 ← decode_from_prechecked_head_Recover_Sol_CallData input_11 base len
   return v12
 
+/-- The entry of `recv_Recover`, for `lib::EcrecoverMsg::Recover` -/
 def recv_Recover_entry : FeM Empty := do
   nonPayable
   let message ← decode_runtime_args_Evm_Sol_Recover
   let result ← recv_Recover message.hash message.recovery_id message.r message.s
   Evm_return_value_Sol_tuple_bool_u256_u256 result
 
+/-- The runtime entry of contract `Ecrecover`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -117,6 +125,7 @@ def runtime : FeM Empty := do
     else
       revertEmpty
 
+/-- The deployment entry of contract `Ecrecover`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init

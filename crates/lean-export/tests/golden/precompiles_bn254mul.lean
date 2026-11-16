@@ -1,9 +1,11 @@
 export Lib (Evm_calldatacopy Evm_calldatasize Evm_return_data Evm_revert MemBuffer MemBuffer_new MemBuffer_span_ref MemBuffer_write_word MemSlice_empty_u8 Option_array_u256_2 Option_array_u256_2.None Option_array_u256_2.Some downcast_truncate_u256_u64 downcast_unchecked_u256_usize u256_wrapping_sub)
 export Shared (Mont_Bn254Base Mont_add_Bn254Base Mont_double_Bn254Base Mont_is_zero_Bn254Base Mont_mul_Bn254Base Mont_square_Bn254Base Mont_sub_Bn254Base Mont_zero_Bn254Base Point_Mont_Bn254Base Point_Mont_Bn254Base.mk Point_affine_Mont_Bn254Base Point_double_Mont_Bn254Base Point_infinity_Mont_Bn254Base Point_is_infinity_Mont_Bn254Base Point_to_affine_Mont_Bn254Base encode fp g1_point_MemBuffer word_at_MemBuffer)
 
+/-- The `init` of contract `Bn254Mul`, which its source leaves out -/
 def init : FeM Unit := do
   return ()
 
+/-- `lib::input<Evm>` -/
 def input_Evm_3 : FeM MemBuffer := do
   let mut input : MemBuffer := default
   let len ← Evm_calldatasize
@@ -15,21 +17,27 @@ def input_Evm_3 : FeM MemBuffer := do
   let input_11 := input
   return input_11
 
+/-- `lib::bn254::ORDER` -/
 def ORDER : FeM UInt256 := do
   return (UInt256.ofNat 21888242871839275222246405745257275088548364400416034343698204186575808495617)
 
+/-- `lib::bn254::GLV_G1` -/
 def GLV_G1 : FeM UInt256 := do
   return (UInt256.ofNat 52538187511802934231)
 
+/-- `lib::bn254::GLV_G2` -/
 def GLV_G2 : FeM UInt256 := do
   return (UInt256.ofNat 782660544089080853078787955015628534157)
 
+/-- `lib::bn254::GLV_A1` -/
 def GLV_A1 : FeM UInt256 := do
   return (UInt256.ofNat 9931322734385697763)
 
+/-- `lib::bn254::GLV_A2` -/
 def GLV_A2 : FeM UInt256 := do
   return (UInt256.ofNat 147946756881789319010696353538189108491)
 
+/-- `lib::bn254::magnitude` -/
 def magnitude (word : UInt256) : FeM (UInt256 × Bool) := do
   let v6 := word >>> (UInt256.ofNat 255)
   let v8 := decide (v6 = (UInt256.ofNat 1))
@@ -43,15 +51,19 @@ def magnitude (word : UInt256) : FeM (UInt256 × Bool) := do
     let v16 := (word, false)
     b3 v16
 
+/-- `lib::bn254::GLV_B1` -/
 def GLV_B1 : FeM UInt256 := do
   return (UInt256.ofNat 147946756881789319000765030803803410728)
 
+/-- `lib::bn254::GLV_B2` -/
 def GLV_B2 : FeM UInt256 := do
   return (UInt256.ofNat 9931322734385697763)
 
+/-- `lib::bn254::BETA` -/
 def BETA : FeM UInt256 := do
   return (UInt256.ofNat 2203960485148121921418603742825762020974279258880205651966)
 
+/-- `Point<Mont<Bn254Base>>::add_affine` -/
 def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn254Base) (y2 : Mont_Bn254Base) : FeM Point_Mont_Bn254Base := do
   let mut z1z1 : Mont_Bn254Base := default
   let mut u2 : Mont_Bn254Base := default
@@ -196,6 +208,7 @@ def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn2
       let v101 := (Point_Mont_Bn254Base.mk x_100 y v99)
       return v101
 
+/-- `<Mont<Bn254Base> as Field>::neg` -/
 def Mont_neg_Bn254Base (self : Mont_Bn254Base) : FeM Mont_Bn254Base := do
   let mut r0 : Mont_Bn254Base := default
   let v1 ← Mont_zero_Bn254Base
@@ -203,6 +216,7 @@ def Mont_neg_Bn254Base (self : Mont_Bn254Base) : FeM Mont_Bn254Base := do
   let v3 ← Mont_sub_Bn254Base r0 self
   return v3
 
+/-- `lib::bn254::multiply_g1` -/
 def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mont_Bn254Base := do
   let mut x1 : Mont_Bn254Base := default
   let mut y1 : Mont_Bn254Base := default
@@ -479,6 +493,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
     let v50 := point.y
     b3 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v50
 
+/-- `lib::bn254::mul<MemBuffer>` -/
 def mul_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
   let mut point : Point_Mont_Bn254Base := default
   let mut r1 : Point_Mont_Bn254Base := default
@@ -515,6 +530,7 @@ def mul_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do
     let v25 := Option_array_u256_2.None
     b1 point r1 v25
 
+/-- `_`, for a call no other arm takes -/
 def recv0_arm0 : FeM Empty := do
   let mut output : MemBuffer := default
   let mut r2 : MemBuffer := default
@@ -544,11 +560,13 @@ def recv0_arm0 : FeM Empty := do
     let v26 ← Evm_revert v23
     nomatch v26
 
+/-- The entry of `recv0_arm0`, for a call no other arm takes -/
 def recv0_arm0_entry : FeM Empty := do
   nonPayable
   let _ ← recv0_arm0
   returnData (UInt256.ofNat 0) (UInt256.ofNat 0)
 
+/-- The runtime entry of contract `Bn254Mul`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size ← calldatasize
   if size.toNat < 4 then
@@ -557,6 +575,7 @@ def runtime : FeM Empty := do
     let selector ← calldataSelector
     recv0_arm0_entry
 
+/-- The deployment entry of contract `Bn254Mul`: `init` on the arguments after the creation code -/
 def init_entry (args : ByteArray) : FeM ByteArray := do
   nonPayable
   let _ ← init
