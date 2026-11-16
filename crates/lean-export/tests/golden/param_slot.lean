@@ -6,10 +6,8 @@ deriving Inhabited
 def init : FeM Unit := do
   return ()
 
-def make (pos_0 : UInt256) : FeM Cursor := do
-  let pos_1 := pos_0
-  let v2 := (UInt256.ofNat 4)
-  let v3 := (Cursor.mk pos_1 v2)
+def make (pos : UInt256) : FeM Cursor := do
+  let v3 := (Cursor.mk pos (UInt256.ofNat 4))
   return v3
 
 def Cursor_end (self : Cursor) : FeM UInt256 := do
@@ -18,14 +16,11 @@ def Cursor_end (self : Cursor) : FeM UInt256 := do
   let v3 ← checkedAdd v1 v2
   return v3
 
-def Cursor_advance (self : Cursor) (by_1 : UInt256) : FeM (UInt256 × Cursor) := do
+def Cursor_advance (self : Cursor) («by» : UInt256) : FeM (UInt256 × Cursor) := do
   let mut self := self
-  let v2 := self.pos
-  let «at» := v2
-  let by_4 := by_1
-  let v5 ← checkedAdd «at» by_4
+  let «at» := self.pos
+  let v5 ← checkedAdd «at» «by»
   self := { self with pos := v5 }
-  let v6 := ()
   return («at», self)
 
 def c_end (c : Cursor) : FeM UInt256 := do
@@ -45,12 +40,9 @@ def consume (c : Cursor) («by» : UInt256) : FeM UInt256 := do
 
 def bump («by» : UInt256) : FeM UInt256 := do
   let mut «by» := «by»
-  let v0 := (UInt256.ofNat 1)
   let by_1 := «by»
-  let v2 ← checkedAdd by_1 v0
-  let by_3 := v2
-  «by» := by_3
-  let v4 := ()
+  let by_2 ← checkedAdd by_1 (UInt256.ofNat 1)
+  «by» := by_2
   let by_5 := «by»
   return by_5
 
@@ -59,8 +51,7 @@ def recv_Sum (step : UInt256) : FeM UInt256 := do
   let v1 ← make step
   r0 := v1
   let v3 ← Cursor_end r0
-  let v4 := (UInt256.ofNat 1)
-  let v5 ← make v4
+  let v5 ← make (UInt256.ofNat 1)
   let v6 ← consume v5 step
   let v7 ← checkedAdd v3 v6
   let v8 ← bump step

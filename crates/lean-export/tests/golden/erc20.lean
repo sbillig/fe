@@ -64,55 +64,43 @@ def Transfer_emit_Evm (self : Transfer) : FeM Unit := do
   r2 := v11
   let v12 := r2
   let v13 ← Address_as_topic v12
-  let v15 ← Evm_log3 v6 v7 v10 v13
+  let _ ← Evm_log3 v6 v7 v10 v13
   let _ ← MemBuffer_drop r0
   return ()
 
-def emit_Evm_Transfer (event_1 : Transfer) : FeM Unit := do
-  let event_3 := event_1
-  let v4 ← Transfer_emit_Evm event_3
+def emit_Evm_Transfer (event : Transfer) : FeM Unit := do
+  let _ ← Transfer_emit_Evm event
   return ()
 
-def init (initial_supply_0 : UInt256) : FeM Unit := do
-  let v2 ← Evm_caller
-  let sender := v2
-  let initial_supply_4 := initial_supply_0
+def init (initial_supply : UInt256) : FeM Unit := do
+  let sender ← Evm_caller
   let l0 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot sender
-  store (Place.mk .storage l0.slot) initial_supply_4
-  let v5 := ()
-  let initial_supply_6 := initial_supply_0
-  store (Field.store.field Layout.TokenStore 2) initial_supply_6
-  let v7 := ()
+  store (Place.mk .storage l0.slot) initial_supply
+  store (Field.store.field Layout.TokenStore 2) initial_supply
   let v8 ← Address_zero
-  let initial_supply_9 := initial_supply_0
-  let v10 := (Transfer.mk v8 sender initial_supply_9)
-  let v12 ← emit_Evm_Transfer v10
+  let v10 := (Transfer.mk v8 sender initial_supply)
+  let _ ← emit_Evm_Transfer v10
   return ()
 
 def recv_Transfer («to» : UInt256) (value : UInt256) : FeM Bool := do
-  let v3 ← Evm_caller
-  let sender := v3
+  let sender ← Evm_caller
   let l0 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot sender
   let v5 ← load (Place.mk .storage l0.slot)
   let v6 := decide (value.toNat ≤ v5.toNat)
   if v6 then
-    let v7 := ()
     let l1 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot sender
     let v8 ← load (Place.mk .storage l1.slot)
     let v9 ← checkedSub v8 value
     let l2 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot sender
     store (Place.mk .storage l2.slot) v9
-    let v10 := ()
     let l3 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot «to»
     let v11 ← load (Place.mk .storage l3.slot)
     let v12 ← checkedAdd v11 value
     let l4 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot «to»
     store (Place.mk .storage l4.slot) v12
-    let v13 := ()
     let v14 := (Transfer.mk sender «to» value)
-    let v16 ← emit_Evm_Transfer v14
-    let v17 := true
-    return v17
+    let _ ← emit_Evm_Transfer v14
+    return true
   else
     M.revert (assertData "ERC20: insufficient balance")
 
@@ -134,63 +122,51 @@ def Approval_emit_Evm (self : Approval) : FeM Unit := do
   r2 := v11
   let v12 := r2
   let v13 ← Address_as_topic v12
-  let v15 ← Evm_log3 v6 v7 v10 v13
+  let _ ← Evm_log3 v6 v7 v10 v13
   let _ ← MemBuffer_drop r0
   return ()
 
-def emit_Evm_Approval (event_1 : Approval) : FeM Unit := do
-  let event_3 := event_1
-  let v4 ← Approval_emit_Evm event_3
+def emit_Evm_Approval (event : Approval) : FeM Unit := do
+  let _ ← Approval_emit_Evm event
   return ()
 
 def recv_Approve (spender : UInt256) (value : UInt256) : FeM Bool := do
-  let v3 ← Evm_caller
-  let owner := v3
+  let owner ← Evm_caller
   let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.TokenStore 1) (Field.store.field Layout.TokenStore 1).slot owner
   let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot spender
   store (Place.mk .storage l1.slot) value
-  let v5 := ()
   let v6 := (Approval.mk owner spender value)
-  let v8 ← emit_Evm_Approval v6
-  let v9 := true
-  return v9
+  let _ ← emit_Evm_Approval v6
+  return true
 
 def recv_TransferFrom («from» : UInt256) («to» : UInt256) (value : UInt256) : FeM Bool := do
-  let v4 ← Evm_caller
-  let spender := v4
+  let spender ← Evm_caller
   let l0 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.TokenStore 1) (Field.store.field Layout.TokenStore 1).slot «from»
   let l1 ← StorageMap_locate_Address_u256 (Place.mk .storage l0.slot) (Place.mk .storage l0.slot).slot spender
-  let v6 ← load (Place.mk .storage l1.slot)
-  let current_allowance := v6
+  let current_allowance ← load (Place.mk .storage l1.slot)
   let v8 := decide (value.toNat ≤ current_allowance.toNat)
   if v8 then
-    let v9 := ()
     let l2 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot «from»
     let v10 ← load (Place.mk .storage l2.slot)
     let v11 := decide (value.toNat ≤ v10.toNat)
     if v11 then
-      let v12 := ()
       let v13 ← checkedSub current_allowance value
       let l3 ← StorageMap_locate_Address_StorageMap_Address_u256 (Field.store.field Layout.TokenStore 1) (Field.store.field Layout.TokenStore 1).slot «from»
       let l4 ← StorageMap_locate_Address_u256 (Place.mk .storage l3.slot) (Place.mk .storage l3.slot).slot spender
       store (Place.mk .storage l4.slot) v13
-      let v14 := ()
       let l5 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot «from»
       let v15 ← load (Place.mk .storage l5.slot)
       let v16 ← checkedSub v15 value
       let l6 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot «from»
       store (Place.mk .storage l6.slot) v16
-      let v17 := ()
       let l7 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot «to»
       let v18 ← load (Place.mk .storage l7.slot)
       let v19 ← checkedAdd v18 value
       let l8 ← StorageMap_locate_Address_u256 (Field.store.field Layout.TokenStore 0) (Field.store.field Layout.TokenStore 0).slot «to»
       store (Place.mk .storage l8.slot) v19
-      let v20 := ()
       let v21 := (Transfer.mk «from» «to» value)
-      let v23 ← emit_Evm_Transfer v21
-      let v24 := true
-      return v24
+      let _ ← emit_Evm_Transfer v21
+      return true
     else
       M.revert (assertData "ERC20: insufficient balance")
   else
@@ -212,23 +188,18 @@ def recv_TotalSupply : FeM UInt256 := do
   return v0
 
 def Transfer_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_Address
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   let v3 ← abi_field_head_size_u256
   let v4 ← checkedAdd v2 v3
   return v4
 
-def Transfer_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base_1 : UInt256) : FeM Transfer_1 := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base_1 __fe_msg_decode_base_1 __fe_msg_decode_input_len
-  let __fe_field_0 := v4
-  let __fe_msg_decode_base_6 := __fe_msg_decode_base_1
+def Transfer_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Transfer_1 := do
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v7 ← abi_field_head_size_Address
-  let v8 ← checkedAdd __fe_msg_decode_base_6 v7
-  let v9 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base_1 v8 __fe_msg_decode_input_len
-  let __fe_field_1 := v9
+  let v8 ← checkedAdd __fe_msg_decode_base v7
+  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
   let v11 := (Transfer_1.mk __fe_field_0 __fe_field_1)
   return v11
 
@@ -238,16 +209,13 @@ def decode_from_prechecked_head_Transfer_Sol_CallData (input : CallData) (pos : 
 
 def decode_runtime_args_Evm_Sol_Transfer : FeM Transfer_1 := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Transfer_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Transfer_Sol_CallData input_11 base len
   return v12
@@ -259,23 +227,18 @@ def recv_Transfer_entry : FeM Empty := do
   Evm_return_value_Sol_bool result
 
 def Approve_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_Address
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   let v3 ← abi_field_head_size_u256
   let v4 ← checkedAdd v2 v3
   return v4
 
-def Approve_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base_1 : UInt256) : FeM Approve := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base_1 __fe_msg_decode_base_1 __fe_msg_decode_input_len
-  let __fe_field_0 := v4
-  let __fe_msg_decode_base_6 := __fe_msg_decode_base_1
+def Approve_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Approve := do
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v7 ← abi_field_head_size_Address
-  let v8 ← checkedAdd __fe_msg_decode_base_6 v7
-  let v9 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base_1 v8 __fe_msg_decode_input_len
-  let __fe_field_1 := v9
+  let v8 ← checkedAdd __fe_msg_decode_base v7
+  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
   let v11 := (Approve.mk __fe_field_0 __fe_field_1)
   return v11
 
@@ -285,16 +248,13 @@ def decode_from_prechecked_head_Approve_Sol_CallData (input : CallData) (pos : U
 
 def decode_runtime_args_Evm_Sol_Approve : FeM Approve := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Approve_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Approve_Sol_CallData input_11 base len
   return v12
@@ -306,32 +266,25 @@ def recv_Approve_entry : FeM Empty := do
   Evm_return_value_Sol_bool result
 
 def TransferFrom_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_Address
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   let v3 ← abi_field_head_size_Address
   let v4 ← checkedAdd v2 v3
   let v5 ← abi_field_head_size_u256
   let v6 ← checkedAdd v4 v5
   return v6
 
-def TransferFrom_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base_1 : UInt256) : FeM TransferFrom := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base_1 __fe_msg_decode_base_1 __fe_msg_decode_input_len
-  let __fe_field_0 := v4
-  let __fe_msg_decode_base_6 := __fe_msg_decode_base_1
+def TransferFrom_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM TransferFrom := do
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v7 ← abi_field_head_size_Address
-  let v8 ← checkedAdd __fe_msg_decode_base_6 v7
-  let v9 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base_1 v8 __fe_msg_decode_input_len
-  let __fe_field_1 := v9
-  let __fe_msg_decode_base_11 := __fe_msg_decode_base_1
+  let v8 ← checkedAdd __fe_msg_decode_base v7
+  let __fe_field_1 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
   let v12 ← abi_field_head_size_Address
-  let v13 ← checkedAdd __fe_msg_decode_base_11 v12
+  let v13 ← checkedAdd __fe_msg_decode_base v12
   let v14 ← abi_field_head_size_Address
   let v15 ← checkedAdd v13 v14
-  let v16 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base_1 v15 __fe_msg_decode_input_len
-  let __fe_field_2 := v16
+  let __fe_field_2 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v15 __fe_msg_decode_input_len
   let v18 := (TransferFrom.mk __fe_field_0 __fe_field_1 __fe_field_2)
   return v18
 
@@ -341,16 +294,13 @@ def decode_from_prechecked_head_TransferFrom_Sol_CallData (input : CallData) (po
 
 def decode_runtime_args_Evm_Sol_TransferFrom : FeM TransferFrom := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← TransferFrom_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_TransferFrom_Sol_CallData input_11 base len
   return v12
@@ -362,16 +312,13 @@ def recv_TransferFrom_entry : FeM Empty := do
   Evm_return_value_Sol_bool result
 
 def BalanceOf_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_Address
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
 def BalanceOf_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM BalanceOf := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let __fe_field_0 := v4
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (BalanceOf.mk __fe_field_0)
   return v6
 
@@ -381,16 +328,13 @@ def decode_from_prechecked_head_BalanceOf_Sol_CallData (input : CallData) (pos :
 
 def decode_runtime_args_Evm_Sol_BalanceOf : FeM BalanceOf := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← BalanceOf_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_BalanceOf_Sol_CallData input_11 base len
   return v12
@@ -402,23 +346,18 @@ def recv_BalanceOf_entry : FeM Empty := do
   Evm_return_value_Sol_u256 result
 
 def Allowance_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_Address
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   let v3 ← abi_field_head_size_Address
   let v4 ← checkedAdd v2 v3
   return v4
 
-def Allowance_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base_1 : UInt256) : FeM Allowance := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base_1 __fe_msg_decode_base_1 __fe_msg_decode_input_len
-  let __fe_field_0 := v4
-  let __fe_msg_decode_base_6 := __fe_msg_decode_base_1
+def Allowance_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Allowance := do
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v7 ← abi_field_head_size_Address
-  let v8 ← checkedAdd __fe_msg_decode_base_6 v7
-  let v9 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base_1 v8 __fe_msg_decode_input_len
-  let __fe_field_1 := v9
+  let v8 ← checkedAdd __fe_msg_decode_base v7
+  let __fe_field_1 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
   let v11 := (Allowance.mk __fe_field_0 __fe_field_1)
   return v11
 
@@ -428,16 +367,13 @@ def decode_from_prechecked_head_Allowance_Sol_CallData (input : CallData) (pos :
 
 def decode_runtime_args_Evm_Sol_Allowance : FeM Allowance := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Allowance_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Allowance_Sol_CallData input_11 base len
   return v12
@@ -449,8 +385,7 @@ def recv_Allowance_entry : FeM Empty := do
   Evm_return_value_Sol_u256 result
 
 def TotalSupply_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
-  return v0
+  return (UInt256.ofNat 0)
 
 def TotalSupply_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM TotalSupply := do
   let v2 := (TotalSupply.mk)
@@ -462,16 +397,13 @@ def decode_from_prechecked_head_TotalSupply_Sol_CallData (input : CallData) (pos
 
 def decode_runtime_args_Evm_Sol_TotalSupply : FeM TotalSupply := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← TotalSupply_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_TotalSupply_Sol_CallData input_11 base len
   return v12

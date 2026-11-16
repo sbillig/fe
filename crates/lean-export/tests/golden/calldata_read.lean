@@ -12,11 +12,8 @@ def second_array_u256_2 (e0 : (Vector UInt256 2)) : FeM UInt256 := do
 
 def recv_Second : FeM UInt256 := do
   let mut r1 : UInt256 := default
-  let v0 := (UInt256.ofNat 4)
-  let v2 ← calldata_ptr_Evm_array_u256_2 v0
-  let data_3 := v2
-  let data_4 := data_3
-  r1 := data_4
+  let data ← calldata_ptr_Evm_array_u256_2 (UInt256.ofNat 4)
+  r1 := data
   let v5 := r1
   let v6_e0 ← cdloadArray 32 (fun q => cdload q) v5 2
   let v6 ← second_array_u256_2 v6_e0

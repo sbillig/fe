@@ -28,7 +28,6 @@ def add_to (v0 : Place) (v1 : UInt256) : FeM Unit := do
   let v7 ← load a
   let v8 ← checkedAdd v7 b
   store a v8
-  let v9 := ()
   return ()
 
 def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
@@ -39,15 +38,13 @@ def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
   let v7 := v0
   let v8 ← checkedAdd v7 b
   v0 := v8
-  let v9 := ()
   return ((), v0)
 
-def recv_Parts (by_0 : UInt256) : FeM UInt256 := do
+def recv_Parts («by» : UInt256) : FeM UInt256 := do
   let mut «local» : UInt256 := default
-  let by_1 := by_0
-  «local» := by_1
+  «local» := «by»
   let v2 := (Field.pair.field Layout.Pair 0)
-  let v4 ← add_to v2 «local»
+  let _ ← add_to v2 «local»
   let v6 := (Field.pair.field Layout.Pair 0)
   let (v7, v7_0) ← add_to_1 «local» v6
   «local» := v7_0
@@ -68,7 +65,6 @@ def bump (v0 : UInt256) (v1 : Place) : FeM UInt256 := do
   let v6 ← load x
   let v7 ← checkedAdd v6 «by»
   store x v7
-  let v8 := ()
   let v9 ← load x
   return v9
 
@@ -89,7 +85,6 @@ def bump_1 (v0 : UInt256) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
   let v6 := v1
   let v7 ← checkedAdd v6 «by»
   v1 := v7
-  let v8 := ()
   let v9 := v1
   return (v9, v1)
 
@@ -101,12 +96,9 @@ def recv_Granted («by» : UInt256) : FeM UInt256 := do
   let v3 := v2.fst
   let v4 := v2.snd
   let v5 := v4
-  let v6 ← bump v3 v5
-  let stored := v6
-  let v8 := (UInt256.ofNat 1)
-  let v9 := (Pair.mk «by» v8)
-  let local_10 := v9
-  «local» := local_10
+  let stored ← bump v3 v5
+  let local_9 := (Pair.mk «by» (UInt256.ofNat 1))
+  «local» := local_9
   let (v12_g, v12_k) ← Pair_at_1 «local»
   v12 := v12_g
   let v13 := v12.fst
@@ -148,17 +140,12 @@ def recv_Lane (second : Bool) : FeM UInt256 := do
     return v14
   match v3 with
   | .Some .. =>
-    let v6 := (UInt256.ofNat 40)
     let v7 := v2.Some_0
-    let v8 ← IntTy.add (.u 8) v7 v6
+    let v8 ← IntTy.add (.u 8) v7 (UInt256.ofNat 40)
     v2 := (v2.set_Some_0 v8)
     let _ ← v2_k v2
-    let v9 := ()
-    let v10 := v9
     b3 v2
   | _ =>
     let _ ← v2_k v2
-    let v11 := ()
-    let v12 := v11
     b3 v2
 

@@ -4,8 +4,7 @@ def init : FeM Unit := do
   return ()
 
 def recv_Probe : FeM UInt256 := do
-  let v1 ← Evm_decode_args_tuple_u256_u256
-  let args := v1
+  let args ← Evm_decode_args_tuple_u256_u256
   let v3 := args.fst
   let v4 := args.snd
   let v5 ← checkedAdd v3 v4

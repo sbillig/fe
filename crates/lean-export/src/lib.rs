@@ -190,6 +190,10 @@ const CUT: char = '\u{2}';
 const BINDER: char = '\u{3}';
 const BINDER_ID: char = '\u{4}';
 
+/// What starts the id of a binder that the source does not name, which is
+/// `_` where nothing names it.
+const UNNAMED: char = '_';
+
 /// A construct the exporter has no model for.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unsupported(pub String);
@@ -1114,6 +1118,7 @@ impl<'db> Module<'db> {
             entries: 0,
             bases: Vec::new(),
             names: Vec::new(),
+            dropped: FxHashSet::default(),
             roots: Vec::new(),
         }
         .export();
@@ -2752,6 +2757,9 @@ struct BodyExporter<'a, 'db> {
     /// itself too, and the Lean term for it: the variable that holds it.
     bases: Vec<String>,
     names: Vec<String>,
+    /// The values the body binds no variable for: a copy, which is the value
+    /// it copies, and a constant that is its literal where it is used.
+    dropped: FxHashSet<NValueId>,
     /// The variable of each root that has one: a local's or a parameter's
     /// slot.
     roots: Vec<String>,
@@ -2780,12 +2788,134 @@ impl<'db> BodyExporter<'_, 'db> {
         let source = |binding: Option<LocalBinding<'db>>| {
             Some(binding?.name(db, hir?)?.data(db).to_string())
         };
-        let values: Vec<_> = self
+        let mut values: Vec<_> = self
             .body
             .values
             .iter()
             .map(|value| source(value.source))
             .collect();
+        // A copy of a value that holds no access is the value it copies,
+        // which takes the copy's name if it has none. A copy that names a
+        // value anew keeps its own variable.
+        let statements = || {
+            self.body
+                .reverse_postorder()
+                .into_iter()
+                .flat_map(|block| &self.body.blocks[block.index()].statements)
+        };
+        let mut copied: Vec<Option<NValueId>> = vec![None; values.len()];
+        for statement in statements() {
+            if let NStatementKind::Define {
+                result,
+                expr: NExpr::Forward { src },
+            } = &statement.kind
+            {
+                let original = copied[src.value.index()].unwrap_or(src.value);
+                let (name, copy) = (&values[original.index()], &values[result.index()]);
+                if self.access_parts(self.ty(original)).is_empty()
+                    && self.access_parts(self.ty(*result)).is_empty()
+                    && (name.is_none() || copy.is_none() || name == copy)
+                {
+                    copied[result.index()] = Some(original);
+                    values[original.index()] = name.clone().or_else(|| copy.clone());
+                }
+            }
+        }
+        // The uses of each value, a copy's as the original's.
+        let mut uses = vec![0; values.len()];
+        let mut used = |value: NValueId| {
+            uses[copied[value.index()].unwrap_or(value).index()] += 1;
+        };
+        for block in &self.body.blocks {
+            for statement in &block.statements {
+                let mut places = Vec::new();
+                match &statement.kind {
+                    NStatementKind::Define { result, expr } => {
+                        if copied[result.index()].is_none() {
+                            expr.for_each_value_operand(|operand| used(operand.value));
+                        }
+                        if let NExpr::ProjectValue { path, .. } = expr {
+                            for step in path.0.iter() {
+                                if let NDataProjection::Index(NIndex::Value(value))
+                                | NDataProjection::Entry(value) = step
+                                {
+                                    used(*value);
+                                }
+                            }
+                        }
+                        expr.for_each_place_operand(|place| places.push(place.clone()));
+                    }
+                    NStatementKind::Store { destination, value } => {
+                        used(value.value);
+                        places.push(destination.clone());
+                    }
+                    NStatementKind::End { access: value }
+                    | NStatementKind::CheckIndex {
+                        index: NIndex::Value(value),
+                        ..
+                    }
+                    | NStatementKind::Drop {
+                        target: NDropTarget::Value(value),
+                    } => used(*value),
+                    NStatementKind::Drop {
+                        target: NDropTarget::Place(place),
+                    } => places.push(place.clone()),
+                    NStatementKind::CheckIndex { .. } => {}
+                }
+                for place in &places {
+                    self.body.place_values(place).for_each(&mut used);
+                }
+            }
+            let terminator = &block.terminator.kind;
+            let tested = match terminator {
+                NTerminatorKind::Branch { cond, .. } => Some(*cond),
+                NTerminatorKind::MatchEnum { value, .. } => Some(*value),
+                _ => terminator.returned(),
+            };
+            tested.into_iter().for_each(|operand| used(operand.value));
+            for successor in terminator.successors() {
+                successor.args.iter().for_each(|arg| used(arg.value));
+            }
+        }
+        // A unit constant, or a scalar one used once at most, is the
+        // constant where it is used, unless a place holds it.
+        let held: FxHashSet<_> = self
+            .body
+            .roots
+            .iter()
+            .filter_map(|root| match root.kind {
+                NRootKind::Temporary { value }
+                | NRootKind::CapabilityRepresentation { carrier: value } => Some(value),
+                _ => None,
+            })
+            .collect();
+        let mut literals = FxHashMap::default();
+        for statement in statements() {
+            if let NStatementKind::Define {
+                result,
+                expr: NExpr::Const(SConst::Value(value)),
+            } = &statement.kind
+                && !held.contains(result)
+            {
+                let value = value.value().value(db);
+                let literal = match value {
+                    SemConstValue::Unit => true,
+                    SemConstValue::Scalar { ty, .. } => {
+                        uses[result.index()] <= 1 && !ty.is_core_dyn_string(db)
+                    }
+                    _ => false,
+                };
+                if literal && let Ok(term) = self.module.const_value(value) {
+                    literals.insert(*result, term);
+                }
+            }
+        }
+        for (index, value) in values.iter_mut().enumerate() {
+            let value_id = NValueId::new(index);
+            if copied[index].is_some() || literals.contains_key(&value_id) {
+                *value = None;
+            }
+        }
         let slots: Vec<_> = self
             .body
             .roots
@@ -2823,12 +2953,28 @@ impl<'db> BodyExporter<'_, 'db> {
                 None => format!("v{index}"),
             })
             .collect();
+        // A value the source does not name may be unnamed where nothing names
+        // it (`resolve`).
         self.names = self
             .bases
             .iter()
+            .zip(&values)
             .enumerate()
-            .map(|(index, base)| binder(base, index))
+            .map(|(index, (base, name))| match name {
+                Some(_) => binder(base, index),
+                None => binder(base, format!("{UNNAMED}{index}")),
+            })
             .collect();
+        for (value, term) in literals {
+            self.names[value.index()] = term;
+            self.dropped.insert(value);
+        }
+        for (index, original) in copied.into_iter().enumerate() {
+            if let Some(original) = original {
+                self.names[index] = self.names[original.index()].clone();
+                self.dropped.insert(NValueId::new(index));
+            }
+        }
         let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
             let NValueDefinition::EntryParam { param } = value.definition else {
@@ -3687,6 +3833,7 @@ impl<'db> BodyExporter<'_, 'db> {
     /// The lines of `statement`, if it prints any.
     fn statement(&mut self, statement: &NStatement<'db>) -> Result<Option<String>, Unsupported> {
         Ok(match &statement.kind {
+            NStatementKind::Define { result, .. } if self.dropped.contains(result) => None,
             NStatementKind::Define { result, expr } => {
                 let name = self.value(*result);
                 match expr {
@@ -6114,10 +6261,13 @@ fn effect(provider: u32) -> String {
 /// `known`, the top-level names, or the prelude's, a name the text writes or
 /// a namespace it writes one in, or another binder's name. It then has that
 /// name with the first number that sets it apart. Comments and string
-/// literals name nothing.
+/// literals name nothing. A binder that may be unnamed (`UNNAMED`), and
+/// that the text names only where a `let` binds it to a computation's
+/// result, is `_`.
 fn resolve(text: &str, known: &FxHashSet<String>) -> String {
     let mut written = FxHashSet::default();
     let mut order = Vec::new();
+    let mut counts = FxHashMap::<&str, usize>::default();
     for lexeme in lexemes(text) {
         match lexeme {
             Lexeme::Name(name) => {
@@ -6126,7 +6276,11 @@ fn resolve(text: &str, known: &FxHashSet<String>) -> String {
                     written.insert(name[..end].replace(['«', '»'], ""));
                 }
             }
-            Lexeme::Binder(token) => order.push(&token[1..token.len() - 1]),
+            Lexeme::Binder(token) => {
+                let token = &token[1..token.len() - 1];
+                order.push(token);
+                *counts.entry(token).or_default() += 1;
+            }
         }
     }
     let mut assigned = FxHashSet::default();
@@ -6155,7 +6309,11 @@ fn resolve(text: &str, known: &FxHashSet<String>) -> String {
     let mut parts = text.split(BINDER);
     let mut resolved = parts.next().unwrap().to_string();
     while let (Some(token), Some(after)) = (parts.next(), parts.next()) {
-        resolved.push_str(&names[token]);
+        let unused = counts[token] == 1
+            && token.contains(&format!("{BINDER_ID}{UNNAMED}"))
+            && resolved.ends_with("let ")
+            && after.starts_with(" ←");
+        resolved.push_str(if unused { "_" } else { &names[token] });
         resolved.push_str(after);
     }
     resolved

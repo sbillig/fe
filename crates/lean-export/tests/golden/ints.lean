@@ -4,27 +4,18 @@ def init : FeM Unit := do
   return ()
 
 def recv_Narrow (a : UInt256) (b : UInt256) : FeM UInt256 := do
-  let v2 ← IntTy.add (.u 8) a b
-  let sum := v2
-  let v4 := (UInt256.ofNat 1)
-  let v5 := sum >>> v4
-  let v6 := (UInt256.ofNat 15)
-  let v7 := v5 &&& v6
-  let low := v7
+  let sum ← IntTy.add (.u 8) a b
+  let v5 := sum >>> (UInt256.ofNat 1)
+  let low := v5 &&& (UInt256.ofNat 15)
   let v9 ← IntTy.sub (.u 8) sum low
-  let v10 := (UInt256.ofNat 2)
-  let v11 ← IntTy.mul (.u 8) v9 v10
+  let v11 ← IntTy.mul (.u 8) v9 (UInt256.ofNat 2)
   let v12 ← checkedDiv v11 b
-  let v13 := (UInt256.ofNat 7)
-  let v14 ← checkedRem v12 v13
+  let v14 ← checkedRem v12 (UInt256.ofNat 7)
   return v14
 
-def wrapping (a_0 : UInt256) (b_1 : UInt256) : FeM UInt256 := do
-  let a_2 := a_0
-  let b_3 := b_1
-  let v4 := IntTy.mulW (.i 32) a_2 b_3
-  let v5 := (UInt256.ofNat 3)
-  let v6 := IntTy.shl (.i 32) v4 v5
+def wrapping (a : UInt256) (b : UInt256) : FeM UInt256 := do
+  let v4 := IntTy.mulW (.i 32) a b
+  let v6 := IntTy.shl (.i 32) v4 (UInt256.ofNat 3)
   return v6
 
 def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
@@ -33,28 +24,20 @@ def recv_Signed (a : UInt256) (b : UInt256) : FeM UInt256 := do
     let v3 ← IntTy.neg (.i 32) a
     return v3
   else
-    let v4 := ()
-    let v5 := v4
     let v6 ← wrapping a b
     let v7 ← IntTy.div (.i 32) a b
     let v8 ← IntTy.add (.i 32) v6 v7
     let v9 ← IntTy.rem (.i 32) a b
     let v10 ← IntTy.sub (.i 32) v8 v9
-    let v11 := (IntTy.wrap (.i 256) (-5))
-    let v12 ← IntTy.add (.i 32) v10 v11
+    let v12 ← IntTy.add (.i 32) v10 (IntTy.wrap (.i 256) (-5))
     return v12
 
 def recv_Mixed (a : UInt256) (b : UInt256) : FeM UInt256 := do
-  let v2 := b
-  let wide := v2
-  let v4 ← downcast_truncate_i256_i8 a
-  let small := v4
-  let v6 ← downcast_unchecked_u256_i256 wide
-  let bits := v6
-  let v8 := (UInt256.ofNat 2)
-  let v9 := IntTy.shr (.i 256) a v8
-  let v10 := (UInt256.ofNat 2)
-  let v11 ← IntTy.pow (.i 256) v9 v10
+  let wide := b
+  let small ← downcast_truncate_i256_i8 a
+  let bits ← downcast_unchecked_u256_i256 wide
+  let v9 := IntTy.shr (.i 256) a (UInt256.ofNat 2)
+  let v11 ← IntTy.pow (.i 256) v9 (UInt256.ofNat 2)
   let v12 := small
   let v13 ← IntTy.add (.i 256) v11 v12
   let v14 ← IntTy.add (.i 256) v13 bits

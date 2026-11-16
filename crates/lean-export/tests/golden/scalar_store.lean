@@ -10,10 +10,8 @@ structure Set where
   value : UInt256
 deriving Inhabited
 
-def init (initial_0 : UInt256) : FeM Unit := do
-  let initial_1 := initial_0
-  store Field.stored initial_1
-  let v2 := ()
+def init (initial : UInt256) : FeM Unit := do
+  store Field.stored initial
   return ()
 
 def recv_Get : FeM UInt256 := do
@@ -22,12 +20,10 @@ def recv_Get : FeM UInt256 := do
 
 def recv_Set (value : UInt256) : FeM Unit := do
   store Field.stored value
-  let v1 := ()
   return ()
 
 def Get_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
-  return v0
+  return (UInt256.ofNat 0)
 
 def Get_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Get := do
   let v2 := (Get.mk)
@@ -39,16 +35,13 @@ def decode_from_prechecked_head_Get_Sol_CallData (input : CallData) (pos : UInt2
 
 def decode_runtime_args_Evm_Sol_Get : FeM Get := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Get_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Get_Sol_CallData input_11 base len
   return v12
@@ -60,16 +53,13 @@ def recv_Get_entry : FeM Empty := do
   Evm_return_value_Sol_u256 result
 
 def Set_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_u256
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
 def Set_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Set := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let __fe_field_0 := v4
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (Set.mk __fe_field_0)
   return v6
 
@@ -79,16 +69,13 @@ def decode_from_prechecked_head_Set_Sol_CallData (input : CallData) (pos : UInt2
 
 def decode_runtime_args_Evm_Sol_Set : FeM Set := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Set_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Set_Sol_CallData input_11 base len
   return v12

@@ -8,15 +8,12 @@ deriving Inhabited
 def init : FeM Unit := do
   return ()
 
-def right (x_0 : UInt256) : FeM UInt256 := do
+def right (x : UInt256) : FeM UInt256 := do
   let mut r0 : Pair := default
-  let v1 := (UInt256.ofNat 1)
-  let x_2 := x_0
-  let v3 := (Pair.mk v1 x_2)
+  let v3 := (Pair.mk (UInt256.ofNat 1) x)
   r0 := v3
   let v5 ← sum r0
-  let v6 := (UInt256.ofNat 2)
-  let v7 ← checkedMul v5 v6
+  let v7 ← checkedMul v5 (UInt256.ofNat 2)
   return v7
 
 def recv_Right (x : UInt256) : FeM UInt256 := do
@@ -24,16 +21,13 @@ def recv_Right (x : UInt256) : FeM UInt256 := do
   return v1
 
 def Right_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_u256
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
 def Right_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Right := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let __fe_field_0 := v4
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (Right.mk __fe_field_0)
   return v6
 
@@ -43,16 +37,13 @@ def decode_from_prechecked_head_Right_Sol_CallData (input : CallData) (pos : UIn
 
 def decode_runtime_args_Evm_Sol_Right : FeM Right := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Right_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Right_Sol_CallData input_11 base len
   return v12

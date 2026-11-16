@@ -30,33 +30,21 @@ def mstore_Config (p : UInt256) (v : Config) : FeM Unit := do
   mstoreBool (p + UInt256.ofNat 1) v.on
   mstore (p + UInt256.ofNat 2) v.limit
 
-def set_small_Config (v_0 : UInt256) (e0 : Config) : FeM (Unit × Config) := do
+def set_small_Config (v : UInt256) (e0 : Config) : FeM (Unit × Config) := do
   let mut e0 := e0
-  let v_1 := v_0
-  e0 := { e0 with small := v_1 }
-  let v2 := ()
+  e0 := { e0 with small := v }
   return ((), e0)
 
-def init (limit_0 : UInt256) (e0 : Config) (e1 : (Vector UInt256 2)) : FeM (Unit × Config × (Vector UInt256 2)) := do
+def init (limit : UInt256) (e0 : Config) (e1 : (Vector UInt256 2)) : FeM (Unit × Config × (Vector UInt256 2)) := do
   let mut e0 := e0
   let mut e1 := e1
-  let v1 := (UInt256.ofNat 0)
-  let v2 := true
-  let limit_3 := limit_0
-  let v4 := (Config.mk v1 v2 limit_3)
+  let v4 := (Config.mk (UInt256.ofNat 0) true limit)
   e0 := v4
-  let v5 := ()
-  let v6 := (UInt256.ofNat 7)
-  let (v7, v7_0) ← set_small_Config v6 e0
+  let (v7, v7_0) ← set_small_Config (UInt256.ofNat 7) e0
   e0 := v7_0
-  let limit_8 := limit_0
-  let v9 := (UInt256.ofNat 2)
-  let v10 := #v[limit_8, v9]
+  let v10 := #v[limit, (UInt256.ofNat 2)]
   e1 := v10
-  let v11 := ()
-  let v12 := (UInt256.ofNat 1)
-  store Field.count v12
-  let v13 := ()
+  store Field.count (UInt256.ofNat 1)
   return ((), e0, e1)
 
 def recv_Limit : FeM UInt256 := do
@@ -69,12 +57,9 @@ def recv_Limit : FeM UInt256 := do
     let v3 := e0.small
     let v4 := v3
     let v5 ← checkedAdd v2 v4
-    let v6 := v5
-    b3 v6
+    b3 v5
   else
-    let v7 := (UInt256.ofNat 0)
-    let v8 := v7
-    b3 v8
+    b3 (UInt256.ofNat 0)
 
 def recv_Sum : FeM UInt256 := do
   let e1 ← cloadArray 32 (fun q => cload q) (← immutableAt 4 2) 2
@@ -87,21 +72,17 @@ def recv_Sum : FeM UInt256 := do
   let v4 ← checkedAdd v1 v3
   return v4
 
-def capped_Config (by_0 : UInt256) : FeM UInt256 := do
+def capped_Config («by» : UInt256) : FeM UInt256 := do
   let e0 ← cload_Config (← immutableAt 4 0)
-  let by_2 := by_0
   let v3 := e0.limit
-  let v4 := decide (v3.toNat < by_2.toNat)
+  let v4 := decide (v3.toNat < «by».toNat)
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
     let v5 := e0.limit
-    let v6 := v5
-    b3 v6
+    b3 v5
   else
-    let by_7 := by_0
-    let by_8 := by_7
-    b3 by_8
+    b3 «by»
 
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
   let e0 ← cload_Config (← immutableAt 4 0)
@@ -109,13 +90,11 @@ def recv_Bump («by» : UInt256) : FeM UInt256 := do
   let count_2 ← load Field.count
   let v3 ← checkedAdd count_2 v1
   store Field.count v3
-  let v4 := ()
   let count_5 ← load Field.count
   return count_5
 
 def Limit_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
-  return v0
+  return (UInt256.ofNat 0)
 
 def Limit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Limit := do
   let v2 := (Limit.mk)
@@ -127,16 +106,13 @@ def decode_from_prechecked_head_Limit_Sol_CallData (input : CallData) (pos : UIn
 
 def decode_runtime_args_Evm_Sol_Limit : FeM Limit := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Limit_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Limit_Sol_CallData input_11 base len
   return v12
@@ -148,8 +124,7 @@ def recv_Limit_entry : FeM Empty := do
   Evm_return_value_Sol_u256 result
 
 def Sum_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
-  return v0
+  return (UInt256.ofNat 0)
 
 def Sum_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Sum := do
   let v2 := (Sum.mk)
@@ -161,16 +136,13 @@ def decode_from_prechecked_head_Sum_Sol_CallData (input : CallData) (pos : UInt2
 
 def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Sum_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Sum_Sol_CallData input_11 base len
   return v12
@@ -182,16 +154,13 @@ def recv_Sum_entry : FeM Empty := do
   Evm_return_value_Sol_u256 result
 
 def Bump_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_u256
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   return v2
 
 def Bump_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Bump := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
-  let __fe_field_0 := v4
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v6 := (Bump.mk __fe_field_0)
   return v6
 
@@ -201,16 +170,13 @@ def decode_from_prechecked_head_Bump_Sol_CallData (input : CallData) (pos : UInt
 
 def decode_runtime_args_Evm_Sol_Bump : FeM Bump := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Bump_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Bump_Sol_CallData input_11 base len
   return v12

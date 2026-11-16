@@ -14,29 +14,26 @@ deriving Inhabited
 def init : FeM Unit := do
   return ()
 
-def credit (m : Place) (who : UInt256) (amount_2 : UInt256) : FeM Unit := do
-  let amount_3 := amount_2
+def credit (m : Place) (who : UInt256) (amount : UInt256) : FeM Unit := do
   let v4 := who
   let l0 ← StorageMap_locate_Address_u256 m m.slot v4
   let v5 ← load (Place.mk .storage l0.slot)
-  let v6 ← checkedAdd v5 amount_3
+  let v6 ← checkedAdd v5 amount
   let l1 ← StorageMap_locate_Address_u256 m m.slot v4
   store (Place.mk .storage l1.slot) v6
-  let v7 := ()
   return ()
 
 def recv_Credit (who : UInt256) (amount : UInt256) : FeM UInt256 := do
   let mut who := who
   let v1 := (Field.ledger.field Layout.Ledger 0)
   let who_2 := who
-  let v3 ← credit v1 who_2 amount
+  let _ ← credit v1 who_2 amount
   let v4 := (Field.ledger.field Layout.Ledger 0)
   let who_5 := who
-  let v6 ← credit v4 who_5 amount
+  let _ ← credit v4 who_5 amount
   let v7 ← load (Field.ledger.field Layout.Ledger 1)
   let v8 ← checkedAdd v7 amount
   store (Field.ledger.field Layout.Ledger 1) v8
-  let v9 := ()
   let who_10 := who
   let l0 ← StorageMap_locate_Address_u256 (Field.ledger.field Layout.Ledger 0) (Field.ledger.field Layout.Ledger 0).slot who_10
   let v11 ← load (Place.mk .storage l0.slot)
@@ -45,23 +42,18 @@ def recv_Credit (who : UInt256) (amount : UInt256) : FeM UInt256 := do
   return v13
 
 def Credit_HEAD_SIZE : FeM UInt256 := do
-  let v0 := (UInt256.ofNat 0)
   let v1 ← abi_field_head_size_Address
-  let v2 ← checkedAdd v0 v1
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
   let v3 ← abi_field_head_size_u256
   let v4 ← checkedAdd v2 v3
   return v4
 
-def Credit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base_1 : UInt256) : FeM Credit := do
-  let v2 ← len_CallData __fe_msg_decode_input
-  let __fe_msg_decode_input_len := v2
-  let v4 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base_1 __fe_msg_decode_base_1 __fe_msg_decode_input_len
-  let __fe_field_0 := v4
-  let __fe_msg_decode_base_6 := __fe_msg_decode_base_1
+def Credit_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Credit := do
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_Address_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
   let v7 ← abi_field_head_size_Address
-  let v8 ← checkedAdd __fe_msg_decode_base_6 v7
-  let v9 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base_1 v8 __fe_msg_decode_input_len
-  let __fe_field_1 := v9
+  let v8 ← checkedAdd __fe_msg_decode_base v7
+  let __fe_field_1 ← decode_msg_field_from_Sol_u256_CallData __fe_msg_decode_input __fe_msg_decode_base v8 __fe_msg_decode_input_len
   let v11 := (Credit.mk __fe_field_0 __fe_field_1)
   return v11
 
@@ -71,16 +63,13 @@ def decode_from_prechecked_head_Credit_Sol_CallData (input : CallData) (pos : UI
 
 def decode_runtime_args_Evm_Sol_Credit : FeM Credit := do
   let mut input : CallData := default
-  let v2 ← Evm_input
-  let input_3 := v2
-  input := input_3
-  let v4 ← Sol_SELECTOR_SIZE
-  let base := v4
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
   let input_6 := input
-  let v7 ← len_CallData input_6
-  let len := v7
+  let len ← len_CallData input_6
   let v9 ← Credit_HEAD_SIZE
-  let v10 ← Sol_validate_runtime_head len base v9
+  let _ ← Sol_validate_runtime_head len base v9
   let input_11 := input
   let v12 ← decode_from_prechecked_head_Credit_Sol_CallData input_11 base len
   return v12
