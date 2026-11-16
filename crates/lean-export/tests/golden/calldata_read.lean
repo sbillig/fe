@@ -5,11 +5,11 @@ def init : FeM Unit := do
   return ()
 
 /-- `calldata_read::second<[u256; 2]>` -/
-def second_array_u256_2 (e0 : (Vector UInt256 2)) : FeM UInt256 := do
-  let mut e0 := e0
+def second_array_u256_2 (words : (Vector UInt256 2)) : FeM UInt256 := do
+  let mut words := words
   let v0 := (UInt256.ofNat 1)
   checkIndex v0 2
-  let v1 := e0[v0.toNat]!
+  let v1 := words[v0.toNat]!
   return v1
 
 /-- `Second { .. } -> u256`, selector `0xc7a76601` (`second(uint256,uint256)`) -/

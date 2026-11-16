@@ -4,16 +4,16 @@ structure Get where
 deriving Inhabited
 
 /-- `init(initial: u256)` of contract `FeCodeScalar` -/
-def init (initial : UInt256) (e0 : UInt256) : FeM (Unit × UInt256) := do
-  let mut e0 := e0
-  e0 := initial
-  return ((), e0)
+def init (initial : UInt256) (value : UInt256) : FeM (Unit × UInt256) := do
+  let mut value := value
+  value := initial
+  return ((), value)
 
 /-- `Get -> u256`, selector `0x6d4ce63c` (`get()`) -/
 def recv_Get : FeM UInt256 := do
-  let e0 ← cload (← immutableAt 1 0)
-  let value := e0
-  return value
+  let value ← cload (← immutableAt 1 0)
+  let value_1 := value
+  return value_1
 
 /-- `<Get as AbiSize>::HEAD_SIZE` -/
 def Get_HEAD_SIZE : FeM UInt256 := do
@@ -71,7 +71,7 @@ def init_entry (args : ByteArray) : FeM ByteArray := do
   let decoder ← Sol_decoder_new
   let (decoded, _) ← tuple_decode_payload_Sol_u256_SolDecoder_MemSlice_u8 decoder (MemSlice_u8.mk tail size)
   let words ← alloc (UInt256.ofNat 32)
-  let (_, e0) ← init decoded default
-  mstore (words + UInt256.ofNat (0 * 32)) e0
+  let (_, value) ← init decoded default
+  mstore (words + UInt256.ofNat (0 * 32)) value
   memoryBytes words (UInt256.ofNat 32)
 

@@ -31,33 +31,33 @@ def mstore_Config (p : UInt256) (v : Config) : FeM Unit := do
   mstore (p + UInt256.ofNat 2) v.limit
 
 /-- `immutables::set_small<Config>` -/
-def set_small_Config (v : UInt256) (e0 : Config) : FeM (Unit × Config) := do
-  let mut e0 := e0
-  e0 := { e0 with small := v }
-  return ((), e0)
+def set_small_Config (v : UInt256) (config : Config) : FeM (Unit × Config) := do
+  let mut config := config
+  config := { config with small := v }
+  return ((), config)
 
 /-- `init(limit: u256)` of contract `Immutables` -/
-def init (limit : UInt256) (e0 : Config) (e1 : (Vector UInt256 2)) : FeM (Unit × Config × (Vector UInt256 2)) := do
-  let mut e0 := e0
-  let mut e1 := e1
+def init (limit : UInt256) (config : Config) (words : (Vector UInt256 2)) : FeM (Unit × Config × (Vector UInt256 2)) := do
+  let mut config := config
+  let mut words := words
   let v4 := (Config.mk (UInt256.ofNat 0) true limit)
-  e0 := v4
-  let (v7, v7_0) ← set_small_Config (UInt256.ofNat 7) e0
-  e0 := v7_0
+  config := v4
+  let (v7, v7_0) ← set_small_Config (UInt256.ofNat 7) config
+  config := v7_0
   let v10 := #v[limit, (UInt256.ofNat 2)]
-  e1 := v10
+  words := v10
   store Field.count (UInt256.ofNat 1)
-  return ((), e0, e1)
+  return ((), config, words)
 
 /-- `Limit -> u256`, selector `0xa4d66daf` (`limit()`) -/
 def recv_Limit : FeM UInt256 := do
-  let e0 ← cload_Config (← immutableAt 4 0)
-  let v1 := e0.on
+  let config ← cload_Config (← immutableAt 4 0)
+  let v1 := config.on
   let b3 : UInt256 → FeM UInt256 := fun v0 => do
     return v0
   if v1 then
-    let v2 := e0.limit
-    let v3 := e0.small
+    let v2 := config.limit
+    let v3 := config.small
     let v4 := v3
     let v5 ← checkedAdd v2 v4
     b3 v5
@@ -66,32 +66,32 @@ def recv_Limit : FeM UInt256 := do
 
 /-- `Sum -> u256`, selector `0x853255cc` (`sum()`) -/
 def recv_Sum : FeM UInt256 := do
-  let e1 ← cloadArray 32 (fun q => cload q) (← immutableAt 4 2) 2
+  let words ← cloadArray 32 (fun q => cload q) (← immutableAt 4 2) 2
   let v0 := (UInt256.ofNat 0)
   checkIndex v0 2
-  let v1 := e1[v0.toNat]!
+  let v1 := words[v0.toNat]!
   let v2 := (UInt256.ofNat 1)
   checkIndex v2 2
-  let v3 := e1[v2.toNat]!
+  let v3 := words[v2.toNat]!
   let v4 ← checkedAdd v1 v3
   return v4
 
 /-- `immutables::capped<Config>` -/
 def capped_Config («by» : UInt256) : FeM UInt256 := do
-  let e0 ← cload_Config (← immutableAt 4 0)
-  let v3 := e0.limit
+  let config ← cload_Config (← immutableAt 4 0)
+  let v3 := config.limit
   let v4 := decide (v3.toNat < «by».toNat)
   let b3 : UInt256 → FeM UInt256 := fun v1 => do
     return v1
   if v4 then
-    let v5 := e0.limit
+    let v5 := config.limit
     b3 v5
   else
     b3 «by»
 
 /-- `Bump { by } -> u256`, selector `0xb20eb4c4` (`bump(uint256)`) -/
 def recv_Bump («by» : UInt256) : FeM UInt256 := do
-  let e0 ← cload_Config (← immutableAt 4 0)
+  let config ← cload_Config (← immutableAt 4 0)
   let v1 ← capped_Config «by»
   let count_2 ← load Field.count
   let v3 ← checkedAdd count_2 v1
@@ -233,8 +233,8 @@ def init_entry (args : ByteArray) : FeM ByteArray := do
   let decoder ← Sol_decoder_new
   let (decoded, _) ← tuple_decode_payload_Sol_u256_SolDecoder_MemSlice_u8 decoder (MemSlice_u8.mk tail size)
   let words ← alloc (UInt256.ofNat 128)
-  let (_, e0, e1) ← init decoded default default
-  mstore_Config (words + UInt256.ofNat (0 * 32)) e0
-  mstoreArray 32 (fun q x => mstore q x) (words + UInt256.ofNat (2 * 32)) e1
+  let (_, config, words_1) ← init decoded default default
+  mstore_Config (words + UInt256.ofNat (0 * 32)) config
+  mstoreArray 32 (fun q x => mstore q x) (words + UInt256.ofNat (2 * 32)) words_1
   memoryBytes words (UInt256.ofNat 128)
 

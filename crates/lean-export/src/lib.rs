@@ -68,7 +68,7 @@ use hir::{
             trait_resolution::PredicateListId,
             ty_check::{
                 BodyOwner, EffectParamSite, LocalBinding, ParamSite, ReturnProjectionStep,
-                param_name,
+                effect_param_name, param_name,
             },
             ty_def::{BorrowKind, CapabilityKind, TyId, prim_int_bits},
             ty_is_snapshot,
@@ -1175,6 +1175,7 @@ impl<'db> Module<'db> {
             names: Vec::new(),
             dropped: FxHashSet::default(),
             roots: Vec::new(),
+            effect_names: FxHashMap::default(),
         }
         .export();
         let refs = self.end(depth);
@@ -1527,17 +1528,21 @@ impl<'db> Module<'db> {
         if bytes == 0 {
             writeln!(lines, "  let _ ← init{args}\n  return ByteArray.empty").unwrap();
         } else {
-            let left: String = fields
-                .iter()
-                .map(|(provider, ..)| format!(", {}", effect(*provider)))
-                .collect();
-            let unset = " default".repeat(fields.len());
+            // Each field is named as its contract names it.
+            let mut left = String::new();
+            let mut stores = Vec::new();
+            for (provider, field, ty) in fields {
+                let layout = self.field_layout(field)?;
+                let value = effect(provider, Some(layout.name.data(db)));
+                write!(left, ", {value}").unwrap();
+                let at = format!("({words} + UInt256.ofNat ({} * 32))", layout.slot_offset);
+                stores.push(self.mstore(ty, &at, &value)?);
+            }
+            let unset = " default".repeat(stores.len());
             writeln!(lines, "  let {words} ← alloc (UInt256.ofNat {bytes})").unwrap();
             writeln!(lines, "  let (_{left}) ← init{args}{unset}").unwrap();
-            for (provider, field, ty) in fields {
-                let slot = self.field_layout(field)?.slot_offset;
-                let at = format!("({words} + UInt256.ofNat ({slot} * 32))");
-                writeln!(lines, "  {}", self.mstore(ty, &at, &effect(provider))?).unwrap();
+            for store in stores {
+                writeln!(lines, "  {store}").unwrap();
             }
             writeln!(lines, "  memoryBytes {words} (UInt256.ofNat {bytes})").unwrap();
         }
@@ -2938,6 +2943,9 @@ struct BodyExporter<'a, 'db> {
     /// The variable of each root that has one: a local's or a parameter's
     /// slot.
     roots: Vec<String>,
+    /// The name the body gives each effect, by provider: its effect
+    /// parameter's, or its contract field's.
+    effect_names: FxHashMap<u32, String>,
 }
 
 impl<'db> BodyExporter<'_, 'db> {
@@ -3157,6 +3165,27 @@ impl<'db> BodyExporter<'_, 'db> {
                 self.dropped.insert(NValueId::new(index));
             }
         }
+        self.effect_names = self
+            .body
+            .roots
+            .iter()
+            .filter_map(|root| {
+                let NRootKind::Provider { binding } = &root.kind else {
+                    return None;
+                };
+                let name = match binding.source {
+                    ProviderSource::UsesParam {
+                        site,
+                        requirement_idx,
+                    } => effect_param_name(db, site, requirement_idx as usize)?.data(db),
+                    ProviderSource::ContractField { field } => {
+                        self.module.field_layout(field).ok()?.name.data(db)
+                    }
+                    ProviderSource::RootProvider { .. } => return None,
+                };
+                Some((binding.provider_idx, name.to_string()))
+            })
+            .collect();
         let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
             let NValueDefinition::EntryParam { param } = value.definition else {
@@ -3219,7 +3248,7 @@ impl<'db> BodyExporter<'_, 'db> {
         params.sort_by_key(|(param, ..)| *param);
         self.binders = params.into_iter().map(|(_, name, ty)| (name, ty)).collect();
         for mut param in self.module.effect_params(self.body.owner.key(db)) {
-            let name = effect(param.provider);
+            let name = self.effect(param.provider);
             let given = self
                 .carriers
                 .effects
@@ -3245,7 +3274,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 let slot = self.module.field_layout(field)?.slot_offset;
                 let total = field.contract.code_address_space_slot_count(db);
                 let at = format!("(← immutableAt {total} {slot})");
-                let name = effect(binding.provider_idx);
+                let name = self.effect(binding.provider_idx);
                 let load = self.module.mload("c", root.ty, &at)?;
                 writeln!(state, "  let {name} ← {load}").unwrap();
                 self.binders.push((name, self.module.value_ty(root.ty)?));
@@ -3420,7 +3449,7 @@ impl<'db> BodyExporter<'_, 'db> {
         });
         slots
             .chain(self.outs.iter().copied().map(|value| self.value(value)))
-            .chain(self.effects.iter().map(|param| effect(param.provider)))
+            .chain(self.effects.iter().map(|param| self.effect(param.provider)))
             .chain(self.sessions.iter().copied().map(|value| self.value(value)))
             .chain(helds)
             .chain(self.flags.iter().copied().map(flag))
@@ -3445,7 +3474,7 @@ impl<'db> BodyExporter<'_, 'db> {
             .iter()
             .copied()
             .map(|value| self.value(value))
-            .chain(effects.map(|param| effect(param.provider)))
+            .chain(effects.map(|param| self.effect(param.provider)))
             .collect()
     }
 
@@ -5054,6 +5083,14 @@ impl<'db> BodyExporter<'_, 'db> {
         Ok(self.value(operand.value))
     }
 
+    /// The variable of effect `provider`, named as the body names it.
+    fn effect(&self, provider: u32) -> String {
+        effect(
+            provider,
+            self.effect_names.get(&provider).map(String::as_str),
+        )
+    }
+
     /// The Lean term for `value`: its variable.
     fn value(&self, value: NValueId) -> String {
         self.names[value.index()].clone()
@@ -5416,7 +5453,7 @@ impl<'db> BodyExporter<'_, 'db> {
                     .effects
                     .iter()
                     .any(|effect| effect.provider == binding.provider_idx))
-            .then(|| effect(binding.provider_idx)),
+            .then(|| self.effect(binding.provider_idx)),
             _ => None,
         }
     }
@@ -5959,7 +5996,7 @@ impl<'db> BodyExporter<'_, 'db> {
             ProviderSource::ContractField { field } => field,
             // A place the caller passes.
             ProviderSource::UsesParam { .. } => {
-                return Ok((effect(binding.provider_idx), None));
+                return Ok((self.effect(binding.provider_idx), None));
             }
             ProviderSource::RootProvider { .. } => {
                 return Err(Unsupported("place in the root object".to_string()));
@@ -6480,10 +6517,11 @@ fn var(name: &str) -> String {
     binder(name, name)
 }
 
-/// The variable of effect `provider`: the place or the value its body takes
-/// it as.
-fn effect(provider: u32) -> String {
-    var(&format!("e{provider}"))
+/// The variable of effect `provider`, named `name` if the source names it:
+/// the place or the value its body takes it as.
+fn effect(provider: u32, name: Option<&str>) -> String {
+    let id = format!("e{provider}");
+    binder(name.unwrap_or(&id), &id)
 }
 
 /// `text`, a definition's, with its binders named. A binder has the name it

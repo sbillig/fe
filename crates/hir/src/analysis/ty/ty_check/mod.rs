@@ -60,7 +60,7 @@ use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::Pac
 use ena::unify::InPlace;
 pub use env::{
     BindingAccess, ClosureCapture, ClosureInfo, EffectParamSite, ExprProp, LocalBinding, ParamSite,
-    PatBindingMode, PathReadSemantics, param_name,
+    PatBindingMode, PathReadSemantics, effect_param_name, param_name,
 };
 use env::{ProvidedEffect, TyCheckEnv, func_param_bindings};
 pub(super) use expr::TraitOps;

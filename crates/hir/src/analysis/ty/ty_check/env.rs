@@ -2212,7 +2212,9 @@ pub(crate) fn hir_param<'db>(
     params.data(db).get(idx)
 }
 
-fn effect_param_name<'db>(
+/// The name of effect `idx` of `site` as the source writes it, if it names
+/// the effect.
+pub fn effect_param_name<'db>(
     db: &'db dyn HirAnalysisDb,
     site: EffectParamSite<'db>,
     idx: usize,
