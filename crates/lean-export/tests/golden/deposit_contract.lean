@@ -144,29 +144,24 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
         let v21 ← ether (UInt256.ofNat 1)
         r8 := v21
         let value_22 := value
-        let v23 := r8
-        let v24 ← Wei_ge value_22 v23
+        let v24 ← Wei_ge value_22 r8
         if v24 then
           let v27 ← gwei (UInt256.ofNat 1)
-          let value_28 := value
-          let v29 ← Wei_rem value_28 v27
+          let v29 ← Wei_rem value v27
           r9 := v29
           let v30 ← Wei_zero
           r10 := v30
           let v31 := r9
-          let v32 := r10
-          let v33 ← Wei_eq v31 v32
+          let v33 ← Wei_eq v31 r10
           if v33 then
             let v36 ← gwei (UInt256.ofNat 1)
-            let value_37 := value
-            let deposit_amount ← Wei_div value_37 v36
+            let deposit_amount ← Wei_div value v36
             let v40 ← u64_MASK
             if decide (deposit_amount.toNat ≤ v40.toNat) then
               let amount_gwei ← downcast_truncate_u256_u64 deposit_amount
               let node_48 ← compute_deposit_data_root pubkey withdrawal_credentials signature amount_gwei
               node := node_48
-              let node_50 := node
-              if decide (node_50 = deposit_data_root.val) then
+              if decide (node = deposit_data_root.val) then
                 let pubkey_55 := pubkey
                 let withdrawal_credentials_57 := withdrawal_credentials
                 let v59 ← serialize_u64 amount_gwei
@@ -202,21 +197,17 @@ def recv_Deposit (pubkey : Bytes) (withdrawal_credentials : Bytes) (signature : 
                     if v86 then
                       let v88 ← Range_at_0 r11 v1
                       let height := v88
-                      let size_90 := size
-                      let v95 := decide ((size_90 &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
+                      let v95 := decide ((size &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
                       if v95 then
-                        let node_96 := node
                         checkIndex height 32
-                        store (Field.store.branch.index 1 height) node_96
+                        store (Field.store.branch.index 1 height) node
                         return ()
                       else
                         checkIndex height 32
                         let v101 ← load (Field.store.branch.index 1 height)
-                        let node_102 := node
-                        let node_104 ← hash_pair v101 node_102
+                        let node_104 ← hash_pair v101 node
                         node := node_104
-                        let size_107 := size
-                        let size_110 ← checkedDiv size_107 (UInt256.ofNat 2)
+                        let size_110 ← checkedDiv size (UInt256.ofNat 2)
                         size := size_110
                         let v114 ← Range_next_0 r11 v1
                         loop pubkey withdrawal_credentials signature value node size r8 r9 r10 r11 v114
@@ -263,29 +254,25 @@ def recv_GetDepositRoot : FeM UInt256 := do
     if v13 then
       let v15 ← Range_at_0 r3 v0
       let height := v15
-      let size_17 := size
-      let v22 := decide ((size_17 &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
+      let v22 := decide ((size &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
       let join : UInt256 → UInt256 → Range_Known_0_Unknown → FeM UInt256 := fun node size r3 => do
         let mut node := node
         let mut size := size
         let mut r3 := r3
-        let size_37 := size
-        let size_40 ← checkedDiv size_37 (UInt256.ofNat 2)
+        let size_40 ← checkedDiv size (UInt256.ofNat 2)
         size := size_40
         let v44 ← Range_next_0 r3 v0
         loop node size r3 v44
       if v22 then
         checkIndex height 32
         let v23 ← load (Field.store.branch.index 1 height)
-        let node_24 := node
-        let node_26 ← hash_pair v23 node_24
+        let node_26 ← hash_pair v23 node
         node := node_26
         join node size r3
       else
-        let node_30 := node
         checkIndex height 32
         let v32 ← load (Field.store.zero_hashes.index 1 height)
-        let node_33 ← hash_pair node_30 v32
+        let node_33 ← hash_pair node v32
         node := node_33
         join node size r3
     else
@@ -364,12 +351,10 @@ def decode_runtime_args_Evm_Sol_Deposit : FeM Deposit := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Deposit_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Deposit`, for `deposit_contract::DepositMsg::Deposit` -/
@@ -397,12 +382,10 @@ def decode_runtime_args_Evm_Sol_GetDepositRoot : FeM GetDepositRoot := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← GetDepositRoot_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_GetDepositRoot_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_GetDepositRoot_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_GetDepositRoot`, for `deposit_contract::DepositMsg::GetDepositRoot` -/
@@ -431,12 +414,10 @@ def decode_runtime_args_Evm_Sol_GetDepositCount : FeM GetDepositCount := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← GetDepositCount_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_GetDepositCount_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_GetDepositCount_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_GetDepositCount`, for `deposit_contract::DepositMsg::GetDepositCount` -/
@@ -469,12 +450,10 @@ def decode_runtime_args_Evm_Sol_SupportsInterface : FeM SupportsInterface := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← SupportsInterface_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_SupportsInterface_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_SupportsInterface_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_SupportsInterface`, for `deposit_contract::DepositMsg::SupportsInterface` -/

@@ -14,8 +14,7 @@ def input_Evm_1 : FeM MemBuffer := do
   input := input_4
   let (v10, v10_0) ← Evm_calldatacopy input (UInt256.ofNat 0) (UInt256.ofNat 0) len
   input := v10_0
-  let input_11 := input
-  return input_11
+  return input
 
 /-- `lib::blake2f::INPUT_LEN` -/
 def INPUT_LEN : FeM UInt256 := do
@@ -44,76 +43,56 @@ def rotate_right (value : UInt256) («by» : UInt256) : FeM UInt256 := do
   let v8 ← IntTy.sub (.u 64) (UInt256.ofNat 64) «by»
   return (value >>> «by») ||| (IntTy.shl (.u 64) value v8)
 
-def mix_k2 (b : UInt256) (c : UInt256) (v60 : UInt256) (v62 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
+def mix_k1 (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (y : UInt256) (v45 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
-  let v63 ← u64_wrapping_add v62 v60
-  checkIndex c 16
-  v := (v.set! c.toNat v63)
-  checkIndex b 16
-  let v67 := v[b.toNat]!
-  checkIndex c 16
-  let v69 := v[c.toNat]!
-  let v72 ← rotate_right (v67 ^^^ v69) (UInt256.ofNat 63)
-  checkIndex b 16
-  v := (v.set! b.toNat v72)
-  return ((), v)
-
-def mix_k1 (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (y : UInt256) (v33 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
-  let mut v := v
-  checkIndex c 16
-  let v35 := v[c.toNat]!
-  let v38 ← rotate_right (v33 ^^^ v35) (UInt256.ofNat 24)
-  checkIndex b 16
-  v := (v.set! b.toNat v38)
-  checkIndex b 16
-  let v42 := v[b.toNat]!
-  checkIndex a 16
-  let v44 := v[a.toNat]!
-  let v45 ← u64_wrapping_add v44 v42
   let v47 ← u64_wrapping_add v45 y
   checkIndex a 16
   v := (v.set! a.toNat v47)
   checkIndex d 16
-  let v51 := v[d.toNat]!
   checkIndex a 16
-  let v53 := v[a.toNat]!
-  let v56 ← rotate_right (v51 ^^^ v53) (UInt256.ofNat 16)
+  let v56 ← rotate_right (v[d.toNat]! ^^^ v[a.toNat]!) (UInt256.ofNat 16)
   checkIndex d 16
   v := (v.set! d.toNat v56)
   checkIndex d 16
-  let v60 := v[d.toNat]!
   checkIndex c 16
-  let v62 := v[c.toNat]!
-  mix_k2 b c v60 v62 v
+  let v63 ← u64_wrapping_add v[c.toNat]! v[d.toNat]!
+  checkIndex c 16
+  v := (v.set! c.toNat v63)
+  checkIndex b 16
+  checkIndex c 16
+  let v72 ← rotate_right (v[b.toNat]! ^^^ v[c.toNat]!) (UInt256.ofNat 63)
+  checkIndex b 16
+  v := (v.set! b.toNat v72)
+  return ((), v)
 
 /-- `lib::blake2f::mix` -/
 def mix (v : (Vector UInt256 16)) (a : UInt256) (b : UInt256) (c : UInt256) (d : UInt256) (x : UInt256) (y : UInt256) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
   checkIndex b 16
-  let v8 := v[b.toNat]!
   checkIndex a 16
-  let v10 := v[a.toNat]!
-  let v11 ← u64_wrapping_add v10 v8
+  let v11 ← u64_wrapping_add v[a.toNat]! v[b.toNat]!
   let v13 ← u64_wrapping_add v11 x
   checkIndex a 16
   v := (v.set! a.toNat v13)
   checkIndex d 16
-  let v17 := v[d.toNat]!
   checkIndex a 16
-  let v19 := v[a.toNat]!
-  let v22 ← rotate_right (v17 ^^^ v19) (UInt256.ofNat 32)
+  let v22 ← rotate_right (v[d.toNat]! ^^^ v[a.toNat]!) (UInt256.ofNat 32)
   checkIndex d 16
   v := (v.set! d.toNat v22)
   checkIndex d 16
-  let v26 := v[d.toNat]!
   checkIndex c 16
-  let v28 := v[c.toNat]!
-  let v29 ← u64_wrapping_add v28 v26
+  let v29 ← u64_wrapping_add v[c.toNat]! v[d.toNat]!
   checkIndex c 16
   v := (v.set! c.toNat v29)
   checkIndex b 16
-  let v33 := v[b.toNat]!
-  mix_k1 a b c d y v33 v
+  checkIndex c 16
+  let v38 ← rotate_right (v[b.toNat]! ^^^ v[c.toNat]!) (UInt256.ofNat 24)
+  checkIndex b 16
+  v := (v.set! b.toNat v38)
+  checkIndex b 16
+  checkIndex a 16
+  let v45 ← u64_wrapping_add v[a.toNat]! v[b.toNat]!
+  mix_k1 a b c d y v45 v
 
 def ten_rounds_k16 (m : (Vector UInt256 16)) (v767 : UInt256) (v769 : UInt256) (v : (Vector UInt256 16)) : FeM (Unit × (Vector UInt256 16)) := do
   let mut v := v
@@ -761,9 +740,8 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                 let v79 ← Range_at_0_8 r6 v4
                 let i_80 := v79
                 checkIndex i_80 8
-                let v81 := h[i_80.toNat]!
                 checkIndex i_80 16
-                v := (v.set! i_80.toNat v81)
+                v := (v.set! i_80.toNat h[i_80.toNat]!)
                 let v83 ← IV
                 checkIndex i_80 8
                 let v86 ← checkedAdd i_80 (UInt256.ofNat 8)
@@ -775,15 +753,13 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                 let v92 ← MemBuffer_lane_at input (UInt256.ofNat 196)
                 let v93 := (UInt256.ofNat 12)
                 checkIndex v93 16
-                let v94 := v[v93.toNat]!
                 checkIndex v93 16
-                v := (v.set! v93.toNat (v94 ^^^ v92))
+                v := (v.set! v93.toNat (v[v93.toNat]! ^^^ v92))
                 let v98 ← MemBuffer_lane_at input (UInt256.ofNat 204)
                 let v99 := (UInt256.ofNat 13)
                 checkIndex v99 16
-                let v100 := v[v99.toNat]!
                 checkIndex v99 16
-                v := (v.set! v99.toNat (v100 ^^^ v98))
+                v := (v.set! v99.toNat (v[v99.toNat]! ^^^ v98))
                 let v104 ← MemBuffer_byte_at input (UInt256.ofNat 212)
                 let join_1 : (Vector UInt256 8) → (Vector UInt256 16) → (Vector UInt256 16) → UInt256 → Range_Known_0_Known_8 → Range_Known_0_Known_16 → Range_Known_0_Known_8 → (Vector UInt256 16) → Range_Known_0_Known_8 → FeM (Vector UInt256 8) := fun h m v round r4 r5 r6 r7 r8 => do
                   let mut h := h
@@ -807,15 +783,12 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                     let mut r6 := r6
                     let mut r7 := r7
                     let mut r8 := r8
-                    let round_119 := round
-                    let v120 ← IntTy.sub (.u 64) total round_119
+                    let v120 ← IntTy.sub (.u 64) total round
                     if decide ((UInt256.ofNat 10).toNat ≤ v120.toNat) then
-                      let m_124 := m
-                      r7 := m_124
+                      r7 := m
                       let (v127, v127_0) ← ten_rounds v r7
                       v := v127_0
-                      let round_129 := round
-                      let round_130 ← IntTy.add (.u 64) round_129 (UInt256.ofNat 10)
+                      let round_130 ← IntTy.add (.u 64) round (UInt256.ofNat 10)
                       round := round_130
                       loop_3 h m v round r4 r5 r6 r7 r8
                     else
@@ -829,125 +802,106 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                         let mut r6 := r6
                         let mut r7 := r7
                         let mut r8 := r8
-                        let round_133 := round
-                        if decide (round_133.toNat < total.toNat) then
-                          let round_136 := round
-                          let v139 ← checkedRem round_136 (UInt256.ofNat 10)
+                        if decide (round.toNat < total.toNat) then
+                          let v139 ← checkedRem round (UInt256.ofNat 10)
                           let v141 ← IntTy.mul (.u 64) v139 (UInt256.ofNat 16)
                           let s ← downcast_truncate_u64_usize v141
                           let v149 ← SIGMA
                           checkIndex s 160
                           let v150 := v149[s.toNat]!
                           checkIndex v150 16
-                          let v152 := m[v150.toNat]!
                           let v153 ← SIGMA
                           let v155 ← checkedAdd s (UInt256.ofNat 1)
                           checkIndex v155 160
                           let v156 := v153[v155.toNat]!
                           checkIndex v156 16
-                          let v158 := m[v156.toNat]!
-                          let (v159, v159_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) v152 v158
+                          let (v159, v159_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 4) (UInt256.ofNat 8) (UInt256.ofNat 12) m[v150.toNat]! m[v156.toNat]!
                           v := v159_0
                           let v165 ← SIGMA
                           let v167 ← checkedAdd s (UInt256.ofNat 2)
                           checkIndex v167 160
                           let v168 := v165[v167.toNat]!
                           checkIndex v168 16
-                          let v170 := m[v168.toNat]!
                           let v171 ← SIGMA
                           let v173 ← checkedAdd s (UInt256.ofNat 3)
                           checkIndex v173 160
                           let v174 := v171[v173.toNat]!
                           checkIndex v174 16
-                          let v176 := m[v174.toNat]!
-                          let (v177, v177_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) v170 v176
+                          let (v177, v177_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 5) (UInt256.ofNat 9) (UInt256.ofNat 13) m[v168.toNat]! m[v174.toNat]!
                           v := v177_0
                           let v183 ← SIGMA
                           let v185 ← checkedAdd s (UInt256.ofNat 4)
                           checkIndex v185 160
                           let v186 := v183[v185.toNat]!
                           checkIndex v186 16
-                          let v188 := m[v186.toNat]!
                           let v189 ← SIGMA
                           let v191 ← checkedAdd s (UInt256.ofNat 5)
                           checkIndex v191 160
                           let v192 := v189[v191.toNat]!
                           checkIndex v192 16
-                          let v194 := m[v192.toNat]!
-                          let (v195, v195_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) v188 v194
+                          let (v195, v195_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 6) (UInt256.ofNat 10) (UInt256.ofNat 14) m[v186.toNat]! m[v192.toNat]!
                           v := v195_0
                           let v201 ← SIGMA
                           let v203 ← checkedAdd s (UInt256.ofNat 6)
                           checkIndex v203 160
                           let v204 := v201[v203.toNat]!
                           checkIndex v204 16
-                          let v206 := m[v204.toNat]!
                           let v207 ← SIGMA
                           let v209 ← checkedAdd s (UInt256.ofNat 7)
                           checkIndex v209 160
                           let v210 := v207[v209.toNat]!
                           checkIndex v210 16
-                          let v212 := m[v210.toNat]!
-                          let (v213, v213_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) v206 v212
+                          let (v213, v213_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 7) (UInt256.ofNat 11) (UInt256.ofNat 15) m[v204.toNat]! m[v210.toNat]!
                           v := v213_0
                           let v219 ← SIGMA
                           let v221 ← checkedAdd s (UInt256.ofNat 8)
                           checkIndex v221 160
                           let v222 := v219[v221.toNat]!
                           checkIndex v222 16
-                          let v224 := m[v222.toNat]!
                           let v225 ← SIGMA
                           let v227 ← checkedAdd s (UInt256.ofNat 9)
                           checkIndex v227 160
                           let v228 := v225[v227.toNat]!
                           checkIndex v228 16
-                          let v230 := m[v228.toNat]!
-                          let (v231, v231_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) v224 v230
+                          let (v231, v231_0) ← mix v (UInt256.ofNat 0) (UInt256.ofNat 5) (UInt256.ofNat 10) (UInt256.ofNat 15) m[v222.toNat]! m[v228.toNat]!
                           v := v231_0
                           let v237 ← SIGMA
                           let v239 ← checkedAdd s (UInt256.ofNat 10)
                           checkIndex v239 160
                           let v240 := v237[v239.toNat]!
                           checkIndex v240 16
-                          let v242 := m[v240.toNat]!
                           let v243 ← SIGMA
                           let v245 ← checkedAdd s (UInt256.ofNat 11)
                           checkIndex v245 160
                           let v246 := v243[v245.toNat]!
                           checkIndex v246 16
-                          let v248 := m[v246.toNat]!
-                          let (v249, v249_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) v242 v248
+                          let (v249, v249_0) ← mix v (UInt256.ofNat 1) (UInt256.ofNat 6) (UInt256.ofNat 11) (UInt256.ofNat 12) m[v240.toNat]! m[v246.toNat]!
                           v := v249_0
                           let v255 ← SIGMA
                           let v257 ← checkedAdd s (UInt256.ofNat 12)
                           checkIndex v257 160
                           let v258 := v255[v257.toNat]!
                           checkIndex v258 16
-                          let v260 := m[v258.toNat]!
                           let v261 ← SIGMA
                           let v263 ← checkedAdd s (UInt256.ofNat 13)
                           checkIndex v263 160
                           let v264 := v261[v263.toNat]!
                           checkIndex v264 16
-                          let v266 := m[v264.toNat]!
-                          let (v267, v267_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) v260 v266
+                          let (v267, v267_0) ← mix v (UInt256.ofNat 2) (UInt256.ofNat 7) (UInt256.ofNat 8) (UInt256.ofNat 13) m[v258.toNat]! m[v264.toNat]!
                           v := v267_0
                           let v273 ← SIGMA
                           let v275 ← checkedAdd s (UInt256.ofNat 14)
                           checkIndex v275 160
                           let v276 := v273[v275.toNat]!
                           checkIndex v276 16
-                          let v278 := m[v276.toNat]!
                           let v279 ← SIGMA
                           let v281 ← checkedAdd s (UInt256.ofNat 15)
                           checkIndex v281 160
                           let v282 := v279[v281.toNat]!
                           checkIndex v282 16
-                          let v284 := m[v282.toNat]!
-                          let (v285, v285_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 4) (UInt256.ofNat 9) (UInt256.ofNat 14) v278 v284
+                          let (v285, v285_0) ← mix v (UInt256.ofNat 3) (UInt256.ofNat 4) (UInt256.ofNat 9) (UInt256.ofNat 14) m[v276.toNat]! m[v282.toNat]!
                           v := v285_0
-                          let round_287 := round
-                          let round_288 ← IntTy.add (.u 64) round_287 (UInt256.ofNat 1)
+                          let round_288 ← IntTy.add (.u 64) round (UInt256.ofNat 1)
                           round := round_288
                           loop_4 h m v round r4 r5 r6 r7 r8
                         else
@@ -968,19 +922,16 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                               let v301 ← Range_at_0_8 r8 v5
                               let i_302 := v301
                               checkIndex i_302 16
-                              let v303 := v[i_302.toNat]!
                               let v305 ← checkedAdd i_302 (UInt256.ofNat 8)
                               checkIndex v305 16
-                              let v306 := v[v305.toNat]!
                               checkIndex i_302 8
-                              let v308 := h[i_302.toNat]!
+                              let v309 := h[i_302.toNat]! ^^^ (v[i_302.toNat]! ^^^ v[v305.toNat]!)
                               checkIndex i_302 8
-                              h := (h.set! i_302.toNat (v308 ^^^ (v303 ^^^ v306)))
+                              h := (h.set! i_302.toNat v309)
                               let v312 ← Range_next_0_8 r8 v5
                               loop_5 h m v round r4 r5 r6 r7 r8 v312
                             else
-                              let h_314 := h
-                              return h_314
+                              return h
                           partial_fixpoint
                           loop_5 h m v round r4 r5 r6 r7 r8 v296
                       partial_fixpoint
@@ -990,10 +941,9 @@ def compress_MemBuffer (input : MemBuffer) : FeM (Vector UInt256 8) := do
                 if decide (v104 = (UInt256.ofNat 1)) then
                   let v107 := (UInt256.ofNat 14)
                   checkIndex v107 16
-                  let v108 := v[v107.toNat]!
                   let v110 := (UInt256.ofNat 14)
                   checkIndex v110 16
-                  v := (v.set! v110.toNat (IntTy.not (.u 64) v108))
+                  v := (v.set! v110.toNat (IntTy.not (.u 64) v[v107.toNat]!))
                   join_1 h m v round r4 r5 r6 r7 r8
                 else
                   join_1 h m v round r4 r5 r6 r7 r8

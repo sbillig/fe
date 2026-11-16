@@ -14,8 +14,7 @@ def input_Evm_2 : FeM MemBuffer := do
   input := input_4
   let (v10, v10_0) ← Evm_calldatacopy input (UInt256.ofNat 0) (UInt256.ofNat 0) len
   input := v10_0
-  let input_11 := input
-  return input_11
+  return input
 
 /-- `lib::hashes::RIPEMD_IV` -/
 def RIPEMD_IV : FeM (Vector UInt256 5) := do
@@ -76,8 +75,7 @@ def padded_block_MemBuffer (input : MemBuffer) (offset : UInt256) (len : UInt256
         let mut block := block
         let mut r1 := r1
         let mut r2 := r2
-        let block_84 := block
-        return block_84
+        return block
       if v51 then
         let bits ← downcast_unchecked_usize_u64 (len * (UInt256.ofNat 8))
         r2 := (Range_Known_0_Known_8.mk () ())
@@ -131,24 +129,19 @@ def f3 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
 def f4 (x : UInt256) (y : UInt256) (z : UInt256) : FeM UInt256 := do
   return x ^^^ (y ||| (IntTy.not (.u 32) z))
 
-def ripemd_compress_k46 (lr77 : UInt256) (lr78 : UInt256) (v1296 : UInt256) (rr77 : UInt256) (r78 : UInt256) (v2224 : UInt256) (t : UInt256) (v2241 : UInt256) (state : (Vector UInt256 5)) : FeM (Unit × (Vector UInt256 5)) := do
+def ripemd_compress_k46 (lr77 : UInt256) (v1296 : UInt256) (rr77 : UInt256) (r78 : UInt256) (v2224 : UInt256) (t : UInt256) (v2244 : UInt256) (v2245 : UInt256) (state : (Vector UInt256 5)) : FeM (Unit × (Vector UInt256 5)) := do
   let mut state := state
-  let v2242 := state[v2241.toNat]!
-  let v2244 := IntTy.addW (.u 32) (IntTy.addW (.u 32) v2242 lr78) rr77
-  let v2245 := (UInt256.ofNat 2)
   checkIndex v2245 5
   state := (state.set! v2245.toNat v2244)
   let v2247 := (UInt256.ofNat 4)
   checkIndex v2247 5
-  let v2248 := state[v2247.toNat]!
-  let v2250 := IntTy.addW (.u 32) (IntTy.addW (.u 32) v2248 lr77) (IntTy.addW (.u 32) v2224 rr77)
+  let v2250 := IntTy.addW (.u 32) (IntTy.addW (.u 32) state[v2247.toNat]! lr77) (IntTy.addW (.u 32) v2224 rr77)
   let v2251 := (UInt256.ofNat 3)
   checkIndex v2251 5
   state := (state.set! v2251.toNat v2250)
   let v2253 := (UInt256.ofNat 0)
   checkIndex v2253 5
-  let v2254 := state[v2253.toNat]!
-  let v2255 := IntTy.addW (.u 32) v2254 (IntTy.addW (.u 32) v1296 lr77)
+  let v2255 := IntTy.addW (.u 32) state[v2253.toNat]! (IntTy.addW (.u 32) v1296 lr77)
   let v2257 := (UInt256.ofNat 4)
   checkIndex v2257 5
   state := (state.set! v2257.toNat (IntTy.addW (.u 32) v2255 r78))
@@ -172,18 +165,18 @@ def ripemd_compress_k45 (w9 : UInt256) (w11 : UInt256) (lr77 : UInt256) (l78 : U
   let rr79 ← rotate_left r77 (UInt256.ofNat 10)
   let v2230 := (UInt256.ofNat 1)
   checkIndex v2230 5
-  let v2231 := state[v2230.toNat]!
-  let t := IntTy.addW (.u 32) (IntTy.addW (.u 32) v2231 l78) rr79
+  let t := IntTy.addW (.u 32) (IntTy.addW (.u 32) state[v2230.toNat]! l78) rr79
   let v2235 := (UInt256.ofNat 2)
   checkIndex v2235 5
-  let v2236 := state[v2235.toNat]!
-  let v2238 := IntTy.addW (.u 32) (IntTy.addW (.u 32) v2236 lr79) rr78
+  let v2238 := IntTy.addW (.u 32) (IntTy.addW (.u 32) state[v2235.toNat]! lr79) rr78
   let v2239 := (UInt256.ofNat 1)
   checkIndex v2239 5
   state := (state.set! v2239.toNat v2238)
   let v2241 := (UInt256.ofNat 3)
   checkIndex v2241 5
-  ripemd_compress_k46 lr77 lr78 v1296 rr77 r78 v2224 t v2241 state
+  let v2244 := IntTy.addW (.u 32) (IntTy.addW (.u 32) state[v2241.toNat]! lr78) rr77
+  let v2245 := (UInt256.ofNat 2)
+  ripemd_compress_k46 lr77 v1296 rr77 r78 v2224 t v2244 v2245 state
 
 def ripemd_compress_k44 (w0 : UInt256) (w2 : UInt256) (w3 : UInt256) (w9 : UInt256) (w11 : UInt256) (w13 : UInt256) (w14 : UInt256) (lr77 : UInt256) (l78 : UInt256) (lr78 : UInt256) (v1296 : UInt256) (lr79 : UInt256) (r70 : UInt256) (rr70 : UInt256) (r71 : UInt256) (rr71 : UInt256) (r72 : UInt256) (state : (Vector UInt256 5)) : FeM (Unit × (Vector UInt256 5)) := do
   let mut state := state
@@ -1484,14 +1477,12 @@ def ripemd160_MemBuffer (input : MemBuffer) : FeM UInt256 := do
         let v34 ← array_has_u32_5 state v2
         if v34 then
           let v36 ← array_at_ref_u32_5 state v2
-          let digest_38 := digest
-          let digest_44 := (digest_38 <<< (UInt256.ofNat 32)) ||| (IntTy.swapBytes (.u 32) v36)
-          digest := digest_44
+          let v41 := digest <<< (UInt256.ofNat 32)
+          digest := (v41 ||| (IntTy.swapBytes (.u 32) v36))
           let v48 ← array_next_u32_5 state v2
           loop_1 state digest r2 r3 v48
         else
-          let digest_50 := digest
-          return digest_50
+          return digest
       partial_fixpoint
       loop_1 state digest r2 r3 v31
   partial_fixpoint

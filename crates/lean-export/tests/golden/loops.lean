@@ -13,19 +13,14 @@ def recv_Triangle (n : UInt256) : FeM UInt256 := do
   let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
-    let i_5 := i
-    if decide (i_5.toNat < n.toNat) then
-      let i_9 := i
-      let i_10 ← checkedAdd i_9 (UInt256.ofNat 1)
+    if decide (i.toNat < n.toNat) then
+      let i_10 ← checkedAdd i (UInt256.ofNat 1)
       i := i_10
-      let i_13 := i
-      let total_15 := total
-      let total_16 ← checkedAdd total_15 i_13
+      let total_16 ← checkedAdd total i
       total := total_16
       loop total i
     else
-      let total_19 := total
-      return total_19
+      return total
   partial_fixpoint
   loop total i
 
@@ -56,22 +51,18 @@ def recv_Collatz (start : UInt256) (limit : UInt256) : FeM UInt256 := do
   let rec loop (value : UInt256) (steps : UInt256) : FeM UInt256 := do
     let mut value := value
     let mut steps := steps
-    let steps_5 := steps
-    if decide (steps_5 = limit) then
+    if decide (steps = limit) then
       return limit
     else
-      let value_10 := value
-      let v12 ← step value_10
+      let v12 ← step value
       match (← pure v12) with
       | .Some .. =>
         value := v12.Some_0
-        let steps_18 := steps
-        let steps_19 ← checkedAdd steps_18 (UInt256.ofNat 1)
+        let steps_19 ← checkedAdd steps (UInt256.ofNat 1)
         steps := steps_19
         loop value steps
       | .None =>
-        let steps_23 := steps
-        return steps_23
+        return steps
   partial_fixpoint
   loop value steps
 

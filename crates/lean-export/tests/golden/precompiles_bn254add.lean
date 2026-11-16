@@ -14,8 +14,7 @@ def input_Evm : FeM MemBuffer := do
   input := input_4
   let (v10, v10_0) ← Evm_calldatacopy input (UInt256.ofNat 0) (UInt256.ofNat 0) len
   input := v10_0
-  let input_11 := input
-  return input_11
+  return input
 
 /-- `Point<Mont<Bn254Base>>::add` -/
 def Point_add_Mont_Bn254Base (self : Point_Mont_Bn254Base) (other : Point_Mont_Bn254Base) : FeM Point_Mont_Bn254Base := do
@@ -179,8 +178,7 @@ def Point_add_Mont_Bn254Base (self : Point_Mont_Bn254Base) (other : Point_Mont_B
         let v118 ← Mont_sub_Bn254Base r35 z2z2
         r36 := v118
         let v121 ← Mont_mul_Bn254Base r36 h
-        let x_122 := x
-        return Point_Mont_Bn254Base.mk x_122 y v121
+        return Point_Mont_Bn254Base.mk x y v121
 
 /-- `lib::bn254::add<MemBuffer>` -/
 def add_MemBuffer (input : MemBuffer) : FeM Option_array_u256_2 := do

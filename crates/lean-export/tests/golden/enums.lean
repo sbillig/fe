@@ -100,20 +100,17 @@ def recv_Grow (side_0 : UInt256) : FeM UInt256 := do
   current := (Shape.Square side_0)
   let join : Shape → FeM UInt256 := fun current => do
     let mut current := current
-    let v13 := current
     let join_1 : Shape → UInt256 → FeM UInt256 := fun current v1 => do
       let mut current := current
       return v1
-    match v13 with
+    match current with
     | .Square .. =>
-      let side_14 := current.Square_0
-      join_1 current side_14
+      join_1 current current.Square_0
     | _ =>
       join_1 current (UInt256.ofNat 0)
   match current with
   | .Square .. =>
-    let v7 := current.Square_0
-    let v8 ← checkedAdd v7 (UInt256.ofNat 1)
+    let v8 ← checkedAdd current.Square_0 (UInt256.ofNat 1)
     current := (current.set_Square_0 v8)
     join current
   | _ =>

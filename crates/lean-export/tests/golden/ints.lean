@@ -49,16 +49,13 @@ def recv_Context : FeM UInt256 := do
   let mut r3 : UInt256 := default
   let v1 ← Evm_address
   r1 := v1
-  let v2 := r1
-  let v3 ← Address_word v2
+  let v3 ← Address_word r1
   let v5 ← Evm_value
   r2 := v5
-  let v6 := r2
-  let v7 ← Wei_as_wei v6
+  let v7 ← Wei_as_wei r2
   let v10 ← Evm_origin
   r3 := v10
-  let v11 := r3
-  let v12 ← Address_word v11
+  let v12 ← Address_word r3
   let v15 ← Evm_block_number
   return ((v3 ^^^ v7) ^^^ v12) ^^^ v15
 

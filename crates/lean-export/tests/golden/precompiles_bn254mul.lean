@@ -14,8 +14,7 @@ def input_Evm_3 : FeM MemBuffer := do
   input := input_4
   let (v10, v10_0) ← Evm_calldatacopy input (UInt256.ofNat 0) (UInt256.ofNat 0) len
   input := v10_0
-  let input_11 := input
-  return input_11
+  return input
 
 /-- `lib::bn254::ORDER` -/
 def ORDER : FeM UInt256 := do
@@ -194,8 +193,7 @@ def Point_add_affine_Mont_Bn254Base (self : Point_Mont_Bn254Base) (x2 : Mont_Bn2
       let v96 ← Mont_sub_Bn254Base r28 z1z1
       r29 := v96
       let v99 ← Mont_sub_Bn254Base r29 hh
-      let x_100 := x
-      return Point_Mont_Bn254Base.mk x_100 y v99
+      return Point_Mont_Bn254Base.mk x y v99
 
 /-- `<Mont<Bn254Base> as Field>::neg` -/
 def Mont_neg_Bn254Base (self : Mont_Bn254Base) : FeM Mont_Bn254Base := do
@@ -328,19 +326,14 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
         let mut r15 := r15
         let mut r16 := r16
         let mut r17 := r17
-        let bit_88 := bit
-        if decide ((UInt256.ofNat 0).toNat < bit_88.toNat) then
-          let bit_93 := bit
-          let bit_94 ← IntTy.sub (.u 64) bit_93 (UInt256.ofNat 1)
+        if decide ((UInt256.ofNat 0).toNat < bit.toNat) then
+          let bit_94 ← IntTy.sub (.u 64) bit (UInt256.ofNat 1)
           bit := bit_94
-          let result_97 := result
-          r14 := result_97
+          r14 := result
           let result_100 ← Point_double_Mont_Bn254Base r14
           result := result_100
-          let bit_103 := bit
-          let in1 := decide (((k1 >>> bit_103) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
-          let bit_111 := bit
-          let in2 := decide (((k2 >>> bit_111) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
+          let in1 := decide (((k1 >>> bit) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
+          let in2 := decide (((k2 >>> bit) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
           let join_2 : Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → UInt256 → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → Point_Mont_Bn254Base → FeM Point_Mont_Bn254Base := fun x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 => do
             let mut x1 := x1
             let mut y1 := y1
@@ -401,8 +394,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
               let mut r17 := r17
               join_2 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17
             if in1 then
-              let result_128 := result
-              r16 := result_128
+              r16 := result
               let result_133 ← Point_add_affine_Mont_Bn254Base r16 x1 y1
               result := result_133
               join_4 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 ()
@@ -428,8 +420,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
                 let mut r17 := r17
                 join_4 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 v5
               if in2 then
-                let result_137 := result
-                r17 := result_137
+                r17 := result
                 let result_142 ← Point_add_affine_Mont_Bn254Base r17 x2 y2
                 result := result_142
                 join_5 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 ()
@@ -437,8 +428,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
                 join_5 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 ()
           if in1 then
             if in2 then
-              let result_119 := result
-              r15 := result_119
+              r15 := result
               let result_124 ← Point_add_affine_Mont_Bn254Base r15 x3 y3
               result := result_124
               join_2 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17
@@ -447,8 +437,7 @@ def multiply_g1 (point : Point_Mont_Bn254Base) (scalar : UInt256) : FeM Point_Mo
           else
             join_3 x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17
         else
-          let result_150 := result
-          return result_150
+          return result
       partial_fixpoint
       loop x1 y1 x2 y2 x3 y3 result bit r8 r9 r10 r11 r12 r13 r14 r15 r16 r17
     if negative2 then

@@ -88,12 +88,10 @@ def decode_runtime_args_Evm_Sol_Recover : FeM Recover := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Recover_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Recover_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Recover_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Recover`, for `lib::EcrecoverMsg::Recover` -/

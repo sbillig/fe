@@ -68,11 +68,9 @@ def Transfer_emit_Evm (self : Transfer) : FeM Unit := do
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 100389287136786176327247604509743168900146139575972864366142685224231313322991) -- a constant, as the compiler evaluates it
   r1 := self.«from»
-  let v9 := r1
-  let v10 ← Address_as_topic v9
+  let v10 ← Address_as_topic r1
   r2 := self.«to»
-  let v12 := r2
-  let v13 ← Address_as_topic v12
+  let v13 ← Address_as_topic r2
   let _ ← Evm_log3 v6 v7 v10 v13
   let _ ← MemBuffer_drop r0
   return ()
@@ -123,11 +121,9 @@ def Approval_emit_Evm (self : Approval) : FeM Unit := do
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 63486140976153616755203102783360879283472101686154884697241723088393386309925) -- a constant, as the compiler evaluates it
   r1 := self.owner
-  let v9 := r1
-  let v10 ← Address_as_topic v9
+  let v10 ← Address_as_topic r1
   r2 := self.spender
-  let v12 := r2
-  let v13 ← Address_as_topic v12
+  let v13 ← Address_as_topic r2
   let _ ← Evm_log3 v6 v7 v10 v13
   let _ ← MemBuffer_drop r0
   return ()
@@ -223,12 +219,10 @@ def decode_runtime_args_Evm_Sol_Transfer : FeM Transfer_1 := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Transfer_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Transfer_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Transfer_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Transfer`, for `erc20::Erc20Msg::Transfer` -/
@@ -266,12 +260,10 @@ def decode_runtime_args_Evm_Sol_Approve : FeM Approve := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Approve_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Approve_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Approve_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Approve`, for `erc20::Erc20Msg::Approve` -/
@@ -316,12 +308,10 @@ def decode_runtime_args_Evm_Sol_TransferFrom : FeM TransferFrom := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← TransferFrom_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_TransferFrom_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_TransferFrom_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_TransferFrom`, for `erc20::Erc20Msg::TransferFrom` -/
@@ -354,12 +344,10 @@ def decode_runtime_args_Evm_Sol_BalanceOf : FeM BalanceOf := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← BalanceOf_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_BalanceOf_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_BalanceOf_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_BalanceOf`, for `erc20::Erc20Msg::BalanceOf` -/
@@ -397,12 +385,10 @@ def decode_runtime_args_Evm_Sol_Allowance : FeM Allowance := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Allowance_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Allowance_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Allowance_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Allowance`, for `erc20::Erc20Msg::Allowance` -/
@@ -431,12 +417,10 @@ def decode_runtime_args_Evm_Sol_TotalSupply : FeM TotalSupply := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← TotalSupply_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_TotalSupply_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_TotalSupply_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_TotalSupply`, for `erc20::Erc20Msg::TotalSupply` -/

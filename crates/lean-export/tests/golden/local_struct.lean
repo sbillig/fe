@@ -31,8 +31,7 @@ def Cursor_skip (self : Cursor) («by» : UInt256) : FeM (Unit × Cursor) := do
   let mut self := self
   let join : Cursor → FeM (Unit × Cursor) := fun self => do
     let mut self := self
-    let v10 := self.pos
-    self := { self with base := v10 }
+    self := { self with base := self.pos }
     return ((), self)
   if decide ((UInt256.ofNat 32).toNat < «by».toNat) then
     let (v6, v6_0) ← Cursor_advance self (UInt256.ofNat 32)
@@ -57,8 +56,7 @@ def recv_Sum (step : UInt256) : FeM UInt256 := do
   c := a_0
   let (v9, v9_0) ← Cursor_skip c step
   c := v9_0
-  let c_10 := c
-  s := (Span.mk c_10 step)
+  s := (Span.mk c step)
   let v14 := s.len
   let (b, b_0) ← Cursor_advance s.start v14
   s := { s with start := b_0 }

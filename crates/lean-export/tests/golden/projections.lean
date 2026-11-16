@@ -45,8 +45,7 @@ def Cell_cached (self_0 : Place) : FeM (UInt256 × (UInt256 → FeM Unit)) := do
   let slide : UInt256 → FeM Unit := fun g => do
     let mut tmp := tmp
     tmp := g
-    let tmp_5 := tmp
-    let _ ← Cell_set self_0 tmp_5
+    let _ ← Cell_set self_0 tmp
     return ()
   return (tmp, slide)
 
@@ -56,8 +55,7 @@ def recv_Slide («by» : UInt256) : FeM UInt256 := do
   let v1 := Field.cell
   let (v2_g, v2_k) ← Cell_cached v1
   v2 := v2_g
-  let v3 := v2
-  let v4 ← checkedAdd v3 «by»
+  let v4 ← checkedAdd v2 «by»
   v2 := v4
   let _ ← v2_k v2
   let v6 ← load Field.cell.v
@@ -79,11 +77,9 @@ def recv_Local (a : UInt256) (b : UInt256) : FeM UInt256 := do
   pair := (a, b)
   let (v5_g, v5_k) ← first pair
   v5 := v5_g
-  let v6 := v5
-  let v7 ← checkedAdd v6 b
+  let v7 ← checkedAdd v5 b
   v5 := v7
   let v5_0 ← v5_k v5
   pair := v5_0
-  let v9 := pair.fst
-  return v9
+  return pair.fst
 

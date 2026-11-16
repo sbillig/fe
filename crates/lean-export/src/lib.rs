@@ -3699,10 +3699,10 @@ impl<'db> BodyExporter<'_, 'db> {
         if !start.is_empty() {
             printed.push((start, None));
         }
-        for statement in &data.statements {
+        for (position, statement) in data.statements.iter().enumerate() {
             let text = match (&statement.kind, self.statement(statement)?) {
                 (NStatementKind::Define { result, .. }, Some(text)) => {
-                    self.fold(*result, text, block)
+                    self.fold(*result, text, block, position)
                 }
                 (_, text) => text,
             };
@@ -4099,18 +4099,44 @@ impl<'db> BodyExporter<'_, 'db> {
         Ok(())
     }
 
-    /// `text`, the definition of `value` in `block`, unless the
+    /// `text`, the definition of `value` at `position` in `block`, unless the
     /// definition binds a pure term in one line: then nothing if nothing
     /// uses the value, and the term where the value is used if one use, in
-    /// the block, does, the term is at most `INLINE` characters long and
-    /// reads no mutable variable.
-    fn fold(&mut self, value: NValueId, text: String, block: NBlockId) -> Option<String> {
+    /// the block, does, and the term is at most `INLINE` characters long. A
+    /// term that reads a mutable variable is moved only over statements
+    /// that cannot write one: definitions that call and borrow nothing, and
+    /// index checks, with no drop flags set after them.
+    fn fold(
+        &mut self,
+        value: NValueId,
+        text: String,
+        block: NBlockId,
+        position: usize,
+    ) -> Option<String> {
         let term = text
             .strip_prefix(&format!("let {} := ", self.value(value)))
             .filter(|term| !term.contains(['\n', '←']) && !term.contains("--"))
             .filter(|_| !self.held_values.contains(&value));
         let Some(term) = term else {
             return Some(text);
+        };
+        let statements = &self.body.blocks[block.index()].statements;
+        // Whether the statement at `at` writes no mutable variable, and
+        // whether no drop flag is set after it.
+        let quiet = |at: usize| match &statements[at].kind {
+            NStatementKind::Define { expr, .. } => !matches!(
+                expr,
+                NExpr::Call { .. } | NExpr::Borrow { .. } | NExpr::MakeView { .. }
+            ),
+            NStatementKind::CheckIndex { .. } => true,
+            _ => false,
+        };
+        let unflagged = |at: usize| {
+            let point = match statements.get(at) {
+                Some(statement) => DropFlagPoint::After(statement.id),
+                None => DropFlagPoint::BeforeTerminator(block),
+            };
+            self.flag_updates(point).is_empty()
         };
         let width: usize = term
             .split(BINDER)
@@ -4125,9 +4151,12 @@ impl<'db> BodyExporter<'_, 'db> {
             .sum();
         let movable = match self.uses[value.index()] {
             (0, _) => true,
-            (1, Some((used, _))) if used == block && width <= INLINE => {
+            (1, Some((used, at))) if used == block && width <= INLINE => {
                 let state = self.state();
                 !state.iter().any(|var| term.contains(var.as_str()))
+                    || (position + 1..at).all(quiet)
+                        && (position..at.min(statements.len())).all(unflagged)
+                        && (at < statements.len() || unflagged(at))
             }
             _ => false,
         };

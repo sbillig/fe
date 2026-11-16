@@ -43,8 +43,7 @@ def add_to_1 (v0 : UInt256) (v1 : Place) : FeM (Unit × UInt256) := do
   let mut v0 := v0
   let v2 := (v0, v1)
   let b ← load v2.snd
-  let v7 := v0
-  let v8 ← checkedAdd v7 b
+  let v8 ← checkedAdd v0 b
   v0 := v8
   return ((), v0)
 
@@ -57,8 +56,7 @@ def recv_Parts («by» : UInt256) : FeM UInt256 := do
   let v6 := Field.pair.a
   let (v7, v7_0) ← add_to_1 «local» v6
   «local» := v7_0
-  let local_8 := «local»
-  return local_8
+  return «local»
 
 /-- `Pair::at` -/
 def Pair_at (self : Place) : FeM (UInt256 × Place) := do
@@ -80,7 +78,6 @@ def bump (v0 : UInt256) (v1 : Place) : FeM UInt256 := do
 def Pair_at_1 (self : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256) → FeM Pair)) := do
   let mut self := self
   let v1 := self.a
-  let v3 := (v1, self.b)
   let slide : (UInt256 × UInt256) → FeM Pair := fun g => do
     let mut self := self
     self := { self with b := g.snd }
@@ -91,8 +88,7 @@ def Pair_at_1 (self : Pair) : FeM ((UInt256 × UInt256) × ((UInt256 × UInt256)
 def bump_1 (v0 : UInt256) (v1 : UInt256) : FeM (UInt256 × UInt256) := do
   let mut v1 := v1
   let v2 := (v0, v1)
-  let v6 := v1
-  let v7 ← checkedAdd v6 v2.fst
+  let v7 ← checkedAdd v1 v2.fst
   v1 := v7
   let v9 := v1
   return (v9, v1)
@@ -120,7 +116,6 @@ def Small_maybe (self : Place) (second : Bool) : FeM (Option_mut_u8 × (Option_m
   let mut h2 : UInt256 := default
   if second then
     h2 := (← loadIntAt (.u 8) (self.field Layout.Small 1) ⟨1, 1, true⟩)
-    let v3 := Option_mut_u8.Some h2
     let slide : Option_mut_u8 → FeM Unit := fun g => do
       let mut h2 := h2
       h2 := g.Some_0
@@ -139,15 +134,13 @@ def recv_Lane (second : Bool) : FeM UInt256 := do
   let v1 := Field.small
   let (v2_g, v2_k) ← Small_maybe v1 second
   v2 := v2_g
-  let v3 := v2
   let join : Option_mut_u8 → FeM UInt256 := fun v2 => do
     let mut v2 := v2
     let v13 ← loadIntAt (.u 8) Field.small.b ⟨1, 1, true⟩
     return v13
-  match v3 with
+  match v2 with
   | .Some .. =>
-    let v7 := v2.Some_0
-    let v8 ← IntTy.add (.u 8) v7 (UInt256.ofNat 40)
+    let v8 ← IntTy.add (.u 8) v2.Some_0 (UInt256.ofNat 40)
     v2 := (v2.set_Some_0 v8)
     let _ ← v2_k v2
     join v2

@@ -44,11 +44,9 @@ def consume (c : Cursor) («by» : UInt256) : FeM UInt256 := do
 /-- `param_slot::bump` -/
 def bump («by» : UInt256) : FeM UInt256 := do
   let mut «by» := «by»
-  let by_1 := «by»
-  let by_2 ← checkedAdd by_1 (UInt256.ofNat 1)
+  let by_2 ← checkedAdd «by» (UInt256.ofNat 1)
   «by» := by_2
-  let by_5 := «by»
-  return by_5
+  return «by»
 
 /-- `Sum { step } -> u256`, selector `0x188b85b4` (`sum(uint256)`) -/
 def recv_Sum (step : UInt256) : FeM UInt256 := do

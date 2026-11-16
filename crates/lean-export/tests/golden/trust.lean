@@ -87,8 +87,7 @@ def recv_Deploy : FeM UInt256 := do
   let mut r1 : Wei := default
   let v0 ← Wei_zero
   r1 := v0
-  let v4 := r1
-  let v5 ← create2_Evm_Child v4 () (UInt256.ofNat 0)
+  let v5 ← create2_Evm_Child r1 () (UInt256.ofNat 0)
   return v5
 
 /-- `<Get as MsgVariant>::SELECTOR` -/
@@ -140,8 +139,7 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
     let v36 ← AbiFrame_from_raw_parts payload payload_size
     r2 := v36
     let _ ← Get_encode message r2
-    let buffer_40 := buffer
-    return buffer_40
+    return buffer
   let join_1 : Get → MemBuffer → AbiFrame → FeM MemBuffer := fun message buffer r2 => do
     let mut message := message
     let mut buffer := buffer
@@ -188,15 +186,13 @@ def Address_call_Evm_Get (self : UInt256) (message : Get) : FeM UInt256 := do
   let v3 ← gas
   let v4 ← Wei_zero
   r1 := v4
-  let v7 := r1
-  let v8 ← call_Evm_Get self v3 v7 message
+  let v8 ← call_Evm_Get self v3 r1 message
   return v8
 
 /-- `Ask { target } -> u256`, selector `0x00000011` -/
 def recv_Ask (target : UInt256) : FeM UInt256 := do
   let mut target := target
-  let target_1 := target
-  let v2 ← Address_call_Evm_Get target_1 (Get.mk)
+  let v2 ← Address_call_Evm_Get target (Get.mk)
   return v2
 
 /-- `<Words as StateIndex>::locate` -/
@@ -253,12 +249,10 @@ def decode_runtime_args_Evm_Sol_Deploy : FeM Deploy := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Deploy_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Deploy_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Deploy_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Deploy`, for `trust::TrustMsg::Deploy` -/
@@ -291,12 +285,10 @@ def decode_runtime_args_Evm_Sol_Ask : FeM Ask := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Ask_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Ask_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Ask_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Ask`, for `trust::TrustMsg::Ask` -/
@@ -329,12 +321,10 @@ def decode_runtime_args_Evm_Sol_Poke : FeM Poke := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Poke_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Poke_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Poke_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Poke`, for `trust::TrustMsg::Poke` -/

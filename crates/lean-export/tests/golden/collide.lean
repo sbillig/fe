@@ -69,19 +69,14 @@ def recv_Spin (n : UInt256) : FeM UInt256 := do
   let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
-    let i_5 := i
-    if decide (i_5.toNat < n.toNat) then
-      let i_9 := i
-      let i_10 ← checkedAdd i_9 (UInt256.ofNat 1)
+    if decide (i.toNat < n.toNat) then
+      let i_10 ← checkedAdd i (UInt256.ofNat 1)
       i := i_10
-      let total_13 := total
-      let i_15 := i
-      let total_17 ← b1 total_13 i_15
+      let total_17 ← b1 total i
       total := total_17
       loop total i
     else
-      let total_20 := total
-      return total_20
+      return total
   partial_fixpoint
   loop total i
 
@@ -117,12 +112,10 @@ def decode_runtime_args_Evm_Sol_Run : FeM Run := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Run_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Run_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Run_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_CollideMsg_Run`, for `collide::CollideMsg::Run` -/
@@ -155,12 +148,10 @@ def decode_runtime_args_Evm_Sol_Spin : FeM Spin := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Spin_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Spin_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Spin_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Spin`, for `collide::CollideMsg::Spin` -/
@@ -200,12 +191,10 @@ def decode_runtime_args_Evm_Sol_Pairs : FeM Pairs := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Pairs_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Pairs_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Pairs_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Pairs`, for `collide::OtherMsg::Pairs` -/

@@ -6,8 +6,7 @@ def init : FeM Unit := do
 def bump (items : (Vector UInt256 4)) («at» : UInt256) («by» : UInt256) : FeM (Unit × (Vector UInt256 4)) := do
   let mut items := items
   checkIndex «at» 4
-  let v5 := items[«at».toNat]!
-  let v6 ← checkedAdd v5 «by»
+  let v6 ← checkedAdd items[«at».toNat]! «by»
   checkIndex «at» 4
   items := (items.set! «at».toNat v6)
   return ((), items)
@@ -22,11 +21,9 @@ def recv_Pick (index : UInt256) (value : UInt256) : FeM UInt256 := do
   let (v9, v9_0) ← bump items index (UInt256.ofNat 1)
   items := v9_0
   checkIndex index 4
-  let v10 := items[index.toNat]!
   let v11 := (UInt256.ofNat 3)
   checkIndex v11 4
-  let v12 := items[v11.toNat]!
-  let v13 ← checkedAdd v10 v12
+  let v13 ← checkedAdd items[index.toNat]! items[v11.toNat]!
   return v13
 
 /-- `arrays::WEIGHTS` -/
@@ -43,24 +40,20 @@ def recv_Weigh (values : (Vector UInt256 3)) : FeM UInt256 := do
   let rec loop (total : UInt256) (i : UInt256) : FeM UInt256 := do
     let mut total := total
     let mut i := i
-    let i_5 := i
-    if decide (i_5.toNat < (UInt256.ofNat 3).toNat) then
+    if decide (i.toNat < (UInt256.ofNat 3).toNat) then
       let i_9 := i
       checkIndex i_9 3
       let v11 ← WEIGHTS
       let i_12 := i
       checkIndex i_12 3
       let v14 ← checkedMul values[i_9.toNat]! v11[i_12.toNat]!
-      let total_15 := total
-      let total_16 ← checkedAdd total_15 v14
+      let total_16 ← checkedAdd total v14
       total := total_16
-      let i_20 := i
-      let i_21 ← checkedAdd i_20 (UInt256.ofNat 1)
+      let i_21 ← checkedAdd i (UInt256.ofNat 1)
       i := i_21
       loop total i
     else
-      let total_24 := total
-      return total_24
+      return total
   partial_fixpoint
   loop total i
 

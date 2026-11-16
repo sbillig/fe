@@ -25,8 +25,7 @@ def init : FeM Unit := do
 /-- A closure in `closures::Closures::{fn_body}` -/
 def closure (self : UInt256) (acc : UInt256) (x : UInt256) : FeM (UInt256 × UInt256) := do
   let mut self := self
-  let v4 := self
-  let v5 ← checkedMul x v4
+  let v5 ← checkedMul x self
   let v6 ← checkedAdd acc v5
   return (v6, self)
 
@@ -42,15 +41,13 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256 (self : (Vector UInt25
     let v7 ← array_has_u256_2 self v3
     if v7 then
       let v8 ← array_at_ref_u256_2 self v3
-      let acc_10 := acc
-      let (acc_13, acc_13_0) ← closure f acc_10 v8
+      let (acc_13, acc_13_0) ← closure f acc v8
       f := acc_13_0
       acc := acc_13
       let v16 ← array_next_u256_2 self v3
       loop acc f v16
     else
-      let acc_18 := acc
-      return (acc_18, f)
+      return (acc, f)
   partial_fixpoint
   loop acc f v5
 
@@ -91,16 +88,14 @@ def fold_array_u256_2_tuple_tuple_u256_own_u256_u256_u256_1 (self : (Vector UInt
     let v7 ← array_has_u256_2 self v3
     if v7 then
       let v8 ← array_at_ref_u256_2 self v3
-      let acc_10 := acc
       let store_1 ← load_Store Field.store
-      let (acc_14, acc_14_0) ← closure_1 f acc_10 v8
+      let (acc_14, acc_14_0) ← closure_1 f acc v8
       f := acc_14_0
       acc := acc_14
       let v17 ← array_next_u256_2 self v3
       loop acc f v17
     else
-      let acc_19 := acc
-      return (acc_19, f)
+      return (acc, f)
   partial_fixpoint
   loop acc f v5
 

@@ -107,12 +107,10 @@ def decode_runtime_args_Evm_Sol_Limit : FeM Limit := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Limit_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Limit_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Limit_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Limit`, for `immutables::ImmutablesMsg::Limit` -/
@@ -141,12 +139,10 @@ def decode_runtime_args_Evm_Sol_Sum : FeM Sum := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Sum_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Sum_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Sum_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Sum`, for `immutables::ImmutablesMsg::Sum` -/
@@ -179,12 +175,10 @@ def decode_runtime_args_Evm_Sol_Bump : FeM Bump := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Bump_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Bump_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Bump_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Bump`, for `immutables::ImmutablesMsg::Bump` -/

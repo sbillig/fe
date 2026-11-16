@@ -167,19 +167,15 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
       let mut words := words
       let mut i_r1 := i_r1
       let mut i_r2 := i_r2
-      let words_63 := words
-      i_r2 := words_63
+      i_r2 := words
       let rec loop (words : UInt256) (i_r1 : UInt256) (i_r2 : UInt256) : FeM Unit := do
         let mut words := words
         let mut i_r1 := i_r1
         let mut i_r2 := i_r2
-        let i_65 := i_r2
-        if decide (i_65.toNat < old_words.toNat) then
-          let i_69 := i_r2
-          let l0 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_69
+        if decide (i_r2.toNat < old_words.toNat) then
+          let l0 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_r2
           store (Place.mk .storage l0.slot) (UInt256.ofNat 0)
-          let i_72 := i_r2
-          i_r2 := (i_72 + (UInt256.ofNat 1))
+          i_r2 := (i_r2 + (UInt256.ofNat 1))
           loop words i_r1 i_r2
         else
           return ()
@@ -198,16 +194,12 @@ def SolString_store (self : Place) (value : DynString) : FeM Unit := do
         let mut words := words
         let mut i_r1 := i_r1
         let mut i_r2 := i_r2
-        let i_44 := i_r1
-        let words_46 := words
-        if decide (i_44.toNat < words_46.toNat) then
-          let i_48 := i_r1
-          let v53 ← payload_word v3 (i_48 * (UInt256.ofNat 32))
-          let i_54 := i_r1
-          let l1 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_54
+        if decide (i_r1.toNat < words.toNat) then
+          let v51 := i_r1 * (UInt256.ofNat 32)
+          let v53 ← payload_word v3 v51
+          let l1 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_r1
           store (Place.mk .storage l1.slot) v53
-          let i_57 := i_r1
-          i_r1 := (i_57 + (UInt256.ofNat 1))
+          i_r1 := (i_r1 + (UInt256.ofNat 1))
           loop_1 words i_r1 i_r2
         else
           join_1 words i_r1 i_r2
@@ -237,8 +229,7 @@ def SolSlot_write_u8 (self : Place) (offset : UInt256) (value : UInt256) : FeM U
     word := (SolWord.mk v11)
     let (v15, v15_0) ← SolWord_set_u8 word offset value
     word := v15_0
-    let v16 := word.word
-    store ((self.field Layout.SolSlot 0).field Layout.Payload 0) v16
+    store ((self.field Layout.SolSlot 0).field Layout.Payload 0) word.word
     join word
 
 /-- `init()` of contract `WETH9` -/
@@ -294,16 +285,12 @@ def SolString_load (self : Place) : FeM DynString := do
       let i_32 := i
       let v34 ← word_count len
       if decide (i_32.toNat < v34.toNat) then
-        let i_36 := i
-        let l0 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i_36
+        let l0 ← Payload_locate (self.field Layout.SolString 0) (self.field Layout.SolString 0).slot i
         let v37 ← load (Place.mk .storage l0.slot)
-        let i_38 := i
-        let word ← leading_bytes v37 (len - (i_38 * (UInt256.ofNat 32)))
-        let i_46 := i
-        let v51 ← downcast_unchecked_u256_usize ((UInt256.ofNat 32) + (i_46 * (UInt256.ofNat 32)))
+        let word ← leading_bytes v37 (len - (i * (UInt256.ofNat 32)))
+        let v51 ← downcast_unchecked_u256_usize ((UInt256.ofNat 32) + (i * (UInt256.ofNat 32)))
         let _ ← store_word (data + v51) word
-        let i_55 := i
-        i := (i_55 + (UInt256.ofNat 1))
+        i := (i + (UInt256.ofNat 1))
         loop i
       else
         join i
@@ -326,11 +313,9 @@ def Approval_emit_Evm (self : Approval) : FeM Unit := do
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 63486140976153616755203102783360879283472101686154884697241723088393386309925) -- a constant, as the compiler evaluates it
   r1 := self.src
-  let v9 := r1
-  let v10 ← Address_as_topic v9
+  let v10 ← Address_as_topic r1
   r2 := self.guy
-  let v12 := r2
-  let v13 ← Address_as_topic v12
+  let v13 ← Address_as_topic r2
   let _ ← Evm_log3 v6 v7 v10 v13
   let _ ← MemBuffer_drop r0
   return ()
@@ -354,8 +339,7 @@ def recv_TotalSupply : FeM UInt256 := do
   let mut r1 : Wei := default
   let v1 ← Evm_selfbalance
   r1 := v1
-  let v2 := r1
-  let v3 ← Wei_as_wei v2
+  let v3 ← Wei_as_wei r1
   return v3
 
 /-- `<Transfer as Event>::emit<Evm>` -/
@@ -368,11 +352,9 @@ def Transfer_emit_Evm (self : Transfer) : FeM Unit := do
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 100389287136786176327247604509743168900146139575972864366142685224231313322991) -- a constant, as the compiler evaluates it
   r1 := self.src
-  let v9 := r1
-  let v10 ← Address_as_topic v9
+  let v10 ← Address_as_topic r1
   r2 := self.dst
-  let v12 := r2
-  let v13 ← Address_as_topic v12
+  let v13 ← Address_as_topic r2
   let _ ← Evm_log3 v6 v7 v10 v13
   let _ ← MemBuffer_drop r0
   return ()
@@ -390,8 +372,7 @@ def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt
   if decide (wad.toNat ≤ v4.toNat) then
     let sender_9 ← Evm_caller
     sender := sender_9
-    let sender_11 := sender
-    let v12 ← ne_Address_Address src sender_11
+    let v12 ← ne_Address_Address src sender
     let join : UInt256 → FeM Bool := fun sender => do
       let mut sender := sender
       let v35 := src
@@ -410,25 +391,21 @@ def transfer_from_Weth9Store_Evm_Evm (src : UInt256) (dst : UInt256) (wad : UInt
       let mut sender := sender
       join sender
     if v12 then
-      let sender_14 := sender
       let allowance_entry ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot src
-      let allowance_entry_sender_14 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry.slot) (Place.mk .storage allowance_entry.slot).slot sender_14
+      let allowance_entry_sender_14 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry.slot) (Place.mk .storage allowance_entry.slot).slot sender
       let v15 ← load (Place.mk .storage allowance_entry_sender_14.slot)
       let v16 ← u256_max
       if decide (v15 ≠ v16) then
-        let sender_19 := sender
         let allowance_entry_1 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot src
-        let allowance_entry_sender_19 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_1.slot) (Place.mk .storage allowance_entry_1.slot).slot sender_19
+        let allowance_entry_sender_19 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_1.slot) (Place.mk .storage allowance_entry_1.slot).slot sender
         let v20 ← load (Place.mk .storage allowance_entry_sender_19.slot)
         if decide (wad.toNat ≤ v20.toNat) then
           let v25 := src
-          let sender_26 := sender
           let allowance_entry_2 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v25
-          let allowance_entry_sender_26 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_2.slot) (Place.mk .storage allowance_entry_2.slot).slot sender_26
+          let allowance_entry_sender_26 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_2.slot) (Place.mk .storage allowance_entry_2.slot).slot sender
           let v27 ← load (Place.mk .storage allowance_entry_sender_26.slot)
-          let sender_29 := sender
           let allowance_entry_3 ← StorageMap_locate_Address_StorageMap_Address_u256 Field.store.allowance Field.store.allowance.slot v25
-          let allowance_entry_sender_29 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_3.slot) (Place.mk .storage allowance_entry_3.slot).slot sender_29
+          let allowance_entry_sender_29 ← StorageMap_locate_Address_u256 (Place.mk .storage allowance_entry_3.slot) (Place.mk .storage allowance_entry_3.slot).slot sender
           store (Place.mk .storage allowance_entry_sender_29.slot) (v27 - wad)
           join sender
         else
@@ -445,8 +422,7 @@ def recv_TransferFrom (src : UInt256) (dst : UInt256) (wad : UInt256) : FeM Bool
   let mut src := src
   let mut dst := dst
   let src_1 := src
-  let dst_2 := dst
-  let v3 ← transfer_from_Weth9Store_Evm_Evm src_1 dst_2 wad
+  let v3 ← transfer_from_Weth9Store_Evm_Evm src_1 dst wad
   return v3
 
 /-- `<Withdrawal as Event>::emit<Evm>` -/
@@ -458,8 +434,7 @@ def Withdrawal_emit_Evm (self : Withdrawal) : FeM Unit := do
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 57810043145978950376228313794938171962422655018555593468903716172405399886693) -- a constant, as the compiler evaluates it
   r1 := self.src
-  let v9 := r1
-  let v10 ← Address_as_topic v9
+  let v10 ← Address_as_topic r1
   let _ ← Evm_log2 v6 v7 v10
   let _ ← MemBuffer_drop r0
   return ()
@@ -486,8 +461,7 @@ def recv_Withdraw (wad : UInt256) : FeM Unit := do
       let mut r3 := r3
       let v18 ← wei wad
       r2 := v18
-      let v20 := r2
-      let v21 ← send_value_Evm src gas_1 v20
+      let v21 ← send_value_Evm src gas_1 r2
       r3 := v21
       let v23 ← RawCallOutcome_success r3
       if v23 then
@@ -507,8 +481,7 @@ def SolSlot_read_u8 (self : Place) (offset : UInt256) : FeM UInt256 := do
   let mut r0 : SolWord := default
   let v2 ← load ((self.field Layout.SolSlot 0).field Layout.Payload 0)
   r0 := (SolWord.mk v2)
-  let v4 := r0
-  let v5 ← SolWord_get_u8 v4 offset
+  let v5 ← SolWord_get_u8 r0 offset
   return v5
 
 /-- `Decimals -> u8`, selector `0x313ce567` (`decimals()`) -/
@@ -536,8 +509,7 @@ def recv_Transfer (dst : UInt256) (wad : UInt256) : FeM Bool := do
   let v2 ← Evm_caller
   r3 := v2
   let v3 := r3
-  let dst_4 := dst
-  let v5 ← transfer_from_Weth9Store_Evm_Evm v3 dst_4 wad
+  let v5 ← transfer_from_Weth9Store_Evm_Evm v3 dst wad
   return v5
 
 /-- `<Deposit as Event>::emit<Evm>` -/
@@ -549,8 +521,7 @@ def Deposit_emit_Evm (self : Deposit) : FeM Unit := do
   let v6 ← MemBuffer_span_ref r0
   let v7 := (UInt256.ofNat 102222681472383059465863322013072701928378550215632170212813623808969952268444) -- a constant, as the compiler evaluates it
   r1 := self.dst
-  let v9 := r1
-  let v10 ← Address_as_topic v9
+  let v10 ← Address_as_topic r1
   let _ ← Evm_log2 v6 v7 v10
   let _ ← MemBuffer_drop r0
   return ()
@@ -566,8 +537,7 @@ def deposit_Weth9Store_Evm_Evm : FeM Unit := do
   let dst ← Evm_caller
   let v4 ← Evm_value
   r3 := v4
-  let v5 := r3
-  let wad ← Wei_as_wei v5
+  let wad ← Wei_as_wei r3
   let balance_of_dst ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot dst
   let v8 ← load (Place.mk .storage balance_of_dst.slot)
   let balance_of_dst_1 ← StorageMap_locate_Address_u256 Field.store.balance_of Field.store.balance_of.slot dst
@@ -611,12 +581,10 @@ def decode_runtime_args_Evm_Sol_Name : FeM Name := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Name_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Name_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Name_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Name`, for `lib::Weth9Msg::Name` -/
@@ -651,12 +619,10 @@ def decode_runtime_args_Evm_Sol_Approve : FeM Approve := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Approve_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Approve_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Approve_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Approve`, for `lib::Weth9Msg::Approve` -/
@@ -685,12 +651,10 @@ def decode_runtime_args_Evm_Sol_TotalSupply : FeM TotalSupply := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← TotalSupply_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_TotalSupply_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_TotalSupply_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_TotalSupply`, for `lib::Weth9Msg::TotalSupply` -/
@@ -729,12 +693,10 @@ def decode_runtime_args_Evm_Sol_TransferFrom : FeM TransferFrom := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← TransferFrom_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_TransferFrom_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_TransferFrom_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_TransferFrom`, for `lib::Weth9Msg::TransferFrom` -/
@@ -766,12 +728,10 @@ def decode_runtime_args_Evm_Sol_Withdraw : FeM Withdraw := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Withdraw_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Withdraw_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Withdraw_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Withdraw`, for `lib::Weth9Msg::Withdraw` -/
@@ -800,12 +760,10 @@ def decode_runtime_args_Evm_Sol_Decimals : FeM Decimals := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Decimals_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Decimals_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Decimals_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Decimals`, for `lib::Weth9Msg::Decimals` -/
@@ -837,12 +795,10 @@ def decode_runtime_args_Evm_Sol_BalanceOf : FeM BalanceOf := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← BalanceOf_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_BalanceOf_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_BalanceOf_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_BalanceOf`, for `lib::Weth9Msg::BalanceOf` -/
@@ -871,12 +827,10 @@ def decode_runtime_args_Evm_Sol_Symbol : FeM Symbol := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Symbol_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Symbol_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Symbol_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Symbol`, for `lib::Weth9Msg::Symbol` -/
@@ -911,12 +865,10 @@ def decode_runtime_args_Evm_Sol_Transfer : FeM Transfer_1 := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Transfer_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Transfer_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Transfer_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Transfer`, for `lib::Weth9Msg::Transfer` -/
@@ -945,12 +897,10 @@ def decode_runtime_args_Evm_Sol_Deposit : FeM Deposit_1 := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Deposit_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Deposit_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Deposit`, for `lib::Weth9Msg::Deposit` -/
@@ -984,12 +934,10 @@ def decode_runtime_args_Evm_Sol_Allowance : FeM Allowance := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Allowance_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Allowance_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Allowance_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Allowance`, for `lib::Weth9Msg::Allowance` -/

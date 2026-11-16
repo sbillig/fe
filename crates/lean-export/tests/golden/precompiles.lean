@@ -300,17 +300,13 @@ def Mont_pow_Base (self : Mont_Base) (exponent : UInt256) : FeM Mont_Base := do
     let mut bit := bit
     let mut r2 := r2
     let mut r3 := r3
-    let bit_6 := bit
-    if decide ((UInt256.ofNat 0).toNat < bit_6.toNat) then
-      let bit_11 := bit
-      let bit_12 ← IntTy.sub (.u 64) bit_11 (UInt256.ofNat 1)
+    if decide ((UInt256.ofNat 0).toNat < bit.toNat) then
+      let bit_12 ← IntTy.sub (.u 64) bit (UInt256.ofNat 1)
       bit := bit_12
-      let result_15 := result
-      r2 := result_15
+      r2 := result
       let result_18 ← Mont_square_Base r2
       result := result_18
-      let bit_22 := bit
-      let v28 := decide (((exponent >>> bit_22) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
+      let v28 := decide (((exponent >>> bit) &&& (UInt256.ofNat 1)) = (UInt256.ofNat 1))
       let join : Mont_Base → UInt256 → Mont_Base → Mont_Base → FeM Mont_Base := fun result bit r2 r3 => do
         let mut result := result
         let mut bit := bit
@@ -318,16 +314,14 @@ def Mont_pow_Base (self : Mont_Base) (exponent : UInt256) : FeM Mont_Base := do
         let mut r3 := r3
         loop result bit r2 r3
       if v28 then
-        let result_29 := result
-        r3 := result_29
+        r3 := result
         let result_32 ← Mont_mul_Base r3 self
         result := result_32
         join result bit r2 r3
       else
         join result bit r2 r3
     else
-      let result_38 := result
-      return result_38
+      return result
   partial_fixpoint
   loop result bit r2 r3
 
@@ -526,15 +520,13 @@ def is_zero_5 (r : (Vector UInt256 5)) : FeM Bool := do
   i := (UInt256.ofNat 0)
   let rec loop (i : UInt256) : FeM Bool := do
     let mut i := i
-    let i_3 := i
-    if decide (i_3.toNat < (UInt256.ofNat 5).toNat) then
+    if decide (i.toNat < (UInt256.ofNat 5).toNat) then
       let i_7 := i
       checkIndex i_7 5
       if decide (r[i_7.toNat]! ≠ (UInt256.ofNat 0)) then
         return false
       else
-        let i_15 := i
-        let i_16 ← checkedAdd i_15 (UInt256.ofNat 1)
+        let i_16 ← checkedAdd i (UInt256.ofNat 1)
         i := i_16
         loop i
     else
@@ -571,36 +563,23 @@ def divsteps (eta_0 : UInt256) (f0_1 : UInt256) (g0 : UInt256) : FeM (UInt256 ×
     let mut eta := eta
     let mut left := left
     let mut bits := bits
-    let g_21 := g
-    let left_24 := left
-    let v25 := IntTy.shl (.u 64) (UInt256.ofNat 18446744073709551615) left_24
-    let zeros := IntTy.trailingZeros (.u 64) (g_21 ||| v25)
-    let g_29 := g
-    g := (g_29 >>> zeros)
-    let u_34 := u
-    u := (IntTy.shl (.u 64) u_34 zeros)
-    let v_39 := v
-    v := (IntTy.shl (.u 64) v_39 zeros)
+    let v25 := IntTy.shl (.u 64) (UInt256.ofNat 18446744073709551615) left
+    let zeros := IntTy.trailingZeros (.u 64) (g ||| v25)
+    g := (g >>> zeros)
+    u := (IntTy.shl (.u 64) u zeros)
+    v := (IntTy.shl (.u 64) v zeros)
     let v44 ← downcast_truncate_u64_i64 zeros
-    let eta_45 := eta
-    eta := (IntTy.subW (.i 64) eta_45 v44)
-    let left_49 := left
-    left := (IntTy.subW (.u 64) left_49 zeros)
-    let left_53 := left
-    if decide (left_53 = (UInt256.ofNat 0)) then
+    eta := (IntTy.subW (.i 64) eta v44)
+    left := (IntTy.subW (.u 64) left zeros)
+    if decide (left = (UInt256.ofNat 0)) then
       let eta_57 := eta
-      let u_59 := u
-      let v61 ← downcast_truncate_u64_i64 u_59
-      let v_62 := v
-      let v64 ← downcast_truncate_u64_i64 v_62
-      let q_65 := q
-      let v67 ← downcast_truncate_u64_i64 q_65
-      let r_68 := r
-      let v70 ← downcast_truncate_u64_i64 r_68
+      let v61 ← downcast_truncate_u64_i64 u
+      let v64 ← downcast_truncate_u64_i64 v
+      let v67 ← downcast_truncate_u64_i64 q
+      let v70 ← downcast_truncate_u64_i64 r
       return (eta_57, (Transition.mk v61 v64 v67 v70))
     else
       bits := (UInt256.ofNat 15)
-      let eta_77 := eta
       let join : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → FeM (UInt256 × Transition) := fun u v q r f g eta left bits => do
         let mut u := u
         let mut v := v
@@ -611,9 +590,7 @@ def divsteps (eta_0 : UInt256) (f0_1 : UInt256) (g0 : UInt256) : FeM (UInt256 ×
         let mut eta := eta
         let mut left := left
         let mut bits := bits
-        let eta_122 := eta
-        let room ← downcast_truncate_i64_u64 (IntTy.addW (.i 64) eta_122 (UInt256.ofNat 1))
-        let left_128 := left
+        let room ← downcast_truncate_i64_u64 (IntTy.addW (.i 64) eta (UInt256.ofNat 1))
         let join_1 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → FeM (UInt256 × Transition) := fun u v q r f g eta left bits limit => do
           let mut u := u
           let mut v := v
@@ -625,9 +602,7 @@ def divsteps (eta_0 : UInt256) (f0_1 : UInt256) (g0 : UInt256) : FeM (UInt256 ×
           let mut left := left
           let mut bits := bits
           let v138 := (UInt256.ofNat 18446744073709551615) >>> (IntTy.subW (.u 64) (UInt256.ofNat 64) limit)
-          let bits_139 := bits
-          let mask := v138 &&& bits_139
-          let bits_142 := bits
+          let mask := v138 &&& bits
           let join_2 : UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → UInt256 → FeM (UInt256 × Transition) := fun u v q r f g eta left bits w => do
             let mut u := u
             let mut v := v
@@ -638,54 +613,33 @@ def divsteps (eta_0 : UInt256) (f0_1 : UInt256) (g0 : UInt256) : FeM (UInt256 ×
             let mut eta := eta
             let mut left := left
             let mut bits := bits
-            let f_177 := f
-            let g_180 := g
-            let g_181 := IntTy.addW (.u 64) g_180 (IntTy.mulW (.u 64) f_177 w)
-            g := g_181
-            let u_184 := u
-            let q_187 := q
-            let q_188 := IntTy.addW (.u 64) q_187 (IntTy.mulW (.u 64) u_184 w)
-            q := q_188
-            let v_191 := v
-            let r_194 := r
-            let r_195 := IntTy.addW (.u 64) r_194 (IntTy.mulW (.u 64) v_191 w)
-            r := r_195
+            g := (IntTy.addW (.u 64) g (IntTy.mulW (.u 64) f w))
+            q := (IntTy.addW (.u 64) q (IntTy.mulW (.u 64) u w))
+            r := (IntTy.addW (.u 64) r (IntTy.mulW (.u 64) v w))
             loop u v q r f g eta left bits
-          if decide (bits_142 = (UInt256.ofNat 63)) then
-            let f_146 := f
-            let g_148 := g
-            let f_150 := f
-            let f_152 := f
-            let v155 := IntTy.subW (.u 64) (IntTy.mulW (.u 64) f_150 f_152) (UInt256.ofNat 2)
-            let v156 := IntTy.mulW (.u 64) (IntTy.mulW (.u 64) f_146 g_148) v155
-            join_2 u v q r f g eta left bits (v156 &&& mask)
+          if decide (bits = (UInt256.ofNat 63)) then
+            let v155 := IntTy.subW (.u 64) (IntTy.mulW (.u 64) f f) (UInt256.ofNat 2)
+            let v157 := (IntTy.mulW (.u 64) (IntTy.mulW (.u 64) f g) v155) &&& mask
+            join_2 u v q r f g eta left bits v157
           else
-            let f_160 := f
-            let f_162 := f
-            let v167 := (IntTy.addW (.u 64) f_162 (UInt256.ofNat 1)) &&& (UInt256.ofNat 4)
-            let v170 := IntTy.addW (.u 64) f_160 (IntTy.shl (.u 64) v167 (UInt256.ofNat 1))
-            let g_172 := g
-            let v173 := IntTy.mulW (.u 64) (IntTy.subW (.u 64) (UInt256.ofNat 0) v170) g_172
+            let v167 := (IntTy.addW (.u 64) f (UInt256.ofNat 1)) &&& (UInt256.ofNat 4)
+            let v170 := IntTy.addW (.u 64) f (IntTy.shl (.u 64) v167 (UInt256.ofNat 1))
+            let v173 := IntTy.mulW (.u 64) (IntTy.subW (.u 64) (UInt256.ofNat 0) v170) g
             join_2 u v q r f g eta left bits (v173 &&& mask)
-        if decide (room.toNat < left_128.toNat) then
+        if decide (room.toNat < left.toNat) then
           join_1 u v q r f g eta left bits room
         else
-          let left_131 := left
-          join_1 u v q r f g eta left bits left_131
-      if UInt256.sltBool eta_77 (UInt256.ofNat 0) then
-        let eta_82 := eta
-        eta := (IntTy.subW (.i 64) (UInt256.ofNat 0) eta_82)
+          join_1 u v q r f g eta left bits left
+      if UInt256.sltBool eta (UInt256.ofNat 0) then
+        eta := (IntTy.subW (.i 64) (UInt256.ofNat 0) eta)
         let f_86 := f
-        let g_88 := g
-        f := g_88
+        f := g
         g := (IntTy.subW (.u 64) (UInt256.ofNat 0) f_86)
         let u_96 := u
-        let q_98 := q
-        u := q_98
+        u := q
         q := (IntTy.subW (.u 64) (UInt256.ofNat 0) u_96)
         let v_106 := v
-        let r_108 := r
-        v := r_108
+        v := r
         r := (IntTy.subW (.u 64) (UInt256.ofNat 0) v_106)
         bits := (UInt256.ofNat 63)
         join u v q r f g eta left bits
@@ -698,7 +652,7 @@ def divsteps (eta_0 : UInt256) (f0_1 : UInt256) (g0 : UInt256) : FeM (UInt256 ×
 def M62_SIGNED : FeM UInt256 := do
   return UInt256.ofNat 4611686018427387903
 
-def update_de_5_k2 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transition) (modulus : (Vector UInt256 5)) (v107 : UInt256) (me_110 : UInt256) (ce_113 : UInt256) (md : UInt256) (me : UInt256) (cd : UInt256) (ce : UInt256) (next_d : (Vector UInt256 5)) (next_e : (Vector UInt256 5)) (i : UInt256) : FeM ((Vector UInt256 5) × (Vector UInt256 5)) := do
+def update_de_5_k1 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transition) (modulus : (Vector UInt256 5)) (inv62 : UInt256) (low_d : UInt256) (low_e : UInt256) (md_bits : UInt256) (me_bits : UInt256) (md : UInt256) (me : UInt256) (cd : UInt256) (ce : UInt256) (next_d : (Vector UInt256 5)) (next_e : (Vector UInt256 5)) (i : UInt256) : FeM ((Vector UInt256 5) × (Vector UInt256 5)) := do
   let mut md := md
   let mut me := me
   let mut cd := cd
@@ -706,12 +660,24 @@ def update_de_5_k2 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transi
   let mut next_d := next_d
   let mut next_e := next_e
   let mut i := i
-  let ce_114 := IntTy.addW (.i 128) ce_113 (IntTy.mulW (.i 128) modulus[v107.toNat]! me_110)
+  let v77 := IntTy.addW (.u 64) (IntTy.mulW (.u 64) inv62 low_d) md_bits
+  let v78 ← M62
+  let correction_d ← downcast_truncate_u64_i64 (v77 &&& v78)
+  let v84 := IntTy.addW (.u 64) (IntTy.mulW (.u 64) inv62 low_e) me_bits
+  let v85 ← M62
+  let correction_e ← downcast_truncate_u64_i64 (v84 &&& v85)
+  md := (IntTy.subW (.i 64) md correction_d)
+  me := (IntTy.subW (.i 64) me correction_e)
+  let v97 := (UInt256.ofNat 0)
+  checkIndex v97 5
+  let cd_104 := IntTy.addW (.i 128) cd (IntTy.mulW (.i 128) modulus[v97.toNat]! md)
+  cd := cd_104
+  let v107 := (UInt256.ofNat 0)
+  checkIndex v107 5
+  let ce_114 := IntTy.addW (.i 128) ce (IntTy.mulW (.i 128) modulus[v107.toNat]! me)
   ce := ce_114
-  let cd_117 := cd
-  cd := (IntTy.shr (.i 128) cd_117 (UInt256.ofNat 62))
-  let ce_123 := ce
-  ce := (IntTy.shr (.i 128) ce_123 (UInt256.ofNat 62))
+  cd := (IntTy.shr (.i 128) cd (UInt256.ofNat 62))
+  ce := (IntTy.shr (.i 128) ce (UInt256.ofNat 62))
   next_d := (Vector.replicate 5 (UInt256.ofNat 0))
   next_e := (Vector.replicate 5 (UInt256.ofNat 0))
   i := (UInt256.ofNat 1)
@@ -723,8 +689,7 @@ def update_de_5_k2 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transi
     let mut next_d := next_d
     let mut next_e := next_e
     let mut i := i
-    let i_137 := i
-    if decide (i_137.toNat < (UInt256.ofNat 5).toNat) then
+    if decide (i.toNat < (UInt256.ofNat 5).toNat) then
       let i_143 := i
       checkIndex i_143 5
       let i_149 := i
@@ -732,10 +697,8 @@ def update_de_5_k2 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transi
       let v153 := IntTy.addW (.i 128) (IntTy.mulW (.i 128) t.u d[i_143.toNat]!) (IntTy.mulW (.i 128) t.v e[i_149.toNat]!)
       let i_154 := i
       checkIndex i_154 5
-      let md_157 := md
-      let v160 := IntTy.addW (.i 128) v153 (IntTy.mulW (.i 128) modulus[i_154.toNat]! md_157)
-      let cd_161 := cd
-      cd := (IntTy.addW (.i 128) cd_161 v160)
+      let v160 := IntTy.addW (.i 128) v153 (IntTy.mulW (.i 128) modulus[i_154.toNat]! md)
+      cd := (IntTy.addW (.i 128) cd v160)
       let i_167 := i
       checkIndex i_167 5
       let i_173 := i
@@ -743,81 +706,34 @@ def update_de_5_k2 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transi
       let v177 := IntTy.addW (.i 128) (IntTy.mulW (.i 128) t.q d[i_167.toNat]!) (IntTy.mulW (.i 128) t.r e[i_173.toNat]!)
       let i_178 := i
       checkIndex i_178 5
-      let me_181 := me
-      let v184 := IntTy.addW (.i 128) v177 (IntTy.mulW (.i 128) modulus[i_178.toNat]! me_181)
-      let ce_185 := ce
-      ce := (IntTy.addW (.i 128) ce_185 v184)
-      let cd_189 := cd
-      let limb_d ← downcast_truncate_i128_i64 cd_189
-      let ce_193 := ce
-      let limb_e ← downcast_truncate_i128_i64 ce_193
+      let v184 := IntTy.addW (.i 128) v177 (IntTy.mulW (.i 128) modulus[i_178.toNat]! me)
+      ce := (IntTy.addW (.i 128) ce v184)
+      let limb_d ← downcast_truncate_i128_i64 cd
+      let limb_e ← downcast_truncate_i128_i64 ce
       let v197 ← M62_SIGNED
-      let i_199 := i
-      let v202 := i_199 - (UInt256.ofNat 1)
+      let v202 := i - (UInt256.ofNat 1)
       checkIndex v202 5
       next_d := (next_d.set! v202.toNat (limb_d &&& v197))
       let v204 ← M62_SIGNED
-      let i_206 := i
-      let v209 := i_206 - (UInt256.ofNat 1)
+      let v209 := i - (UInt256.ofNat 1)
       checkIndex v209 5
       next_e := (next_e.set! v209.toNat (limb_e &&& v204))
-      let cd_211 := cd
-      cd := (IntTy.shr (.i 128) cd_211 (UInt256.ofNat 62))
-      let ce_217 := ce
-      ce := (IntTy.shr (.i 128) ce_217 (UInt256.ofNat 62))
-      let i_224 := i
-      i := (i_224 + (UInt256.ofNat 1))
+      cd := (IntTy.shr (.i 128) cd (UInt256.ofNat 62))
+      ce := (IntTy.shr (.i 128) ce (UInt256.ofNat 62))
+      i := (i + (UInt256.ofNat 1))
       loop md me cd ce next_d next_e i
     else
-      let cd_228 := cd
-      let v230 ← downcast_truncate_i128_i64 cd_228
+      let v230 ← downcast_truncate_i128_i64 cd
       let v233 := (UInt256.ofNat 5) - (UInt256.ofNat 1)
       checkIndex v233 5
       next_d := (next_d.set! v233.toNat v230)
-      let ce_235 := ce
-      let v237 ← downcast_truncate_i128_i64 ce_235
+      let v237 ← downcast_truncate_i128_i64 ce
       let v240 := (UInt256.ofNat 5) - (UInt256.ofNat 1)
       checkIndex v240 5
       next_e := (next_e.set! v240.toNat v237)
-      let next_d_242 := next_d
-      let next_e_244 := next_e
-      return (next_d_242, next_e_244)
+      return (next_d, next_e)
   partial_fixpoint
   loop md me cd ce next_d next_e i
-
-def update_de_5_k1 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transition) (modulus : (Vector UInt256 5)) (inv62 : UInt256) (low_d : UInt256) (low_e : UInt256) (md : UInt256) (me : UInt256) (cd : UInt256) (ce : UInt256) (next_d : (Vector UInt256 5)) (next_e : (Vector UInt256 5)) (i : UInt256) : FeM ((Vector UInt256 5) × (Vector UInt256 5)) := do
-  let mut md := md
-  let mut me := me
-  let mut cd := cd
-  let mut ce := ce
-  let mut next_d := next_d
-  let mut next_e := next_e
-  let mut i := i
-  let md_67 := md
-  let md_bits ← downcast_truncate_i64_u64 md_67
-  let me_71 := me
-  let me_bits ← downcast_truncate_i64_u64 me_71
-  let v77 := IntTy.addW (.u 64) (IntTy.mulW (.u 64) inv62 low_d) md_bits
-  let v78 ← M62
-  let correction_d ← downcast_truncate_u64_i64 (v77 &&& v78)
-  let v84 := IntTy.addW (.u 64) (IntTy.mulW (.u 64) inv62 low_e) me_bits
-  let v85 ← M62
-  let correction_e ← downcast_truncate_u64_i64 (v84 &&& v85)
-  let md_89 := md
-  md := (IntTy.subW (.i 64) md_89 correction_d)
-  let me_93 := me
-  me := (IntTy.subW (.i 64) me_93 correction_e)
-  let v97 := (UInt256.ofNat 0)
-  checkIndex v97 5
-  let md_100 := md
-  let cd_103 := cd
-  let cd_104 := IntTy.addW (.i 128) cd_103 (IntTy.mulW (.i 128) modulus[v97.toNat]! md_100)
-  cd := cd_104
-  let v107 := (UInt256.ofNat 0)
-  checkIndex v107 5
-  let me_110 := me
-  let ce_113 := ce
-  update_de_5_k2 d e t modulus v107 me_110 ce_113 md me cd ce next_d next_e i
 
 /-- `lib::inversion::update_de<5>` -/
 def update_de_5 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transition) (modulus : (Vector UInt256 5)) (inv62 : UInt256) : FeM ((Vector UInt256 5) × (Vector UInt256 5)) := do
@@ -848,11 +764,11 @@ def update_de_5 (d : (Vector UInt256 5)) (e : (Vector UInt256 5)) (t : Transitio
   checkIndex v53 5
   let ce_57 := IntTy.addW (.i 128) (IntTy.mulW (.i 128) t.q d[v47.toNat]!) (IntTy.mulW (.i 128) t.r e[v53.toNat]!)
   ce := ce_57
-  let cd_59 := cd
-  let low_d ← downcast_truncate_i128_u64 cd_59
-  let ce_63 := ce
-  let low_e ← downcast_truncate_i128_u64 ce_63
-  update_de_5_k1 d e t modulus inv62 low_d low_e md me cd ce next_d next_e i
+  let low_d ← downcast_truncate_i128_u64 cd
+  let low_e ← downcast_truncate_i128_u64 ce
+  let md_bits ← downcast_truncate_i64_u64 md
+  let me_bits ← downcast_truncate_i64_u64 me
+  update_de_5_k1 d e t modulus inv62 low_d low_e md_bits me_bits md me cd ce next_d next_e i
 
 /-- `lib::inversion::update_fg<5>` -/
 def update_fg_5 (f : (Vector UInt256 5)) (g : (Vector UInt256 5)) (t : Transition) : FeM ((Vector UInt256 5) × (Vector UInt256 5)) := do
@@ -873,10 +789,8 @@ def update_fg_5 (f : (Vector UInt256 5)) (g : (Vector UInt256 5)) (t : Transitio
   checkIndex v25 5
   let cg_29 := IntTy.addW (.i 128) (IntTy.mulW (.i 128) t.q f[v19.toNat]!) (IntTy.mulW (.i 128) t.r g[v25.toNat]!)
   cg := cg_29
-  let cf_31 := cf
-  cf := (IntTy.shr (.i 128) cf_31 (UInt256.ofNat 62))
-  let cg_37 := cg
-  cg := (IntTy.shr (.i 128) cg_37 (UInt256.ofNat 62))
+  cf := (IntTy.shr (.i 128) cf (UInt256.ofNat 62))
+  cg := (IntTy.shr (.i 128) cg (UInt256.ofNat 62))
   next_f := (Vector.replicate 5 (UInt256.ofNat 0))
   next_g := (Vector.replicate 5 (UInt256.ofNat 0))
   i := (UInt256.ofNat 1)
@@ -886,57 +800,43 @@ def update_fg_5 (f : (Vector UInt256 5)) (g : (Vector UInt256 5)) (t : Transitio
     let mut next_f := next_f
     let mut next_g := next_g
     let mut i := i
-    let i_51 := i
-    if decide (i_51.toNat < (UInt256.ofNat 5).toNat) then
+    if decide (i.toNat < (UInt256.ofNat 5).toNat) then
       let i_57 := i
       checkIndex i_57 5
       let i_63 := i
       checkIndex i_63 5
       let v67 := IntTy.addW (.i 128) (IntTy.mulW (.i 128) t.u f[i_57.toNat]!) (IntTy.mulW (.i 128) t.v g[i_63.toNat]!)
-      let cf_68 := cf
-      cf := (IntTy.addW (.i 128) cf_68 v67)
+      cf := (IntTy.addW (.i 128) cf v67)
       let i_74 := i
       checkIndex i_74 5
       let i_80 := i
       checkIndex i_80 5
       let v84 := IntTy.addW (.i 128) (IntTy.mulW (.i 128) t.q f[i_74.toNat]!) (IntTy.mulW (.i 128) t.r g[i_80.toNat]!)
-      let cg_85 := cg
-      cg := (IntTy.addW (.i 128) cg_85 v84)
-      let cf_89 := cf
-      let limb_f ← downcast_truncate_i128_i64 cf_89
-      let cg_93 := cg
-      let limb_g ← downcast_truncate_i128_i64 cg_93
+      cg := (IntTy.addW (.i 128) cg v84)
+      let limb_f ← downcast_truncate_i128_i64 cf
+      let limb_g ← downcast_truncate_i128_i64 cg
       let v97 ← M62_SIGNED
-      let i_99 := i
-      let v102 := i_99 - (UInt256.ofNat 1)
+      let v102 := i - (UInt256.ofNat 1)
       checkIndex v102 5
       next_f := (next_f.set! v102.toNat (limb_f &&& v97))
       let v104 ← M62_SIGNED
-      let i_106 := i
-      let v109 := i_106 - (UInt256.ofNat 1)
+      let v109 := i - (UInt256.ofNat 1)
       checkIndex v109 5
       next_g := (next_g.set! v109.toNat (limb_g &&& v104))
-      let cf_111 := cf
-      cf := (IntTy.shr (.i 128) cf_111 (UInt256.ofNat 62))
-      let cg_117 := cg
-      cg := (IntTy.shr (.i 128) cg_117 (UInt256.ofNat 62))
-      let i_124 := i
-      i := (i_124 + (UInt256.ofNat 1))
+      cf := (IntTy.shr (.i 128) cf (UInt256.ofNat 62))
+      cg := (IntTy.shr (.i 128) cg (UInt256.ofNat 62))
+      i := (i + (UInt256.ofNat 1))
       loop cf cg next_f next_g i
     else
-      let cf_128 := cf
-      let v130 ← downcast_truncate_i128_i64 cf_128
+      let v130 ← downcast_truncate_i128_i64 cf
       let v133 := (UInt256.ofNat 5) - (UInt256.ofNat 1)
       checkIndex v133 5
       next_f := (next_f.set! v133.toNat v130)
-      let cg_135 := cg
-      let v137 ← downcast_truncate_i128_i64 cg_135
+      let v137 ← downcast_truncate_i128_i64 cg
       let v140 := (UInt256.ofNat 5) - (UInt256.ofNat 1)
       checkIndex v140 5
       next_g := (next_g.set! v140.toNat v137)
-      let next_f_142 := next_f
-      let next_g_144 := next_g
-      return (next_f_142, next_g_144)
+      return (next_f, next_g)
   partial_fixpoint
   loop cf cg next_f next_g i
 
@@ -947,29 +847,24 @@ def add_if_negative_5 (r_0 : (Vector UInt256 5)) (modulus : (Vector UInt256 5)) 
   r := r_0
   let v6 := (UInt256.ofNat 5) - (UInt256.ofNat 1)
   checkIndex v6 5
-  let v7 := r[v6.toNat]!
-  let negative := IntTy.shr (.i 64) v7 (UInt256.ofNat 63)
+  let negative := IntTy.shr (.i 64) r[v6.toNat]! (UInt256.ofNat 63)
   i := (UInt256.ofNat 0)
   let rec loop (r : (Vector UInt256 5)) (i : UInt256) : FeM (Vector UInt256 5) := do
     let mut r := r
     let mut i := i
-    let i_13 := i
-    if decide (i_13.toNat < (UInt256.ofNat 5).toNat) then
+    if decide (i.toNat < (UInt256.ofNat 5).toNat) then
       let i_17 := i
       checkIndex i_17 5
       let i_20 := i
       checkIndex i_20 5
-      let v21 := r[i_20.toNat]!
-      let v22 := IntTy.addW (.i 64) v21 (modulus[i_17.toNat]! &&& negative)
+      let v22 := IntTy.addW (.i 64) r[i_20.toNat]! (modulus[i_17.toNat]! &&& negative)
       let i_23 := i
       checkIndex i_23 5
       r := (r.set! i_23.toNat v22)
-      let i_26 := i
-      i := (i_26 + (UInt256.ofNat 1))
+      i := (i + (UInt256.ofNat 1))
       loop r i
     else
-      let r_30 := r
-      return r_30
+      return r
   partial_fixpoint
   loop r i
 
@@ -982,32 +877,25 @@ def carry_5 (r_0 : (Vector UInt256 5)) : FeM (Vector UInt256 5) := do
   let rec loop (r : (Vector UInt256 5)) (i : UInt256) : FeM (Vector UInt256 5) := do
     let mut r := r
     let mut i := i
-    let i_5 := i
-    let v10 := decide ((i_5 + (UInt256.ofNat 1)).toNat < (UInt256.ofNat 5).toNat)
+    let v10 := decide ((i + (UInt256.ofNat 1)).toNat < (UInt256.ofNat 5).toNat)
     if v10 then
       let i_11 := i
       checkIndex i_11 5
-      let v12 := r[i_11.toNat]!
-      let i_15 := i
-      let v18 := i_15 + (UInt256.ofNat 1)
+      let v14 := IntTy.shr (.i 64) r[i_11.toNat]! (UInt256.ofNat 62)
+      let v18 := i + (UInt256.ofNat 1)
       checkIndex v18 5
-      let v19 := r[v18.toNat]!
-      let v20 := IntTy.addW (.i 64) v19 (IntTy.shr (.i 64) v12 (UInt256.ofNat 62))
       checkIndex v18 5
-      r := (r.set! v18.toNat v20)
+      r := (r.set! v18.toNat (IntTy.addW (.i 64) r[v18.toNat]! v14))
       let v22 ← M62_SIGNED
       let i_23 := i
       checkIndex i_23 5
-      let v24 := r[i_23.toNat]!
       let i_26 := i
       checkIndex i_26 5
-      r := (r.set! i_26.toNat (v24 &&& v22))
-      let i_29 := i
-      i := (i_29 + (UInt256.ofNat 1))
+      r := (r.set! i_26.toNat (r[i_23.toNat]! &&& v22))
+      i := (i + (UInt256.ofNat 1))
       loop r i
     else
-      let r_33 := r
-      return r_33
+      return r
   partial_fixpoint
   loop r i
 
@@ -1028,20 +916,17 @@ def normalize_5 (r_0 : (Vector UInt256 5)) (sign : UInt256) (modulus : (Vector U
     let mut r2 := r2
     let mut r3 := r3
     let mut r4 := r4
-    let i_11 := i
-    if decide (i_11.toNat < (UInt256.ofNat 5).toNat) then
+    if decide (i.toNat < (UInt256.ofNat 5).toNat) then
       let i_15 := i
       checkIndex i_15 5
-      let v16 := r[i_15.toNat]!
+      let v18 := IntTy.subW (.i 64) (r[i_15.toNat]! ^^^ negate) negate
       let i_19 := i
       checkIndex i_19 5
-      r := (r.set! i_19.toNat (IntTy.subW (.i 64) (v16 ^^^ negate) negate))
-      let i_22 := i
-      i := (i_22 + (UInt256.ofNat 1))
+      r := (r.set! i_19.toNat v18)
+      i := (i + (UInt256.ofNat 1))
       loop r i r2 r3 r4
     else
-      let r_26 := r
-      r2 := r_26
+      r2 := r
       let v29 ← carry_5 r2
       r3 := v29
       let v31 ← add_if_negative_5 r3 modulus
@@ -1086,40 +971,32 @@ def invert_5 (x : (Vector UInt256 5)) (modulus : (Vector UInt256 5)) (inv62 : UI
     let mut r9 := r9
     let mut r10 := r10
     let mut r11 := r11
-    let g_18 := g
-    r6 := g_18
+    r6 := g
     let v21 ← is_zero_5 r6
     if !v21 then
       let eta_23 := eta
       let v25 := (UInt256.ofNat 0)
       checkIndex v25 5
-      let v26 := f[v25.toNat]!
-      let v27 ← downcast_truncate_i64_u64 v26
+      let v27 ← downcast_truncate_i64_u64 f[v25.toNat]!
       let v28 := (UInt256.ofNat 0)
       checkIndex v28 5
-      let v29 := g[v28.toNat]!
-      let v30 ← downcast_truncate_i64_u64 v29
+      let v30 ← downcast_truncate_i64_u64 g[v28.toNat]!
       let v31 ← divsteps eta_23 v27 v30
       t := v31.snd
       eta := v31.fst
-      let d_38 := d
-      r7 := d_38
-      let e_40 := e
-      r8 := e_40
+      r7 := d
+      r8 := e
       let v45 ← update_de_5 r7 r8 t modulus inv62
       d := v45.fst
       e := v45.snd
-      let f_54 := f
-      r9 := f_54
-      let g_56 := g
-      r10 := g_56
+      r9 := f
+      r10 := g
       let v61 ← update_fg_5 r9 r10 t
       f := v61.fst
       g := v61.snd
       loop d e f g eta t r6 r7 r8 r9 r10 r11
     else
-      let d_70 := d
-      r11 := d_70
+      r11 := d
       let v74 := (UInt256.ofNat 5) - (UInt256.ofNat 1)
       checkIndex v74 5
       let v75 := f[v74.toNat]!
@@ -1497,8 +1374,7 @@ def Point_double_Mont_Base (self : Point_Mont_Base) : FeM Point_Mont_Base := do
       let v67 ← Mont_mul_Base r23 r22
       r24 := v67
       let v69 ← Mont_double_Base r24
-      let x_70 := x
-      return Point_Mont_Base.mk x_70 y v69
+      return Point_Mont_Base.mk x y v69
 
 /-- `Point<Mont<Base>>::add` -/
 def Point_add_Mont_Base (self : Point_Mont_Base) (other : Point_Mont_Base) : FeM Point_Mont_Base := do
@@ -1662,8 +1538,7 @@ def Point_add_Mont_Base (self : Point_Mont_Base) (other : Point_Mont_Base) : FeM
         let v118 ← Mont_sub_Base r35 z2z2
         r36 := v118
         let v121 ← Mont_mul_Base r36 h
-        let x_122 := x
-        return Point_Mont_Base.mk x_122 y v121
+        return Point_Mont_Base.mk x y v121
 
 /-- `<Base as Modulus>::SIGNED_62` -/
 def Base_SIGNED_62 : FeM (Vector UInt256 5) := do
@@ -1839,8 +1714,7 @@ def Point_add_affine_Mont_Base (self : Point_Mont_Base) (x2 : Mont_Base) (y2 : M
       let v96 ← Mont_sub_Base r28 z1z1
       r29 := v96
       let v99 ← Mont_sub_Base r29 hh
-      let x_100 := x
-      return Point_Mont_Base.mk x_100 y v99
+      return Point_Mont_Base.mk x y v99
 
 /-- `lib::secp256k1::combination` -/
 def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_Mont_Base := do
@@ -1894,24 +1768,21 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
   table := (table.set! v15.toNat v14)
   let v17 := (UInt256.ofNat 2)
   checkIndex v17 16
-  let v18 := table[v17.toNat]!
-  r10 := v18
+  r10 := table[v17.toNat]!
   let v20 ← Point_add_Mont_Base r10 q
   let v21 := (UInt256.ofNat 3)
   checkIndex v21 16
   table := (table.set! v21.toNat v20)
   let v23 := (UInt256.ofNat 4)
-  let g_24 := g
   checkIndex v23 16
-  table := (table.set! v23.toNat g_24)
+  table := (table.set! v23.toNat g)
   let v27 ← Point_double_Mont_Base g
   let v28 := (UInt256.ofNat 8)
   checkIndex v28 16
   table := (table.set! v28.toNat v27)
   let v30 := (UInt256.ofNat 8)
   checkIndex v30 16
-  let v31 := table[v30.toNat]!
-  r11 := v31
+  r11 := table[v30.toNat]!
   let v34 ← Point_add_Mont_Base r11 g
   let v35 := (UInt256.ofNat 12)
   checkIndex v35 16
@@ -2006,11 +1877,9 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
           let v60 ← Range_at_1_4 r13 v4
           let j := v60
           checkIndex j 16
-          let v62 := table[j.toNat]!
-          r14 := v62
+          r14 := table[j.toNat]!
           checkIndex i 16
-          let v63 := table[i.toNat]!
-          r15 := v63
+          r15 := table[i.toNat]!
           let v66 ← Point_add_Mont_Base r15 r14
           let v67 ← checkedAdd i j
           checkIndex v67 16
@@ -2071,12 +1940,10 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
         if v89 then
           let v91 ← Range_at_1_16 r16 v5
           let k_92 := v91
-          let running_93 := running
           checkIndex k_92 16
-          «prefix» := («prefix».set! k_92.toNat running_93)
+          «prefix» := («prefix».set! k_92.toNat running)
           checkIndex k_92 16
-          let v96 := table[k_92.toNat]!
-          r17 := v96
+          r17 := table[k_92.toNat]!
           let v98 ← Point_is_infinity_Mont_Base r17
           let join : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
             let mut g := g
@@ -2120,18 +1987,15 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
             loop_2 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 v112
           if !v98 then
             checkIndex k_92 16
-            let v100 := table[k_92.toNat]!.z
-            r18 := v100
-            let running_101 := running
-            r19 := running_101
+            r18 := table[k_92.toNat]!.z
+            r19 := running
             let running_105 ← Mont_mul_Base r19 r18
             running := running_105
             join g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
           else
             join g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
         else
-          let running_114 := running
-          r20 := running_114
+          r20 := running
           let inverse_117 ← Mont_inverse_Base r20
           inverse := inverse_117
           k := (UInt256.ofNat 16)
@@ -2173,49 +2037,40 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
             let mut r34 := r34
             let mut r35 := r35
             let mut r36 := r36
-            let k_121 := k
-            if decide ((UInt256.ofNat 1).toNat < k_121.toNat) then
-              let k_126 := k
-              let k_127 ← checkedSub k_126 (UInt256.ofNat 1)
+            if decide ((UInt256.ofNat 1).toNat < k.toNat) then
+              let k_127 ← checkedSub k (UInt256.ofNat 1)
               k := k_127
               let k_130 := k
               checkIndex k_130 16
-              let v131 := table[k_130.toNat]!
-              r21 := v131
+              r21 := table[k_130.toNat]!
               let v134 ← Point_is_infinity_Mont_Base r21
               if v134 then
                 loop_3 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
               else
                 let k_137 := k
                 checkIndex k_137 16
-                let v138 := «prefix»[k_137.toNat]!
-                r22 := v138
-                let inverse_139 := inverse
-                r23 := inverse_139
+                r22 := «prefix»[k_137.toNat]!
+                r23 := inverse
                 let z_inverse_144 ← Mont_mul_Base r23 r22
                 z_inverse := z_inverse_144
                 let k_146 := k
                 checkIndex k_146 16
-                let v147 := table[k_146.toNat]!.z
-                r24 := v147
-                let inverse_148 := inverse
-                r25 := inverse_148
+                r24 := table[k_146.toNat]!.z
+                r25 := inverse
                 let inverse_153 ← Mont_mul_Base r25 r24
                 inverse := inverse_153
                 let z_inverse2_157 ← Mont_square_Base z_inverse
                 z_inverse2 := z_inverse2_157
                 let k_159 := k
                 checkIndex k_159 16
-                let v160 := table[k_159.toNat]!.x
-                r26 := v160
+                r26 := table[k_159.toNat]!.x
                 let v164 ← Mont_mul_Base r26 z_inverse2
                 r27 := v164
                 let v167 ← Mont_mul_Base z_inverse2 z_inverse
                 r28 := v167
                 let k_168 := k
                 checkIndex k_168 16
-                let v169 := table[k_168.toNat]!.y
-                r29 := v169
+                r29 := table[k_168.toNat]!.y
                 let v173 ← Mont_mul_Base r29 r28
                 r30 := v173
                 let v176 ← Point_affine_Mont_Base r27 r30
@@ -2265,21 +2120,16 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
                 let mut r34 := r34
                 let mut r35 := r35
                 let mut r36 := r36
-                let bit_183 := bit
-                if decide ((UInt256.ofNat 0).toNat < bit_183.toNat) then
-                  let bit_188 := bit
-                  let bit_189 ← IntTy.sub (.u 64) bit_188 (UInt256.ofNat 2)
+                if decide ((UInt256.ofNat 0).toNat < bit.toNat) then
+                  let bit_189 ← IntTy.sub (.u 64) bit (UInt256.ofNat 2)
                   bit := bit_189
-                  let result_192 := result
-                  r31 := result_192
+                  r31 := result
                   let v195 ← Point_double_Mont_Base r31
                   r32 := v195
                   let result_197 ← Point_double_Mont_Base r32
                   result := result_197
-                  let bit_201 := bit
-                  let v207 := ((u >>> bit_201) &&& (UInt256.ofNat 3)) <<< (UInt256.ofNat 2)
-                  let bit_209 := bit
-                  let entry ← downcast_truncate_u256_usize (v207 ||| ((v_1 >>> bit_209) &&& (UInt256.ofNat 3)))
+                  let v207 := ((u >>> bit) &&& (UInt256.ofNat 3)) <<< (UInt256.ofNat 2)
+                  let entry ← downcast_truncate_u256_usize (v207 ||| ((v_1 >>> bit) &&& (UInt256.ofNat 3)))
                   let join_1 : Point_Mont_Base → (Vector Point_Mont_Base 16) → (Vector Mont_Base 16) → Mont_Base → Mont_Base → UInt256 → Mont_Base → Mont_Base → Point_Mont_Base → UInt256 → Point_Mont_Base → Point_Mont_Base → (Vector UInt256 3) → Range_Known_1_Known_4 → Point_Mont_Base → Point_Mont_Base → Range_Known_1_Known_16 → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → Point_Mont_Base → Point_Mont_Base → Mont_Base → Mont_Base → Point_Mont_Base → FeM Point_Mont_Base := fun g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36 => do
                     let mut g := g
                     let mut table := table
@@ -2360,18 +2210,14 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
                     join_1 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
                   if decide (entry ≠ (UInt256.ofNat 0)) then
                     checkIndex entry 16
-                    let v219 := table[entry.toNat]!
-                    r33 := v219
+                    r33 := table[entry.toNat]!
                     let v221 ← Point_is_infinity_Mont_Base r33
                     if !v221 then
                       checkIndex entry 16
-                      let v223 := table[entry.toNat]!.x
-                      r34 := v223
+                      r34 := table[entry.toNat]!.x
                       checkIndex entry 16
-                      let v224 := table[entry.toNat]!.y
-                      r35 := v224
-                      let result_225 := result
-                      r36 := result_225
+                      r35 := table[entry.toNat]!.y
+                      r36 := result
                       let result_230 ← Point_add_affine_Mont_Base r36 r34 r35
                       result := result_230
                       join_1 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
@@ -2380,8 +2226,7 @@ def combination (u : UInt256) (v_1 : UInt256) (q : Point_Mont_Base) : FeM Point_
                   else
                     join_2 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
                 else
-                  let result_236 := result
-                  return result_236
+                  return result
               partial_fixpoint
               loop_4 g table «prefix» running inverse k z_inverse z_inverse2 result bit r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31 r32 r33 r34 r35 r36
           partial_fixpoint
@@ -2539,8 +2384,7 @@ def recover (hash : UInt256) (recovery_id : UInt256) (r : UInt256) (s : UInt256)
           let v111 ← Mont_value_Base key_y
           return Option_PublicKey.Some (PublicKey.mk v109 v111)
       if decide ((v57 &&& (UInt256.ofNat 1)) = recovery_id) then
-        let beta_62 := beta
-        join_1 x alpha beta y r_inverse key key_x key_y r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 beta_62
+        join_1 x alpha beta y r_inverse key key_x key_y r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 beta
       else
         let v65 ← Mont_neg_Base beta
         join_1 x alpha beta y r_inverse key key_x key_y r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 v65
@@ -2631,8 +2475,7 @@ def word_at_MemBuffer (input : MemBuffer) (offset : UInt256) : FeM UInt256 := do
       if v53 then
         let v55 ← Range_Unknown_Unknown_at r1 v2
         let index := v55
-        let value_57 := value
-        let v60 := value_57 <<< (UInt256.ofNat 8)
+        let v60 := value <<< (UInt256.ofNat 8)
         let v61 ← MemBuffer_len_1 input
         let join : UInt256 → Range_Unknown_Unknown → UInt256 → FeM UInt256 := fun value r1 v3 => do
           let mut value := value
@@ -2646,8 +2489,7 @@ def word_at_MemBuffer (input : MemBuffer) (offset : UInt256) : FeM UInt256 := do
         else
           join value r1 (UInt256.ofNat 0)
       else
-        let value_74 := value
-        return value_74
+        return value
     partial_fixpoint
     loop value r1 v50
 
@@ -3106,8 +2948,7 @@ def Point_double_Mont_Bn254Base (self : Point_Mont_Bn254Base) : FeM Point_Mont_B
       let v67 ← Mont_mul_Bn254Base r23 r22
       r24 := v67
       let v69 ← Mont_double_Bn254Base r24
-      let x_70 := x
-      return Point_Mont_Bn254Base.mk x_70 y v69
+      return Point_Mont_Bn254Base.mk x y v69
 
 /-- `<Bn254Base as Modulus>::SIGNED_62` -/
 def Bn254Base_SIGNED_62 : FeM (Vector UInt256 5) := do

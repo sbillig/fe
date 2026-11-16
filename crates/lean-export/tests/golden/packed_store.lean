@@ -77,12 +77,10 @@ def decode_runtime_args_Evm_Sol_Get0 : FeM Get0 := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Get0_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Get0_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Get0_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Get0`, for `packed_store::FePackedStoreMsg::Get0` -/
@@ -111,12 +109,10 @@ def decode_runtime_args_Evm_Sol_Get1 : FeM Get1 := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Get1_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Get1_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Get1_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Get1`, for `packed_store::FePackedStoreMsg::Get1` -/
@@ -149,12 +145,10 @@ def decode_runtime_args_Evm_Sol_Set0 : FeM Set0 := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Set0_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Set0_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Set0_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Set0`, for `packed_store::FePackedStoreMsg::Set0` -/
@@ -187,12 +181,10 @@ def decode_runtime_args_Evm_Sol_Set1 : FeM Set1 := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← Set1_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_Set1_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_Set1_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_Set1`, for `packed_store::FePackedStoreMsg::Set1` -/
@@ -230,12 +222,10 @@ def decode_runtime_args_Evm_Sol_SetBoth : FeM SetBoth := do
   let input_2 ← Evm_input
   input := input_2
   let base ← Sol_SELECTOR_SIZE
-  let input_6 := input
-  let len ← len_CallData input_6
+  let len ← len_CallData input
   let v9 ← SetBoth_HEAD_SIZE
   let _ ← Sol_validate_runtime_head len base v9
-  let input_11 := input
-  let v12 ← decode_from_prechecked_head_SetBoth_Sol_CallData input_11 base len
+  let v12 ← decode_from_prechecked_head_SetBoth_Sol_CallData input base len
   return v12
 
 /-- The entry of `recv_SetBoth`, for `packed_store::FePackedStoreMsg::SetBoth` -/
