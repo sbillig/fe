@@ -122,3 +122,5 @@ set_option maxRecDepth 10000 in
 example : FixedBytes_IS_DYNAMIC_4 = pure false := rfl
 set_option maxRecDepth 10000 in
 example : FixedBytes_HEAD_SIZE_4 = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : tuple_IS_DYNAMIC_u256_u256 = pure false := rfl

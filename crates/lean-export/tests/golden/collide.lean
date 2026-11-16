@@ -1,4 +1,4 @@
-export Lib (CallData Evm_input Evm_return_value_Sol_u256 Sol_SELECTOR_SIZE Sol_validate_runtime_head abi_field_head_size_u256 decode_msg_field_from_Sol_u256_CallData len_CallData)
+export Lib (CallData Evm_input Evm_return_value_Sol_u256 Sol_SELECTOR_SIZE Sol_validate_runtime_head abi_field_head_size_tuple_u256_u256 abi_field_head_size_u256 decode_msg_field_from_Sol_tuple_u256_u256_CallData decode_msg_field_from_Sol_u256_CallData len_CallData)
 
 def Field.count : Place :=
   .storage (UInt256.ofNat 0)
@@ -9,6 +9,10 @@ deriving Inhabited
 
 structure Spin where
   n : UInt256
+deriving Inhabited
+
+structure Pairs where
+  t : (UInt256 × UInt256)
 deriving Inhabited
 
 /-- The `init` of contract `Collide`, which its source leaves out -/
@@ -85,6 +89,13 @@ def recv_Spin (n : UInt256) : FeM UInt256 := do
 /-- `Run { x } -> u256`, selector `0xeb034fa7` (`rerun(uint256)`) -/
 def recv_OtherMsg_Run (x : UInt256) : FeM UInt256 := do
   return x
+
+/-- `Pairs { t: (a, b) } -> u256`, selector `0x6a530d0d` (`pairs((uint256,uint256))`) -/
+def recv_Pairs (v0 : (UInt256 × UInt256)) : FeM UInt256 := do
+  let a := v0.fst
+  let b := v0.snd
+  let v5 ← checkedAdd a b
+  return v5
 
 /-- `<Run as AbiSize>::HEAD_SIZE` -/
 def Run_HEAD_SIZE : FeM UInt256 := do
@@ -171,6 +182,45 @@ def recv_OtherMsg_Run_entry : FeM Empty := do
   let result ← recv_OtherMsg_Run message.x
   Evm_return_value_Sol_u256 result
 
+/-- `<Pairs as AbiSize>::HEAD_SIZE` -/
+def Pairs_HEAD_SIZE : FeM UInt256 := do
+  let v1 ← abi_field_head_size_tuple_u256_u256
+  let v2 ← checkedAdd (UInt256.ofNat 0) v1
+  return v2
+
+/-- `<Pairs as Decode>::decode_from<CallData>` -/
+def Pairs_decode_from_CallData (__fe_msg_decode_input : CallData) (__fe_msg_decode_base : UInt256) : FeM Pairs := do
+  let __fe_msg_decode_input_len ← len_CallData __fe_msg_decode_input
+  let __fe_field_0 ← decode_msg_field_from_Sol_tuple_u256_u256_CallData __fe_msg_decode_input __fe_msg_decode_base __fe_msg_decode_base __fe_msg_decode_input_len
+  let v6 := (Pairs.mk __fe_field_0)
+  return v6
+
+/-- `core::abi::Decode::decode_from_prechecked_head<Pairs, Sol, CallData>` -/
+def decode_from_prechecked_head_Pairs_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Pairs := do
+  let v3_1 ← Pairs_decode_from_CallData input pos
+  return v3_1
+
+/-- `core::contracts::decode_runtime_args<Evm, Sol, Pairs>` -/
+def decode_runtime_args_Evm_Sol_Pairs : FeM Pairs := do
+  let mut input : CallData := default
+  let input_2 ← Evm_input
+  input := input_2
+  let base ← Sol_SELECTOR_SIZE
+  let input_6 := input
+  let len ← len_CallData input_6
+  let v9 ← Pairs_HEAD_SIZE
+  let _ ← Sol_validate_runtime_head len base v9
+  let input_11 := input
+  let v12 ← decode_from_prechecked_head_Pairs_Sol_CallData input_11 base len
+  return v12
+
+/-- The entry of `recv_Pairs`, for `collide::OtherMsg::Pairs` -/
+def recv_Pairs_entry : FeM Empty := do
+  nonPayable
+  let message ← decode_runtime_args_Evm_Sol_Pairs
+  let result ← recv_Pairs message.t
+  Evm_return_value_Sol_u256 result
+
 /-- The runtime entry of contract `Collide`: the entry of the arm the call's selector picks -/
 def runtime : FeM Empty := do
   let size_1 ← calldatasize
@@ -178,7 +228,9 @@ def runtime : FeM Empty := do
     revertEmpty
   else
     let selector ← calldataSelector
-    if selector = UInt256.ofNat 0xa444f5e9 then
+    if selector = UInt256.ofNat 0x6a530d0d then
+      recv_Pairs_entry
+    else if selector = UInt256.ofNat 0xa444f5e9 then
       recv_CollideMsg_Run_entry
     else if selector = UInt256.ofNat 0xa5b6ea8f then
       recv_Spin_entry

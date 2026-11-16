@@ -6,3 +6,5 @@ set_option maxRecDepth 10000 in
 example : Run_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
 set_option maxRecDepth 10000 in
 example : Spin_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : Pairs_HEAD_SIZE = pure (UInt256.ofNat 64) := rfl

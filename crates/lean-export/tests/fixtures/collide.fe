@@ -4,7 +4,8 @@
 // export's one sequence of `let`s would keep in scope. And top-level
 // names spelled like the exporter's own binders: `v3` and `size`, and `b1`,
 // a loop's local function. Two msgs have a `Run` variant, whose arms are
-// named with the msg's name.
+// named with the msg's name. `Pairs` destructures a field, which binds it by
+// a name the compiler makes.
 use std::abi::sol
 
 msg CollideMsg {
@@ -17,6 +18,8 @@ msg CollideMsg {
 msg OtherMsg {
     #[selector = sol("rerun(uint256)")]
     Run { x: u256 } -> u256,
+    #[selector = sol("pairs((uint256,uint256))")]
+    Pairs { t: (u256, u256) } -> u256,
 }
 
 mod bounds {
@@ -67,6 +70,10 @@ pub contract Collide {
     recv OtherMsg {
         Run { x } -> u256 {
             x
+        }
+
+        Pairs { t: (a, b) } -> u256 {
+            a + b
         }
     }
 }

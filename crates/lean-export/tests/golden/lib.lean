@@ -5589,3 +5589,84 @@ def decode_msg_field_from_Sol_FixedBytes_4_CallData (input : CallData) (base : U
     let v8 ← decode_field_from_Sol_FixedBytes_4_CallData input base head_pos
     return v8
 
+/-- `<(u256, u256) as AbiSize>::IS_DYNAMIC` -/
+def tuple_IS_DYNAMIC_u256_u256 : FeM Bool := do
+  let v1 ← u256_IS_DYNAMIC
+  let b3 : Bool → FeM Bool := fun v0 => do
+    return v0
+  let b1 : FeM Bool := do
+    b3 true
+  if v1 then
+    b1
+  else
+    let v2 ← u256_IS_DYNAMIC
+    if v2 then
+      b1
+    else
+      b3 false
+
+/-- `core::abi::abi_field_head_size<(u256, u256)>` -/
+def abi_field_head_size_tuple_u256_u256 : FeM UInt256 := do
+  let v0 ← tuple_IS_DYNAMIC_u256_u256
+  if v0 then
+    return (UInt256.ofNat 32)
+  else
+    let v4 ← tuple_HEAD_SIZE_u256_u256
+    return v4
+
+/-- `<(u256, u256) as Decode>::decode_from_bounded<CallData>` -/
+def tuple_decode_from_bounded_Sol_u256_u256_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM (UInt256 × UInt256) := do
+  let v3 ← tuple_HEAD_SIZE_u256_u256
+  let _ ← checked_frame_end_Sol pos v3 input_len
+  let v5 ← tuple_decode_from_prechecked_head_Sol_u256_u256_CallData input pos input_len
+  return v5
+
+/-- `<(u256, u256) as Decode>::decode_from<CallData>` -/
+def tuple_decode_from_Sol_u256_u256_CallData (input : CallData) (pos : UInt256) : FeM (UInt256 × UInt256) := do
+  let mut head_pos : UInt256 := default
+  head_pos := pos
+  let head_pos_4 := head_pos
+  let v0 ← decode_field_from_Sol_u256_CallData input pos head_pos_4
+  let v8 ← abi_field_head_size_u256
+  let head_pos_9 := head_pos
+  let head_pos_10 ← checkedAdd head_pos_9 v8
+  head_pos := head_pos_10
+  let head_pos_13 := head_pos
+  let v1 ← decode_field_from_Sol_u256_CallData input pos head_pos_13
+  let v17 := (v0, v1)
+  return v17
+
+/-- `core::abi::decode_field_from_prechecked_head<Sol, (u256, u256), CallData>` -/
+def decode_field_from_prechecked_head_Sol_tuple_u256_u256_CallData (input : CallData) (base : UInt256) (head_pos : UInt256) (input_len : UInt256) : FeM (UInt256 × UInt256) := do
+  let v4 ← tuple_IS_DYNAMIC_u256_u256
+  if v4 then
+    let tail_rel ← CallData_word_at input head_pos
+    let tail_at ← checked_tail_Sol base tail_rel
+    let v9 ← tuple_decode_from_bounded_Sol_u256_u256_CallData input tail_at input_len
+    return v9
+  else
+    let v12 ← tuple_decode_from_Sol_u256_u256_CallData input head_pos
+    return v12
+
+/-- `core::abi::decode_field_from<Sol, (u256, u256), CallData>` -/
+def decode_field_from_Sol_tuple_u256_u256_CallData (input : CallData) (base : UInt256) (head_pos : UInt256) : FeM (UInt256 × UInt256) := do
+  let v3 ← tuple_IS_DYNAMIC_u256_u256
+  if v3 then
+    let tail_rel ← CallData_word_at input head_pos
+    let v6 ← checked_tail_Sol base tail_rel
+    let v7 ← tuple_decode_from_Sol_u256_u256_CallData input v6
+    return v7
+  else
+    let v10 ← tuple_decode_from_Sol_u256_u256_CallData input head_pos
+    return v10
+
+/-- `core::abi::decode_msg_field_from<Sol, (u256, u256), CallData>` -/
+def decode_msg_field_from_Sol_tuple_u256_u256_CallData (input : CallData) (base : UInt256) (head_pos : UInt256) (input_len : UInt256) : FeM (UInt256 × UInt256) := do
+  let v4 ← tuple_IS_DYNAMIC_u256_u256
+  if v4 then
+    let v5 ← decode_field_from_prechecked_head_Sol_tuple_u256_u256_CallData input base head_pos input_len
+    return v5
+  else
+    let v8 ← decode_field_from_Sol_tuple_u256_u256_CallData input base head_pos
+    return v8
+

@@ -2938,8 +2938,15 @@ impl<'db> BodyExporter<'_, 'db> {
             BodyOwner::ContractInit { contract } => Some(ParamSite::ContractInit(contract)),
             _ => None,
         };
+        // A binding the compiler makes, as for a pattern a parameter or a
+        // field destructures, has a name no source could write: it names
+        // nothing here.
         let source = |binding: Option<LocalBinding<'db>>| {
-            Some(binding?.name(db, hir?)?.data(db).to_string())
+            let name = binding?.name(db, hir?)?.data(db);
+            let mut chars = name.chars();
+            let ident = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+                && chars.all(|c| c.is_alphanumeric() || c == '_');
+            ident.then(|| name.to_string())
         };
         let mut values: Vec<_> = self
             .body
