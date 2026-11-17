@@ -284,6 +284,11 @@ struct Effect<'db> {
 struct Carriers {
     params: Vec<Option<Carrier>>,
     effects: Vec<(u32, Carrier)>,
+    /// Whether the body is its unwinding variant: one that returns from a
+    /// successful halt it reaches, as `.halt` with the values its `mut`
+    /// parameters and effects then hold, so that its caller can store back
+    /// the lane copies it holds before it halts as recorded.
+    unwinds: bool,
 }
 
 impl From<Vec<Option<Carrier>>> for Carriers {
@@ -291,7 +296,45 @@ impl From<Vec<Option<Carrier>>> for Carriers {
         Self {
             params,
             effects: Vec::new(),
+            unwinds: false,
         }
+    }
+}
+
+/// A contract field in a lane of a storage word that effects of a function
+/// provide, one of them `mut`: the function works on a memory copy of the
+/// field for the whole call, one for all the effects it provides, which the
+/// call's end stores back (`docs/language/effects.md`).
+struct LaneCopy<'db> {
+    /// The providers of the effects, least first: the copy is named after
+    /// the first.
+    providers: Vec<u32>,
+    root: NRootId,
+    ty: TyId<'db>,
+    mutable: bool,
+}
+
+/// Where the export of a contract holds copies of lanes and stores them back
+/// before a successful halt, by semantic instance, to check against where
+/// lowering does (`crates/mir/src/runtime/lower/halts.rs`). A copy is
+/// counted where lowering holds it: a lane a call passes is the caller's.
+#[derive(Clone, Default)]
+pub struct LaneReport<'db> {
+    /// The instances whose bodies hold a copy of a lane.
+    pub holders: FxHashSet<SemanticInstanceKey<'db>>,
+    /// The points where a body stores back copies it holds before it may
+    /// halt successfully: a call, with its callee, or a halt of its own.
+    pub halts: FxHashSet<(SemanticInstanceKey<'db>, Option<SemanticInstanceKey<'db>>)>,
+    /// The projections that hold lane copies: lowering inlines a projection,
+    /// so its callers hold them.
+    projections: FxHashSet<SemanticInstanceKey<'db>>,
+}
+
+impl<'db> LaneReport<'db> {
+    fn extend(&mut self, other: LaneReport<'db>) {
+        self.holders.extend(other.holders);
+        self.halts.extend(other.halts);
+        self.projections.extend(other.projections);
     }
 }
 
@@ -303,6 +346,16 @@ enum Out<'db> {
     Value(ValueTarget<'db>),
     /// In a packed lane of contract state, which has no address to pass.
     Lane(TyId<'db>, String, Lane),
+}
+
+/// A copy of a contract field's lane that a body holds for the whole call:
+/// its variable, where the lane is, and whether an effect is `mut`.
+struct HeldCopy<'db> {
+    var: String,
+    ty: TyId<'db>,
+    place: String,
+    lane: Lane,
+    mutable: bool,
 }
 
 /// What a place is in the model.
@@ -568,6 +621,7 @@ pub struct IngotExport<'db> {
     /// What each definition of the library's and the ingot's exported so
     /// far takes on trust.
     trusted: Vec<Trusted>,
+    lanes: LaneReport<'db>,
 }
 
 /// What one contract's export adds: its own definitions and the ingot's it
@@ -608,7 +662,14 @@ impl<'db> IngotExport<'db> {
             defs: Vec::new(),
             contracts: Vec::new(),
             trusted: Vec::new(),
+            lanes: LaneReport::default(),
         }
+    }
+
+    /// Where the contracts exported so far hold lane copies and store them
+    /// back before successful halts.
+    pub fn lane_report(&self) -> &LaneReport<'db> {
+        &self.lanes
     }
 
     /// Exports the definitions of `contract`: its storage layout, the
@@ -720,6 +781,11 @@ impl<'db> IngotExport<'db> {
             folded: Vec::new(),
             checks: Vec::new(),
             refs: Vec::new(),
+            halts: FxHashMap::default(),
+            lanes: LaneReport {
+                projections: self.lanes.projections.clone(),
+                ..LaneReport::default()
+            },
         };
         // The Lean names of each instance whose body is exported.
         let mut defined = FxHashMap::<_, Vec<String>>::default();
@@ -855,6 +921,7 @@ impl<'db> IngotExport<'db> {
                 Scope::Contract => {}
             }
         }
+        self.lanes.extend(std::mem::take(&mut module.lanes));
         for name in module.nevers {
             match scope(&name) {
                 Scope::Library => {
@@ -1126,6 +1193,9 @@ struct Module<'db> {
     checks: Vec<(String, String)>,
     /// The definitions named by each text under way, innermost last.
     refs: Vec<Vec<String>>,
+    /// Whether each instance asked about may halt successfully (`may_halt`).
+    halts: FxHashMap<SemanticInstanceKey<'db>, bool>,
+    lanes: LaneReport<'db>,
 }
 
 /// A use of a constant whose definition has no model, in the body of the
@@ -1189,6 +1259,10 @@ impl<'db> Module<'db> {
             copied: Vec::new(),
             statements: Statements::default(),
             commented: None,
+            copies: Vec::new(),
+            copy_vars: FxHashMap::default(),
+            holds_at: FxHashMap::default(),
+            at: (NBlockId::new(0), 0),
         }
         .export();
         let refs = self.end(depth);
@@ -1672,6 +1746,10 @@ impl<'db> Module<'db> {
         let base = args.iter().fold(base, |name, arg| {
             format!("{name}_{}", lean_ident(arg.pretty_print(db)))
         });
+        let base = match carriers.unwinds {
+            true => format!("{base}_unwinds"),
+            false => base,
+        };
         // A function called while its export is under way is named before
         // its body is done.
         if under_way.is_some() {
@@ -1913,6 +1991,179 @@ impl<'db> Module<'db> {
             .collect();
         effects.sort_unstable_by_key(|effect| effect.provider);
         effects
+    }
+
+    /// Whether a call to `key` may reach a successful halt (RETURN, STOP or
+    /// SELFDESTRUCT): it is such a builtin, or its body, or that of an
+    /// instance it calls, calls one.
+    fn may_halt(&mut self, key: SemanticInstanceKey<'db>) -> bool {
+        if let Some(&halts) = self.halts.get(&key) {
+            return halts;
+        }
+        let db = self.db;
+        // The instances `key` reaches, each with those it calls and whether
+        // it is a builtin that halts.
+        let mut graph = FxHashMap::default();
+        let mut pending = vec![key];
+        while let Some(next) = pending.pop() {
+            if graph.contains_key(&next) || self.halts.contains_key(&next) {
+                continue;
+            }
+            let builtin = match next.owner(db) {
+                BodyOwner::Func(func, _) => runtime_builtin_func_kind(db, func),
+                _ => None,
+            };
+            let mut callees = Vec::new();
+            if builtin.is_none()
+                && let Ok(normalized) = normalize_semantic_body(db, SemanticInstance::new(db, next))
+            {
+                let statements = normalized
+                    .body
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements);
+                for statement in statements {
+                    if let NStatementKind::Define {
+                        expr: NExpr::Call { callee, .. },
+                        ..
+                    } = &statement.kind
+                    {
+                        callees.push(callee.key);
+                    }
+                }
+            }
+            let own = matches!(
+                builtin,
+                Some(
+                    RuntimeBuiltinFuncKind::ReturnData
+                        | RuntimeBuiltinFuncKind::Stop
+                        | RuntimeBuiltinFuncKind::SelfDestruct
+                )
+            );
+            pending.extend(callees.iter().copied());
+            graph.insert(next, (callees, own));
+        }
+        let mut halts: FxHashMap<_, _> = graph.iter().map(|(key, (_, own))| (*key, *own)).collect();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (key, (callees, _)) in &graph {
+                let reaches = callees.iter().any(|callee| {
+                    halts.get(callee).or(self.halts.get(callee)).copied() == Some(true)
+                });
+                if reaches && !halts[key] {
+                    halts.insert(*key, true);
+                    changed = true;
+                }
+            }
+        }
+        self.halts.extend(halts);
+        self.halts[&key]
+    }
+
+    /// Whether the body of `key` never returns: it has no `Return`.
+    fn never_returns(&self, key: SemanticInstanceKey<'db>) -> bool {
+        normalize_semantic_body(self.db, SemanticInstance::new(self.db, key)).is_ok_and(
+            |normalized| {
+                !normalized
+                    .body
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
+            },
+        )
+    }
+
+    /// Whether the slides of the projection `key` do nothing but end
+    /// accesses: ending those it holds stores back the lane copies among
+    /// them, which is all a successful halt during a session of it does.
+    fn slide_only_ends(&self, key: SemanticInstanceKey<'db>) -> bool {
+        let Ok(normalized) = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
+        else {
+            return false;
+        };
+        let body = &normalized.body;
+        let mut pending: Vec<_> = body
+            .blocks
+            .iter()
+            .filter_map(|block| match &block.terminator.kind {
+                NTerminatorKind::Yield { resume, .. } => Some(resume.block),
+                _ => None,
+            })
+            .collect();
+        let mut seen = FxHashSet::default();
+        while let Some(block) = pending.pop() {
+            if !seen.insert(block) {
+                continue;
+            }
+            let data = &body.blocks[block.index()];
+            if !data
+                .statements
+                .iter()
+                .all(|statement| matches!(statement.kind, NStatementKind::End { .. }))
+            {
+                return false;
+            }
+            let successors = data.terminator.kind.successors();
+            pending.extend(successors.iter().map(|successor| successor.block));
+        }
+        true
+    }
+
+    /// The contract fields in lanes that the effects of the function `key`
+    /// provide, one of them `mut`, each with its providers (`LaneCopy`). A
+    /// contract's entries reach the fields themselves.
+    fn lane_copies(
+        &self,
+        key: SemanticInstanceKey<'db>,
+    ) -> Result<Vec<LaneCopy<'db>>, Unsupported> {
+        let db = self.db;
+        if !matches!(
+            key.owner(db),
+            BodyOwner::Func(..) | BodyOwner::Closure { .. }
+        ) {
+            return Ok(Vec::new());
+        }
+        let Ok(normalized) = normalize_semantic_body(db, SemanticInstance::new(db, key)) else {
+            return Ok(Vec::new());
+        };
+        let mut copies: Vec<(ContractFieldId<'db>, LaneCopy<'db>)> = Vec::new();
+        for (index, root) in normalized.body.roots.iter().enumerate() {
+            if let NRootKind::Provider { binding } = &root.kind
+                && let ProviderSource::ContractField { field } = binding.source
+                && root.address_space == AddressSpace::Storage
+                && self
+                    .field_layout(field)?
+                    .lane
+                    .is_some_and(|lane| lane.partial)
+            {
+                match copies.iter_mut().find(|(copied, _)| *copied == field) {
+                    Some((_, copy)) => {
+                        copy.providers.push(binding.provider_idx);
+                        copy.mutable |= binding.is_mut;
+                    }
+                    None => copies.push((
+                        field,
+                        LaneCopy {
+                            providers: vec![binding.provider_idx],
+                            root: NRootId::new(index),
+                            ty: root.ty,
+                            mutable: binding.is_mut,
+                        },
+                    )),
+                }
+            }
+        }
+        let mut copies: Vec<_> = copies
+            .into_iter()
+            .map(|(_, copy)| copy)
+            .filter(|copy| copy.mutable)
+            .collect();
+        for copy in &mut copies {
+            copy.providers.sort_unstable();
+        }
+        copies.sort_by_key(|copy| copy.providers[0]);
+        Ok(copies)
     }
 
     /// Appends the definition of `name` with the text `body` gives after the
@@ -2891,6 +3142,16 @@ struct BodyExporter<'a, 'db> {
     /// which an edge from a later block enters, and the joins that must be
     /// part of a loop's recursion (`find_joins`).
     recursive: FxHashSet<NBlockId>,
+    /// The copies of contract fields' lanes the body holds for the whole
+    /// call (`LaneCopy`), and the variable of each provider of one, a copy
+    /// it holds or takes by value.
+    copies: Vec<HeldCopy<'db>>,
+    copy_vars: FxHashMap<u32, String>,
+    /// The lane borrows and the projection sessions open before each
+    /// statement, by block and position: on every path, and on some.
+    holds_at: FxHashMap<(NBlockId, usize), (FxHashSet<NValueId>, FxHashSet<NValueId>)>,
+    /// The statement being printed.
+    at: (NBlockId, usize),
     /// The borrows of packed lanes, with the place each borrows and whether
     /// it is `mut`. A lane has no address, so the borrow holds its value in a
     /// mutable variable, which a `mut` borrow writes back where it ends.
@@ -3373,6 +3634,42 @@ impl<'db> BodyExporter<'_, 'db> {
                 self.effects.push(param);
             }
         }
+        // A function given a contract field's lane holds a copy of it for
+        // the whole call, or takes the copy its caller holds by value.
+        for copy in self.module.lane_copies(self.body.owner.key(db))? {
+            let name = self.effect(copy.providers[0]);
+            let ty = self.module.value_ty(copy.ty)?;
+            if self
+                .carriers
+                .effects
+                .contains(&(copy.providers[0], Carrier::Value))
+            {
+                writeln!(state, "  let mut {name} := {name}").unwrap();
+                self.binders.push((name.clone(), ty));
+                self.effects.push(Effect {
+                    provider: copy.providers[0],
+                    ty: copy.ty,
+                    state: false,
+                    mutable: true,
+                });
+            } else {
+                let (place, lane) = self.root(copy.root)?;
+                let lane =
+                    lane.ok_or_else(|| Unsupported("lane copy of a field in no lane".to_string()))?;
+                let load = self.load(copy.ty, &place, Some(lane))?;
+                writeln!(state, "  let mut {name} ← {load}").unwrap();
+                self.copies.push(HeldCopy {
+                    var: name.clone(),
+                    ty: copy.ty,
+                    place,
+                    lane,
+                    mutable: copy.mutable,
+                });
+            }
+            for provider in copy.providers {
+                self.copy_vars.insert(provider, name.clone());
+            }
+        }
         let params = binders(&self.binders);
         // An immutable field is words of the code's tail, at its memory
         // layout. Nothing writes it, so the body reads it once.
@@ -3503,7 +3800,7 @@ impl<'db> BodyExporter<'_, 'db> {
             self.yielded = Some(ty);
         }
         self.result_ty = self.returned_ty()?;
-        let never = self.result_ty == "Empty";
+        let never = self.result_ty == "Empty" && !self.carriers.unwinds;
         let mut returned = Vec::new();
         for out in self.outs.clone() {
             let (_, inner) = self.ty(out).as_capability(db).unwrap();
@@ -3523,6 +3820,11 @@ impl<'db> BodyExporter<'_, 'db> {
             && yields
                 .iter()
                 .all(|(_, resume)| self.slide_is_empty(*resume));
+        if !yields.is_empty() && (self.carriers.unwinds || !self.copies.is_empty()) {
+            return Err(Unsupported(
+                "a projection that unwinds or holds a contract field's lane".to_string(),
+            ));
+        }
         if !yields.is_empty() && !direct {
             let mut pending: Vec<_> = yields.iter().map(|(_, resume)| *resume).collect();
             while let Some(block) = pending.pop() {
@@ -3538,8 +3840,23 @@ impl<'db> BodyExporter<'_, 'db> {
             };
             self.result_ty = format!("({0} × ({0} → FeM {outs}))", self.result_ty);
             self.slide_ty = Some(outs);
+        } else if self.carriers.unwinds {
+            if returned.is_empty() {
+                return Err(Unsupported(
+                    "unwinding variant of a body that returns no values".to_string(),
+                ));
+            }
+            self.result_ty = format!("(Unwound {} × {})", self.result_ty, returned.join(" × "));
         } else if !returned.is_empty() {
             self.result_ty = format!("({} × {})", self.result_ty, returned.join(" × "));
+        }
+        self.holds_at = self.open_holds();
+        if self.helds.iter().any(|(_, _, mutable)| *mutable) {
+            let lanes = &mut self.module.lanes;
+            match yields.is_empty() {
+                true => lanes.holders.insert(self.body.owner.key(db)),
+                false => lanes.projections.insert(self.body.owner.key(db)),
+            };
         }
         self.find_joins();
         let mut out = format!("{params} : FeM {} := do\n{state}", self.result_ty);
@@ -3565,6 +3882,7 @@ impl<'db> BodyExporter<'_, 'db> {
         slots
             .chain(self.outs.iter().copied().map(|value| self.value(value)))
             .chain(self.effects.iter().map(|param| self.effect(param.provider)))
+            .chain(self.copies.iter().map(|copy| copy.var.clone()))
             .chain(self.sessions.iter().copied().map(|value| self.value(value)))
             .chain(helds)
             .chain(self.flags.iter().copied().map(flag))
@@ -3773,6 +4091,7 @@ impl<'db> BodyExporter<'_, 'db> {
             printed.push((start, None));
         }
         for (position, statement) in data.statements.iter().enumerate() {
+            self.at = (block, position);
             let text = match (&statement.kind, self.statement(statement)?) {
                 (NStatementKind::Define { result, .. }, Some(text)) => {
                     self.fold(*result, text, block, position)
@@ -3884,6 +4203,10 @@ impl<'db> BodyExporter<'_, 'db> {
         for effect in self.effects.clone() {
             tys.push(self.module.value_ty(effect.ty)?);
         }
+        let copies: Vec<_> = self.copies.iter().map(|copy| copy.ty).collect();
+        for ty in copies {
+            tys.push(self.module.value_ty(ty)?);
+        }
         for session in self.sessions.clone() {
             tys.push(self.held_ty(session)?);
         }
@@ -3974,12 +4297,17 @@ impl<'db> BodyExporter<'_, 'db> {
                     Some(returned) => self.operand(returned)?,
                     None => "()".to_string(),
                 };
+                for line in self.store_copies()? {
+                    writeln!(out, "{pad}{line}").unwrap();
+                }
                 let outs: String = self
                     .returned()
                     .iter()
                     .map(|out| format!(", {out}"))
                     .collect();
-                if outs.is_empty() {
+                if self.carriers.unwinds {
+                    writeln!(out, "{pad}return (.ret {result}{outs})").unwrap();
+                } else if outs.is_empty() {
                     writeln!(out, "{pad}return {}", bare(&result)).unwrap();
                 } else {
                     writeln!(out, "{pad}return ({result}{outs})").unwrap();
@@ -4298,6 +4626,219 @@ impl<'db> BodyExporter<'_, 'db> {
         Some(line.chars().filter(|c| !c.is_control()).collect())
     }
 
+    /// The `mut` borrows of lanes and the projection sessions open before
+    /// each statement (`holds_at`).
+    #[allow(clippy::type_complexity)]
+    fn open_holds(
+        &self,
+    ) -> FxHashMap<(NBlockId, usize), (FxHashSet<NValueId>, FxHashSet<NValueId>)> {
+        let db = self.module.db;
+        let mut items: FxHashSet<_> = self
+            .helds
+            .iter()
+            .filter(|(_, _, mutable)| *mutable)
+            .map(|(held, ..)| *held)
+            .collect();
+        for statement in self.body.blocks.iter().flat_map(|block| &block.statements) {
+            if let NStatementKind::Define {
+                result,
+                expr: NExpr::Call { callee, .. },
+            } = &statement.kind
+                && SemanticInstance::new(db, callee.key).is_projection(db)
+            {
+                items.insert(*result);
+            }
+        }
+        let mut entry: Vec<Option<(FxHashSet<NValueId>, FxHashSet<NValueId>)>> =
+            vec![None; self.body.blocks.len()];
+        entry[self.body.entry.index()] = Some(Default::default());
+        let mut pending = vec![self.body.entry];
+        let mut at = FxHashMap::default();
+        while let Some(block) = pending.pop() {
+            let (mut must, mut may) = entry[block.index()].clone().unwrap();
+            let data = &self.body.blocks[block.index()];
+            for (position, statement) in data.statements.iter().enumerate() {
+                at.insert((block, position), (must.clone(), may.clone()));
+                match &statement.kind {
+                    NStatementKind::Define { result, .. } if items.contains(result) => {
+                        must.insert(*result);
+                        may.insert(*result);
+                    }
+                    NStatementKind::End { access } => {
+                        must.remove(access);
+                        may.remove(access);
+                    }
+                    _ => {}
+                }
+            }
+            for successor in data.terminator.kind.successors().iter() {
+                let next = successor.block;
+                let merged = match &entry[next.index()] {
+                    None => (must.clone(), may.clone()),
+                    Some((others, some)) => (
+                        others.intersection(&must).copied().collect(),
+                        some.union(&may).copied().collect(),
+                    ),
+                };
+                if entry[next.index()].as_ref() != Some(&merged) {
+                    entry[next.index()] = Some(merged);
+                    pending.push(next);
+                }
+            }
+        }
+        at
+    }
+
+    /// Where the statement being printed may halt successfully, calling
+    /// `callee` or halting itself: the lines that store back the lane
+    /// copies the body holds there first, if it must catch the halt. It
+    /// must where it holds a copy, where the call passes one (`passes`), and
+    /// in its unwinding variant, which returns the halt. `gives` says that
+    /// the call gives the callee a contract field's lane it holds a copy of.
+    fn halt_flush(
+        &mut self,
+        callee: Option<SemanticInstanceKey<'db>>,
+        passes: bool,
+        gives: bool,
+    ) -> Result<Option<String>, Unsupported> {
+        let db = self.module.db;
+        let (must, may) = self.holds_at.get(&self.at).cloned().unwrap_or_default();
+        if must != may {
+            return Err(Unsupported(
+                "a lane copy held on some paths only where the body may halt".to_string(),
+            ));
+        }
+        let mut lines = Vec::new();
+        let mut held = false;
+        // The innermost first: a session's slide writes back into what those
+        // around it hold.
+        let mut open: Vec<_> = must.into_iter().collect();
+        open.sort_by_key(|value| std::cmp::Reverse(value.index()));
+        for value in open {
+            if let Some((outs, _)) = self.slides.get(&value) {
+                let Some((_, NExpr::Call { callee, .. })) = self.body.defining_expr(value) else {
+                    return Err(Unsupported("session of no call".to_string()));
+                };
+                // The session holds the copies the projection holds, which
+                // lowering inlines into the body, and those of the lanes the
+                // call passes. One that holds none and returns nothing has
+                // nothing to store back.
+                let holds = self.module.lanes.projections.contains(&callee.key);
+                let passed = outs.iter().any(|out| matches!(out, Out::Lane(..)));
+                if outs.is_empty() && !holds {
+                    continue;
+                }
+                if !self.module.slide_only_ends(callee.key) {
+                    return Err(Unsupported(
+                        "a projection session open where the body may halt, whose slide does more than end accesses"
+                            .to_string(),
+                    ));
+                }
+                held |= holds || passed;
+                lines.push(self.session_end(value)?);
+            } else if let Some(line) = self.held_store(value)? {
+                held = true;
+                lines.push(line);
+            }
+        }
+        lines.extend(self.store_copies()?);
+        let catches = self.carriers.unwinds || passes || !lines.is_empty();
+        // Lowering inlines a projection, so its callers hold its copies and
+        // store them back.
+        if (catches || gives) && self.yielded.is_some() {
+            return Err(Unsupported(
+                "a successful halt in a projection that holds or passes lane copies".to_string(),
+            ));
+        }
+        if held || passes || gives {
+            self.module
+                .lanes
+                .halts
+                .insert((self.body.owner.key(db), callee));
+        }
+        Ok(catches.then(|| lines.join("\n")))
+    }
+
+    /// The line that takes the result `name` of the run whose `Unwound`
+    /// result is `unwound`, and what the body does if the run halted:
+    /// `flush`, then it halts as recorded or, in its unwinding variant,
+    /// returns the halt with the values it returns.
+    fn caught(&self, unwound: &str, name: &str, flush: &str) -> String {
+        let halt = match self.carriers.unwinds {
+            true => {
+                let outs: String = self
+                    .returned()
+                    .iter()
+                    .map(|out| format!(", {out}"))
+                    .collect();
+                format!("return (.halt {unwound}.data{outs})")
+            }
+            false => format!("Fe.M.stop {unwound}.data"),
+        };
+        let mut lines = format!("\nlet some {name} := {unwound}.ret? | do");
+        let flush = flush.lines().filter(|line| !line.trim().is_empty());
+        for line in flush.chain([halt.as_str()]) {
+            write!(lines, "\n  {line}").unwrap();
+        }
+        lines
+    }
+
+    /// The lines that end the session `access` of a projection: its slide
+    /// runs on the value the session leaves, and what it returns is written
+    /// back.
+    fn session_end(&mut self, access: NValueId) -> Result<String, Unsupported> {
+        let outs = self.slides[&access].0.clone();
+        let name = self.value(access);
+        let names: Vec<_> = (0..outs.len()).map(|n| self.derived(access, n)).collect();
+        let binder = match names.as_slice() {
+            [] => "_".to_string(),
+            [one] => one.clone(),
+            names => format!("({})", names.join(", ")),
+        };
+        let mut lines = format!("let {binder} ← {} {name}", self.derived(access, "k"));
+        for (out, value) in outs.iter().zip(&names) {
+            let line = match out {
+                Out::Value(target) => self.write(target, value)?,
+                Out::Lane(ty, place, lane) => self.store(*ty, place, Some(*lane), value)?,
+            };
+            write!(lines, "\n{line}").unwrap();
+        }
+        lines.push_str(&self.reloads[&access]);
+        Ok(lines)
+    }
+
+    /// The line that stores back the lane the `mut` borrow `access` holds, if
+    /// it is such a borrow.
+    fn held_store(&mut self, access: NValueId) -> Result<Option<String>, Unsupported> {
+        let held = self
+            .helds
+            .iter()
+            .find(|(held, _, mutable)| *held == access && *mutable)
+            .cloned();
+        let Some((held, place, _)) = held else {
+            return Ok(None);
+        };
+        let (var, _) = self.held(held).unwrap();
+        let (lean, lane) = self.place(&place)?;
+        let value = self.held_var(var);
+        Ok(Some(self.store(place.ty, &lean, lane, &value)?))
+    }
+
+    /// The lines that store back the copies of contract fields' lanes the
+    /// body holds for the whole call.
+    fn store_copies(&mut self) -> Result<Vec<String>, Unsupported> {
+        let copies: Vec<_> = self
+            .copies
+            .iter()
+            .filter(|copy| copy.mutable)
+            .map(|copy| (copy.ty, copy.place.clone(), copy.lane, copy.var.clone()))
+            .collect();
+        copies
+            .into_iter()
+            .map(|(ty, place, lane, var)| self.store(ty, &place, Some(lane), &var))
+            .collect()
+    }
+
     /// The lines of `statement`, if it prints any.
     fn statement(&mut self, statement: &NStatement<'db>) -> Result<Option<String>, Unsupported> {
         Ok(match &statement.kind {
@@ -4586,42 +5127,10 @@ impl<'db> BodyExporter<'_, 'db> {
             // The end of a session runs the projection's slide on the value
             // the session leaves.
             NStatementKind::End { access } if self.slides.contains_key(access) => {
-                let outs = self.slides[access].0.clone();
-                let name = self.value(*access);
-                let names: Vec<_> = (0..outs.len()).map(|n| self.derived(*access, n)).collect();
-                let binder = match names.as_slice() {
-                    [] => "_".to_string(),
-                    [one] => one.clone(),
-                    names => format!("({})", names.join(", ")),
-                };
-                let mut lines = format!("let {binder} ← {} {name}", self.derived(*access, "k"));
-                for (out, value) in outs.iter().zip(&names) {
-                    let line = match out {
-                        Out::Value(target) => self.write(target, value)?,
-                        Out::Lane(ty, place, lane) => self.store(*ty, place, Some(*lane), value)?,
-                    };
-                    write!(lines, "\n{line}").unwrap();
-                }
-                lines.push_str(&self.reloads[access]);
-                Some(lines)
+                Some(self.session_end(*access)?)
             }
             // A `mut` borrow of a lane writes the value it held back.
-            NStatementKind::End { access } => {
-                let held = self
-                    .helds
-                    .iter()
-                    .find(|(held, _, mutable)| held == access && *mutable)
-                    .cloned();
-                match held {
-                    Some((held, place, _)) => {
-                        let (var, _) = self.held(held).unwrap();
-                        let (lean, lane) = self.place(&place)?;
-                        let value = self.held_var(var);
-                        Some(self.store(place.ty, &lean, lane, &value)?)
-                    }
-                    None => None,
-                }
-            }
+            NStatementKind::End { access } => self.held_store(*access)?,
             // An index known when compiling was checked then.
             NStatementKind::CheckIndex {
                 index: NIndex::Const(_),
@@ -4986,6 +5495,31 @@ impl<'db> BodyExporter<'_, 'db> {
                 _ => return Err(Unsupported("effect argument in memory".to_string())),
             }
         }
+        // A contract field's lane the callee's effects are given: the callee
+        // holds a copy of it for the call, or takes the copy the body holds
+        // by value and returns what it leaves.
+        let copies = self.module.lane_copies(callee)?;
+        let mut gives = false;
+        for copy in &copies {
+            let provider = copy.providers[0];
+            let arg = effect_args
+                .iter()
+                .find(|arg| arg.binding_idx == provider)
+                .ok_or_else(|| Unsupported("effect without an argument".to_string()))?;
+            match self.target(&arg.place)? {
+                Target::Value(target) => {
+                    write!(lean_args, " {}", self.read(&target)?).unwrap();
+                    effects.push((provider, Carrier::Value));
+                    outs.push(Out::Value(target));
+                }
+                Target::Place(_, Some(_)) => gives = true,
+                _ => {
+                    return Err(Unsupported(
+                        "contract field's lane given from neither a copy nor the field".to_string(),
+                    ));
+                }
+            }
+        }
         // A callee whose instance names the contract field behind an effect
         // reads and writes the field itself. Where the body holds the
         // field's lane, the callee finds what the body wrote, and the body
@@ -4998,6 +5532,9 @@ impl<'db> BodyExporter<'_, 'db> {
             if params
                 .iter()
                 .any(|effect| effect.provider == arg.binding_idx)
+                || copies
+                    .iter()
+                    .any(|copy| copy.providers.contains(&arg.binding_idx))
             {
                 continue;
             }
@@ -5017,11 +5554,71 @@ impl<'db> BodyExporter<'_, 'db> {
                 write!(reloads, "\n{var} := (← {load})").unwrap();
             }
         }
+        // A call that may halt successfully where the body holds lane copies,
+        // passes one or unwinds: the body takes the halt, stores back its
+        // copies and halts as recorded, or returns the halt. A callee that
+        // returns values is called through its unwinding variant, which
+        // returns them from a halt too.
+        let passes = outs.iter().any(|out| matches!(out, Out::Lane(..)));
+        let flush = match self.module.may_halt(callee) {
+            true => self.halt_flush(Some(callee), passes, gives)?,
+            false => None,
+        };
+        let projection = SemanticInstance::new(db, callee).is_projection(db);
+        // Lowering inlines a projection: its halts are its callers'.
+        if projection && flush.is_some() {
+            return Err(Unsupported(
+                "a projection that may halt where the body must catch a halt".to_string(),
+            ));
+        }
+        let never = self.module.never_returns(callee);
         let carriers = Carriers {
             params: carriers,
             effects,
+            unwinds: flush.is_some() && !outs.is_empty(),
         };
-        let callee = self.module.instance(callee, carriers)?;
+        let unwinds = carriers.unwinds;
+        let key = callee;
+        let callee = self.module.instance(key, carriers)?;
+        // The body holds the copies of the lanes it passes and gives, and
+        // those a projection it calls holds, once that is exported; a
+        // projection's callers hold them in turn.
+        if passes || gives || (projection && self.module.lanes.projections.contains(&key)) {
+            let owner = self.body.owner.key(db);
+            let lanes = &mut self.module.lanes;
+            match self.yielded.is_some() {
+                true => lanes.projections.insert(owner),
+                false => lanes.holders.insert(owner),
+            };
+        }
+        if let Some(flush) = flush {
+            let unwound = self.derived(result, "u");
+            let mut lines = if unwinds {
+                let returned: String = (0..outs.len())
+                    .map(|n| format!(", {}", self.derived(result, n)))
+                    .collect();
+                let mut lines = format!("let ({unwound}{returned}) ← {callee}{lean_args}");
+                for (n, out) in outs.iter().enumerate() {
+                    let value = self.derived(result, n);
+                    let line = match out {
+                        Out::Value(target) => self.write(target, &value)?,
+                        Out::Lane(ty, place, lane) => {
+                            self.store(*ty, place, Some(*lane), &value)?
+                        }
+                    };
+                    write!(lines, "\n{line}").unwrap();
+                }
+                lines
+            } else {
+                format!("let {unwound} ← Fe.M.unwind ({callee}{lean_args})")
+            };
+            lines.push_str(&self.caught(&unwound, name, &format!("{reloads}\n{flush}")));
+            lines.push_str(&reloads);
+            if never {
+                lines.push_str("\nnever");
+            }
+            return Ok(lines);
+        }
         if self.module.nevers.contains(&callee) {
             return Ok(format!("let {name} ← {callee}{lean_args}\nnever"));
         }
@@ -5145,6 +5742,16 @@ impl<'db> BodyExporter<'_, 'db> {
                 | Kind::Todo
                 | Kind::PanicCode
         );
+        // A halt where the body holds lane copies, or unwinds.
+        if matches!(kind, Kind::ReturnData | Kind::Stop)
+            && let Some(flush) = self.halt_flush(None, false, false)?
+        {
+            let unwound = self.derived(result, "u");
+            let caught = self.caught(&unwound, &name, &flush);
+            return Ok(format!(
+                "let {unwound} ← Fe.M.unwind ({action}{applied}){caught}\nnever"
+            ));
+        }
         if !action.is_empty() {
             let never = if never { "\nnever" } else { "" };
             return Ok(format!("let {name} ← {action}{applied}{never}"));
@@ -5739,6 +6346,11 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             // A temporary is the value it was made for.
             NRootKind::Temporary { value } => Some(self.value(*value)),
+            NRootKind::Provider { binding }
+                if let Some(var) = self.copy_vars.get(&binding.provider_idx) =>
+            {
+                Some(var.clone())
+            }
             NRootKind::Provider { binding } => (self.immutables.contains(&binding.provider_idx)
                 || self
                     .effects

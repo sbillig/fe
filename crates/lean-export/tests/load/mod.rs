@@ -50,6 +50,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("collide", true),
     ("names", true),
     ("effect_copies", true),
+    ("lane_holds", true),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it

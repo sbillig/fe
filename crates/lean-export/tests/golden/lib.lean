@@ -6090,3 +6090,154 @@ def decode_msg_field_from_Sol_tuple_u256_u256_CallData (input : CallData) (base 
     let v8 ← decode_field_from_Sol_tuple_u256_u256_CallData input base head_pos
     return v8
 
+/-- `std::evm::storage_bytes::ceil_words` -/
+def ceil_words (len : UInt256) : FeM UInt256 := do
+  -- if len == 0 {
+  if decide (len = (UInt256.ofNat 0)) then
+    return UInt256.ofNat 0
+  else
+    -- ((len - 1) / 32) + 1
+    let v9 ← checkedSub len (UInt256.ofNat 1)
+    let v11 ← checkedDiv v9 (UInt256.ofNat 32)
+    let v13 ← checkedAdd v11 (UInt256.ofNat 1)
+    return v13
+
+/-- `std::evm::storage_bytes::offset` -/
+def offset (base : UInt256) (bytes : UInt256) : FeM UInt256 := do
+  -- ptr::offset_bytes(base, bytes.downcast_unchecked())
+  let v2 ← downcast_unchecked_u256_usize bytes
+  return base + v2
+
+/-- `std::evm::storage_bytes::mask_for_bytes` -/
+def mask_for_bytes (rem : UInt256) : FeM UInt256 := do
+  -- if rem == 0 {
+  if decide (rem = (UInt256.ofNat 0)) then
+    return UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007913129639935
+  else
+    -- let shift = (32 - rem) * 8
+    let v9 ← checkedSub (UInt256.ofNat 32) rem
+    let shift ← checkedMul v9 (UInt256.ofNat 8)
+    -- 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff << shift
+    let v14 := (UInt256.ofNat 115792089237316195423570985008687907853269984665640564039457584007913129639935) <<< shift
+    return v14
+
+/-- `std::evm::storage_bytes::zero_pad_memory_bytes` -/
+def zero_pad_memory_bytes (ptr : UInt256) (len : UInt256) : FeM Unit := do
+  -- let rem = len % 32
+  let rem ← checkedRem len (UInt256.ofNat 32)
+  -- if rem == 0 {
+  if decide (rem = (UInt256.ofNat 0)) then
+    return ()
+  else
+    -- let tail_ptr = offset(ptr, (len / 32) * 32)
+    let v12 ← checkedDiv len (UInt256.ofNat 32)
+    let v14 ← checkedMul v12 (UInt256.ofNat 32)
+    let tail_ptr ← offset ptr v14
+    -- let word = ops::mload(tail_ptr)
+    let word ← mload tail_ptr
+    -- ops::mstore(addr: tail_ptr, value: word & mask_for_bytes(rem))
+    let v19 ← mask_for_bytes rem
+    let _ ← mstore tail_ptr (word &&& v19)
+    return ()
+
+/-- `std::evm::storage_bytes::encode_bytes_return_from_calldata` -/
+def encode_bytes_return_from_calldata (data_ptr : UInt256) (len : UInt256) : FeM Empty := do
+  -- let total_len = 64 + ceil_words(len) * 32
+  let v3 ← ceil_words len
+  let v5 ← checkedMul v3 (UInt256.ofNat 32)
+  let total_len ← checkedAdd (UInt256.ofNat 64) v5
+  -- let ptr = ptr::alloc_bytes(total_len.downcast_saturate())
+  let v8 ← downcast_saturate_u256_usize total_len
+  let ptr ← alloc_bytes v8
+  -- ops::mstore(addr: ptr, value: 32)
+  let _ ← mstore ptr (UInt256.ofNat 32)
+  -- ops::mstore(addr: offset(ptr, 32), value: len)
+  let v14 ← offset ptr (UInt256.ofNat 32)
+  let _ ← mstore v14 len
+  -- ops::calldatacopy(dest: offset(ptr, 64), offset: data_ptr, len: len)
+  let v17 ← offset ptr (UInt256.ofNat 64)
+  let _ ← calldatacopy v17 data_ptr len
+  -- zero_pad_memory_bytes(ptr: offset(ptr, 64), len: len)
+  let v20 ← offset ptr (UInt256.ofNat 64)
+  let _ ← zero_pad_memory_bytes v20 len
+  -- ops::return_data(offset: ptr, len: total_len)
+  let v22 ← returnData ptr total_len
+  nomatch v22
+
+/-- `<Sol as Abi>::decode_bool_word` -/
+def Sol_decode_bool_word (word : UInt256) : FeM Bool := do
+  -- if word == 0 {
+  if decide (word = (UInt256.ofNat 0)) then
+    return false
+  else
+    -- if word == 1 {
+    if decide (word = (UInt256.ofNat 1)) then
+      return true
+    else
+      -- revert_empty()
+      let v13 ← revertEmpty
+      let v13 : Bool := nomatch v13
+      return v13
+
+/-- `<bool as Decode>::decode_from<CallData>` -/
+def bool_decode_from_Sol_CallData (input : CallData) (pos : UInt256) : FeM Bool := do
+  -- A::decode_bool_word(input.word_at(pos))
+  let v2 ← CallData_word_at input pos
+  let v3 ← Sol_decode_bool_word v2
+  return v3
+
+/-- `core::abi::Decode::decode_from_bounded<bool, Sol, CallData>` -/
+def decode_from_bounded_bool_Sol_CallData (input : CallData) (pos : UInt256) (input_len : UInt256) : FeM Bool := do
+  -- checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+  let v3 ← bool_HEAD_SIZE
+  let _ ← checked_frame_end_Sol pos v3 input_len
+  -- Self::decode_from(input, pos)
+  let v5 ← bool_decode_from_Sol_CallData input pos
+  return v5
+
+/-- `core::abi::decode_field_from_prechecked_head<Sol, bool, CallData>` -/
+def decode_field_from_prechecked_head_Sol_bool_CallData (input : CallData) (base : UInt256) (head_pos : UInt256) (input_len : UInt256) : FeM Bool := do
+  -- if T::IS_DYNAMIC {
+  let v4 ← bool_IS_DYNAMIC
+  if v4 then
+    -- let tail_rel = input.word_at(head_pos)
+    let tail_rel ← CallData_word_at input head_pos
+    -- let tail_at = checked_tail<A>(base, tail_rel)
+    let tail_at ← checked_tail_Sol base tail_rel
+    -- return T::decode_from_bounded(input, tail_at, input_len)
+    let v9 ← decode_from_bounded_bool_Sol_CallData input tail_at input_len
+    return v9
+  else
+    -- T::decode_from(input, head_pos)
+    let v12 ← bool_decode_from_Sol_CallData input head_pos
+    return v12
+
+/-- `core::abi::decode_field_from<Sol, bool, CallData>` -/
+def decode_field_from_Sol_bool_CallData (input : CallData) (base : UInt256) (head_pos : UInt256) : FeM Bool := do
+  -- if T::IS_DYNAMIC {
+  let v3 ← bool_IS_DYNAMIC
+  if v3 then
+    -- let tail_rel = input.word_at(head_pos)
+    let tail_rel ← CallData_word_at input head_pos
+    -- return T::decode_from(input, checked_tail<A>(base, tail_rel))
+    let v6 ← checked_tail_Sol base tail_rel
+    let v7 ← bool_decode_from_Sol_CallData input v6
+    return v7
+  else
+    -- T::decode_from(input, head_pos)
+    let v10 ← bool_decode_from_Sol_CallData input head_pos
+    return v10
+
+/-- `core::abi::decode_msg_field_from<Sol, bool, CallData>` -/
+def decode_msg_field_from_Sol_bool_CallData (input : CallData) (base : UInt256) (head_pos : UInt256) (input_len : UInt256) : FeM Bool := do
+  -- if T::IS_DYNAMIC {
+  let v4 ← bool_IS_DYNAMIC
+  if v4 then
+    -- return decode_field_from_prechecked_head<A, T, I>(input, base: base, head_pos: head_pos, input_len: input_len)
+    let v5 ← decode_field_from_prechecked_head_Sol_bool_CallData input base head_pos input_len
+    return v5
+  else
+    -- decode_field_from<A, T, I>(input, base: base, head_pos: head_pos)
+    let v8 ← decode_field_from_Sol_bool_CallData input base head_pos
+    return v8
+
