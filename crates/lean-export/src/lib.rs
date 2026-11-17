@@ -82,8 +82,8 @@ use hir::{
         scope_graph::ScopeId,
     },
     semantic::{
-        ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_placements,
-        storage_lane_bytes, storage_slot_span,
+        ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_lanes,
+        storage_field_placements, storage_lane_bytes, storage_slot_span,
     },
     span::{LazySpan, expr::LazyExprSpan, pat::LazyPatSpan, stmt::LazyStmtSpan},
     visitor::prelude::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_stmt},
@@ -2408,28 +2408,16 @@ impl<'db> Module<'db> {
         Some((bytes, field))
     }
 
-    /// The bits of the scalar a packable type holds.
-    fn scalar_bits(&self, ty: TyId<'db>) -> Option<usize> {
-        match (self.int_bits(ty), self.newtype(ty)) {
-            (Some((bits, _)), _) => Some(bits),
-            (None, Some((_, field))) => self.scalar_bits(field),
-            (None, None) => ty.is_bool(self.db).then_some(8),
-        }
-    }
-
-    /// The lane a field of type `ty` placed by `placement` lies in. A lane
-    /// narrower than its scalar is partial too: a write checks the value and
-    /// a read masks it.
-    fn lane(&self, ty: TyId<'db>, placement: StorageFieldPlacement) -> Option<Lane> {
+    /// The lane a field placed by `placement` lies in. A newtype alone at
+    /// the low end of its slot is not partial, even one narrower than its
+    /// field: its field is (`storage_field_lanes`).
+    fn lane(&self, placement: StorageFieldPlacement) -> Option<Lane> {
         let lane = placement.lane?;
-        let narrow = self
-            .scalar_bits(ty)
-            .is_some_and(|bits| bits > lane.bit_width() as usize);
         Some(Lane {
             off: lane.byte_offset,
             width: lane.byte_width,
             shared: placement.shared,
-            partial: placement.partial_lane().is_some() || narrow,
+            partial: placement.partial_lane().is_some(),
             codec: None,
         })
     }
@@ -2543,7 +2531,7 @@ impl<'db> Module<'db> {
             let fields = self.fields(ty)?;
             for (index, ((_, ty), placement)) in fields.iter().zip(&placements).enumerate() {
                 let at = self.pinned(*ty, format!("({p}.offset {})", placement.slot));
-                let lane = self.lane(*ty, *placement);
+                let lane = self.lane(*placement);
                 let load = self.load(*ty, &at, lane)?;
                 writeln!(body, "  let {} ← {load}", field(index)).unwrap();
             }
@@ -2807,7 +2795,7 @@ impl<'db> Module<'db> {
                 self.fields(ty)?.iter().zip(&placements).enumerate()
             {
                 let part = Self::projected(&v, steps);
-                let Some(lane) = self.lane(*field, *placement) else {
+                let Some(lane) = self.lane(*placement) else {
                     // A field of no slots leaves the fields around it in
                     // one word.
                     if self.span(*field)? > 0 {
@@ -6089,22 +6077,26 @@ impl<'db> BodyExporter<'_, 'db> {
                 continue;
             }
             (lean, lane) = match projection {
-                // The field of a newtype lies where the newtype does.
+                // The field of a newtype lies where the newtype does: in the
+                // newtype's lane if that is partial, and otherwise in its
+                // own, which is partial if the newtype is narrower than its
+                // field, as `mir::runtime::place::field_path_lane` has it.
                 NDataProjection::Field(_) if let Some((width, _)) = self.module.newtype(ty) => {
                     let own = Lane {
                         off: 0,
                         width,
                         shared: false,
-                        partial: false,
+                        partial: *storage_field_lanes(db, ty) == [true],
                         codec: None,
                     };
-                    (lean, Some(lane.unwrap_or(own)))
+                    let lane = lane.filter(|lane| lane.partial).unwrap_or(own);
+                    (lean, Some(lane))
                 }
                 NDataProjection::Field(index) => {
                     let placements = storage_field_placements(db, ty).unwrap_or_default();
                     let lane = placements
                         .get(usize::from(index.0))
-                        .and_then(|placement| self.module.lane(part, *placement));
+                        .and_then(|placement| self.module.lane(*placement));
                     let layout = self.module.struct_layout(ty)?;
                     let place = format!("{lean}.field {layout} {}", index.0);
                     // A field of a contract field, or of one of its fields, is

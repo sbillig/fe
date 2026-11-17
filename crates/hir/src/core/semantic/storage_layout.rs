@@ -1226,7 +1226,7 @@ pub fn storage_slot_span<'db>(
 /// field (`newtype_narrows`), as MIR's `storage_field_lane` decides. A retained
 /// grant to a lane is a memory copy.
 #[salsa::tracked]
-pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
+pub fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
     if newtype_narrows(db, ty) {
         return vec![true];
     }
