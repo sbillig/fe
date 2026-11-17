@@ -82,8 +82,8 @@ use hir::{
         scope_graph::ScopeId,
     },
     semantic::{
-        ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_placements,
-        storage_lane_bytes, storage_slot_span,
+        ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_lanes,
+        storage_field_placements, storage_lane_bytes, storage_slot_span,
     },
     span::{LazySpan, expr::LazyExprSpan, pat::LazyPatSpan, stmt::LazyStmtSpan},
     visitor::prelude::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_stmt},
@@ -2074,13 +2074,14 @@ impl<'db> Module<'db> {
         )
     }
 
-    /// Whether the slides of the projection `key` end any access, if they do
-    /// nothing else: ending the accesses it holds stores back the lane
-    /// copies among them, which is what a successful halt during a session
-    /// of it does too.
-    fn slide_ends(&self, key: SemanticInstanceKey<'db>) -> Option<bool> {
-        let normalized =
-            normalize_semantic_body(self.db, SemanticInstance::new(self.db, key)).ok()?;
+    /// Whether the slides of the projection `key` do nothing but end
+    /// accesses: ending those it holds stores back the lane copies among
+    /// them, which is all a successful halt during a session of it does.
+    fn slide_only_ends(&self, key: SemanticInstanceKey<'db>) -> bool {
+        let Ok(normalized) = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
+        else {
+            return false;
+        };
         let body = &normalized.body;
         let mut pending: Vec<_> = body
             .blocks
@@ -2091,7 +2092,6 @@ impl<'db> Module<'db> {
             })
             .collect();
         let mut seen = FxHashSet::default();
-        let mut ends = false;
         while let Some(block) = pending.pop() {
             if !seen.insert(block) {
                 continue;
@@ -2102,13 +2102,12 @@ impl<'db> Module<'db> {
                 .iter()
                 .all(|statement| matches!(statement.kind, NStatementKind::End { .. }))
             {
-                return None;
+                return false;
             }
-            ends |= !data.statements.is_empty();
             let successors = data.terminator.kind.successors();
             pending.extend(successors.iter().map(|successor| successor.block));
         }
-        Some(ends)
+        true
     }
 
     /// The contract fields in lanes that the effects of the function `key`
@@ -2660,28 +2659,16 @@ impl<'db> Module<'db> {
         Some((bytes, field))
     }
 
-    /// The bits of the scalar a packable type holds.
-    fn scalar_bits(&self, ty: TyId<'db>) -> Option<usize> {
-        match (self.int_bits(ty), self.newtype(ty)) {
-            (Some((bits, _)), _) => Some(bits),
-            (None, Some((_, field))) => self.scalar_bits(field),
-            (None, None) => ty.is_bool(self.db).then_some(8),
-        }
-    }
-
-    /// The lane a field of type `ty` placed by `placement` lies in. A lane
-    /// narrower than its scalar is partial too: a write checks the value and
-    /// a read masks it.
-    fn lane(&self, ty: TyId<'db>, placement: StorageFieldPlacement) -> Option<Lane> {
+    /// The lane a field placed by `placement` lies in. A newtype alone at
+    /// the low end of its slot is not partial, even one narrower than its
+    /// field: its field is (`storage_field_lanes`).
+    fn lane(&self, placement: StorageFieldPlacement) -> Option<Lane> {
         let lane = placement.lane?;
-        let narrow = self
-            .scalar_bits(ty)
-            .is_some_and(|bits| bits > lane.bit_width() as usize);
         Some(Lane {
             off: lane.byte_offset,
             width: lane.byte_width,
             shared: placement.shared,
-            partial: placement.partial_lane().is_some() || narrow,
+            partial: placement.partial_lane().is_some(),
             codec: None,
         })
     }
@@ -2795,7 +2782,7 @@ impl<'db> Module<'db> {
             let fields = self.fields(ty)?;
             for (index, ((_, ty), placement)) in fields.iter().zip(&placements).enumerate() {
                 let at = self.pinned(*ty, format!("({p}.offset {})", placement.slot));
-                let lane = self.lane(*ty, *placement);
+                let lane = self.lane(*placement);
                 let load = self.load(*ty, &at, lane)?;
                 writeln!(body, "  let {} ← {load}", field(index)).unwrap();
             }
@@ -3059,7 +3046,7 @@ impl<'db> Module<'db> {
                 self.fields(ty)?.iter().zip(&placements).enumerate()
             {
                 let part = Self::projected(&v, steps);
-                let Some(lane) = self.lane(*field, *placement) else {
+                let Some(lane) = self.lane(*placement) else {
                     // A field of no slots leaves the fields around it in
                     // one word.
                     if self.span(*field)? > 0 {
@@ -4728,17 +4715,26 @@ impl<'db> BodyExporter<'_, 'db> {
         let mut open: Vec<_> = must.into_iter().collect();
         open.sort_by_key(|value| std::cmp::Reverse(value.index()));
         for value in open {
-            if self.slides.contains_key(&value) {
+            if let Some((outs, _)) = self.slides.get(&value) {
                 let Some((_, NExpr::Call { callee, .. })) = self.body.defining_expr(value) else {
                     return Err(Unsupported("session of no call".to_string()));
                 };
-                let ends = self.module.slide_ends(callee.key).ok_or_else(|| {
-                    Unsupported(
+                // The session holds the copies the projection holds, which
+                // lowering inlines into the body, and those of the lanes the
+                // call passes. One that holds none and returns nothing has
+                // nothing to store back.
+                let holds = self.module.lanes.projections.contains(&callee.key);
+                let passed = outs.iter().any(|out| matches!(out, Out::Lane(..)));
+                if outs.is_empty() && !holds {
+                    continue;
+                }
+                if !self.module.slide_only_ends(callee.key) {
+                    return Err(Unsupported(
                         "a projection session open where the body may halt, whose slide does more than end accesses"
                             .to_string(),
-                    )
-                })?;
-                held |= ends;
+                    ));
+                }
+                held |= holds || passed;
                 lines.push(self.session_end(value)?);
             } else if let Some(line) = self.held_store(value)? {
                 held = true;
@@ -4746,13 +4742,12 @@ impl<'db> BodyExporter<'_, 'db> {
             }
         }
         lines.extend(self.store_copies()?);
-        if !(self.carriers.unwinds || passes || !lines.is_empty()) {
-            return Ok(None);
-        }
-        if self.slide.contains(&self.at.0) {
+        let catches = self.carriers.unwinds || passes || !lines.is_empty();
+        // Lowering inlines a projection, so its callers hold its copies and
+        // store them back.
+        if (catches || gives) && self.yielded.is_some() {
             return Err(Unsupported(
-                "a successful halt in a projection's slide where the body must catch it"
-                    .to_string(),
+                "a successful halt in a projection that holds or passes lane copies".to_string(),
             ));
         }
         if held || passes || gives {
@@ -4761,7 +4756,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 .halts
                 .insert((self.body.owner.key(db), callee));
         }
-        Ok(Some(lines.join("\n")))
+        Ok(catches.then(|| lines.join("\n")))
     }
 
     /// The line that takes the result `name` of the run whose `Unwound`
@@ -5565,13 +5560,17 @@ impl<'db> BodyExporter<'_, 'db> {
         // returns values is called through its unwinding variant, which
         // returns them from a halt too.
         let passes = outs.iter().any(|out| matches!(out, Out::Lane(..)));
-        if passes || gives || self.module.lanes.projections.contains(&callee) {
-            self.module.lanes.holders.insert(self.body.owner.key(db));
-        }
         let flush = match self.module.may_halt(callee) {
             true => self.halt_flush(Some(callee), passes, gives)?,
             false => None,
         };
+        let projection = SemanticInstance::new(db, callee).is_projection(db);
+        // Lowering inlines a projection: its halts are its callers'.
+        if projection && flush.is_some() {
+            return Err(Unsupported(
+                "a projection that may halt where the body must catch a halt".to_string(),
+            ));
+        }
         let never = self.module.never_returns(callee);
         let carriers = Carriers {
             params: carriers,
@@ -5579,13 +5578,20 @@ impl<'db> BodyExporter<'_, 'db> {
             unwinds: flush.is_some() && !outs.is_empty(),
         };
         let unwinds = carriers.unwinds;
-        let callee = self.module.instance(callee, carriers)?;
+        let key = callee;
+        let callee = self.module.instance(key, carriers)?;
+        // The body holds the copies of the lanes it passes and gives, and
+        // those a projection it calls holds, once that is exported; a
+        // projection's callers hold them in turn.
+        if passes || gives || (projection && self.module.lanes.projections.contains(&key)) {
+            let owner = self.body.owner.key(db);
+            let lanes = &mut self.module.lanes;
+            match self.yielded.is_some() {
+                true => lanes.projections.insert(owner),
+                false => lanes.holders.insert(owner),
+            };
+        }
         if let Some(flush) = flush {
-            if self.module.lenses.contains_key(&callee) {
-                return Err(Unsupported(
-                    "a projection that may halt where the body must catch a halt".to_string(),
-                ));
-            }
             let unwound = self.derived(result, "u");
             let mut lines = if unwinds {
                 let returned: String = (0..outs.len())
@@ -6683,22 +6689,26 @@ impl<'db> BodyExporter<'_, 'db> {
                 continue;
             }
             (lean, lane) = match projection {
-                // The field of a newtype lies where the newtype does.
+                // The field of a newtype lies where the newtype does: in the
+                // newtype's lane if that is partial, and otherwise in its
+                // own, which is partial if the newtype is narrower than its
+                // field, as `mir::runtime::place::field_path_lane` has it.
                 NDataProjection::Field(_) if let Some((width, _)) = self.module.newtype(ty) => {
                     let own = Lane {
                         off: 0,
                         width,
                         shared: false,
-                        partial: false,
+                        partial: storage_field_lanes(db, ty) == [true],
                         codec: None,
                     };
-                    (lean, Some(lane.unwrap_or(own)))
+                    let lane = lane.filter(|lane| lane.partial).unwrap_or(own);
+                    (lean, Some(lane))
                 }
                 NDataProjection::Field(index) => {
                     let placements = storage_field_placements(db, ty).unwrap_or_default();
                     let lane = placements
                         .get(usize::from(index.0))
-                        .and_then(|placement| self.module.lane(part, *placement));
+                        .and_then(|placement| self.module.lane(*placement));
                     let layout = self.module.struct_layout(ty)?;
                     let place = format!("{lean}.field {layout} {}", index.0);
                     // A field of a contract field, or of one of its fields, is

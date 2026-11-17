@@ -17,7 +17,7 @@
 //! callee's, and returns, so each frame on the way stores back its copies. A
 //! body that holds no copy where it may halt is left as it is.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cranelift_entity::EntityRef;
 use hir::{
@@ -27,7 +27,7 @@ use hir::{
     },
     hir_def::{BinOp, CompBinOp},
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::SalsaValue;
 
 use crate::{
@@ -248,8 +248,14 @@ fn held_at_entry(body: &RuntimeBody<'_>) -> Vec<Option<Held>> {
 
 /// Where `instance` holds lane copies, to check a model of lane holds
 /// against lowering: whether its body holds one at all, and each point where
-/// it may halt successfully while it holds one, a call with its callee or a
-/// halt of its own (`None`). `None` if the instance does not lower.
+/// it may halt successfully while a path holds one, a call with its callee
+/// or a halt of its own (`None`). `None` if the instance does not lower.
+///
+/// A copy held on some paths only is stored back where its flag says it is
+/// held (`Unwinder::flag_uncertain_holds`), so a point counts where a path
+/// to it holds a copy. The paths follow the yield site that a session's
+/// slide dispatches on (`inline_projections`): past the slide of one site,
+/// the copies only another site holds are not held.
 pub fn lane_halt_points<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,
@@ -261,32 +267,96 @@ pub fn lane_halt_points<'db>(
         .flat_map(|block| &block.stmts)
         .any(|stmt| matches!(stmt, RStmt::HoldLane { .. }));
     let halts = |callee: RuntimeInstance<'db>| !runtime_halt_kinds(db, callee).is_empty();
-    let mut points = Vec::new();
-    for (block, held) in body.blocks.iter().zip(held_at_entry(body)) {
-        let Some(mut held) = held else {
+    // The locals a switch dispatches on.
+    let sites: BTreeSet<RLocalId> = body
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.terminator {
+            RTerminator::SwitchScalar { discr, .. } => Some(*discr),
+            _ => None,
+        })
+        .collect();
+    // An unsigned constant's value: its big-endian bytes, less leading zeros.
+    let unsigned = |scalar: &ConstScalar| match scalar {
+        ConstScalar::Int {
+            signed: false,
+            words,
+            ..
+        } => Some(words[words.iter().take_while(|byte| **byte == 0).count()..].to_vec()),
+        _ => None,
+    };
+    // Each path's state where a block starts: the copies it holds, and the
+    // constant it last gave each local a switch dispatches on.
+    type State = (BTreeSet<RLocalId>, BTreeMap<RLocalId, Vec<u8>>);
+    let mut seen: Vec<FxHashSet<State>> = vec![FxHashSet::default(); body.blocks.len()];
+    let mut pending = vec![(RBlockId::new(0), State::default())];
+    let mut points = FxHashMap::default();
+    while let Some((block, mut state)) = pending.pop() {
+        if !seen[block.index()].insert(state.clone()) {
             continue;
-        };
-        for stmt in &block.stmts {
+        }
+        let (held, constants) = &mut state;
+        let data = &body.blocks[block.index()];
+        for (position, stmt) in data.stmts.iter().enumerate() {
             match stmt {
-                RStmt::HoldLane { .. } | RStmt::ReleaseLane { .. } => held.apply(stmt),
-                RStmt::Assign {
-                    expr: RExpr::Call { callee, .. },
-                    ..
-                } if !held.may.is_empty() && halts(*callee) => points.push(Some(*callee)),
+                RStmt::HoldLane { copy, .. } => {
+                    held.insert(*copy);
+                }
+                RStmt::ReleaseLane { copy } => {
+                    held.remove(copy);
+                }
+                RStmt::Assign { dst, expr } => {
+                    if let RExpr::Call { callee, .. } = expr
+                        && !held.is_empty()
+                        && halts(*callee)
+                    {
+                        points.insert((block, position), Some(*callee));
+                    }
+                    if sites.contains(dst) {
+                        match expr {
+                            RExpr::ConstScalar(scalar) if let Some(value) = unsigned(scalar) => {
+                                constants.insert(*dst, value);
+                            }
+                            _ => {
+                                constants.remove(dst);
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
-        match &block.terminator {
-            RTerminator::TerminalCall { callee, .. } if !held.may.is_empty() && halts(*callee) => {
-                points.push(Some(*callee));
+        let end = data.stmts.len();
+        match &data.terminator {
+            RTerminator::TerminalCall { callee, .. } if !held.is_empty() && halts(*callee) => {
+                points.insert((block, end), Some(*callee));
             }
-            terminator if !held.may.is_empty() && HaltKind::of(terminator).is_some() => {
-                points.push(None);
+            terminator if !held.is_empty() && HaltKind::of(terminator).is_some() => {
+                points.insert((block, end), None);
             }
             _ => {}
         }
+        // A switch on a known constant takes its case, or the default if no
+        // case is that constant.
+        let successors = match &data.terminator {
+            RTerminator::SwitchScalar {
+                discr,
+                cases,
+                default,
+            } if let Some(value) = constants.get(discr)
+                && let Some(cases) = cases
+                    .iter()
+                    .map(|(case, target)| Some((unsigned(case)?, *target)))
+                    .collect::<Option<Vec<_>>>() =>
+            {
+                let taken = cases.into_iter().find(|(case, _)| case == value);
+                vec![taken.map_or(*default, |(_, target)| target)]
+            }
+            terminator => terminator.successors(),
+        };
+        pending.extend(successors.into_iter().map(|next| (next, state.clone())));
     }
-    Some((holds, points))
+    Some((holds, points.into_values().collect()))
 }
 
 /// Resolves the lane holds `body` marks (see the module docs).
