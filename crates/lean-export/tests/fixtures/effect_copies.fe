@@ -1,0 +1,54 @@
+// Read-only effects of a scalar type are copies the caller takes at the
+// call, from a local, a storage field or a field of a stored struct: the
+// callee has each as a value parameter after its own. A body that needs the
+// copy's place, to pass it on or to view it, holds it in a slot that starts
+// with the argument.
+use std::abi::sol
+
+msg CopiesMsg {
+    #[selector = sol("get()")]
+    Get -> u256,
+    #[selector = sol("local(uint256)")]
+    Local { v: u256 } -> u256,
+    #[selector = sol("both(uint256)")]
+    Both { k: u256 } -> u256,
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn read() -> u256 uses (x: u256) {
+    x
+}
+
+fn read_twice() -> u256 uses (x: u256) {
+    read() + x
+}
+
+fn read_through_ref() -> u256 uses (x: u256) {
+    let r = ref x
+    r + 1
+}
+
+fn scaled(_ k: u256) -> u256 uses (x: u256) {
+    k * x + read()
+}
+
+pub contract Copies {
+    mut count: u256,
+    mut pair: Pair,
+
+    recv CopiesMsg {
+        Get -> u256 uses (count) {
+            with (count) { read_twice() }
+        }
+        Local { v } -> u256 {
+            with (v) { read_through_ref() }
+        }
+        Both { k } -> u256 uses (count, pair) {
+            with (pair.b) { scaled(k) }
+        }
+    }
+}

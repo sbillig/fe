@@ -3298,11 +3298,21 @@ impl<'db> BodyExporter<'_, 'db> {
             self.statements.body = Some(body);
             self.statements.visit_expr(&mut ctxt, body.expr(db), expr);
         }
+        // The parameters, by their place: the body's own, then each effect
+        // it takes by value, a copy its caller makes, by provider.
         let mut params = Vec::new();
         for (index, value) in self.body.values.iter().enumerate() {
             let NValueDefinition::EntryParam { param } = value.definition else {
                 continue;
             };
+            if let Some(provider) = effect_input(value.source) {
+                params.push((
+                    (1, provider),
+                    self.names[index].clone(),
+                    self.lean_ty(value.ty)?,
+                ));
+                continue;
+            }
             let param = if arm {
                 arg_position(value.source, &pats)
                     .ok_or_else(|| Unsupported("argument bound by no field".to_string()))?
@@ -3331,7 +3341,7 @@ impl<'db> BodyExporter<'_, 'db> {
                 (Some(_), Some(Carrier::Memory)) => "UInt256".to_string(),
                 _ => self.lean_ty(value.ty)?,
             };
-            params.push((param, self.names[index].clone(), ty));
+            params.push(((0, param), self.names[index].clone(), ty));
         }
         let mut state = String::new();
         for (index, root) in self.body.roots.iter().enumerate() {
@@ -3343,10 +3353,10 @@ impl<'db> BodyExporter<'_, 'db> {
             };
             self.slots.push(NRootId::new(index));
             let param = match root.kind {
-                NRootKind::ParamPlace { param } => Some(param),
-                NRootKind::LocalSlot { binding } => {
-                    arg_position(binding, &pats).map(|position| position as u32)
-                }
+                NRootKind::ParamPlace { param } => Some((0, param)),
+                NRootKind::LocalSlot { binding } => effect_input(binding)
+                    .map(|provider| (1, provider))
+                    .or_else(|| arg_position(binding, &pats).map(|position| (0, position as u32))),
                 _ => None,
             };
             let slot = &self.roots[index];
@@ -4900,6 +4910,44 @@ impl<'db> BodyExporter<'_, 'db> {
             if matches!(taken.as_capability(db), Some((CapabilityKind::Mut, _))) {
                 outs.push(Out::Value(target));
             }
+        }
+        // An effect the callee takes by value is a copy of what its
+        // argument's place holds at the call, after the callee's parameters,
+        // by provider.
+        let mut inputs: Vec<u32> = taken
+            .iter()
+            .flat_map(|callee| {
+                let values = callee.body.values.iter().filter_map(|value| {
+                    matches!(value.definition, NValueDefinition::EntryParam { .. })
+                        .then(|| effect_input(value.source))
+                        .flatten()
+                });
+                let slots = callee.body.roots.iter().filter_map(|root| match root.kind {
+                    NRootKind::LocalSlot { binding } => effect_input(binding),
+                    _ => None,
+                });
+                values.chain(slots)
+            })
+            .collect();
+        inputs.sort_unstable();
+        for provider in inputs {
+            let arg = effect_args
+                .iter()
+                .find(|arg| arg.binding_idx == provider)
+                .ok_or_else(|| Unsupported("effect without an argument".to_string()))?;
+            let ty = arg.place.ty;
+            let copy = self.derived(result, format!("e{provider}"));
+            let load = match self.target(&arg.place)? {
+                Target::Value(target) => {
+                    write!(lean_args, " {}", self.read(&target)?).unwrap();
+                    continue;
+                }
+                Target::Place(lean, lane) => self.load(ty, &lean, lane)?,
+                Target::Memory(address) => self.module.mload("m", ty, &address)?,
+                Target::Calldata(offset) => self.module.mload("cd", ty, &offset)?,
+            };
+            self.located.push(format!("let {copy} ← {load}"));
+            write!(lean_args, " {copy}").unwrap();
         }
         // A callee's instance names the contract field behind an effect.
         // Any other effect is an argument: its place in contract state, or
@@ -6955,6 +7003,15 @@ fn lean_ident(text: impl AsRef<str>) -> String {
 /// The variable of drop flag `flag`.
 fn flag(flag: u32) -> String {
     var(&format!("f{flag}"))
+}
+
+/// The provider of the effect `binding` binds, if it is an effect's: an
+/// effect a body takes by value, as an input after its parameters.
+fn effect_input(binding: Option<LocalBinding<'_>>) -> Option<u32> {
+    match binding? {
+        LocalBinding::EffectParam { provider_idx, .. } => Some(provider_idx),
+        _ => None,
+    }
 }
 
 /// The place of `binding` among the patterns `pats`, if it is one of them.
