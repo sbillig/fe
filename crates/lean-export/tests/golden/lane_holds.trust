@@ -1,0 +1,21 @@
+core alloc_bytes extern core::panic_code
+core alloc_bytes extern core::ptr::alloc_raw
+core downcast_saturate_u256_usize extern core::num::__bitcast<u256, i256>
+core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core i256_from_word extern core::num::__bitcast<u256, i256>
+core u64_from_word extern core::num::__bitcast<u256, u64>
+core usize_MASK extern core::num::__bitnot_usize
+core usize_from_word extern core::num::__bitcast<u256, usize>
+std CallData_size extern std::evm::ops::calldatasize
+std CallData_word_at extern std::evm::ops::calldataload
+std Sol_decode_bool_word extern std::evm::ops::revert_empty
+std Sol_decode_error extern std::evm::ops::revert_empty
+std Sol_validate_runtime_head extern std::evm::ops::revert_empty
+std encode_bytes_return_from_calldata unsafe-block 1 of 1
+std encode_bytes_return_from_calldata raw-memory std::evm::ops::calldatacopy
+std encode_bytes_return_from_calldata raw-memory std::evm::ops::mstore
+std encode_bytes_return_from_calldata extern std::evm::ops::return_data
+std offset extern core::ptr::offset_bytes<u8>
+std zero_pad_memory_bytes unsafe-fn the whole body
+std zero_pad_memory_bytes raw-memory std::evm::ops::mload
+std zero_pad_memory_bytes raw-memory std::evm::ops::mstore
