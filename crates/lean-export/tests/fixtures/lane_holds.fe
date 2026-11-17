@@ -2,8 +2,12 @@
 // that the access's end stores back, and a successful halt while it is open
 // stores it back first, wherever the halt happens. A field given to effects
 // is one copy for all the effects it provides, held for the call; a callee
-// that forwards it passes the same copy on.
+// that forwards it passes the same copy on. A write to a lane after the
+// access to it has ended is not undone by a copy stored back at a halt. A
+// newtype narrower than its field is not a lane alone at the low end of its
+// slot, but its field is.
 use std::abi::sol
+use std::abi::sol::Bytes4
 use std::evm::storage_bytes::encode_bytes_return_from_calldata
 
 msg LanesMsg {
@@ -21,6 +25,16 @@ msg LanesMsg {
     Forward,
     #[selector = sol("session()")]
     Session,
+    #[selector = sol("pickThenWrite(bool)")]
+    PickThenWrite { c: bool },
+    #[selector = sol("maybeThenWrite(bool)")]
+    MaybeThenWrite { c: bool },
+    #[selector = sol("directThenWrite()")]
+    DirectThenWrite,
+    #[selector = sol("tag()")]
+    Tag,
+    #[selector = sol("tagVal()")]
+    TagVal,
 }
 
 struct Small { a: u8, b: u8 }
@@ -29,6 +43,19 @@ impl Small {
     fn a_mut(mut self) -> mut u8 {
         mut self.a
     }
+
+    fn pick(mut self, _ c: bool) -> mut u8 {
+        if c { mut self.b } else { mut self.a }
+    }
+
+    fn maybe_b(mut self, _ c: bool) -> Option<mut u8> {
+        if c { Option::Some(mut self.b) } else { Option::None }
+    }
+}
+
+struct Tagged {
+    tag: Bytes4,
+    big: u256,
 }
 
 trait Bump {
@@ -77,6 +104,15 @@ fn pair<T: Bump, U: Bump>() uses (x: mut T, y: mut U) {
     x.bump()
 }
 
+fn set_tag(_ tag: mut Bytes4, _ to: Bytes4) {
+    tag = to
+}
+
+fn bump_word_halt(_ x: mut u256) -> ! {
+    x += 1
+    halt()
+}
+
 fn forward() -> ! uses (x: mut u8) {
     x.bump()
     bump_effect_halt()
@@ -87,6 +123,7 @@ pub contract Lanes {
     mut b: u8,
     mut c: u16,
     mut small: Small,
+    mut tagged: Tagged,
 
     recv LanesMsg {
         Arg uses (mut a) { bump_halt(mut a) }
@@ -112,6 +149,39 @@ pub contract Lanes {
             q = 5
             maybe_halt(true)
             q += 1
+        }
+        PickThenWrite { c } uses (mut small) {
+            let q = mut small.pick(c)
+            q = 5
+            maybe_halt(false)
+            q += 1
+            small.a = 7
+            small.b = 8
+            halt()
+        }
+        MaybeThenWrite { c } uses (mut small) {
+            if let Option::Some(mut q) = small.maybe_b(c) {
+                q = 5
+                maybe_halt(false)
+                q += 1
+            }
+            small.b = 9
+            halt()
+        }
+        DirectThenWrite uses (mut small) {
+            let q = mut small.a_mut()
+            q = 5
+            maybe_halt(false)
+            q += 1
+            small.a = 7
+            halt()
+        }
+        Tag uses (mut tagged) {
+            set_tag(mut tagged.tag, Bytes4 { val: 0x01ffc9a7 })
+            halt()
+        }
+        TagVal uses (mut tagged) {
+            bump_word_halt(mut tagged.tag.val)
         }
     }
 }

@@ -6698,7 +6698,7 @@ impl<'db> BodyExporter<'_, 'db> {
                         off: 0,
                         width,
                         shared: false,
-                        partial: storage_field_lanes(db, ty) == [true],
+                        partial: *storage_field_lanes(db, ty) == [true],
                         codec: None,
                     };
                     let lane = lane.filter(|lane| lane.partial).unwrap_or(own);
