@@ -28,6 +28,7 @@ use hir::{
     test_db::HirAnalysisTestDb,
 };
 use num_bigint::BigUint;
+use rustc_hash::FxHashSet;
 use url::Url;
 
 /// Exports every contract of the colon-separated files and ingot directories
@@ -508,5 +509,143 @@ fn dump_ir() {
             }
             println!("  -> {:?}", block.terminator.kind);
         }
+    }
+}
+
+/// The fixtures of `crates/fe/tests/fixtures/fe_test` whose bodies hold
+/// copies of lanes.
+const LANE_FIXTURES: &[&str] = &[
+    "assoc_type_lanes",
+    "clear_place",
+    "contract_field_packing",
+    "effect_aliasing_lanes",
+    "forwarded_projection_spaces",
+    "lane_holds_before_halts",
+    "lane_pattern_writes",
+    "lane_projection_spaces",
+    "library_state_index",
+    "product_params",
+    "sol_array_lanes",
+    "storage_lane_grants",
+    "storage_packing",
+    "storage_packing_value_types",
+    "trait_effect_lane_writes",
+];
+
+/// The export holds copies of lanes, and stores them back before successful
+/// halts, where lowering does (`mir::lane_halt_points`): in the same
+/// instances, and at the same calls and halts. Checked on the fixtures that
+/// hold lanes and this crate's `lane_holds`, or on the files and ingots in
+/// `LEAN_EXPORT_LANES`, separated by `:`. A change to where either holds a
+/// copy fails here rather than leave a model that differs from the bytecode.
+#[test]
+fn lane_holds() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let default = LANE_FIXTURES
+        .iter()
+        .map(|name| format!("{root}/../fe/tests/fixtures/fe_test/{name}.fe"))
+        .chain([format!("{root}/tests/fixtures/lane_holds.fe")])
+        .collect::<Vec<_>>()
+        .join(":");
+    let files = env::var("LEAN_EXPORT_LANES").unwrap_or(default);
+    let mut differences = String::new();
+    for path in files.split(':') {
+        let (db, url) = analyze(path).unwrap_or_else(|| panic!("{path} does not compile"));
+        let db = &db;
+        let (_, modules) = modules(db, path, &url);
+        let mut ingot = IngotExport::new(db);
+        let mut library = Library::default();
+        for contract in modules.iter().flat_map(|module| module.all_contracts(db)) {
+            if let Err(Unsupported(reason)) = ingot.export_contract(*contract, true, &mut library) {
+                writeln!(differences, "{path}: not exported: {reason}").unwrap();
+            }
+        }
+        let exported = ingot.lane_report();
+        let mut holders = FxHashSet::default();
+        let mut halts = FxHashSet::default();
+        for &module in &modules {
+            let package = mir::build_runtime_package(db, module).unwrap();
+            for function in package.functions(db) {
+                let instance = function.instance(db);
+                let Some(key) = instance.key(db).semantic(db) else {
+                    continue;
+                };
+                let Some((holds, points)) = mir::lane_halt_points(db, instance) else {
+                    continue;
+                };
+                let key = key.key(db);
+                if holds {
+                    holders.insert(key);
+                }
+                for callee in points {
+                    let callee = callee.map(|callee| callee.key(db).semantic(db));
+                    let callee = match callee {
+                        Some(Some(callee)) => Some(callee.key(db)),
+                        Some(None) => {
+                            writeln!(
+                                differences,
+                                "{path}: {} halts in a synthetic callee",
+                                describe(db, key)
+                            )
+                            .unwrap();
+                            continue;
+                        }
+                        None => None,
+                    };
+                    halts.insert((key, callee));
+                }
+            }
+        }
+        for key in holders.symmetric_difference(&exported.holders) {
+            let side = if holders.contains(key) {
+                "lowering only"
+            } else {
+                "export only"
+            };
+            writeln!(
+                differences,
+                "{path}: {} holds a lane copy: {side}",
+                describe(db, *key)
+            )
+            .unwrap();
+        }
+        for (key, callee) in halts.symmetric_difference(&exported.halts) {
+            let side = if halts.contains(&(*key, *callee)) {
+                "lowering only"
+            } else {
+                "export only"
+            };
+            let at = callee.map_or("its own halt".to_string(), |callee| {
+                format!("the call of {}", describe(db, callee))
+            });
+            writeln!(
+                differences,
+                "{path}: {} stores back copies before {at}: {side}",
+                describe(db, *key)
+            )
+            .unwrap();
+        }
+    }
+    assert!(differences.is_empty(), "{differences}");
+}
+
+/// The function or entry `key` is an instance of, with its types.
+fn describe(db: &DriverDataBase, key: SemanticInstanceKey<'_>) -> String {
+    let owner = match key.owner(db) {
+        BodyOwner::Func(func, _) => func
+            .name(db)
+            .to_opt()
+            .map_or("fn".to_string(), |name| name.data(db).to_string()),
+        owner => format!("{owner:?}"),
+    };
+    let args: Vec<_> = key
+        .subst(db)
+        .generic_args(db)
+        .iter()
+        .map(|arg| arg.pretty_print(db).to_string())
+        .collect();
+    match args.is_empty() {
+        true => owner,
+        false => format!("{owner}<{}>", args.join(", ")),
     }
 }

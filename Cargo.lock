@@ -2679,6 +2679,7 @@ dependencies = [
  "fe-common",
  "fe-driver",
  "fe-hir",
+ "fe-mir",
  "num-bigint",
  "num-traits",
  "rustc-hash 2.1.1",

@@ -246,6 +246,49 @@ fn held_at_entry(body: &RuntimeBody<'_>) -> Vec<Option<Held>> {
     entry
 }
 
+/// Where `instance` holds lane copies, to check a model of lane holds
+/// against lowering: whether its body holds one at all, and each point where
+/// it may halt successfully while it holds one, a call with its callee or a
+/// halt of its own (`None`). `None` if the instance does not lower.
+pub fn lane_halt_points<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+) -> Option<(bool, Vec<Option<RuntimeInstance<'db>>>)> {
+    let body = runtime_body_with_lane_holds(db, instance).as_ref().ok()?;
+    let holds = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .any(|stmt| matches!(stmt, RStmt::HoldLane { .. }));
+    let halts = |callee: RuntimeInstance<'db>| !runtime_halt_kinds(db, callee).is_empty();
+    let mut points = Vec::new();
+    for (block, held) in body.blocks.iter().zip(held_at_entry(body)) {
+        let Some(mut held) = held else {
+            continue;
+        };
+        for stmt in &block.stmts {
+            match stmt {
+                RStmt::HoldLane { .. } | RStmt::ReleaseLane { .. } => held.apply(stmt),
+                RStmt::Assign {
+                    expr: RExpr::Call { callee, .. },
+                    ..
+                } if !held.may.is_empty() && halts(*callee) => points.push(Some(*callee)),
+                _ => {}
+            }
+        }
+        match &block.terminator {
+            RTerminator::TerminalCall { callee, .. } if !held.may.is_empty() && halts(*callee) => {
+                points.push(Some(*callee));
+            }
+            terminator if !held.may.is_empty() && HaltKind::of(terminator).is_some() => {
+                points.push(None);
+            }
+            _ => {}
+        }
+    }
+    Some((holds, points))
+}
+
 /// Resolves the lane holds `body` marks (see the module docs).
 pub(crate) fn unwind_halts<'db>(db: &'db dyn MirDb, body: &mut RuntimeBody<'db>) {
     let unwinds = body.key.unwinds(db);
