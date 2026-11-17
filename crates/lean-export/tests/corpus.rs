@@ -596,6 +596,11 @@ fn lane_holds() {
                 }
             }
         }
+        eprintln!(
+            "{path}: {} instances hold lane copies, {} points store them back",
+            holders.len(),
+            halts.len()
+        );
         for key in holders.symmetric_difference(&exported.holders) {
             let side = if holders.contains(key) {
                 "lowering only"
