@@ -730,9 +730,11 @@ mod tests {
     }
 
     fn assert_shared_panic_attribution(path: &Utf8PathBuf, level: codegen::OptLevel) {
-        // Locate the shared overflow path through the actual branch targets
-        // of the three authored checks. Other REVERTs belong to ABI helpers
-        // and may legitimately retain their own source attribution.
+        // Locate the shared overflow path through the successor on the failure
+        // path of each of the three authored checks: its branch target or its
+        // fall-through, whichever runs straight into a Panic REVERT, as branch
+        // polarity decides. Other REVERTs belong to ABI helpers and may
+        // legitimately retain their own source attribution.
         let (_, source_uri, source_text) = standalone_file_input(path).unwrap();
         let bundle = emit_real_trace_bundle(path, false, "dev", level)
             .expect("shared panic fixture should compile");
@@ -776,6 +778,39 @@ mod tests {
             3,
             "fixture needs distinct authored sites"
         );
+        // Whether the code from `start`, past a leading JUMPDEST, reaches a
+        // REVERT of a Panic payload without another jump, jump destination or
+        // halt, so without passing through another check.
+        let fails_into_panic = |check: &debug_export::DebugInstruction, start: u32| {
+            let mut run = bytecode
+                .iter()
+                .copied()
+                .filter(|instruction| {
+                    instruction.code_object == check.code_object
+                        && instruction.pc_range.start >= start
+                })
+                .collect::<Vec<_>>();
+            run.sort_by_key(|instruction| instruction.pc_range.start);
+            let body = match run.split_first() {
+                Some((first, rest)) if first.opcode_or_mnemonic == "JUMPDEST" => rest,
+                _ => &run[..],
+            };
+            body.iter()
+                .position(|instruction| {
+                    matches!(
+                        instruction.opcode_or_mnemonic.as_str(),
+                        "JUMPDEST" | "JUMP" | "JUMPI" | "STOP" | "RETURN" | "REVERT" | "INVALID"
+                    )
+                })
+                .is_some_and(|end| {
+                    body[end].opcode_or_mnemonic == "REVERT"
+                        && body[..end].iter().any(|instruction| {
+                            opcodes.get(&instruction.key).is_some_and(|opcode| {
+                                opcode.immediate.as_deref() == Some("0x4e487b71")
+                            })
+                        })
+                })
+        };
         let mut targets = std::collections::BTreeSet::new();
         for line in addition_lines {
             let checks = bytecode
@@ -820,15 +855,24 @@ mod tests {
                 16,
             )
             .expect("target PC must fit u32");
+            let failures = [target, check.pc_range.end]
+                .into_iter()
+                .filter(|&start| fails_into_panic(check, start))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                failures.len(),
+                1,
+                "overflow check on line {line} must have one successor that fails into a panic, got {failures:?}"
+            );
             targets.insert((
                 check.code_object.clone().expect("check needs code object"),
-                target,
+                failures[0],
             ));
         }
         assert_eq!(
             targets.len(),
             1,
-            "all three checks must share one actual branch destination"
+            "all three checks must fail into one panic block"
         );
         let (code_object, target) = targets.into_iter().next().unwrap();
         let mut tail = bytecode
