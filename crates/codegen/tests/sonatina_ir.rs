@@ -13,6 +13,7 @@ use fe_codegen::{
     OptLevel, SonatinaSidecar, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized,
 };
 use hir::hir_def::TopLevelMod;
+use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashSet},
     path::Path,
@@ -157,8 +158,25 @@ fn observability_preserves_creation_and_runtime_bytecode(fixture: Fixture<&str>)
     });
 }
 
+/// The passes of the machine stage's pass round, which `-O0` does not run.
+const MACHINE_ROUND: [&str; 7] = [
+    "cfg_cleanup",
+    "branch_canonicalize",
+    "scalar_canonicalize",
+    "known_bits_simplify",
+    "sccp",
+    "gvn",
+    "adce",
+];
+
+fn array(value: &Value) -> &Vec<Value> {
+    value.as_array().expect("a JSON array")
+}
+
 /// The sidecars of `top_mod` at `level`, checked against its bytecode and IR: each symbol is
 /// a function or global of its section's IR, and each function's symbol is where its code starts.
+/// In the JSON of each sidecar, the machine steps of each section compose to its `machine_ir`,
+/// and at `-O0` no pass of the pass round runs.
 fn checked_sidecars(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -228,6 +246,55 @@ fn checked_sidecars(
                 }
             }
         }
+        let json: Value = serde_json::from_str(&serde_json::to_string(sidecar).unwrap()).unwrap();
+        assert_eq!(json["version"], 5);
+        for section in array(&json["sections"]) {
+            let lowering = &section["lowering"];
+            let steps = &lowering["machine_steps"];
+            let text = |snap: &Value| {
+                let field = |key: &str| snap[key].as_str().unwrap().to_string();
+                (field("func"), field("text"))
+            };
+            let mut funcs: BTreeMap<_, _> = array(&steps["lowered"]).iter().map(text).collect();
+            for pass in array(&steps["passes"]) {
+                for func in array(&pass["steps"])
+                    .iter()
+                    .flat_map(|step| array(&step["funcs"]))
+                {
+                    let (func, text) = text(&func["out"]);
+                    assert!(funcs.insert(func, text).is_some(), "{name}: a new function");
+                }
+            }
+            let mut machine = BTreeMap::new();
+            let mut current: Option<(String, String)> = None;
+            for line in lowering["machine_ir"]
+                .as_str()
+                .unwrap()
+                .split_inclusive('\n')
+            {
+                if line.starts_with("func ") {
+                    let func = line.split_once('%').unwrap().1.split('(').next().unwrap();
+                    current = Some((func.to_string(), String::new()));
+                }
+                if let Some((func, text)) = &mut current {
+                    text.push_str(line);
+                    if line == "}\n" {
+                        machine.insert(func.clone(), text.clone());
+                        current = None;
+                    }
+                }
+            }
+            assert_eq!(funcs, machine, "{name}, {level:?}: the composed steps");
+            if level == OptLevel::O0 {
+                assert_eq!(steps["profile"], "off");
+                assert!(
+                    array(&steps["passes"])
+                        .iter()
+                        .all(|pass| !MACHINE_ROUND.contains(&pass["kind"].as_str().unwrap())),
+                    "{name}: a pass of the pass round at -O0"
+                );
+            }
+        }
     }
     sidecars
 }
@@ -235,9 +302,16 @@ fn checked_sidecars(
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "observability_preserves_creation_and_runtime_bytecode.fe")]
 fn sidecar_holds_compiled_ir_and_sections(fixture: Fixture<&str>) {
     with_top_mod_for_source(&fixture, |db, top_mod| {
-        for level in [OptLevel::O0, OptLevel::O1] {
-            checked_sidecars(db, top_mod, level);
-        }
+        checked_sidecars(db, top_mod, OptLevel::O0);
+        let sidecars = checked_sidecars(db, top_mod, OptLevel::O1);
+        let round_steps = sidecars
+            .values()
+            .flat_map(|sidecar| &sidecar.sections)
+            .flat_map(|section| &section.lowering.machine_steps.passes)
+            .filter(|pass| MACHINE_ROUND.contains(&pass.kind))
+            .map(|pass| pass.steps.len())
+            .sum::<usize>();
+        assert!(round_steps > 0, "-O1 records no step of the pass round");
     });
 }
 
