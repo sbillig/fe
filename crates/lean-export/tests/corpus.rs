@@ -79,7 +79,7 @@ fn export_corpus() {
         let (ingot, modules) = modules(db, path, &url);
         let mut library = Library::default();
         let mut ingot_export = IngotExport::new(db);
-        let mut models = Vec::new();
+        let (mut models, mut unexported) = (Vec::new(), Vec::new());
         let contracts = modules.iter().flat_map(|module| module.all_contracts(db));
         for (index, &contract) in contracts.enumerate() {
             total += 1;
@@ -88,31 +88,35 @@ fn export_corpus() {
                 ingot_export.export_contract(contract, true, &mut library)
             }))
             .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
+            // The contract's IR for fe-spec's interpreter, or why it is not serialized,
+            // which the Lean file reads when it runs.
+            let ir = panic::catch_unwind(panic::AssertUnwindSafe(|| export_ir(db, contract)))
+                .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
+            match ir {
+                Ok(json) => fs::write(format!("{out}/{id}.ir.json"), ir_text(&json)),
+                Err(reason) => fs::write(format!("{out}/{id}.ir.refused"), reason.0),
+            }
+            .unwrap();
+            let name = contract.name(db).unwrap().data(db).to_string();
             match result {
                 Ok(()) => {
                     exported += 1;
-                    let name = contract.name(db).unwrap().data(db).to_string();
                     let bytes = contract.code_address_space_slot_count(db) * 32;
-                    // The contract's IR for fe-spec's interpreter, or why it is not
-                    // serialized, which the Lean file reads when it runs.
-                    let ir =
-                        panic::catch_unwind(panic::AssertUnwindSafe(|| export_ir(db, contract)))
-                            .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
-                    match ir {
-                        Ok(json) => fs::write(format!("{out}/{id}.ir.json"), ir_text(&json)),
-                        Err(reason) => fs::write(format!("{out}/{id}.ir.refused"), reason.0),
-                    }
-                    .unwrap();
                     models.push((
                         id.clone(),
                         name,
                         format!(
-                            "⟨deploy Corpus.{id}.init_entry, entry Corpus.{id}.runtime, {bytes}⟩"
+                            "some ⟨deploy Corpus.{id}.init_entry, entry Corpus.{id}.runtime, \
+                             {bytes}⟩"
                         ),
                         interface(db, contract),
                     ));
                 }
-                Err(reason) => blockers.entry(reason.0).or_default().push(id),
+                // A contract the exporter stops at is compared with the interpreter only.
+                Err(reason) => {
+                    blockers.entry(reason.0).or_default().push(id.clone());
+                    unexported.push((id, name, "none".to_string(), interface(db, contract)));
+                }
             }
         }
         // The definitions the file's contracts share, then each contract's.
@@ -146,7 +150,7 @@ fn export_corpus() {
                 .unwrap();
             }
         }
-        if models.is_empty() {
+        if models.is_empty() && unexported.is_empty() {
             continue;
         }
         let compiled = panic::catch_unwind(panic::AssertUnwindSafe(|| {
@@ -173,6 +177,7 @@ fn export_corpus() {
             text.insert_str(0, &creations);
             let targets: Vec<_> = models
                 .iter()
+                .chain(&unexported)
                 .map(|(id, contract, model, interface)| {
                     format!(
                         "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{}\", \
