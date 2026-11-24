@@ -2505,12 +2505,22 @@ impl<'db> Module<'db> {
         if ty.is_never(self.db) {
             return Ok("Empty".to_string());
         }
+        // Each type the export defines derives `Inhabited`, and reads a
+        // field of another variant as the field type's default, so no other
+        // uninhabited type, nor a variant field of one, has a definition.
+        let db = self.db;
+        let scope = self.root.key(db).owner(db).scope();
+        let assumptions = self.root.assumptions(db);
+        let uninhabited = |ty: TyId<'db>| ty.is_uninhabited_in(db, Some(scope), assumptions);
+        let pretty = ty.pretty_print(self.db);
+        if uninhabited(ty) {
+            return Err(Unsupported(format!("uninhabited type {pretty}")));
+        }
         // An access that is part of a value is the place it reaches in
         // contract state; a view of a snapshot type is the value.
         if let Some((kind, inner)) = ty.as_capability(self.db) {
-            let scope = self.root.key(self.db).owner(self.db).scope();
             let snapshot = kind == CapabilityKind::View
-                && ty_is_snapshot(self.db, scope, inner, self.root.assumptions(self.db))
+                && ty_is_snapshot(self.db, scope, inner, assumptions)
                 && self.root.pinned_space(self.db, inner).is_none();
             let held = held
                 .iter()
@@ -2523,7 +2533,6 @@ impl<'db> Module<'db> {
                 Some((_, Carrier::Place)) | None => Ok("Place".to_string()),
             };
         }
-        let pretty = ty.pretty_print(self.db);
         match pretty.as_str() {
             // An address is its word.
             "Address" => return Ok("UInt256".to_string()),
@@ -2532,6 +2541,15 @@ impl<'db> Module<'db> {
             _ => {}
         }
         if let Some(variants) = self.variants(ty) {
+            if variants
+                .iter()
+                .flat_map(|(_, fields)| fields)
+                .any(|&field| uninhabited(field))
+            {
+                return Err(Unsupported(format!(
+                    "{pretty}, with an uninhabited variant"
+                )));
+            }
             let depth = self.begin();
             let mut lean = Vec::new();
             for (variant, (name, fields)) in variants.into_iter().enumerate() {

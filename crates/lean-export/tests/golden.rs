@@ -81,3 +81,17 @@ fn rejects_programs_with_errors() {
     });
     assert!(error.0.contains("refutable pattern"), "{}", error.0);
 }
+
+/// A type with no values, or an enum with a variant that has none, is not
+/// exported: each type the export defines is inhabited. `uninhabited.fe`
+/// matches on a `Result` whose `Err` holds an enum with no variants.
+#[test]
+fn rejects_uninhabited_types() {
+    let mut library = Library::default();
+    let error = with_fixture("uninhabited", |db, contracts| {
+        IngotExport::new(db)
+            .export_contract(contracts[0], true, &mut library)
+            .unwrap_err()
+    });
+    assert!(error.0.contains("uninhabited"), "{}", error.0);
+}
