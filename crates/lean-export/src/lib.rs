@@ -24,6 +24,8 @@
 //! definition is that value ([`Export::checks`], and [`Library::checks`] for
 //! the library's): Lean's kernel decides each by evaluating the definition.
 
+mod ir;
+
 use std::fmt::{self, Write};
 
 use common::{
@@ -82,8 +84,8 @@ use hir::{
         scope_graph::ScopeId,
     },
     semantic::{
-        ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmView, storage_field_lanes,
-        storage_field_placements, storage_lane_bytes, storage_slot_span,
+        ContractFieldId, FieldStorageLayout, ProviderSource, RecvArmAbiInfo, RecvArmView,
+        storage_field_lanes, storage_field_placements, storage_lane_bytes, storage_slot_span,
     },
     span::{LazySpan, expr::LazyExprSpan, pat::LazyPatSpan, stmt::LazyStmtSpan},
     visitor::prelude::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_stmt},
@@ -91,6 +93,8 @@ use hir::{
 use num_bigint::BigUint;
 use num_traits::Signed;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+pub use ir::{IR_VERSION, export_ir, ir_text};
 
 /// The names exported code calls the prelude and the entries by, which no
 /// exported function takes.
@@ -1327,15 +1331,6 @@ impl<'db> Module<'db> {
         arms: &[(RecvArmView<'db>, String)],
     ) -> Result<(), Unsupported> {
         let db = self.db;
-        let scope = contract.scope();
-        let missing = |what: &str| Unsupported(format!("runtime: missing `{what}`"));
-        let abi = resolve_lib_type_path(db, scope, "std::abi::Sol")
-            .ok_or_else(|| missing("std::abi::Sol"))?;
-        let decode = resolve_lib_func_path(db, scope, "core::contracts::decode_runtime_args")
-            .ok_or_else(|| missing("core::contracts::decode_runtime_args"))?;
-        let host_trait = resolve_core_trait(db, scope, &["contracts", "ContractHost"])
-            .ok_or_else(|| missing("core::contracts::ContractHost"))?;
-        let generated = |error| Unsupported(format!("runtime: generated call: {error:?}"));
         let mut cases = Vec::new();
         let mut default = "revertEmpty".to_string();
         for (arm, name) in arms {
@@ -1346,16 +1341,8 @@ impl<'db> Module<'db> {
                 recv_idx,
                 arm_idx,
             };
-            let site = EffectParamSite::ContractRecvArm {
-                contract,
-                recv_idx,
-                arm_idx,
-            };
-            let host = registered_root_providers(db, site)
-                .first()
-                .ok_or_else(|| missing("root provider"))?
-                .provider_ty;
-            let info = arm.abi_info(db, abi);
+            let callees = arm_callees(db, contract, *arm)?;
+            let info = &callees.info;
             let mut lines = String::new();
             if !arm.arm(db).is_some_and(|arm| arm.is_payable(db)) {
                 lines.push_str("  nonPayable\n");
@@ -1387,16 +1374,7 @@ impl<'db> Module<'db> {
             positions.sort_unstable();
             let mut args = String::new();
             let (message, result) = (var("message"), var("result"));
-            if info.args_ty != TyId::unit(db) {
-                let key = generated_callee_key(
-                    db,
-                    scope,
-                    PredicateListId::empty_list(db),
-                    decode,
-                    None,
-                    &[host, abi, info.args_ty],
-                )
-                .map_err(generated)?;
+            if let Some(key) = callees.decode {
                 let decode = self.instance(key, vec![Some(Carrier::Erased)].into())?;
                 writeln!(lines, "  let {message} ← {decode}").unwrap();
                 let fields = self.fields(info.args_ty)?;
@@ -1406,28 +1384,12 @@ impl<'db> Module<'db> {
                     write!(args, " {message}.{}", steps.join(".")).unwrap();
                 }
             }
-            match info.ret_ty {
+            match callees.return_value {
                 None => {
                     writeln!(lines, "  let _ ← {name}{args}").unwrap();
                     lines.push_str("  returnData (UInt256.ofNat 0) (UInt256.ofNat 0)\n");
                 }
-                Some(ret_ty) => {
-                    let inst = TraitInstId::new_simple(db, host_trait, vec![host]);
-                    let method = IdentId::new(db, "return_value".to_string());
-                    let func = host_trait
-                        .method_defs(db)
-                        .get(&method)
-                        .copied()
-                        .ok_or_else(|| missing("ContractHost::return_value"))?;
-                    let key = generated_callee_key(
-                        db,
-                        scope,
-                        PredicateListId::empty_list(db),
-                        func,
-                        Some(inst),
-                        &[abi, ret_ty],
-                    )
-                    .map_err(generated)?;
+                Some(key) => {
                     let carriers = vec![Some(Carrier::Erased), None];
                     let return_value = self.instance(key, carriers.into())?;
                     writeln!(lines, "  let {result} ← {name}{args}").unwrap();
@@ -1501,9 +1463,6 @@ impl<'db> Module<'db> {
     /// word.
     fn init_entry(&mut self, contract: Contract<'db>) -> Result<(), Unsupported> {
         let db = self.db;
-        let scope = contract.scope();
-        let missing = |what: &str| Unsupported(format!("init_entry: missing `{what}`"));
-        let generated = |error| Unsupported(format!("init_entry: generated call: {error:?}"));
         let depth = self.begin();
         let mut lines = String::new();
         if !contract.init(db).is_some_and(|init| init.is_payable(db)) {
@@ -1517,45 +1476,21 @@ impl<'db> Module<'db> {
         let instance = SemanticInstance::new(db, identity_semantic_instance_key(db, owner));
         let normalized = normalize_semantic_body(db, instance)
             .map_err(|_| Unsupported("init: body does not normalize".to_string()))?;
-        if args_ty != TyId::unit(db) {
-            let lib_ty =
-                |path: &str| resolve_lib_type_path(db, scope, path).ok_or_else(|| missing(path));
-            let abi = lib_ty("std::abi::Sol")?;
-            let decoder_ty = lib_ty("std::abi::sol::SolDecoder")?;
-            let span_ty = lib_ty("core::ptr::MemSpan")?;
-            let method =
-                |segments: &[&str], inst_args: Vec<TyId<'db>>, method: &str, own: &[TyId<'db>]| {
-                    let def = resolve_core_trait(db, scope, segments)
-                        .ok_or_else(|| missing(&segments.join("::")))?;
-                    let func = def
-                        .method_defs(db)
-                        .get(&IdentId::new(db, method.to_string()))
-                        .copied()
-                        .ok_or_else(|| missing(method))?;
-                    let inst = TraitInstId::new_simple(db, def, inst_args);
-                    generated_callee_key(
-                        db,
-                        scope,
-                        PredicateListId::empty_list(db),
-                        func,
-                        Some(inst),
-                        own,
-                    )
-                    .map_err(generated)
-                };
-            let decoder_new = method(&["abi", "Abi"], vec![abi], "decoder_new", &[])?;
-            let decode = method(
-                &["abi", "Decode"],
-                vec![args_ty, abi],
-                "decode_payload",
-                &[decoder_ty, span_ty],
-            )?;
-            let decoder_new = self.instance(decoder_new, Carriers::default())?;
+        if let Some(callees) = init_callees(db, contract)? {
+            let decoder_new = self.instance(callees.decoder_new, Carriers::default())?;
             // The input is a view: the value itself if a span is a snapshot.
-            let input = (!ty_is_snapshot(db, scope, span_ty, PredicateListId::empty_list(db)))
-                .then_some(Carrier::Value);
-            let decode = self.instance(decode, vec![Some(Carrier::Value), input].into())?;
-            let span = self.value_ty(span_ty)?;
+            let input = (!ty_is_snapshot(
+                db,
+                contract.scope(),
+                callees.span_ty,
+                PredicateListId::empty_list(db),
+            ))
+            .then_some(Carrier::Value);
+            let decode = self.instance(
+                callees.decode_payload,
+                vec![Some(Carrier::Value), input].into(),
+            )?;
+            let span = self.value_ty(callees.span_ty)?;
             writeln!(lines, "  let {size} := UInt256.ofNat {bytes_in}.size").unwrap();
             writeln!(
                 lines,
@@ -1799,7 +1734,7 @@ impl<'db> Module<'db> {
             (Some(name), _) => {
                 let members = self.members.split_off(open.members);
                 let first = self.defs.len();
-                let doc = self.describe(key);
+                let doc = describe(self.db, key);
                 self.define(
                     &name,
                     &doc,
@@ -1809,7 +1744,7 @@ impl<'db> Module<'db> {
                 );
                 for member in &members {
                     let body = format!("{}partial_fixpoint\n", member.body);
-                    let doc = self.describe(member.instance.0);
+                    let doc = describe(self.db, member.instance.0);
                     self.define(&member.name, &doc, &body, member.scope, member.refs.clone());
                 }
                 if !members.is_empty() {
@@ -1828,7 +1763,7 @@ impl<'db> Module<'db> {
             (None, Some(name)) => name.clone(),
             (None, None) => {
                 let name = self.fresh(&base);
-                let doc = self.describe(key);
+                let doc = describe(self.db, key);
                 self.define(&name, &doc, &body, scope, refs);
                 self.bodies.insert((base, body), name.clone());
                 name
@@ -1843,81 +1778,6 @@ impl<'db> Module<'db> {
         self.names.insert((key, carriers), name.clone());
         self.note(&name);
         Ok(name)
-    }
-
-    /// What the definition of `key` defines, as Fe names it: the function
-    /// or constant it is an instance of, a method or an associated constant
-    /// by the type its impl is for at the instance's types, and the
-    /// instance's other types.
-    fn describe(&self, key: SemanticInstanceKey<'db>) -> String {
-        let db = self.db;
-        let owner = key.owner(db);
-        let args = key.subst(db).generic_args(db);
-        // The item the instance's types are for, its scope and its name.
-        let (generic, scope, name) = match owner {
-            BodyOwner::Func(func, _) => {
-                let name = func.name(db).to_opt().map(|name| name.data(db).as_str());
-                (Some(GenericParamOwner::Func(func)), func.scope(), name)
-            }
-            BodyOwner::AnonConstBody { body, .. } => {
-                let generic = match body.scope().parent_item(db) {
-                    Some(ItemKind::Impl(item)) => Some(GenericParamOwner::Impl(item)),
-                    Some(ItemKind::ImplTrait(item)) => Some(GenericParamOwner::ImplTrait(item)),
-                    _ => None,
-                };
-                (generic, body.scope(), assoc_const_name(db, body))
-            }
-            BodyOwner::Closure { .. } => {
-                return format!("A closure in `{}`", fe_path(db, owner.scope()));
-            }
-            owner => return format!("`{}`", const_path(db, owner)),
-        };
-        let types: Vec<_> = args
-            .iter()
-            .map(|arg| arg.pretty_print(db).as_str())
-            .collect();
-        let Some(name) = name else {
-            let block = format!("A `const` block in `{}`", fe_path(db, scope));
-            return match types.as_slice() {
-                [] => block,
-                types => format!("{block}, at `<{}>`", types.join(", ")),
-            };
-        };
-        // The type an impl is for, at the instance's types, and the number
-        // of those the impl takes.
-        let instantiated = |ty: TyId<'db>, parent: GenericParamOwner<'db>| {
-            let owner = generic.unwrap_or(parent);
-            let subst = CompleteSubst::for_owner(db, owner, args.to_vec()).ok();
-            let ty = subst
-                .and_then(|subst| Binder::bind(owner, ty).instantiate_subst(db, &subst).ok())
-                .unwrap_or(ty);
-            let taken = ParamSchemaId::full(db, parent).keys(db).len();
-            (ty.pretty_print(db).to_string(), taken)
-        };
-        let (path, taken) = match scope.parent_item(db) {
-            Some(ItemKind::Impl(item)) => {
-                let (ty, taken) = instantiated(item.ty(db), GenericParamOwner::Impl(item));
-                (format!("{ty}::{name}"), taken)
-            }
-            Some(ItemKind::ImplTrait(item)) => {
-                let (ty, taken) = instantiated(item.ty(db), GenericParamOwner::ImplTrait(item));
-                let trait_name = item.trait_def(db).and_then(|def| def.name(db).to_opt());
-                let trait_name = trait_name.map_or("?", |name| name.data(db));
-                (format!("<{ty} as {trait_name}>::{name}"), taken)
-            }
-            _ => (fe_path(db, scope), 0),
-        };
-        let own = match types.get(taken..).unwrap_or_default() {
-            [] => String::new(),
-            own => format!("<{}>", own.join(", ")),
-        };
-        match owner {
-            BodyOwner::Func(_, Some(mode)) => {
-                let mode = format!("{mode:?}").to_lowercase();
-                format!("`{path}{own}`, its `{mode}` body")
-            }
-            _ => format!("`{path}{own}`"),
-        }
     }
 
     /// A Lean name no definition has yet: `base`, or `base` with a number.
@@ -6976,6 +6836,218 @@ impl<'db> BodyExporter<'_, 'db> {
     }
 }
 
+/// What the definition of `key` defines, as Fe names it: the function
+/// or constant it is an instance of, a method or an associated constant
+/// by the type its impl is for at the instance's types, and the
+/// instance's other types.
+pub(crate) fn describe<'db>(db: &'db dyn HirAnalysisDb, key: SemanticInstanceKey<'db>) -> String {
+    let owner = key.owner(db);
+    let args = key.subst(db).generic_args(db);
+    // The item the instance's types are for, its scope and its name.
+    let (generic, scope, name) = match owner {
+        BodyOwner::Func(func, _) => {
+            let name = func.name(db).to_opt().map(|name| name.data(db).as_str());
+            (Some(GenericParamOwner::Func(func)), func.scope(), name)
+        }
+        BodyOwner::AnonConstBody { body, .. } => {
+            let generic = match body.scope().parent_item(db) {
+                Some(ItemKind::Impl(item)) => Some(GenericParamOwner::Impl(item)),
+                Some(ItemKind::ImplTrait(item)) => Some(GenericParamOwner::ImplTrait(item)),
+                _ => None,
+            };
+            (generic, body.scope(), assoc_const_name(db, body))
+        }
+        BodyOwner::Closure { .. } => {
+            return format!("A closure in `{}`", fe_path(db, owner.scope()));
+        }
+        owner => return format!("`{}`", const_path(db, owner)),
+    };
+    let types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.pretty_print(db).as_str())
+        .collect();
+    let Some(name) = name else {
+        let block = format!("A `const` block in `{}`", fe_path(db, scope));
+        return match types.as_slice() {
+            [] => block,
+            types => format!("{block}, at `<{}>`", types.join(", ")),
+        };
+    };
+    // The type an impl is for, at the instance's types, and the number
+    // of those the impl takes.
+    let instantiated = |ty: TyId<'db>, parent: GenericParamOwner<'db>| {
+        let owner = generic.unwrap_or(parent);
+        let subst = CompleteSubst::for_owner(db, owner, args.to_vec()).ok();
+        let ty = subst
+            .and_then(|subst| Binder::bind(owner, ty).instantiate_subst(db, &subst).ok())
+            .unwrap_or(ty);
+        let taken = ParamSchemaId::full(db, parent).keys(db).len();
+        (ty.pretty_print(db).to_string(), taken)
+    };
+    let (path, taken) = match scope.parent_item(db) {
+        Some(ItemKind::Impl(item)) => {
+            let (ty, taken) = instantiated(item.ty(db), GenericParamOwner::Impl(item));
+            (format!("{ty}::{name}"), taken)
+        }
+        Some(ItemKind::ImplTrait(item)) => {
+            let (ty, taken) = instantiated(item.ty(db), GenericParamOwner::ImplTrait(item));
+            let trait_name = item.trait_def(db).and_then(|def| def.name(db).to_opt());
+            let trait_name = trait_name.map_or("?", |name| name.data(db));
+            (format!("<{ty} as {trait_name}>::{name}"), taken)
+        }
+        _ => (fe_path(db, scope), 0),
+    };
+    let own = match types.get(taken..).unwrap_or_default() {
+        [] => String::new(),
+        own => format!("<{}>", own.join(", ")),
+    };
+    match owner {
+        BodyOwner::Func(_, Some(mode)) => {
+            let mode = format!("{mode:?}").to_lowercase();
+            format!("`{path}{own}`, its `{mode}` body")
+        }
+        _ => format!("`{path}{own}`"),
+    }
+}
+
+/// What the compiler's entry code calls around one recv arm: the root
+/// provider the arm runs under, the arm's ABI information, the instance of
+/// `core::contracts::decode_runtime_args` that decodes its arguments, if it
+/// takes any, and the instance of `ContractHost::return_value` that returns
+/// its result, if it has one.
+pub(crate) struct ArmCallees<'db> {
+    pub(crate) host: TyId<'db>,
+    pub(crate) info: RecvArmAbiInfo<'db>,
+    pub(crate) decode: Option<SemanticInstanceKey<'db>>,
+    pub(crate) return_value: Option<SemanticInstanceKey<'db>>,
+}
+
+/// The callees of the entry code of recv arm `arm` of `contract`.
+pub(crate) fn arm_callees<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    arm: RecvArmView<'db>,
+) -> Result<ArmCallees<'db>, Unsupported> {
+    let scope = contract.scope();
+    let missing = |what: &str| Unsupported(format!("runtime: missing `{what}`"));
+    let generated = |error| Unsupported(format!("runtime: generated call: {error:?}"));
+    let abi = resolve_lib_type_path(db, scope, "std::abi::Sol")
+        .ok_or_else(|| missing("std::abi::Sol"))?;
+    let site = EffectParamSite::ContractRecvArm {
+        contract,
+        recv_idx: arm.recv(db).recv_idx(db),
+        arm_idx: arm.arm_idx(db),
+    };
+    let host = registered_root_providers(db, site)
+        .first()
+        .ok_or_else(|| missing("root provider"))?
+        .provider_ty;
+    let info = arm.abi_info(db, abi);
+    let decode = if info.args_ty != TyId::unit(db) {
+        let decode = resolve_lib_func_path(db, scope, "core::contracts::decode_runtime_args")
+            .ok_or_else(|| missing("core::contracts::decode_runtime_args"))?;
+        let key = generated_callee_key(
+            db,
+            scope,
+            PredicateListId::empty_list(db),
+            decode,
+            None,
+            &[host, abi, info.args_ty],
+        )
+        .map_err(generated)?;
+        Some(key)
+    } else {
+        None
+    };
+    let return_value = match info.ret_ty {
+        Some(ret_ty) => {
+            let host_trait = resolve_core_trait(db, scope, &["contracts", "ContractHost"])
+                .ok_or_else(|| missing("core::contracts::ContractHost"))?;
+            let inst = TraitInstId::new_simple(db, host_trait, vec![host]);
+            let method = IdentId::new(db, "return_value".to_string());
+            let func = host_trait
+                .method_defs(db)
+                .get(&method)
+                .copied()
+                .ok_or_else(|| missing("ContractHost::return_value"))?;
+            let key = generated_callee_key(
+                db,
+                scope,
+                PredicateListId::empty_list(db),
+                func,
+                Some(inst),
+                &[abi, ret_ty],
+            )
+            .map_err(generated)?;
+            Some(key)
+        }
+        None => None,
+    };
+    Ok(ArmCallees {
+        host,
+        info,
+        decode,
+        return_value,
+    })
+}
+
+/// What the compiler's deployment code calls to decode the constructor
+/// arguments: `Abi::decoder_new` and `Decode::decode_payload` at the tuple of
+/// `init`'s parameter types, which decodes from a `core::ptr::MemSpan`.
+pub(crate) struct InitCallees<'db> {
+    pub(crate) decoder_new: SemanticInstanceKey<'db>,
+    pub(crate) decode_payload: SemanticInstanceKey<'db>,
+    pub(crate) span_ty: TyId<'db>,
+}
+
+/// The callees of the deployment code of `contract`, if `init` takes
+/// arguments.
+pub(crate) fn init_callees<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Result<Option<InitCallees<'db>>, Unsupported> {
+    let scope = contract.scope();
+    let missing = |what: &str| Unsupported(format!("init_entry: missing `{what}`"));
+    let generated = |error| Unsupported(format!("init_entry: generated call: {error:?}"));
+    let args_ty = contract.init_args_ty(db);
+    if args_ty == TyId::unit(db) {
+        return Ok(None);
+    }
+    let lib_ty = |path: &str| resolve_lib_type_path(db, scope, path).ok_or_else(|| missing(path));
+    let abi = lib_ty("std::abi::Sol")?;
+    let decoder_ty = lib_ty("std::abi::sol::SolDecoder")?;
+    let span_ty = lib_ty("core::ptr::MemSpan")?;
+    let method = |segments: &[&str], inst_args: Vec<TyId<'db>>, method: &str, own: &[TyId<'db>]| {
+        let def =
+            resolve_core_trait(db, scope, segments).ok_or_else(|| missing(&segments.join("::")))?;
+        let func = def
+            .method_defs(db)
+            .get(&IdentId::new(db, method.to_string()))
+            .copied()
+            .ok_or_else(|| missing(method))?;
+        let inst = TraitInstId::new_simple(db, def, inst_args);
+        generated_callee_key(
+            db,
+            scope,
+            PredicateListId::empty_list(db),
+            func,
+            Some(inst),
+            own,
+        )
+        .map_err(generated)
+    };
+    Ok(Some(InitCallees {
+        decoder_new: method(&["abi", "Abi"], vec![abi], "decoder_new", &[])?,
+        decode_payload: method(
+            &["abi", "Decode"],
+            vec![args_ty, abi],
+            "decode_payload",
+            &[decoder_ty, span_ty],
+        )?,
+        span_ty,
+    }))
+}
+
 /// Whether the projection `callee` grants the access at `component` of its
 /// result in contract state.
 fn granted_in_state<'db>(
@@ -7261,7 +7333,7 @@ fn assoc_const_name<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<
 /// the arm that takes any other call. An arm whose name or entry's name is
 /// still another arm's, or that handles neither, is named by its place,
 /// `recv<n>_arm<m>`.
-fn arm_names<'db>(
+pub(crate) fn arm_names<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Vec<(RecvArmView<'db>, String)> {
@@ -7324,7 +7396,10 @@ fn arm_names<'db>(
 /// The errors the compiler reports in `ingot`, as `fe check` finds them: the
 /// analysis of its modules, and the check of their accesses if that finds
 /// none.
-fn ingot_errors<'db>(db: &'db dyn SpannedHirAnalysisDb, ingot: Ingot<'db>) -> Vec<String> {
+pub(crate) fn ingot_errors<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> Vec<String> {
     let tree = ingot.module_tree(db);
     let errors = |mut passes: AnalysisPassManager| -> Vec<String> {
         let diagnostics = passes.run_on_module_tree(db, tree);
@@ -7356,7 +7431,7 @@ fn source_text(db: &dyn SpannedHirDb, start: impl LazySpan, end: impl LazySpan) 
 }
 
 /// `contract` as its documentation names it: "contract `<name>`".
-fn contract_title(db: &dyn HirAnalysisDb, contract: Contract<'_>) -> String {
+pub(crate) fn contract_title(db: &dyn HirAnalysisDb, contract: Contract<'_>) -> String {
     let name = contract.name(db).to_opt();
     format!("contract `{}`", name.map_or("", |name| name.data(db)))
 }
@@ -7611,7 +7686,7 @@ fn flag(flag: u32) -> String {
 
 /// The provider of the effect `binding` binds, if it is an effect's: an
 /// effect a body takes by value, as an input after its parameters.
-fn effect_input(binding: Option<LocalBinding<'_>>) -> Option<u32> {
+pub(crate) fn effect_input(binding: Option<LocalBinding<'_>>) -> Option<u32> {
     match binding? {
         LocalBinding::EffectParam { provider_idx, .. } => Some(provider_idx),
         _ => None,
@@ -7619,7 +7694,7 @@ fn effect_input(binding: Option<LocalBinding<'_>>) -> Option<u32> {
 }
 
 /// The place of `binding` among the patterns `pats`, if it is one of them.
-fn arg_position(binding: Option<LocalBinding<'_>>, pats: &[PatId]) -> Option<usize> {
+pub(crate) fn arg_position(binding: Option<LocalBinding<'_>>, pats: &[PatId]) -> Option<usize> {
     let Some(LocalBinding::Local { pat, .. }) = binding else {
         return None;
     };
