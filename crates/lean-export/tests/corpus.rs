@@ -29,7 +29,8 @@ use hir::{
 };
 use num_bigint::BigUint;
 use rustc_hash::FxHashSet;
-use spec_ir::{Unsupported, export_ir, ir_text};
+use serde_json::Value;
+use spec_ir::{Unsupported, export_ir, ir_text, merge_library};
 use url::Url;
 
 /// Exports every contract of the colon-separated files and ingot directories
@@ -48,7 +49,8 @@ use url::Url;
 ///
 /// Writes the normalized IR of each exported contract, for fe-spec's
 /// interpreter, to `LEAN_EXPORT_CORPUS_OUT/<file>_<index>.ir.json`, or the
-/// construct the serializer stopped at to `<file>_<index>.ir.refused`.
+/// construct the serializer stopped at to `<file>_<index>.ir.refused`, and
+/// the library of all of them, merged, to `library.ir.json`.
 ///
 /// A file that compiles ends in `Corpus.targets`, the creation and runtime
 /// bytecode, model, interface and IR path of each exported contract. A call of
@@ -67,6 +69,7 @@ fn export_corpus() {
         .collect();
     let mut blockers = BTreeMap::<String, Vec<String>>::new();
     let (mut exported, mut skipped, mut uncompiled, mut total) = (0, Vec::new(), Vec::new(), 0);
+    let mut ir_library = None;
     let files = env::var("LEAN_EXPORT_CORPUS").unwrap();
     for path in files.split(':') {
         let name = file_name(path);
@@ -94,7 +97,10 @@ fn export_corpus() {
             let ir = panic::catch_unwind(panic::AssertUnwindSafe(|| export_ir(db, contract)))
                 .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
             match ir {
-                Ok(json) => fs::write(format!("{out}/{id}.ir.json"), ir_text(&json)),
+                Ok(ir) => {
+                    add_library(&mut ir_library, ir.library);
+                    fs::write(format!("{out}/{id}.ir.json"), ir_text(&ir.contract))
+                }
                 Err(reason) => fs::write(format!("{out}/{id}.ir.refused"), reason.0),
             }
             .unwrap();
@@ -184,7 +190,7 @@ fn export_corpus() {
                         "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{}\", \
                          runtime := Fe.EVM.Diff.hex \"{}\",\n     model := {model},\n     \
                          interface := {interface},\n     ir := \"{out}/{id}\", \
-                         creations := Corpus.creations }}",
+                         irLibrary := \"{out}/library.ir.json\", creations := Corpus.creations }}",
                         hex(&code[contract].deploy),
                         hex(&code[contract].runtime)
                     )
@@ -248,6 +254,9 @@ fn export_corpus() {
         );
         fs::write(format!("{out}/{name}.checks"), library_checks + &checks).unwrap();
     }
+    if let Some(library) = ir_library {
+        fs::write(format!("{out}/library.ir.json"), ir_text(&library)).unwrap();
+    }
     println!(
         "contracts: {total}, exported: {exported}, files skipped: {skipped:?}, \
          not compiled: {uncompiled:?}"
@@ -267,7 +276,8 @@ fn export_corpus() {
 /// its model.
 /// Serializes the normalized IR of every contract of the colon-separated
 /// files and ingot directories in `LEAN_EXPORT_CORPUS` to
-/// `IR_CORPUS_OUT/<file>_<index>.json`, and prints the construct each
+/// `IR_CORPUS_OUT/<file>_<index>.json`, with the library of all of them,
+/// merged, in `IR_CORPUS_OUT/library.json`, and prints the construct each
 /// contract that does not serialize stopped at as `BLOCK <ids>\t<reason>`.
 #[test]
 #[ignore = "reads its input from the environment"]
@@ -275,6 +285,7 @@ fn ir_corpus() {
     let out = env::var("IR_CORPUS_OUT").unwrap();
     let mut blockers = BTreeMap::<String, Vec<String>>::new();
     let (mut serialized, mut skipped, mut total) = (0, Vec::new(), 0);
+    let mut library = None;
     let files = env::var("LEAN_EXPORT_CORPUS").unwrap();
     for path in files.split(':') {
         let name = file_name(path);
@@ -291,9 +302,10 @@ fn ir_corpus() {
             let result = panic::catch_unwind(panic::AssertUnwindSafe(|| export_ir(db, contract)))
                 .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
             match result {
-                Ok(json) => {
+                Ok(ir) => {
                     serialized += 1;
-                    fs::write(format!("{out}/{id}.json"), ir_text(&json)).unwrap();
+                    add_library(&mut library, ir.library);
+                    fs::write(format!("{out}/{id}.json"), ir_text(&ir.contract)).unwrap();
                 }
                 Err(reason) => blockers.entry(reason.0).or_default().push(id),
             }
@@ -301,6 +313,9 @@ fn ir_corpus() {
     }
     for (reason, ids) in &blockers {
         println!("BLOCK {}\t{reason}", ids.join(" "));
+    }
+    if let Some(library) = library {
+        fs::write(format!("{out}/library.json"), ir_text(&library)).unwrap();
     }
     println!("skipped (errors): {}", skipped.join(" "));
     println!("contracts: {serialized} of {total} serialized");
@@ -727,5 +742,14 @@ fn describe(db: &DriverDataBase, key: SemanticInstanceKey<'_>) -> String {
     match args.is_empty() {
         true => owner,
         false => format!("{owner}<{}>", args.join(", ")),
+    }
+}
+
+/// Merges `other` into `library`, the corpus' library so far. A conflict is
+/// an instance or type that serializes differently in two contracts.
+fn add_library(library: &mut Option<Value>, other: Value) {
+    match library {
+        Some(library) => merge_library(library, &other).unwrap(),
+        None => *library = Some(other),
     }
 }

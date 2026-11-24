@@ -4,6 +4,7 @@
 //! the names of its arms and instances.
 
 mod ir;
+mod key;
 
 use common::{
     diagnostics::Severity,
@@ -33,7 +34,7 @@ use hir::{
     semantic::{RecvArmAbiInfo, RecvArmView},
 };
 
-pub use ir::{IR_VERSION, export_ir, ir_text};
+pub use ir::{IR_VERSION, SpecIr, export_ir, ir_text, merge_library};
 
 /// Why a contract is not exported: a construct the exporter has no model
 /// for, or the errors the compiler reports in its ingot.

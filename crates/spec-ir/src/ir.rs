@@ -9,8 +9,13 @@
 //! its compiler-interned objects resolved into tables. What a construct does
 //! is the interpreter's to say. A construct this serializer has no encoding
 //! for is reported by name, never skipped.
+//!
+//! Every type and function is a table entry under its key (`key.rs`), and
+//! is referred to by it. The entries whose keys name no item of the
+//! contract's ingot form the library, which contracts share; the others are
+//! the contract's own.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use common::layout::StorageFieldPlacement;
 use cranelift_entity::EntityRef;
@@ -56,21 +61,35 @@ use mir::{
     stored_class_in_instance,
 };
 use rustc_hash::FxHashMap;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::{
     Unsupported, arg_position, arm_callees, arm_names, contract_title, describe, effect_input,
-    ingot_errors, init_callees,
+    ingot_errors, init_callees, key::Keys,
 };
 
 /// The version of the format [`export_ir`] writes. A change to the format
 /// changes it.
-pub const IR_VERSION: u32 = 1;
+pub const IR_VERSION: u32 = 2;
+
+/// A serialization of a contract: the entries of the library its code
+/// reaches, and the contract's own entries with its plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpecIr {
+    /// The types and functions whose keys name no item of the contract's
+    /// ingot, sorted by key: `{version, target, types, funcs}`.
+    pub library: Value,
+    /// The other types and functions, sorted by key, and the contract plan:
+    /// `{version, target, types, funcs, contract}`.
+    pub contract: Value,
+}
 
 /// The normalized IR of `contract` and of everything its entries reach, as
-/// JSON (`docs/design.md` of fe-spec has the schema). A contract of an
-/// ingot the compiler reports errors in is not serialized.
-pub fn export_ir<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> Result<Value, Unsupported> {
+/// JSON (`docs/design.md` of fe-spec has the schema). Every type and
+/// function is an entry named by its key ([`crate::key`]), and every
+/// reference to one is its key, `{"$ty": key}` or `{"$fn": key}`. A
+/// contract of an ingot the compiler reports errors in is not serialized.
+pub fn export_ir<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> Result<SpecIr, Unsupported> {
     let mir: &'db dyn MirDb = db;
     let errors = ingot_errors(db, contract.top_mod(db).ingot(db));
     if !errors.is_empty() {
@@ -80,6 +99,7 @@ pub fn export_ir<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> Result<Val
         )));
     }
     let db: &'db dyn HirAnalysisDb = db;
+    let ingot = contract.top_mod(db).ingot(db);
     let root = SemanticInstance::new(
         db,
         identity_semantic_instance_key(db, BodyOwner::ContractInit { contract }),
@@ -90,28 +110,141 @@ pub fn export_ir<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> Result<Val
         contract,
         root,
         scope: root,
-        types: Vec::new(),
+        keys: Keys::new(db, ingot),
+        types: Table::default(),
         type_ids: FxHashMap::default(),
-        funcs: Vec::new(),
+        funcs: Table::default(),
         func_ids: FxHashMap::default(),
         pending: VecDeque::new(),
     };
     let entry = ir.entry_plan()?;
-    while let Some(key) = ir.pending.pop_front() {
-        let index = ir.func_ids[&key];
-        ir.funcs[index] = ir.function(key)?;
+    while let Some(instance) = ir.pending.pop_front() {
+        let function = ir.function(instance)?;
+        let key = ir.func_ids[&instance].clone();
+        ir.funcs.insert(key, function)?;
     }
     let target = db.compilation_settings().target(db);
-    Ok(json!({
+    let target = json!({
+        "name": format!("{target:?}").to_lowercase(),
+        "usizeBits": prim_int_bits(PrimTy::Usize, target),
+    });
+    let (library_types, types) = ir.types.split();
+    let (library_funcs, funcs) = ir.funcs.split();
+    let library = json!({
         "version": IR_VERSION,
-        "target": {
-            "name": format!("{target:?}").to_lowercase(),
-            "usizeBits": prim_int_bits(PrimTy::Usize, target),
-        },
-        "types": ir.types,
-        "funcs": ir.funcs,
-        "contract": entry,
-    }))
+        "target": target,
+        "types": library_types,
+        "funcs": library_funcs,
+    });
+    // The library is closed: none of its entries names one of the contract's.
+    let mut refs = Vec::new();
+    references(&library, &mut refs);
+    let own = |table: &[Value], key: &str| table.iter().any(|entry| entry["key"] == key);
+    if let Some((kind, key)) = refs
+        .into_iter()
+        .find(|(kind, key)| own(if *kind == "$ty" { &types } else { &funcs }, key))
+    {
+        return Err(Unsupported(format!(
+            "the library refers to the contract's {kind} `{key}`"
+        )));
+    }
+    Ok(SpecIr {
+        library,
+        contract: json!({
+            "version": IR_VERSION,
+            "target": target,
+            "types": types,
+            "funcs": funcs,
+            "contract": entry,
+        }),
+    })
+}
+
+/// Each reference `{"$ty": key}` or `{"$fn": key}` in `value`, as the tag and the key.
+fn references<'a>(value: &'a Value, refs: &mut Vec<(&'a str, &'a str)>) {
+    match value {
+        Value::Object(fields) => {
+            if fields.len() == 1
+                && let Some((tag, Value::String(key))) = fields.iter().next()
+                && matches!(tag.as_str(), "$ty" | "$fn")
+            {
+                refs.push((tag, key));
+                return;
+            }
+            fields.values().for_each(|value| references(value, refs));
+        }
+        Value::Array(values) => values.iter().for_each(|value| references(value, refs)),
+        _ => {}
+    }
+}
+
+/// Merges the library `other` into the library `into`, both [`SpecIr::library`]
+/// outputs, possibly with more fields (such as a `provenance`) than
+/// [`export_ir`] writes: their other fields must be equal, and an entry
+/// both have must be the same in both. The result is sorted by key, so it
+/// does not depend on the order libraries are merged in.
+pub fn merge_library(into: &mut Value, other: &Value) -> Result<(), String> {
+    let (Value::Object(into), Value::Object(other)) = (into, other) else {
+        return Err("a library is a JSON object".into());
+    };
+    let fields = |object: &Map<String, Value>| {
+        object
+            .iter()
+            .filter(|(field, _)| !matches!(field.as_str(), "types" | "funcs"))
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .collect::<Map<_, _>>()
+    };
+    if fields(into) != fields(other) {
+        return Err("the libraries differ in their version, target or provenance".into());
+    }
+    for table in ["types", "funcs"] {
+        let mut entries = BTreeMap::new();
+        for entry in [&*into, other]
+            .into_iter()
+            .filter_map(|library| library.get(table)?.as_array())
+            .flatten()
+        {
+            let key = entry["key"]
+                .as_str()
+                .ok_or_else(|| format!("an entry of `{table}` without a key"))?;
+            if let Some(existing) = entries.insert(key.to_string(), entry.clone())
+                && existing != *entry
+            {
+                return Err(format!("the libraries differ in `{key}`"));
+            }
+        }
+        into.insert(table.into(), Value::Array(entries.into_values().collect()));
+    }
+    Ok(())
+}
+
+/// A table of entries by key, each with whether it is the contract's own.
+#[derive(Default)]
+struct Table(BTreeMap<String, (bool, Value)>);
+
+impl Table {
+    /// Adds the entry `value` of `key`, which must be the same as the one the
+    /// table has if it has one: instances and types under one key are one.
+    fn insert(&mut self, (key, own): (String, bool), mut value: Value) -> Result<(), Unsupported> {
+        value["key"] = json!(key);
+        match self.0.get(&key) {
+            Some((_, existing)) if *existing != value => Err(Unsupported(format!(
+                "two entries under the key `{key}` differ:\n{existing}\n{value}"
+            ))),
+            _ => {
+                self.0.insert(key, (own, value));
+                Ok(())
+            }
+        }
+    }
+
+    /// The library's entries and the others, each sorted by key.
+    fn split(self) -> (Vec<Value>, Vec<Value>) {
+        let (own, library): (Vec<_>, Vec<_>) = self.0.into_values().partition(|(own, _)| *own);
+        let values =
+            |entries: Vec<(bool, Value)>| entries.into_iter().map(|(_, value)| value).collect();
+        (values(library), values(own))
+    }
 }
 
 /// `ir`, an [`export_ir`] output, as text: each top-level field on a line
@@ -149,11 +282,14 @@ struct IrExport<'db> {
     /// drop impl and layouts) is resolved in the scope and assumptions of the instance that
     /// first names it.
     scope: SemanticInstance<'db>,
-    types: Vec<Value>,
-    type_ids: FxHashMap<TyId<'db>, usize>,
-    funcs: Vec<Value>,
-    func_ids: FxHashMap<SemanticInstanceKey<'db>, usize>,
-    /// The instances numbered but not yet serialized.
+    keys: Keys<'db>,
+    types: Table,
+    /// The key of each type named so far, and whether it is the contract's own.
+    type_ids: FxHashMap<TyId<'db>, (String, bool)>,
+    funcs: Table,
+    /// The key of each instance named so far, and whether it is the contract's own.
+    func_ids: FxHashMap<SemanticInstanceKey<'db>, (String, bool)>,
+    /// The instances named but not yet serialized.
     pending: VecDeque<SemanticInstanceKey<'db>>,
 }
 
@@ -304,17 +440,17 @@ impl<'db> IrExport<'db> {
             .ok_or_else(|| Unsupported("contract field without a layout".into()))
     }
 
-    /// The number of instance `key` in the function table, serialized once
-    /// the instances before it are.
-    fn func(&mut self, key: SemanticInstanceKey<'db>) -> usize {
-        if let Some(&index) = self.func_ids.get(&key) {
-            return index;
+    /// A reference to instance `key`, serialized once the instances named
+    /// before it are.
+    fn func(&mut self, key: SemanticInstanceKey<'db>) -> Value {
+        if let Some((name, _)) = self.func_ids.get(&key) {
+            return json!({ "$fn": name });
         }
-        let index = self.funcs.len();
-        self.funcs.push(Value::Null);
-        self.func_ids.insert(key, index);
+        let id = self.keys.func_key(key);
+        let reference = json!({ "$fn": id.0 });
+        self.func_ids.insert(key, id);
         self.pending.push_back(key);
-        index
+        reference
     }
 
     /// The entry of `key` in the function table: a body, or a callee
@@ -429,17 +565,17 @@ impl<'db> IrExport<'db> {
         }))
     }
 
-    /// The number of `ty` in the type table, with its entry.
-    fn ty(&mut self, ty: TyId<'db>) -> Result<usize, Unsupported> {
-        if let Some(&index) = self.type_ids.get(&ty) {
-            return Ok(index);
+    /// A reference to `ty`, with its entry in the type table.
+    fn ty(&mut self, ty: TyId<'db>) -> Result<Value, Unsupported> {
+        if let Some((name, _)) = self.type_ids.get(&ty) {
+            return Ok(json!({ "$ty": name }));
         }
-        let index = self.types.len();
-        self.types.push(Value::Null);
-        self.type_ids.insert(ty, index);
+        let id = self.keys.ty_key(ty);
+        let reference = json!({ "$ty": id.0 });
+        self.type_ids.insert(ty, id.clone());
         let entry = self.type_entry(ty)?;
-        self.types[index] = entry;
-        Ok(index)
+        self.types.insert(id, entry)?;
+        Ok(reference)
     }
 
     /// What the compiler knows of `ty`: its shape, and its layouts in memory
@@ -541,7 +677,7 @@ impl<'db> IrExport<'db> {
 
     /// The `Drop::drop` instance that destroys a value of `ty`, if its type
     /// implements `Drop`.
-    fn drop_impl(&mut self, ty: TyId<'db>) -> Result<Option<usize>, Unsupported> {
+    fn drop_impl(&mut self, ty: TyId<'db>) -> Result<Option<Value>, Unsupported> {
         let db = self.db;
         let Some(adt) = ty.adt_def(db) else {
             return Ok(None);
@@ -562,7 +698,7 @@ impl<'db> IrExport<'db> {
         Ok(Some(self.func(key)))
     }
 
-    fn tys(&mut self, tys: &[TyId<'db>]) -> Result<Vec<usize>, Unsupported> {
+    fn tys(&mut self, tys: &[TyId<'db>]) -> Result<Vec<Value>, Unsupported> {
         tys.iter().map(|ty| self.ty(*ty)).collect()
     }
 
@@ -628,8 +764,8 @@ struct BodyWriter<'a, 'db> {
 }
 
 impl<'db> BodyWriter<'_, 'db> {
-    /// The number of `ty`, normalized in the body's instance, in the type table.
-    fn ty(&mut self, ty: TyId<'db>) -> Result<usize, Unsupported> {
+    /// A reference to `ty`, normalized in the body's instance.
+    fn ty(&mut self, ty: TyId<'db>) -> Result<Value, Unsupported> {
         let ty = self.body.owner.normalized_ty(self.ir.db, ty);
         self.ir.ty(ty)
     }
