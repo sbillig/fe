@@ -385,12 +385,18 @@ impl<'db> IrExport<'db> {
         };
         let normalized = normalize_semantic_body(db, instance)
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
-        let body = BodyWriter {
+        let mut body = BodyWriter {
             ir: self,
             body: &normalized.body,
         }
         .write()
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))?;
+        let requirements: Vec<_> = instance
+            .call_effect_requirements(db)
+            .iter()
+            .map(|requirement| json!({ "binding": requirement.binding_idx, "mutable": requirement.is_mut }))
+            .collect();
+        body["requirements"] = json!(requirements);
         Ok(json!({
             "name": name,
             "mayReturn": semantic_may_return(db, instance),
