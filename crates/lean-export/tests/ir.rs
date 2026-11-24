@@ -56,8 +56,23 @@ fn immutables() {
 }
 
 #[test]
+fn review4() {
+    golden("ir/review4");
+}
+
+#[test]
 fn review2() {
     golden("ir/review2");
+}
+
+#[test]
+fn review3() {
+    golden("ir/review3");
+}
+
+#[test]
+fn init_pattern() {
+    golden("ir/init_pattern");
 }
 
 #[test]

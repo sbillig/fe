@@ -17,7 +17,7 @@ pub(crate) mod returns;
 pub(crate) mod semantic_body;
 pub(crate) mod source;
 pub(crate) mod tuple;
-pub(crate) mod type_info;
+pub mod type_info;
 
 pub use body::lower_to_rmir;
 pub use call::collect_runtime_calls;

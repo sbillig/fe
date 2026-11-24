@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use common::{compilation::Target as CompilationTarget, layout::StorageFieldPlacement};
+use common::layout::StorageFieldPlacement;
 use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
@@ -27,17 +27,17 @@ use hir::{
             core_method_callee_key, drop_elaboration, eval_const_ref, fixed_string_capacity_bytes,
             identity_semantic_instance_key, normalize_semantic_body, owner_effect_bindings,
             reify_runtime_const_for_ty, resolved_provider_binding_for_instance_effect,
-            runtime_size_bytes,
+            runtime_size_bytes, semantic_may_return,
         },
         ty::{
             AddressSpace, ProviderKind,
             adt_def::AdtRef,
             corelib::{
-                ContractMetadataKind, NumericExternIntrinsic, SaturatingArithmetic,
-                core_numeric_const_intrinsic, lib_func_matches, runtime_builtin_func_kind,
+                ContractMetadataKind, NumericExternIntrinsic, RuntimeBuiltinFuncKind,
+                SaturatingArithmetic, core_numeric_const_intrinsic, lib_func_matches,
+                runtime_builtin_func_kind,
             },
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
-            trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId, prim_int_bits},
         },
@@ -51,7 +51,10 @@ use hir::{
         storage_field_placements, storage_lane_bytes, storage_slot_span,
     },
 };
-use mir::{MirDb, runtime_needs_drop};
+use mir::{
+    MirDb, RuntimeMemoryLayout, RuntimeMemoryOffsets, panic_payload_revert_key, runtime_needs_drop,
+    stored_class_in_instance,
+};
 use rustc_hash::FxHashMap;
 use serde_json::{Value, json};
 
@@ -86,6 +89,7 @@ pub fn export_ir<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> Result<Val
         mir,
         contract,
         root,
+        scope: root,
         types: Vec::new(),
         type_ids: FxHashMap::default(),
         funcs: Vec::new(),
@@ -139,8 +143,12 @@ struct IrExport<'db> {
     /// The database, for what runtime lowering decides.
     mir: &'db dyn MirDb,
     contract: Contract<'db>,
-    /// The contract's `init`, which types are normalized in.
+    /// The contract's `init`, which the entry plan's types are normalized in.
     root: SemanticInstance<'db>,
+    /// The instance whose types are being resolved: a type's entry (its fields, pinned space,
+    /// drop impl and layouts) is resolved in the scope and assumptions of the instance that
+    /// first names it.
+    scope: SemanticInstance<'db>,
     types: Vec<Value>,
     type_ids: FxHashMap<TyId<'db>, usize>,
     funcs: Vec<Value>,
@@ -312,8 +320,19 @@ impl<'db> IrExport<'db> {
     /// The entry of `key` in the function table: a body, or a callee
     /// without one by what the compiler knows it as.
     fn function(&mut self, key: SemanticInstanceKey<'db>) -> Result<Value, Unsupported> {
+        let instance = SemanticInstance::new(self.db, key);
+        let outer = std::mem::replace(&mut self.scope, instance);
+        let function = self.function_in_scope(key, instance);
+        self.scope = outer;
+        function
+    }
+
+    fn function_in_scope(
+        &mut self,
+        key: SemanticInstanceKey<'db>,
+        instance: SemanticInstance<'db>,
+    ) -> Result<Value, Unsupported> {
         let db = self.db;
-        let instance = SemanticInstance::new(db, key);
         let owner = key.owner(db);
         let name = match owner {
             BodyOwner::ContractInit { contract } => {
@@ -366,6 +385,7 @@ impl<'db> IrExport<'db> {
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(json!({
                     "name": name,
+                    "mayReturn": semantic_may_return(db, instance),
                     "kind": { "intrinsic": {
                         "kind": intrinsic,
                         "params": params,
@@ -384,14 +404,21 @@ impl<'db> IrExport<'db> {
         };
         let normalized = normalize_semantic_body(db, instance)
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
-        let body = BodyWriter {
+        let mut body = BodyWriter {
             ir: self,
             body: &normalized.body,
         }
         .write()
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))?;
+        let requirements: Vec<_> = instance
+            .call_effect_requirements(db)
+            .iter()
+            .map(|requirement| json!({ "binding": requirement.binding_idx, "mutable": requirement.is_mut }))
+            .collect();
+        body["requirements"] = json!(requirements);
         Ok(json!({
             "name": name,
+            "mayReturn": semantic_may_return(db, instance),
             "kind": { "body": {
                 "owner": owner_kind,
                 "projection": instance.is_projection(db),
@@ -419,7 +446,7 @@ impl<'db> IrExport<'db> {
     /// and in contract state.
     fn type_entry(&mut self, ty: TyId<'db>) -> Result<Value, Unsupported> {
         let db = self.db;
-        let root = self.root;
+        let root = self.scope;
         let pretty = ty.pretty_print(db).to_string();
         let target = db.compilation_settings().target(db);
         let kind = if ty.is_never(db) {
@@ -522,11 +549,11 @@ impl<'db> IrExport<'db> {
         if adt_drop_impl(db, adt.adt_ref(db)).is_none() {
             return Ok(None);
         }
-        let scope = self.root.key(db).owner(db).scope();
+        let scope = self.scope.key(db).owner(db).scope();
         let key = core_method_callee_key(
             db,
             scope,
-            PredicateListId::empty_list(db),
+            self.scope.assumptions(db),
             &["ops", "Drop"],
             "drop",
             vec![ty],
@@ -539,51 +566,28 @@ impl<'db> IrExport<'db> {
         tys.iter().map(|ty| self.ty(*ty)).collect()
     }
 
-    /// The bytes a value of `ty` takes in memory, and where its parts lie
-    /// there: a struct's or tuple's fields one after another, an enum's tag
-    /// first and each variant's fields after it. EVM memory packs fields
-    /// (`Target::memory_has_object_layout`), so each part follows the one
-    /// before it; other targets align them, and have no offsets here.
+    /// Where a value of `ty` lies in memory, as `RuntimeMemoryLayout` places it: its size, and
+    /// the offsets of a product's fields or of an enum's tag, payload and variants' fields.
     fn memory_layout(&mut self, ty: TyId<'db>) -> Result<Value, Unsupported> {
-        let db = self.db;
-        let Some(size) = runtime_size_bytes(db, ty).ok().flatten() else {
+        if runtime_size_bytes(self.db, ty).ok().flatten().is_none() {
+            return Ok(Value::Null);
+        }
+        let class = stored_class_in_instance(self.mir, self.scope, ty);
+        let Ok(facts) = RuntimeMemoryLayout::raw(self.mir).memory_facts(&class) else {
             return Ok(Value::Null);
         };
-        let target = db.compilation_settings().target(db);
-        let packed = target == CompilationTarget::Evm;
-        let sizes = |tys: &[TyId<'db>]| -> Option<Vec<u64>> {
-            let mut offset = 0;
-            tys.iter()
-                .map(|ty| {
-                    let at = offset;
-                    offset += runtime_size_bytes(db, *ty).ok().flatten()?;
-                    Some(at)
-                })
-                .collect()
+        let offsets = match facts.offsets {
+            RuntimeMemoryOffsets::Product(fields) => json!({ "product": { "fields": fields } }),
+            RuntimeMemoryOffsets::Enum {
+                tag_bytes,
+                payload,
+                variants,
+            } => {
+                json!({ "enum": { "tagBytes": tag_bytes, "payload": payload, "variants": variants } })
+            }
+            RuntimeMemoryOffsets::None => Value::Null,
         };
-        let root = self.root;
-        let offsets = if !packed {
-            Value::Null
-        } else if ty.is_tuple(db) || ty.is_struct(db) || ty.as_closure(db).is_some() {
-            json!({ "product": { "fields": sizes(root.normalized_field_types(db, ty)) } })
-        } else if let Some(enum_) = ty.as_enum(db) {
-            let count = enum_.len_variants(db);
-            let tag = common::layout::enum_tag_bits(count) / 8;
-            let variants: Option<Vec<_>> = (0..count)
-                .map(|index| {
-                    let fields = root.normalized_enum_variant_field_tys(
-                        db,
-                        ty,
-                        hir::analysis::semantic::VariantIndex(index as u16),
-                    );
-                    sizes(fields)
-                })
-                .collect();
-            json!({ "enum": { "tagBytes": tag, "payload": tag, "variants": variants } })
-        } else {
-            Value::Null
-        };
-        Ok(json!({ "size": size, "offsets": offsets }))
+        Ok(json!({ "size": facts.size, "offsets": offsets }))
     }
 
     /// Where a value of `ty` lies in storage or transient storage: the slots
@@ -1001,12 +1005,33 @@ impl<'db> BodyWriter<'_, 'db> {
                         CallSiteId::Expr(expr) => format!("expr{}", expr.index()),
                         CallSiteId::ForLoop(stmt, step) => format!("for{}:{step:?}", stmt.index()),
                     },
-                    "callee": self.ir.func(callee.key),
+                    "callee": self.ir.func(self.callee_key(callee.key, args)),
                     "args": args.iter().map(operand).collect::<Vec<_>>(),
                     "effectArgs": effects,
                 }})
             }
         })
+    }
+
+    /// The function a call of `callee` runs: on the EVM, `panic_with_value::<T>` reverts
+    /// through the function MIR's `lower_panic_with_value` calls in its place, which the
+    /// calling body's scope resolves.
+    fn callee_key(
+        &self,
+        callee: SemanticInstanceKey<'db>,
+        args: &[NOperand],
+    ) -> SemanticInstanceKey<'db> {
+        let db = self.ir.db;
+        match (callee.owner(db), args) {
+            (BodyOwner::Func(func, _), [value])
+                if runtime_builtin_func_kind(db, func)
+                    == Some(RuntimeBuiltinFuncKind::PanicWithValue) =>
+            {
+                let value_ty = self.body.values[value.value.index()].ty;
+                panic_payload_revert_key(self.ir.mir, self.body.owner.key(db), value_ty)
+            }
+            _ => callee,
+        }
     }
 
     fn effect_arg(&mut self, arg: &NEffectArg<'db>) -> Result<Value, Unsupported> {

@@ -382,6 +382,16 @@ pub(crate) fn top_level_class_for_ty_in_env<'db>(
     runtime_top_level_class(db, ty, default_space, env.scope, env.assumptions)
 }
 
+/// The class a value of `ty` is stored as, with the types `semantic`
+/// normalizes in.
+pub fn stored_class_in_instance<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    ty: TyId<'db>,
+) -> RuntimeClass<'db> {
+    stored_class_for_ty_in_env(db, RuntimeTypeEnv::for_semantic(db, semantic), ty)
+}
+
 pub(crate) fn stored_class_for_ty_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,

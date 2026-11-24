@@ -1,0 +1,52 @@
+// Scenarios of the fourth fe-spec code review: a reference into an enum variant's payload that
+// outlives its access, the enum reassigned to another variant since; and a call of a function
+// with a parameter it does not bind.
+use std::abi::sol
+
+enum E { A(u256), B(bool) }
+
+fn reassign(_ k: u256) -> u256 {
+    var e: E = E::A(k)
+    var n: u256 = 0
+    match e {
+        E::A(ref x) => {
+            n = x
+        }
+        E::B(_) => {}
+    }
+    e = E::B(true)
+    match e {
+        E::A(ref x) => {
+            n += x
+        }
+        E::B(ref b) => {
+            if b {
+                n += 100
+            }
+        }
+    }
+    n
+}
+
+fn second(_: u256, _ x: u256) -> u256 {
+    x
+}
+
+msg Review4Msg {
+    #[selector = sol("reassign(uint256)")]
+    Reassign { k: u256 } -> u256,
+    #[selector = sol("second(uint256)")]
+    Second { x: u256 } -> u256,
+}
+
+pub contract Review4 {
+    recv Review4Msg {
+        Reassign { k } -> u256 {
+            reassign(k)
+        }
+
+        Second { x } -> u256 {
+            second(1, x)
+        }
+    }
+}

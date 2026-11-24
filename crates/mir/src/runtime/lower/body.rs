@@ -341,6 +341,27 @@ fn builtin_arg_ty<'db>(
     Some(body.normalized.value(value.value)?.ty)
 }
 
+/// The function an EVM `panic_with_value::<T>` in `caller` reverts through:
+/// `std::evm::revert_error` for an error variant, else `std::evm::revert`.
+pub fn panic_payload_revert_key<'db>(
+    db: &'db dyn MirDb,
+    caller: SemanticInstanceKey<'db>,
+    value_ty: TyId<'db>,
+) -> SemanticInstanceKey<'db> {
+    let impl_env = caller.impl_env(db);
+    let scope = impl_env.normalization_scope(db);
+    let assumptions = impl_env.assumptions(db);
+    let func_path = if panic_payload_is_error_variant(db, scope, assumptions, value_ty) {
+        "std::evm::revert_error"
+    } else {
+        "std::evm::revert"
+    };
+    let func = resolve_lib_func_path(db, scope, func_path)
+        .unwrap_or_else(|| panic!("missing {func_path}"));
+    generated_callee_key(db, scope, assumptions, func, None, &[value_ty])
+        .unwrap_or_else(|error| panic!("{}", generated_call_error(db, func, error)))
+}
+
 fn panic_payload_is_error_variant<'db>(
     db: &'db dyn MirDb,
     scope: ScopeId<'db>,
@@ -3247,20 +3268,7 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn resolve_panic_payload_revert(&self, value_ty: TyId<'db>) -> RuntimeInstance<'db> {
-        let key = self.current_semantic_key();
-        let impl_env = key.impl_env(self.db);
-        let scope = impl_env.normalization_scope(self.db);
-        let assumptions = impl_env.assumptions(self.db);
-        let func_path = if panic_payload_is_error_variant(self.db, scope, assumptions, value_ty) {
-            "std::evm::revert_error"
-        } else {
-            "std::evm::revert"
-        };
-        let func = resolve_lib_func_path(self.db, scope, func_path)
-            .unwrap_or_else(|| panic!("missing {func_path}"));
-        let semantic_key =
-            generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
-                .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
+        let semantic_key = panic_payload_revert_key(self.db, self.current_semantic_key(), value_ty);
         runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
     }
 
