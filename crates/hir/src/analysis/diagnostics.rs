@@ -16,7 +16,7 @@ use crate::analysis::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
             ExportIssue, FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
             ReadOnlyProvider, RevealedBy, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection,
-            TyLowerDiag,
+            TyLowerDiag, VariadicIssue,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -26,6 +26,7 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
+    core::semantic::ZeroInvalidReason,
     hir_def::{
         AssocTyDecl, CallableDef, FieldIndex, GenericParamOwner, ModeMarker, PathKind, Trait,
         TypeMode, params::FuncParamMode,
@@ -591,6 +592,35 @@ impl DiagnosticVoucher for crate::FieldModifierError {
             message,
             vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
             notes,
+            GlobalErrorCode::new(DiagnosticPass::AttrMisuse, local_code),
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::VariadicParamError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let (local_code, message, label) = match self.kind {
+            crate::VariadicParamErrorKind::OutsideExtern => (
+                6,
+                "`...` outside an `extern` function",
+                "only an `extern` function takes variadic arguments",
+            ),
+            crate::VariadicParamErrorKind::NotLast => (
+                7,
+                "`...` must be the last parameter",
+                "a parameter follows `...`",
+            ),
+        };
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message.to_string(),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label.to_string(),
+                Some(span),
+            )],
+            vec![],
             GlobalErrorCode::new(DiagnosticPass::AttrMisuse, local_code),
         )
     }
@@ -1814,6 +1844,33 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     error_code,
                 }
             }
+            Self::InvalidVariadic { span, issue } => {
+                let (message, label) = match issue {
+                    VariadicIssue::NotNative => (
+                        "a variadic `extern` function is only supported on the native target",
+                        "variadic arguments",
+                    ),
+                    VariadicIssue::Generic => (
+                        "a variadic `extern` function cannot be generic",
+                        "generic parameters",
+                    ),
+                    VariadicIssue::Effects => (
+                        "a variadic `extern` function cannot take effects",
+                        "effects",
+                    ),
+                    VariadicIssue::Const => (
+                        "a variadic `extern` function cannot be `const`",
+                        "`const`",
+                    ),
+                };
+                primary_diag(
+                    Severity::Error,
+                    message,
+                    label,
+                    span.resolve(db),
+                    error_code,
+                )
+            }
             Self::InvalidMainReturn { span, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "a native `main` must return `i32` or nothing".to_string(),
@@ -2468,12 +2525,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ContractFieldZeroInvalid { span, ty, invalid } => {
+            Self::ContractFieldZeroInvalid {
+                span,
+                ty,
+                invalid,
+                reason,
+            } => {
+                let (reason, note) = match reason {
+                    ZeroInvalidReason::UnsafeFields => (
+                        "has `unsafe` fields",
+                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant",
+                    ),
+                    ZeroInvalidReason::Uninhabited => (
+                        "is uninhabited",
+                        "state starts zeroed, and an uninhabited type has no valid values",
+                    ),
+                    ZeroInvalidReason::UninhabitedFirstVariant => (
+                        "has an uninhabited first variant",
+                        "state starts zeroed, and tag 0 selects an uninhabited variant",
+                    ),
+                };
                 let label = if ty == invalid {
-                    format!("`{}` has `unsafe` fields", ty.pretty_print(db))
+                    format!("`{}` {reason}", ty.pretty_print(db))
                 } else {
                     format!(
-                        "`{}` holds `{}`, which has `unsafe` fields",
+                        "`{}` holds `{}`, which {reason}",
                         ty.pretty_print(db),
                         invalid.pretty_print(db)
                     )
@@ -2489,9 +2565,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         message: label,
                         span: span.resolve(db),
                     }],
-                    notes: vec![
-                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant".to_string(),
-                    ],
+                    notes: vec![note.to_string()],
                     error_code,
                 }
             }
@@ -4917,6 +4991,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::ImmutableContractEffectMutBinding {
+                primary,
+                effect,
+                effect_span,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot bind immutable contract effect as `mut`".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is not declared `mut`", effect.data(db)),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` declared here", effect.data(db)),
+                        span: effect_span.resolve(db),
+                    },
+                ],
+                notes: vec![
+                    "mark the contract's effect `mut` to use it mutably in `init` or a recv arm"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };
 
@@ -5366,7 +5466,40 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
-            Self::TypeAnnotationNeeded { span: primary, ty } => {
+            Self::VariadicArgLabel(primary) => primary_diag(
+                Severity::Error,
+                "a variadic argument takes no label",
+                "no parameter has this label",
+                primary.resolve(db),
+                error_code,
+            ),
+            Self::InvalidVariadicArg { primary, ty } => {
+                let narrow = matches!(
+                    ty.as_prim(db),
+                    Some(PrimTy::Bool | PrimTy::I8 | PrimTy::U8 | PrimTy::I16 | PrimTy::U16)
+                );
+                let note = if narrow {
+                    "cast it to `i32`, which C passes in its place"
+                } else {
+                    "a variadic argument is an `i32`, `u32`, `i64`, `u64`, `isize`, `usize` or a raw pointer"
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "a variadic argument must be a C integer or a raw pointer".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` cannot pass to C here", ty.pretty_print(db)),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![note.to_string()],
+                    error_code,
+                }
+            }
+            Self::TypeAnnotationNeeded {
+                span: primary,
+                ty,
+                variadic,
+            } => {
                 // A function's own generic parameter that its call leaves
                 // open is named, with the arguments that would close it.
                 let uninferred_param = || {
@@ -5408,6 +5541,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 };
                 let (label, hint) = uninferred_param().unwrap_or_else(|| {
                     let hint = match ty.base_ty(db).data(db) {
+                        _ if *variadic => "a variadic argument has no parameter to take a type \
+                                           from: give it one, as in `0 as i32`"
+                            .to_string(),
                         TyData::TyVar(var) if var.sort == TyVarSort::Integral => {
                             "no default type is provided for an integer type. consider giving integer type".to_string()
                         }

@@ -17,6 +17,7 @@ use crate::{
         CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
         ImplTrait, IntegerId, ModeMarker, TypeId as HirTypeId, TypeMode,
     },
+    core::semantic::ZeroInvalidReason,
     hir_def::TypeAlias,
 };
 use either::Either;
@@ -92,6 +93,11 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
         mutable: bool,
         exported: bool,
+    },
+    /// A variadic `extern` function that C cannot call as declared.
+    InvalidVariadic {
+        span: DynLazySpan<'db>,
+        issue: VariadicIssue,
     },
     /// A native `main` that doesn't return `i32` or nothing.
     InvalidMainReturn {
@@ -329,6 +335,7 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
         invalid: TyId<'db>,
+        reason: ZeroInvalidReason,
     },
 
     /// A collection entry type in contract state with no storage layout.
@@ -386,6 +393,16 @@ pub enum ExportIssue {
     Effects,
 }
 
+/// Why a variadic `extern` function cannot be called as declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum VariadicIssue {
+    /// Only native code calls C.
+    NotNative,
+    Generic,
+    Effects,
+    Const,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractFieldLayoutIssue {
     ExtentOverflow,
@@ -408,6 +425,7 @@ impl TyLowerDiag<'_> {
             Self::DestructuredParamWithoutBody(_) => 76,
             Self::InvalidExport { .. } => 88,
             Self::InvalidCAbi { .. } => 90,
+            Self::InvalidVariadic { .. } => 95,
             Self::InvalidMainReturn { .. } => 91,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
@@ -1141,6 +1159,13 @@ pub enum BodyDiag<'db> {
         field: IdentId<'db>,
         field_span: DynLazySpan<'db>,
     },
+    /// A recv arm or `init` lists `mut` a contract effect the contract
+    /// declares without `mut`.
+    ImmutableContractEffectMutBinding {
+        primary: DynLazySpan<'db>,
+        effect: IdentId<'db>,
+        effect_span: DynLazySpan<'db>,
+    },
 
     LoopControlOutsideOfLoop {
         primary: DynLazySpan<'db>,
@@ -1240,6 +1265,17 @@ pub enum BodyDiag<'db> {
 
     TypeAnnotationNeeded {
         span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        /// Whether the expression is an extra argument of a variadic call,
+        /// which has no parameter to take a type from.
+        variadic: bool,
+    },
+    /// A label on an extra argument of a variadic call, which no parameter
+    /// names.
+    VariadicArgLabel(DynLazySpan<'db>),
+    /// An extra argument of a variadic call that C cannot take.
+    InvalidVariadicArg {
+        primary: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
     UnusedMustUse {
@@ -1629,6 +1665,9 @@ impl<'db> BodyDiag<'db> {
             Self::InvisibleAmbiguousTrait { .. } => 28,
             Self::NotValue { .. } => 30,
             Self::TypeAnnotationNeeded { .. } => 31,
+            Self::VariadicArgLabel(_) => 160,
+            Self::InvalidVariadicArg { .. } => 161,
+            Self::ImmutableContractEffectMutBinding { .. } => 162,
             Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,

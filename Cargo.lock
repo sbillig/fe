@@ -1346,7 +1346,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2250,7 +2250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2395,7 +2395,7 @@ dependencies = [
 
 [[package]]
 name = "fe"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "axum",
  "blake3",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "fe-bench"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "camino",
  "criterion",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "fe-codegen"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "blake3",
  "dir-test",
@@ -2502,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "fe-common"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "camino",
  "fe-parser",
@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "fe-contract-harness"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "ethers-core",
  "fe-codegen",
@@ -2541,14 +2541,14 @@ dependencies = [
 
 [[package]]
 name = "fe-dataflow"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "cranelift-entity 0.136.1",
 ]
 
 [[package]]
 name = "fe-debug-export"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "blake3",
  "fe-common",
@@ -2560,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "fe-driver"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "camino",
  "codespan-reporting",
@@ -2579,7 +2579,7 @@ dependencies = [
 
 [[package]]
 name = "fe-fmt"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "dir-test",
  "fe-parser",
@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "fe-hir"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "ascii_tree",
  "bitflags 2.11.0",
@@ -2629,7 +2629,7 @@ dependencies = [
 
 [[package]]
 name = "fe-language-server"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "act-locally",
  "anyhow",
@@ -2689,7 +2689,7 @@ dependencies = [
 
 [[package]]
 name = "fe-mir"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "blake3",
  "cranelift-entity 0.136.1",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "fe-parser"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "derive_more 1.0.0",
  "dir-test",
@@ -2728,7 +2728,7 @@ dependencies = [
 
 [[package]]
 name = "fe-resolver"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "camino",
  "dir-test",
@@ -2750,7 +2750,7 @@ dependencies = [
 
 [[package]]
 name = "fe-semantic-indexing"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "camino",
  "dir-test",
@@ -2770,7 +2770,7 @@ dependencies = [
 
 [[package]]
 name = "fe-solc-runner"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "fe-contract-harness",
  "indexmap 2.14.2",
@@ -2779,7 +2779,7 @@ dependencies = [
 
 [[package]]
 name = "fe-test-utils"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "fe-common",
  "glob",
@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "fe-trace-facts"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "blake3",
  "fe-common",
@@ -2806,7 +2806,7 @@ dependencies = [
 
 [[package]]
 name = "fe-trace-facts-macros"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "fe-uitest"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "dir-test",
  "fe-common",
@@ -2831,7 +2831,7 @@ dependencies = [
 
 [[package]]
 name = "fe-web"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "insta",
  "js-sys",
@@ -4565,7 +4565,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4619,7 +4619,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6372,7 +6372,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6429,7 +6429,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7047,7 +7047,7 @@ dependencies = [
 [[package]]
 name = "sonatina-codegen"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "bit-set",
  "cranelift-entity 0.136.1",
@@ -7067,7 +7067,7 @@ dependencies = [
 [[package]]
 name = "sonatina-cranelift"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "cranelift-codegen 0.135.2",
  "cranelift-entity 0.136.1",
@@ -7086,7 +7086,7 @@ dependencies = [
 [[package]]
 name = "sonatina-ir"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "bit-set",
  "bitflags 2.11.0",
@@ -7111,7 +7111,7 @@ dependencies = [
 [[package]]
 name = "sonatina-macros"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7121,7 +7121,7 @@ dependencies = [
 [[package]]
 name = "sonatina-parser"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "annotate-snippets",
  "bimap",
@@ -7142,7 +7142,7 @@ dependencies = [
 [[package]]
 name = "sonatina-sp1"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "object",
  "tempfile",
@@ -7152,7 +7152,7 @@ dependencies = [
 [[package]]
 name = "sonatina-triple"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -7160,7 +7160,7 @@ dependencies = [
 [[package]]
 name = "sonatina-verifier"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "cranelift-entity 0.136.1",
  "rpds",
@@ -7176,7 +7176,7 @@ dependencies = [
 [[package]]
 name = "sonatina-wasm"
 version = "0.1.0"
-source = "git+https://github.com/sbillig/sonatina?rev=1f0424324574c1da25d58d4d4cfbbb39ff25e4bc#1f0424324574c1da25d58d4d4cfbbb39ff25e4bc"
+source = "git+https://github.com/fe-lang/sonatina?rev=daca656deafba402682436079c91a3edc07af58f#daca656deafba402682436079c91a3edc07af58f"
 dependencies = [
  "rustc-hash 2.1.1",
  "sonatina-codegen",
@@ -7341,7 +7341,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7814,7 +7814,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-fe"
-version = "26.6.0"
+version = "26.7.0"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -8521,7 +8521,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

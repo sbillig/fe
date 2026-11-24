@@ -3274,7 +3274,13 @@ impl<'db> RmirEmitter<'db> {
         if func.body(self.db).is_some() {
             return None;
         }
+        // Only an intrinsic's arguments are lowered here: another extern
+        // function's, such as a variadic one's extra arguments, are not.
         let name = func.name(self.db).to_opt()?.data(self.db);
+        let kind = generic_numeric_intrinsic_kind(name.as_str());
+        if kind.is_none() && intrinsic_numeric_name_parts(name.as_str()).is_none() {
+            return None;
+        }
         let mut boundary_sites = BoundarySiteAllocator::default();
         let call_input_plan =
             compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
@@ -3287,7 +3293,7 @@ impl<'db> RmirEmitter<'db> {
             RuntimeClass::AggregateValue { .. } | RuntimeClass::RawAddr { .. } => return None,
         };
         let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
-        let expr = match generic_numeric_intrinsic_kind(name.as_str()) {
+        let expr = match kind {
             Some(GenericNumericIntrinsicKind::Saturating(op)) => {
                 let [lhs, rhs] = args.as_slice() else {
                     return None;
@@ -3518,6 +3524,8 @@ impl<'db> RmirEmitter<'db> {
         RuntimeArgLowerer::new(self, bb).lower_all(&selected)
     }
 
+    /// The runtime inputs of a call, with the classes of all but a variadic
+    /// call's extra arguments, which follow the others.
     fn lower_runtime_call_inputs(
         &mut self,
         bb: RBlockId,
@@ -3527,14 +3535,19 @@ impl<'db> RmirEmitter<'db> {
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
         let roots = self.runtime_roots();
         let value_classes = self.normalized_value_classes();
-        let selected = self.with_current_body_cx(|cx| {
+        let (selected, inputs) = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
-            RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
+            let mut selector = RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
                 .with_concrete_roots(&roots)
-                .with_concrete_value_classes(&value_classes)
-                .selected_call_inputs(args, effect_args, plan)
+                .with_concrete_value_classes(&value_classes);
+            let mut selected = selector.selected_call_inputs(args, effect_args, plan);
+            let inputs = selected.len();
+            selected.extend(selector.selected_variadic_args(args, plan));
+            (selected, inputs)
         });
-        RuntimeArgLowerer::new(self, bb).lower_all(&selected)
+        let (runtime_args, mut classes) = RuntimeArgLowerer::new(self, bb).lower_all(&selected);
+        classes.truncate(inputs);
+        (runtime_args, classes)
     }
 
     fn lower_extern_builtin(
@@ -4723,10 +4736,12 @@ impl<'db> RmirEmitter<'db> {
             let mut sites = BoundarySiteAllocator::default();
             let plan = compile_call_input_plan_for_semantic(self.db, semantic, effect_args, &mut sites);
             self.with_current_body_cx(|cx| {
-                RuntimeArgSelector::new(cx.env, cx.carriers, None)
+                let mut selector = RuntimeArgSelector::new(cx.env, cx.carriers, None)
                     .with_concrete_roots(&roots)
-                    .with_concrete_value_classes(&value_classes)
-                    .selected_call_inputs(args, effect_args, &plan)
+                    .with_concrete_value_classes(&value_classes);
+                let mut selected = selector.selected_call_inputs(args, effect_args, &plan);
+                selected.extend(selector.selected_variadic_args(args, &plan));
+                selected
                     .iter()
                     .any(|selected| match &selected.source {
                         RuntimeArgSource::SemanticOperand(operand)
@@ -5464,28 +5479,40 @@ impl<'db> RmirEmitter<'db> {
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
                 Layout::Struct(data) => {
-                    let field_tys = self.aggregate_field_tys(ty, data.fields.len());
-                    let fields = data
-                        .fields
-                        .iter()
-                        .zip(field_tys)
-                        .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
-                        .collect();
+                    let fields: Box<[RLocalId]> = if data.fields.is_empty() {
+                        Box::default()
+                    } else {
+                        let field_tys = self.aggregate_field_tys(ty, data.fields.len());
+                        data.fields
+                            .iter()
+                            .zip(field_tys)
+                            .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
+                            .collect()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
                         fields,
                     }
                 }
                 Layout::Array(data) => {
-                    let elem_ty = self.aggregate_field_tys(ty, 1)[0];
-                    let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                    let fields: Box<[RLocalId]> = if data.len == 0 {
+                        Box::default()
+                    } else {
+                        let elem_ty = self.aggregate_field_tys(ty, 1)[0];
+                        let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                        vec![elem; data.len as usize].into_boxed_slice()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
-                        fields: vec![elem; data.len as usize].into_boxed_slice(),
+                        fields,
                     }
                 }
                 Layout::Enum(data) => {
-                    let classes = &data.variants[0].fields;
+                    let first = data
+                        .variants
+                        .first()
+                        .expect("zero value requires a non-empty enum layout");
+                    let classes = &first.fields;
                     let field_tys = self.enum_variant_field_tys(ty, VariantIndex(0), classes.len());
                     let fields = classes
                         .iter()

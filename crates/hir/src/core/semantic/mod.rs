@@ -52,8 +52,8 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan, contract_field_lane, storage_field_lanes, storage_field_placements,
-    storage_lane_bytes, storage_slot_span,
+    ValidatedFieldLayoutPlan, ZeroInvalidReason, contract_field_lane, storage_field_lanes,
+    storage_field_placements, storage_lane_bytes, storage_slot_span,
 };
 pub use symbol::{
     IndexedReference, ReferenceIndex, SignatureWithSpan, SourceLocation, SymbolKind, SymbolView,
@@ -927,11 +927,18 @@ pub enum CallSiteKind<'db> {
 }
 
 impl<'db> CallSiteView<'db> {
-    /// Resolve the callee of this call site via type checking.
+    /// Resolve the callee of this call site via type checking. A call of a
+    /// callable value, such as a closure, has none: it runs the method of the
+    /// value's `Fn` trait, which the call doesn't name.
     pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
         use crate::analysis::ty::ty_check::check_func_body;
         let func = self.body.containing_func(db)?;
         let (_, typed_body) = check_func_body(db, func);
+        if matches!(self.kind, CallSiteKind::FnCall)
+            && typed_body.call_receiver(db, self.expr_id).is_some()
+        {
+            return None;
+        }
         typed_body
             .callable_expr(self.expr_id)
             .map(|c| c.callable_def)
@@ -2582,27 +2589,19 @@ fn contract_scoped_effect_requirements_canonical<'db>(
 
         if key_path.len(db) == 1
             && let Some(name) = key_path.ident(db).to_opt()
-            && let Some(field) = fields.get(&name)
+            && let Some(key) = fields
+                .get(&name)
+                .map(|field| EffectRequirementKey::Type(field.declared))
+                .or_else(|| {
+                    contract_named_effects
+                        .get(&name)
+                        .map(|binding| binding.key.clone())
+                })
         {
             out.push(EffectRequirement {
                 binding_name: name,
-                key: EffectRequirementKey::Type(field.declared),
+                key,
                 is_mut: effect.is_mut(),
-                binding_site: list_site,
-                binding_idx: idx as u32,
-                binding_ty: key_syntax,
-            });
-            continue;
-        }
-
-        if key_path.len(db) == 1
-            && let Some(name) = key_path.ident(db).to_opt()
-            && let Some(binding) = contract_named_effects.get(&name)
-        {
-            out.push(EffectRequirement {
-                binding_name: name,
-                key: binding.key.clone(),
-                is_mut: binding.is_mut,
                 binding_site: list_site,
                 binding_idx: idx as u32,
                 binding_ty: key_syntax,
@@ -6285,11 +6284,12 @@ impl<'db> FieldView<'db> {
                         collection: *collection,
                     }
                 }
-                ContractLayoutError::ZeroInvalidInState { invalid } => {
+                ContractLayoutError::ZeroInvalidInState { invalid, reason } => {
                     TyLowerDiag::ContractFieldZeroInvalid {
                         span,
                         ty,
                         invalid: *invalid,
+                        reason: *reason,
                     }
                 }
                 ContractLayoutError::EntryLayout { entry, reason } => {
