@@ -66,6 +66,11 @@ fn review3() {
 }
 
 #[test]
+fn init_pattern() {
+    golden("ir/init_pattern");
+}
+
+#[test]
 fn review() {
     golden("ir/review");
 }

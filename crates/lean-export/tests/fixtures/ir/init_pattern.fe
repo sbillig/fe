@@ -1,0 +1,21 @@
+// An `init` whose parameter is a pattern: `fe build` accepts it.
+use std::abi::sol
+
+msg InitPatternMsg {
+    #[selector = sol("x()")]
+    X -> u256,
+}
+
+pub contract InitPattern {
+    mut x: u256,
+
+    init(_ (a, b): (u256, u256)) uses (mut x) {
+        x = a * 10 + b
+    }
+
+    recv InitPatternMsg {
+        X -> u256 uses (x) {
+            x
+        }
+    }
+}
