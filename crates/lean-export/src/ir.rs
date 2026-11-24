@@ -17,7 +17,6 @@ use cranelift_entity::EntityRef;
 use hir::{
     analysis::{
         HirAnalysisDb,
-        diagnostics::SpannedHirAnalysisDb,
         semantic::{
             BinaryOp, CallSiteId, DropFlagPoint, DropStep, EvalOutcome, FailReason, NBlock,
             NDataPath, NDataProjection, NDropTarget, NEffectArg, NExpr, NIndex, NOperand, NPlace,
@@ -50,6 +49,7 @@ use hir::{
         storage_lane_bytes, storage_slot_span,
     },
 };
+use mir::{MirDb, runtime_needs_drop};
 use rustc_hash::FxHashMap;
 use serde_json::{Value, json};
 
@@ -65,10 +65,8 @@ pub const IR_VERSION: u32 = 1;
 /// The normalized IR of `contract` and of everything its entries reach, as
 /// JSON (`docs/design.md` of fe-spec has the schema). A contract of an
 /// ingot the compiler reports errors in is not serialized.
-pub fn export_ir<'db>(
-    db: &'db dyn SpannedHirAnalysisDb,
-    contract: Contract<'db>,
-) -> Result<Value, Unsupported> {
+pub fn export_ir<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> Result<Value, Unsupported> {
+    let mir: &'db dyn MirDb = db;
     let errors = ingot_errors(db, contract.top_mod(db).ingot(db));
     if !errors.is_empty() {
         return Err(Unsupported(format!(
@@ -83,6 +81,7 @@ pub fn export_ir<'db>(
     );
     let mut ir = IrExport {
         db,
+        mir,
         contract,
         root,
         types: Vec::new(),
@@ -135,6 +134,8 @@ pub fn ir_text(ir: &Value) -> String {
 
 struct IrExport<'db> {
     db: &'db dyn HirAnalysisDb,
+    /// The database, for what runtime lowering decides.
+    mir: &'db dyn MirDb,
     contract: Contract<'db>,
     /// The contract's `init`, which types are normalized in.
     root: SemanticInstance<'db>,
@@ -301,7 +302,7 @@ impl<'db> IrExport<'db> {
                     .subst(db)
                     .generic_args(db)
                     .iter()
-                    .map(|ty| self.ty(*ty))
+                    .map(|ty| self.ty(instance.normalized_ty(db, *ty)))
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(json!({
                     "name": name,
@@ -445,6 +446,7 @@ impl<'db> IrExport<'db> {
             "pinned": root.pinned_space(db, ty).map(space),
             "dynString": ty.is_core_dyn_string(db),
             "dropGlue": ty_has_drop_glue(db, ty),
+            "needsDrop": runtime_needs_drop(self.mir, ty),
             "dropImpl": self.drop_impl(ty)?,
         }))
     }
@@ -561,6 +563,12 @@ struct BodyWriter<'a, 'db> {
 }
 
 impl<'db> BodyWriter<'_, 'db> {
+    /// The number of `ty`, normalized in the body's instance, in the type table.
+    fn ty(&mut self, ty: TyId<'db>) -> Result<usize, Unsupported> {
+        let ty = self.body.owner.normalized_ty(self.ir.db, ty);
+        self.ir.ty(ty)
+    }
+
     fn write(mut self) -> Result<Value, Unsupported> {
         let db = self.ir.db;
         let body = self.body;
@@ -579,7 +587,7 @@ impl<'db> BodyWriter<'_, 'db> {
                 }
             };
             values.push(json!({
-                "ty": self.ir.ty(value.ty)?,
+                "ty": self.ty(value.ty)?,
                 "mutable": value.mutability == hir::analysis::semantic::Mutability::Mutable,
                 "definition": definition,
                 "name": self.binding_name(value.source),
@@ -750,7 +758,7 @@ impl<'db> BodyWriter<'_, 'db> {
         };
         Ok(json!({
             "kind": kind,
-            "ty": self.ir.ty(root.ty)?,
+            "ty": self.ty(root.ty)?,
             "space": space(root.address_space),
             "mutable": root.mutability == hir::analysis::semantic::Mutability::Mutable,
         }))
@@ -779,7 +787,7 @@ impl<'db> BodyWriter<'_, 'db> {
         let semantics = &binding.semantics;
         Ok(json!({
             "provider": binding.provider_idx,
-            "ty": self.ir.ty(binding.provider_ty)?,
+            "ty": self.ty(binding.provider_ty)?,
             "mutable": binding.is_mut,
             "source": source,
             "kind": match semantics.kind {
@@ -787,7 +795,7 @@ impl<'db> BodyWriter<'_, 'db> {
                 ProviderKind::Place => "place",
             },
             "space": space(semantics.address_space),
-            "target": semantics.target_ty.map(|ty| self.ir.ty(ty)).transpose()?,
+            "target": semantics.target_ty.map(|ty| self.ty(ty)).transpose()?,
         }))
     }
 
@@ -815,7 +823,7 @@ impl<'db> BodyWriter<'_, 'db> {
             NStatementKind::End { access } => json!({ "end": { "access": access.index() } }),
             NStatementKind::CheckIndex { index, array } => json!({ "checkIndex": {
                 "index": nindex(index),
-                "array": self.ir.ty(*array)?,
+                "array": self.ty(*array)?,
             }}),
             NStatementKind::Drop { target } => {
                 let target = match target {
@@ -874,18 +882,18 @@ impl<'db> BodyWriter<'_, 'db> {
             }}),
             NExpr::PointerCast { value, to } => json!({ "pointerCast": {
                 "value": operand(value),
-                "to": self.ir.ty(*to)?,
+                "to": self.ty(*to)?,
             }}),
             NExpr::ScalarCast { value, to } => json!({ "scalarCast": {
                 "value": operand(value),
-                "to": self.ir.ty(*to)?,
+                "to": self.ty(*to)?,
             }}),
             NExpr::ArrayRepeat { ty, value } => json!({ "arrayRepeat": {
-                "ty": self.ir.ty(*ty)?,
+                "ty": self.ty(*ty)?,
                 "value": operand(value),
             }}),
             NExpr::AggregateMake { ty, fields } => json!({ "aggregateMake": {
-                "ty": self.ir.ty(*ty)?,
+                "ty": self.ty(*ty)?,
                 "fields": fields.iter().map(operand).collect::<Vec<_>>(),
             }}),
             NExpr::EnumMake {
@@ -893,7 +901,7 @@ impl<'db> BodyWriter<'_, 'db> {
                 variant,
                 fields,
             } => json!({ "enumMake": {
-                "enumTy": self.ir.ty(*enum_ty)?,
+                "enumTy": self.ty(*enum_ty)?,
                 "variant": variant.0,
                 "fields": fields.iter().map(operand).collect::<Vec<_>>(),
             }}),
@@ -936,7 +944,7 @@ impl<'db> BodyWriter<'_, 'db> {
             "bindingIdx": arg.binding_idx,
             "place": self.place(&arg.place)?,
             "requiredMut": arg.required_mut,
-            "providerTargetTy": arg.provider_target_ty.map(|ty| self.ir.ty(ty)).transpose()?,
+            "providerTargetTy": arg.provider_target_ty.map(|ty| self.ty(ty)).transpose()?,
             "provider": arg.provider.map(space),
         }))
     }
@@ -961,7 +969,7 @@ impl<'db> BodyWriter<'_, 'db> {
                 };
                 json!({ "ref": {
                     "func": self.ir.func(reference.instance(db)),
-                    "ty": self.ir.ty(reference.ty(db))?,
+                    "ty": self.ty(reference.ty(db))?,
                     "value": value,
                 }})
             }
@@ -976,7 +984,7 @@ impl<'db> BodyWriter<'_, 'db> {
         Ok(match value.value(db) {
             SemConstValue::Unit => json!("unit"),
             SemConstValue::Scalar { ty, value } => {
-                let ty = self.ir.ty(*ty)?;
+                let ty = self.ty(*ty)?;
                 match value {
                     SemConstScalar::Bool(value) => json!({ "bool": { "ty": ty, "value": value } }),
                     SemConstScalar::Int { value } => {
@@ -995,15 +1003,15 @@ impl<'db> BodyWriter<'_, 'db> {
                 )));
             }
             SemConstValue::Tuple { ty, elems } => json!({ "tuple": {
-                "ty": self.ir.ty(*ty)?,
+                "ty": self.ty(*ty)?,
                 "elems": parts(self, elems)?,
             }}),
             SemConstValue::Struct { ty, fields } => json!({ "struct": {
-                "ty": self.ir.ty(*ty)?,
+                "ty": self.ty(*ty)?,
                 "fields": parts(self, fields)?,
             }}),
             SemConstValue::Array { ty, elems } => json!({ "array": {
-                "ty": self.ir.ty(*ty)?,
+                "ty": self.ty(*ty)?,
                 "elems": parts(self, elems)?,
             }}),
             SemConstValue::Enum {
@@ -1011,7 +1019,7 @@ impl<'db> BodyWriter<'_, 'db> {
                 variant,
                 fields,
             } => json!({ "enum": {
-                "ty": self.ir.ty(*ty)?,
+                "ty": self.ty(*ty)?,
                 "variant": variant.0,
                 "fields": parts(self, fields)?,
             }}),
@@ -1029,7 +1037,7 @@ impl<'db> BodyWriter<'_, 'db> {
         Ok(json!({
             "base": base,
             "path": path_json(&place.path),
-            "ty": self.ir.ty(place.ty)?,
+            "ty": self.ty(place.ty)?,
         }))
     }
 
@@ -1053,7 +1061,7 @@ impl<'db> BodyWriter<'_, 'db> {
                 default,
             } => json!({ "matchEnum": {
                 "value": operand(value),
-                "enumTy": self.ir.ty(*enum_ty)?,
+                "enumTy": self.ty(*enum_ty)?,
                 "cases": cases.iter()
                     .map(|(variant, target)| json!({ "variant": variant.0, "target": successor(target) }))
                     .collect::<Vec<_>>(),
@@ -1133,10 +1141,10 @@ impl<'db> BodyWriter<'_, 'db> {
                 None => None,
             };
             entries.push(json!({
-                "collection": self.ir.ty(ty)?,
+                "collection": self.ty(ty)?,
                 "locate": self.ir.func(entry.callee),
-                "keyTy": self.ir.ty(entry.key_ty)?,
-                "entryTy": self.ir.ty(entry.entry_ty)?,
+                "keyTy": self.ty(entry.key_ty)?,
+                "entryTy": self.ty(entry.entry_ty)?,
                 "space": entry.space.map(space),
                 "codec": codec,
             }));

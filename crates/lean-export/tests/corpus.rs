@@ -12,7 +12,7 @@ use codegen::{
 use common::{InputDb, ingot::Ingot};
 use cranelift_entity::EntityRef;
 use driver::{DriverDataBase, init_ingot};
-use fe_lean_export::{IngotExport, Library, Unsupported};
+use fe_lean_export::{IngotExport, Library, Unsupported, export_ir, ir_text};
 use hir::{
     analysis::{
         semantic::{
@@ -231,6 +231,47 @@ fn export_corpus() {
 /// `<file>.lean`, which runs the file's tests (`Fe.EVM.Diff.main`) and
 /// generated calls (`Fe.EVM.Diff.generated`) with the IR of each contract as
 /// its model.
+/// Serializes the normalized IR of every contract of the colon-separated
+/// files and ingot directories in `LEAN_EXPORT_CORPUS` to
+/// `IR_CORPUS_OUT/<file>_<index>.json`, and prints the construct each
+/// contract that does not serialize stopped at as `BLOCK <ids>\t<reason>`.
+#[test]
+#[ignore = "reads its input from the environment"]
+fn ir_corpus() {
+    let out = env::var("IR_CORPUS_OUT").unwrap();
+    let mut blockers = BTreeMap::<String, Vec<String>>::new();
+    let (mut serialized, mut skipped, mut total) = (0, Vec::new(), 0);
+    let files = env::var("LEAN_EXPORT_CORPUS").unwrap();
+    for path in files.split(':') {
+        let name = file_name(path);
+        let Some((db, url)) = analyze(path) else {
+            skipped.push(name);
+            continue;
+        };
+        let db = &db;
+        let (_, modules) = modules(db, path, &url);
+        let contracts = modules.iter().flat_map(|module| module.all_contracts(db));
+        for (index, &contract) in contracts.enumerate() {
+            total += 1;
+            let id = format!("{name}_{index}");
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| export_ir(db, contract)))
+                .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
+            match result {
+                Ok(json) => {
+                    serialized += 1;
+                    fs::write(format!("{out}/{id}.json"), ir_text(&json)).unwrap();
+                }
+                Err(reason) => blockers.entry(reason.0).or_default().push(id),
+            }
+        }
+    }
+    for (reason, ids) in &blockers {
+        println!("BLOCK {}\t{reason}", ids.join(" "));
+    }
+    println!("skipped (errors): {}", skipped.join(" "));
+    println!("contracts: {serialized} of {total} serialized");
+}
+
 #[test]
 #[ignore = "reads its input from the environment"]
 fn sonatina_corpus() {

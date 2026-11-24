@@ -3,10 +3,10 @@ use std::{env, fs, path::PathBuf};
 use common::InputDb;
 use driver::{DriverDataBase, init_ingot};
 use hir::{
-    analysis::diagnostics::SpannedHirAnalysisDb,
     hir_def::{Contract, HirIngot},
     test_db::HirAnalysisTestDb,
 };
+use mir::MirDb;
 use url::Url;
 
 /// The fixtures in the order they are exported in, and whether with their
@@ -58,7 +58,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
 /// `tests/fixtures/<name>/`, in their order there.
 pub fn with_fixture<T>(
     name: &str,
-    f: impl for<'db> FnOnce(&'db dyn SpannedHirAnalysisDb, &[Contract<'db>]) -> T,
+    f: impl for<'db> FnOnce(&'db dyn MirDb, &[Contract<'db>]) -> T,
 ) -> T {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"));
     if fixture.is_dir() {

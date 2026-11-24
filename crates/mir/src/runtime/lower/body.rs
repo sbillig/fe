@@ -103,6 +103,8 @@ use super::{
 
 mod drops;
 
+pub use drops::runtime_needs_drop;
+
 pub fn lower_to_rmir<'db>(
     db: &'db dyn MirDb,
     instance: RuntimeInstance<'db>,

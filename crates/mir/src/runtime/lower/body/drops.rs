@@ -604,7 +604,7 @@ fn runtime_needs_drop_cycle_initial<'db>(_: &'db dyn MirDb, _: salsa::Id, _: TyI
 /// type that holds itself, such as a list of boxed nodes, needs destroying
 /// only if something it holds does.
 #[salsa::tracked(returns(copy), cycle_initial = runtime_needs_drop_cycle_initial)]
-pub(crate) fn runtime_needs_drop<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
+pub fn runtime_needs_drop<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
     if !ty_has_drop_glue(db, ty) {
         return false;
     }
