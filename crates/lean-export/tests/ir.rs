@@ -39,6 +39,11 @@ fn loops() {
     golden("loops");
 }
 
+#[test]
+fn lane_holds() {
+    golden("lane_holds");
+}
+
 /// Whether each contract of each fixture serializes, or the construct that
 /// stops it, as `golden/ir/coverage.txt` has it.
 #[test]
