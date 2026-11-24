@@ -1,0 +1,61 @@
+// A paymaster whose runtime, at -O1, gets a phi from the GVN rewrite of the
+// machine stage (taken from fe_test/erc4337.fe).
+use core::ptr::{self, MemSpan}
+use std::abi::Bytes
+use std::evm::{Address, Ctx}
+use std::evm::erc4337::{self, PaymasterMsg, PostOpMode}
+
+/// `len` bytes from the start of `words`.
+fn bytes<const N: usize>(_ words: [u256; N], len: u256) -> Bytes {
+    let buf = ptr::alloc<[u256; N]>()
+    unsafe { *buf = words }
+    unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: ptr::byte_ptr(buf), len: len.downcast_unchecked())) }
+}
+
+
+msg PaymasterStateMsg {
+    #[selector = sol("lastPostOp()")]
+    LastPostOp -> (u256, Address, Wei),
+}
+
+pub contract Paymaster uses (ctx: Ctx) {
+    entry_point: Address,
+    mut last_mode: u256,
+    mut last_sender: Address,
+    mut last_cost: Wei,
+
+    init(entry_point_address: Address) uses (mut entry_point) {
+        entry_point = entry_point_address
+    }
+
+    recv PaymasterMsg {
+        ValidatePaymasterUserOp { user_op, user_op_hash, max_cost } -> (Bytes, u256)
+            uses (entry_point, ctx)
+        {
+            erc4337::require_paymaster_entry_point(entry_point)
+            let valid_until: u64 = (user_op.paymaster_data().word_at(0) >> 208).downcast_truncate()
+            let context = bytes([user_op.sender.word()], len: 32)
+            (context, erc4337::pack_validation_data(sig_success: true, valid_after: 0, valid_until))
+        }
+
+        PostOp { mode, context, actual_gas_cost, actual_user_op_fee_per_gas }
+            uses (entry_point, ctx, mut last_mode, mut last_sender, mut last_cost)
+        {
+            erc4337::require_paymaster_entry_point(entry_point)
+            last_mode = match PostOpMode::from_u8(mode) {
+                PostOpMode::OpSucceeded => 1,
+                PostOpMode::OpReverted => 2,
+                PostOpMode::PostOpReverted => 3,
+            }
+            last_sender = Address::new(context.word_at(0))
+            last_cost = actual_gas_cost
+        }
+    }
+
+    recv PaymasterStateMsg {
+        LastPostOp -> (u256, Address, Wei) uses (last_mode, last_sender, last_cost) {
+            (last_mode, last_sender, last_cost)
+        }
+    }
+}
+

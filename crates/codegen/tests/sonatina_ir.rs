@@ -251,20 +251,69 @@ fn checked_sidecars(
         for section in array(&json["sections"]) {
             let lowering = &section["lowering"];
             let steps = &lowering["machine_steps"];
-            let text = |snap: &Value| {
-                let field = |key: &str| snap[key].as_str().unwrap().to_string();
-                (field("func"), field("text"))
-            };
-            let mut funcs: BTreeMap<_, _> = array(&steps["lowered"]).iter().map(text).collect();
+            let text = |snap: &Value| snap["text"].as_str().unwrap().to_string();
+            let mut funcs: BTreeMap<_, _> = array(&steps["lowered"])
+                .iter()
+                .map(|snap| (snap["func"].as_str().unwrap().to_string(), snap))
+                .collect();
             for pass in array(&steps["passes"]) {
                 for func in array(&pass["steps"])
                     .iter()
                     .flat_map(|step| array(&step["funcs"]))
                 {
-                    let (func, text) = text(&func["out"]);
-                    assert!(funcs.insert(func, text).is_some(), "{name}: a new function");
+                    let out = &func["out"];
+                    let input = funcs
+                        .insert(out["func"].as_str().unwrap().to_string(), out)
+                        .unwrap_or_else(|| panic!("{name}: a new function"));
+                    // Each inserted phi heads its block of the output, each replaced value
+                    // has one, and each term's instructions are of the step input.
+                    let gvn = &func["facts"]["gvn"];
+                    if gvn.is_null() {
+                        continue;
+                    }
+                    let inserted = array(&gvn["phis"]);
+                    for phi in inserted {
+                        let line = format!("v{}.i256 = phi ", phi["phi"]);
+                        assert!(
+                            text(out).split("\n\n").any(|block| block
+                                .contains(&format!("    block{}:\n", phi["block"]))
+                                && block.contains(&line)),
+                            "{name}: no inserted {line} in block{}",
+                            phi["block"]
+                        );
+                    }
+                    for value_phi in array(&gvn["value_phis"]) {
+                        assert!(inserted.iter().any(|phi| phi["phi"] == value_phi[1]));
+                    }
+                    let insts: HashSet<_> = array(&input["insts"])
+                        .iter()
+                        .flat_map(array)
+                        .filter_map(Value::as_u64)
+                        .collect();
+                    let mut terms: Vec<_> = inserted.iter().map(|phi| &phi["term"]).collect();
+                    while let Some(term) = terms.pop() {
+                        match term.get("inst") {
+                            Some(inst) => {
+                                assert!(
+                                    inst["inst"].as_u64().is_some_and(|id| insts.contains(&id)),
+                                    "{name}: {term}"
+                                );
+                                terms.extend(array(&inst["args"]));
+                            }
+                            None => assert!(
+                                term.is_null()
+                                    || term.get("value").is_some_and(Value::is_u64)
+                                    || term.get("imm").is_some_and(Value::is_string),
+                                "{name}: {term}"
+                            ),
+                        }
+                    }
                 }
             }
+            let funcs: BTreeMap<_, _> = funcs
+                .into_iter()
+                .map(|(func, snap)| (func, text(snap)))
+                .collect();
             let mut machine = BTreeMap::new();
             let mut current: Option<(String, String)> = None;
             for line in lowering["machine_ir"]
@@ -312,6 +361,31 @@ fn sidecar_holds_compiled_ir_and_sections(fixture: Fixture<&str>) {
             .map(|pass| pass.steps.len())
             .sum::<usize>();
         assert!(round_steps > 0, "-O1 records no step of the pass round");
+    });
+}
+
+/// The paymaster's runtime gets a phi from GVN's rewrite, so the checks of `checked_sidecars`
+/// see an inserted phi with an instruction term.
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "sidecar_gvn_inserted_phi.fe")]
+fn sidecar_records_phis_gvn_inserts(fixture: Fixture<&str>) {
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        let sidecars = checked_sidecars(db, top_mod, OptLevel::O1);
+        let json = serde_json::to_value(&sidecars["Paymaster"]).unwrap();
+        let terms = array(&json["sections"])
+            .iter()
+            .flat_map(|section| array(&section["lowering"]["machine_steps"]["passes"]))
+            .flat_map(|pass| array(&pass["steps"]))
+            .filter(|step| step["kind"] == "gvn_rewrite")
+            .flat_map(|step| array(&step["funcs"]))
+            .flat_map(|func| {
+                func["facts"]["gvn"]["phis"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+            })
+            .filter(|phi| phi["term"].get("inst").is_some())
+            .count();
+        assert!(terms > 0, "no inserted phi with an instruction term");
     });
 }
 

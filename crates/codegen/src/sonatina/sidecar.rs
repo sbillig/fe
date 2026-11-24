@@ -10,7 +10,8 @@
 //! `{"before": {"block", "index"}}`, `{"after": {"block", "index"}}` or
 //! `{"case": {"block", "index", "case"}}`, where `index` is an instruction's position in its
 //! block, phis included. In `machine_steps`, the values, blocks and instructions of a step's
-//! facts are those of the function before the step, except `value_phis`.
+//! facts are those of the function before the step, except the inserted phis of `phis` and
+//! `value_phis`, which are of the function after it.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -24,9 +25,9 @@ use sonatina_codegen::{
     object::{
         ObjectArtifact,
         lowering::{
-            CodeLabel, CodePoint, DynSpInitLowering, FuncSnap, GvnOperand, MachinePassKind,
-            MachineSteps, MallocLowering, SectionLowering, SpillLocation, StableLowering,
-            StackSlot, StepFacts, StepKind,
+            CodeLabel, CodePoint, DynSpInitLowering, FuncSnap, GvnOperand, GvnTerm,
+            MachinePassKind, MachineSteps, MallocLowering, SectionLowering, SpillLocation,
+            StableLowering, StackSlot, StepFacts, StepKind,
         },
     },
 };
@@ -176,8 +177,45 @@ pub struct SidecarGvnFacts {
     pub class: Vec<(u32, SidecarGvnOperand)>,
     /// `[block, slot, lhs, rhs]`: `lhs` equals `rhs` once the edge is taken.
     pub preds: Vec<(u32, u32, SidecarGvnOperand, SidecarGvnOperand)>,
-    /// `[value, block, phi]`, of the function after the step.
-    pub value_phis: Vec<(u32, u32, u32)>,
+    /// The phis the step inserted, of the function after it, in the order inserted.
+    pub phis: Vec<SidecarInsertedPhi>,
+    /// `[value, phi]`: the step replaced `value` with `phi`, one of `phis`.
+    pub value_phis: Vec<(u32, u32)>,
+}
+
+/// A phi a `gvn_rewrite` step inserted at the top of `block`, with the term of the step input
+/// it stands for there, if GVN's reasoning reduces to one.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarInsertedPhi {
+    pub phi: u32,
+    pub block: u32,
+    pub term: Option<SidecarGvnTerm>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarGvnTerm {
+    Value(u32),
+    Imm(String),
+    /// The operation of instruction `inst` of the step input, on `args` in place of its
+    /// operands.
+    Inst {
+        inst: u32,
+        args: Vec<SidecarGvnTerm>,
+    },
+}
+
+impl From<&GvnTerm> for SidecarGvnTerm {
+    fn from(term: &GvnTerm) -> Self {
+        match term {
+            GvnTerm::Value(value) => Self::Value(value.as_u32()),
+            GvnTerm::Imm(imm) => Self::Imm(word(*imm)),
+            GvnTerm::Inst { inst, args } => Self::Inst {
+                inst: inst.as_u32(),
+                args: args.iter().map(Self::from).collect(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,10 +322,19 @@ impl From<&StepFacts> for SidecarStepFacts {
                     .iter()
                     .map(|(block, slot, lhs, rhs)| (block.as_u32(), *slot, lhs.into(), rhs.into()))
                     .collect(),
+                phis: gvn
+                    .phis
+                    .iter()
+                    .map(|inserted| SidecarInsertedPhi {
+                        phi: inserted.phi.as_u32(),
+                        block: inserted.block.as_u32(),
+                        term: inserted.term.as_ref().map(SidecarGvnTerm::from),
+                    })
+                    .collect(),
                 value_phis: gvn
                     .value_phis
                     .iter()
-                    .map(|(value, block, phi)| (value.as_u32(), block.as_u32(), phi.as_u32()))
+                    .map(|(value, phi)| (value.as_u32(), phi.as_u32()))
                     .collect(),
             }),
             ranges: facts.ranges.as_ref().map(|ranges| SidecarRangeFacts {
