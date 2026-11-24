@@ -3871,7 +3871,8 @@ impl<'db> BodyExporter<'_, 'db> {
                 ));
             }
             self.result_ty = format!("(Unwound {} × {})", self.result_ty, returned.join(" × "));
-        } else if !returned.is_empty() {
+        } else if !returned.is_empty() && !never {
+            // A body that never returns gives back no values either.
             self.result_ty = format!("({} × {})", self.result_ty, returned.join(" × "));
         }
         self.holds_at = self.open_holds();
