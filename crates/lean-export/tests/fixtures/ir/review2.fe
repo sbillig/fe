@@ -1,0 +1,93 @@
+// Scenarios of the second fe-spec code review: destructors, and a collection that packs its
+// elements into lanes.
+use core::ops::Drop
+use std::abi::sol
+use std::evm::SolArray
+
+struct D { v: u256 }
+
+impl Drop for D {
+    fn drop(own self) {
+        if self.v == 1 {
+            assert!(false, "one")
+        }
+        if self.v == 2 {
+            assert!(false, "two")
+        }
+    }
+}
+
+struct Two { a: D, b: D }
+
+fn inc(_ x: mut u8) {
+    x += 1
+}
+
+msg Review2Msg {
+    #[selector = sol("array()")]
+    Array -> u256,
+    #[selector = sol("fields(uint256)")]
+    Fields { first: u256 } -> u256,
+    #[selector = sol("forgotten()")]
+    Forgotten -> u256,
+    #[selector = sol("option(bool)")]
+    Option { some: bool } -> u256,
+    #[selector = sol("push(uint8)")]
+    Push { v: u8 } -> u256,
+    #[selector = sol("bump()")]
+    Bump -> u256,
+    #[selector = sol("pop()")]
+    Pop -> u256,
+}
+
+pub contract Review2 {
+    mut arr: SolArray<u8>,
+
+    recv Review2Msg {
+        // An array's elements are destroyed in order: the first's destructor reverts.
+        Array -> u256 {
+            let ds = [D { v: 1 }, D { v: 2 }]
+            0
+        }
+
+        // A struct's fields are destroyed in order.
+        Fields { first } -> u256 {
+            let t = Two { a: D { v: first }, b: D { v: 2 } }
+            0
+        }
+
+        // A forgotten field is not destroyed; the other is.
+        Forgotten -> u256 {
+            let t = Two { a: D { v: 0 }, b: D { v: 1 } }
+            core::mem::forget(t.b)
+            0
+        }
+
+        // A variant's payload is destroyed in a value that is the variant.
+        Option { some } -> u256 {
+            let o = if some { Option::Some(D { v: 2 }) } else { Option::None }
+            0
+        }
+
+        Push { v } -> u256 uses (mut arr) {
+            arr.push(v)
+            arr.push(v + 1)
+            arr.len() * 1000 + (arr.get(1) as u256)
+        }
+
+        // A `mut` borrow of a packed element is a copy stored back where it ends.
+        Bump -> u256 uses (mut arr) {
+            arr.push(5)
+            inc(mut arr[0])
+            arr.get(0) as u256
+        }
+
+        // `pop` clears the element it removes.
+        Pop -> u256 uses (mut arr) {
+            arr.push(1)
+            arr.push(2)
+            arr.pop()
+            arr.len() * 1000 + (arr.get(0) as u256)
+        }
+    }
+}

@@ -182,13 +182,22 @@ impl<'db> IrExport<'db> {
             None => None,
         };
         let init_args = contract.init_args_ty(db);
-        // `init` takes the fields of the decoded tuple by the place of its parameters.
-        let init_params = init_key.typed_body(db).input_bindings().len();
+        // `init` takes the field of the decoded tuple each of its input bindings binds: a
+        // parameter's own (`visible_init_arg_fields` in MIR).
+        let init_fields = init_key
+            .typed_body(db)
+            .input_bindings()
+            .iter()
+            .map(|binding| match binding {
+                LocalBinding::Param { idx, .. } => Ok(*idx),
+                binding => Err(Unsupported(format!("init input binding {binding:?}"))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let init = json!({
             "func": self.func(init_key),
             "payable": contract.init(db).is_some_and(|init| init.is_payable(db)),
             "argsTy": self.ty(init_args)?,
-            "argFields": (0..init_params).collect::<Vec<_>>(),
+            "argFields": init_fields,
             "decode": init_decode,
             "effects": self.entry_effects(init_key)?,
         });
