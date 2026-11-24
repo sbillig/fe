@@ -1,4 +1,4 @@
-instances compared: 581
+instances compared: 597
 
 expected: drops opaque in the generic body: 20
   Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there

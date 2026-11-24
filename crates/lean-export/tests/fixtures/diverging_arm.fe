@@ -1,0 +1,23 @@
+// An arm that returns a value only in its type: its body ends in a call that
+// never returns, so its entry has no value to return.
+use std::abi::sol
+use std::evm::revert
+
+msg DivergeMsg {
+    #[selector = sol("fail(uint256)")]
+    Fail { value: u256 } -> u256,
+    #[selector = sol("one()")]
+    One -> u256,
+}
+
+pub contract Diverge {
+    recv DivergeMsg {
+        Fail { value } -> u256 {
+            revert(value)
+        }
+
+        One -> u256 {
+            1
+        }
+    }
+}

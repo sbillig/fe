@@ -1,0 +1,4 @@
+set_option maxRecDepth 10000 in
+example : Fail_HEAD_SIZE = pure (UInt256.ofNat 32) := rfl
+set_option maxRecDepth 10000 in
+example : One_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl

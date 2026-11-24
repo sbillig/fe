@@ -791,8 +791,11 @@ impl<'db> IngotExport<'db> {
         let mut defined = FxHashMap::<_, Vec<String>>::default();
         for (name, doc, owner) in entries {
             let key = identity_semantic_instance_key(db, owner);
-            let (body, _, refs) = module.body(&name, key, &Carriers::default())?;
+            let (body, never, refs) = module.body(&name, key, &Carriers::default())?;
             module.define(&name, &doc, &body, Scope::Contract, refs);
+            if never {
+                module.nevers.insert(name.clone());
+            }
             defined.entry(key).or_default().push(name);
         }
         if with_entries {
@@ -1410,6 +1413,10 @@ impl<'db> Module<'db> {
                 None => {
                     writeln!(lines, "  let _ ← {name}{args}").unwrap();
                     lines.push_str("  returnData (UInt256.ofNat 0) (UInt256.ofNat 0)\n");
+                }
+                // An arm that never returns gives nothing to return.
+                Some(_) if self.nevers.contains(name) => {
+                    writeln!(lines, "  let {result} ← {name}{args}\n  nomatch {result}").unwrap();
                 }
                 Some(ret_ty) => {
                     let inst = TraitInstId::new_simple(db, host_trait, vec![host]);
