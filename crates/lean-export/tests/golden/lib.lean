@@ -6374,3 +6374,14 @@ def decode_msg_field_from_Sol_bool_CallData (input : CallData) (base : UInt256) 
     let v8 ← decode_field_from_Sol_bool_CallData input base head_pos
     return v8
 
+/-- `core::ptr::alloc<u256>` -/
+def alloc_u256 : FeM UInt256 := do
+  -- cast<u8, T>(alloc_bytes(size_of<T>()))
+  let v1 ← alloc_bytes (UInt256.ofNat 32)
+  let v2 ← cast_u8_u256 v1
+  return v2
+
+/-- `core::ptr::null<!>` -/
+def null_ : FeM UInt256 := do
+  return UInt256.ofNat 0
+

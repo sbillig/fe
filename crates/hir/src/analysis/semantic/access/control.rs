@@ -8,11 +8,12 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            SBlockId, SExpr, SStmtId, SStmtKind, STerminatorKind, SemanticInstance, VariantIndex,
+            SBlockId, SExpr, SStmtId, SStmtKind, STerminatorKind, SemOrigin, SemanticInstance,
+            VariantIndex,
             normalized::{
-                NDropTarget, NExpr, NPlace, NStatement, NStatementKind, NSuccessor,
-                NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
-                normalize_semantic_body,
+                NBlock, NBlockId, NDropTarget, NExpr, NPlace, NStatement, NStatementKind,
+                NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId,
+                NormalizedBody, normalize_semantic_body,
             },
         },
         ty::{trait_resolution::PredicateListId, ty_def::TyId},
@@ -52,6 +53,85 @@ pub enum ExecutableBlock {
     TrapsAfter(Option<SStmtId>),
     /// The terminator executes; each successor edge is feasible or not.
     Continues(Box<[bool]>),
+}
+
+impl ExecutableControlFlow {
+    /// Restricts `body`, a normalization of the instance whose control flow
+    /// this is, to the paths that execute. Code after a diverging call, a
+    /// trapping cut and an unreachable block end in `Unreachable`, and an
+    /// infeasible edge or one into an unreachable block goes to a block of
+    /// its own that does.
+    pub fn restrict(&self, body: &mut NormalizedBody<'_>) {
+        assert_eq!(
+            self.0.len(),
+            body.blocks.len(),
+            "executable control flow must cover the body"
+        );
+        let trap = NBlockId::new(body.blocks.len());
+        let mut trapped = false;
+        for (block, executable_block) in body.blocks.iter_mut().zip(&self.0) {
+            match executable_block {
+                ExecutableBlock::Unreachable => {
+                    block.params = Box::default();
+                    block.statements.clear();
+                    block.terminator.kind = NTerminatorKind::Unreachable;
+                }
+                ExecutableBlock::Diverges(call) => {
+                    let end = block
+                        .statements
+                        .iter()
+                        .position(|statement| statement.source == Some(*call))
+                        .expect("a diverging call survives normalization");
+                    block.statements.truncate(end + 1);
+                    block.terminator.kind = NTerminatorKind::Unreachable;
+                }
+                ExecutableBlock::TrapsAfter(anchor) => {
+                    let keep = anchor.map_or(0, |anchor| {
+                        block
+                            .statements
+                            .iter()
+                            .position(|statement| statement.source == Some(anchor))
+                            .expect("a trap's anchor survives normalization")
+                            + 1
+                    });
+                    block.statements.truncate(keep);
+                    block.terminator.kind = NTerminatorKind::Unreachable;
+                }
+                ExecutableBlock::Continues(feasible) => {
+                    for (successor, feasible) in block
+                        .terminator
+                        .kind
+                        .successors_mut()
+                        .into_iter()
+                        .zip(feasible)
+                    {
+                        if !feasible
+                            || matches!(
+                                self.0[successor.block.index()],
+                                ExecutableBlock::Unreachable
+                            )
+                        {
+                            *successor = NSuccessor {
+                                block: trap,
+                                args: Box::default(),
+                            };
+                            trapped = true;
+                        }
+                    }
+                }
+            }
+        }
+        if trapped {
+            body.blocks.push(NBlock {
+                params: Box::default(),
+                statements: Vec::new(),
+                terminator: NTerminator {
+                    origin: SemOrigin::Synthetic,
+                    kind: NTerminatorKind::Unreachable,
+                },
+            });
+        }
+    }
 }
 
 /// Which values and places of a body's statements are uninhabited, in its

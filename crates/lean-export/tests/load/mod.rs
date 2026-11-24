@@ -52,6 +52,7 @@ pub const FIXTURES: &[(&str, bool)] = &[
     ("effect_copies", true),
     ("lane_holds", true),
     ("diverging_arm", true),
+    ("uninhabited_access", true),
 ];
 
 /// `f` of the last contract of `tests/fixtures/<name>.fe`, after those it

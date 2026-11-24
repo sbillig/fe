@@ -49,6 +49,7 @@ use hir::{
             SemanticInstance, SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key,
             drop_elaboration, eval_const_ref, generated_callee_key, identity_semantic_instance_key,
             normalize_semantic_body, projection_component_spaces, runtime_size_bytes,
+            semantic_executable_control_flow, semantic_may_return,
         },
         ty::{
             AddressSpace,
@@ -1222,8 +1223,14 @@ impl<'db> Module<'db> {
         key: SemanticInstanceKey<'db>,
         carriers: &Carriers,
     ) -> Result<(String, bool, Vec<String>), Unsupported> {
-        let normalized = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
+        let instance = SemanticInstance::new(self.db, key);
+        let mut normalized = normalize_semantic_body(self.db, instance)
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
+        // The model runs the paths the compiled code runs: runtime lowering
+        // cuts the body where it cannot continue.
+        semantic_executable_control_flow(self.db, instance)
+            .ok_or_else(|| Unsupported(format!("{name}: no executable control flow")))?
+            .restrict(&mut normalized.body);
         let depth = self.begin();
         let exported = BodyExporter {
             module: self,
@@ -2068,17 +2075,9 @@ impl<'db> Module<'db> {
         self.halts[&key]
     }
 
-    /// Whether the body of `key` never returns: it has no `Return`.
+    /// Whether the body of `key` never returns: no `Return` of it executes.
     fn never_returns(&self, key: SemanticInstanceKey<'db>) -> bool {
-        normalize_semantic_body(self.db, SemanticInstance::new(self.db, key)).is_ok_and(
-            |normalized| {
-                !normalized
-                    .body
-                    .blocks
-                    .iter()
-                    .any(|block| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
-            },
-        )
+        !semantic_may_return(self.db, SemanticInstance::new(self.db, key))
     }
 
     /// Whether the slides of the projection `key` do nothing but end
@@ -4466,7 +4465,9 @@ impl<'db> BodyExporter<'_, 'db> {
                 writeln!(out, "{pad}return ({granted}, {slide})").unwrap();
             }
             // Control stops at a call that never returns, whose result has
-            // no values.
+            // no values, or where the compiled code cannot continue, which
+            // panics with code 0x01 there, as after a call that never
+            // returns but whose result has a type with values.
             NTerminatorKind::Unreachable => {
                 let never =
                     data.statements
@@ -4480,9 +4481,10 @@ impl<'db> BodyExporter<'_, 'db> {
                             }
                             _ => None,
                         });
-                let never = never
-                    .ok_or_else(|| Unsupported("unreachable code after no call".to_string()))?;
-                writeln!(out, "{pad}nomatch {}", self.value(never)).unwrap();
+                match never {
+                    Some(never) => writeln!(out, "{pad}nomatch {}", self.value(never)).unwrap(),
+                    None => writeln!(out, "{pad}M.panic 0x01").unwrap(),
+                }
             }
         }
         Ok(())

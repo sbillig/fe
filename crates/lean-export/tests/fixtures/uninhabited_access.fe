@@ -1,0 +1,45 @@
+// Reads and borrows through pointers to uninhabited types. The compiled code
+// traps where it would access the uninhabited value, so the model must too.
+use core::ptr
+use std::abi::sol
+
+struct Mixed {
+    a: u256,
+    b: !,
+}
+
+fn read_mixed_field() -> u256 {
+    let buf = ptr::alloc<u256>()
+    unsafe {
+        *buf = 42
+        let p: *Mixed = ptr::cast<u256, Mixed>(buf)
+        (*p).a
+    }
+}
+
+fn borrow_never() -> u256 {
+    let p: *! = ptr::null<!>()
+    unsafe {
+        let _ = mut (*p)
+    }
+    42
+}
+
+msg AccessMsg {
+    #[selector = sol("read()")]
+    Read -> u256,
+    #[selector = sol("borrow()")]
+    Borrow -> u256,
+}
+
+pub contract UninhabitedAccess {
+    recv AccessMsg {
+        Read -> u256 {
+            read_mixed_field()
+        }
+
+        Borrow -> u256 {
+            borrow_never()
+        }
+    }
+}
