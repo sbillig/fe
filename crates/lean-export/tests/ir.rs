@@ -56,6 +56,11 @@ fn immutables() {
 }
 
 #[test]
+fn review2() {
+    golden("ir/review2");
+}
+
+#[test]
 fn review() {
     golden("ir/review");
 }
