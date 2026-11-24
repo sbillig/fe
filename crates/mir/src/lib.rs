@@ -12,7 +12,10 @@ pub use origin::{
     RuntimeLoopOrigin, RuntimeLoopSite, RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite,
     RuntimeTerminatorOrigin, RuntimeTerminatorSite,
 };
-pub use runtime::lower::{body::runtime_needs_drop, halts::lane_halt_points};
+pub use runtime::lower::{
+    body::{panic_payload_revert_key, runtime_needs_drop},
+    halts::lane_halt_points,
+};
 pub use runtime::{
     ArrayLayout, BorrowAccess, BorrowTransportSet, ConstNode, ConstRegion, ConstRegionId,
     ConstScalar, ContractFieldSlot, EnumLayout, EnumVariantLayout, FieldPlacement, IngotContract,

@@ -33,8 +33,9 @@ use hir::{
             AddressSpace, ProviderKind,
             adt_def::AdtRef,
             corelib::{
-                ContractMetadataKind, NumericExternIntrinsic, SaturatingArithmetic,
-                core_numeric_const_intrinsic, lib_func_matches, runtime_builtin_func_kind,
+                ContractMetadataKind, NumericExternIntrinsic, RuntimeBuiltinFuncKind,
+                SaturatingArithmetic, core_numeric_const_intrinsic, lib_func_matches,
+                runtime_builtin_func_kind,
             },
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
             trait_resolution::PredicateListId,
@@ -51,7 +52,7 @@ use hir::{
         storage_field_placements, storage_lane_bytes, storage_slot_span,
     },
 };
-use mir::{MirDb, runtime_needs_drop};
+use mir::{MirDb, panic_payload_revert_key, runtime_needs_drop};
 use rustc_hash::FxHashMap;
 use serde_json::{Value, json};
 
@@ -1009,12 +1010,33 @@ impl<'db> BodyWriter<'_, 'db> {
                         CallSiteId::Expr(expr) => format!("expr{}", expr.index()),
                         CallSiteId::ForLoop(stmt, step) => format!("for{}:{step:?}", stmt.index()),
                     },
-                    "callee": self.ir.func(callee.key),
+                    "callee": self.ir.func(self.callee_key(callee.key, args)),
                     "args": args.iter().map(operand).collect::<Vec<_>>(),
                     "effectArgs": effects,
                 }})
             }
         })
+    }
+
+    /// The function a call of `callee` runs: on the EVM, `panic_with_value::<T>` reverts
+    /// through the function MIR's `lower_panic_with_value` calls in its place, which the
+    /// calling body's scope resolves.
+    fn callee_key(
+        &self,
+        callee: SemanticInstanceKey<'db>,
+        args: &[NOperand],
+    ) -> SemanticInstanceKey<'db> {
+        let db = self.ir.db;
+        match (callee.owner(db), args) {
+            (BodyOwner::Func(func, _), [value])
+                if runtime_builtin_func_kind(db, func)
+                    == Some(RuntimeBuiltinFuncKind::PanicWithValue) =>
+            {
+                let value_ty = self.body.values[value.value.index()].ty;
+                panic_payload_revert_key(self.ir.mir, self.body.owner.key(db), value_ty)
+            }
+            _ => callee,
+        }
     }
 
     fn effect_arg(&mut self, arg: &NEffectArg<'db>) -> Result<Value, Unsupported> {

@@ -107,6 +107,8 @@ msg Review3Msg {
     Both { x: u8 } -> u256,
     #[selector = sol("replace()")]
     Replace -> u256,
+    #[selector = sol("fail(uint256)")]
+    Fail { v: u256 } -> u256,
 }
 
 pub contract Review3 {
@@ -133,6 +135,11 @@ pub contract Review3 {
         Replace -> u256 uses (mut e) {
             e = E::B(Inner::X)
             0
+        }
+
+        // A panic with a value reverts with its encoding (`std::evm::revert`).
+        Fail { v } -> u256 {
+            core::panic_with_value(v)
         }
     }
 }
