@@ -4,6 +4,7 @@
 use core::marker::{Pinned, Storage}
 use core::ops::{Drop, LaneCodec, Location, StateIndex}
 use std::abi::sol
+use std::evm::SolArray
 use std::evm::storage_bytes::encode_bytes_return_from_calldata
 
 /// Returns the 32 bytes after the selector.
@@ -109,6 +110,8 @@ msg Review3Msg {
     Replace -> u256,
     #[selector = sol("fail(uint256)")]
     Fail { v: u256 } -> u256,
+    #[selector = sol("sweep()")]
+    Sweep -> u256,
 }
 
 pub contract Review3 {
@@ -116,6 +119,7 @@ pub contract Review3 {
     mut pds: PDs,
     mut hs: Hs,
     mut small: Small,
+    mut bytes: SolArray<u8>,
 
     recv Review3Msg {
         // Writing an element destroys the one it replaces, read with the codec's `get`.
@@ -135,6 +139,21 @@ pub contract Review3 {
         Replace -> u256 uses (mut e) {
             e = E::B(Inner::X)
             0
+        }
+
+        // Iterating a packed array: `mut` elements are copies stored back as each ends.
+        Sweep -> u256 uses (mut bytes) {
+            bytes.push(1)
+            bytes.push(2)
+            bytes.push(3)
+            for mut b in bytes {
+                b += 10
+            }
+            var sum: u256 = 0
+            for b in bytes {
+                sum += b as u256
+            }
+            sum * 1000 + (bytes.get(2) as u256)
         }
 
         // A panic with a value reverts with its encoding (`std::evm::revert`).

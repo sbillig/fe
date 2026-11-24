@@ -73,6 +73,27 @@ enum RuntimeMemoryUnit {
     Word,
 }
 
+/// What `RuntimeMemoryLayout::memory_facts` finds of a value in memory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeMemoryFacts {
+    pub size: u64,
+    pub offsets: RuntimeMemoryOffsets,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeMemoryOffsets {
+    /// The offsets of a struct's fields.
+    Product(Vec<u64>),
+    /// An enum's tag bytes (at offset 0), its payload's offset, and each
+    /// variant's field offsets from the payload.
+    Enum {
+        tag_bytes: u64,
+        payload: u64,
+        variants: Vec<Vec<u64>>,
+    },
+    None,
+}
+
 #[derive(Clone, Copy)]
 pub struct RuntimeMemoryLayout<'db> {
     db: &'db dyn MirDb,
@@ -346,6 +367,42 @@ impl<'db> RuntimeMemoryLayout<'db> {
 
     fn target(self) -> Target {
         self.db.compilation_settings().target(self.db)
+    }
+
+    /// Where a value of `class` lies in byte-addressed memory: its size, and
+    /// the offsets of a struct's fields or of an enum's tag and variants'
+    /// fields.
+    pub fn memory_facts(
+        self,
+        class: &RuntimeClass<'db>,
+    ) -> Result<RuntimeMemoryFacts, RuntimeMemoryLayoutError> {
+        let visiting = &mut FxHashSet::default();
+        let size = self.memory_layout(class, visiting)?.size;
+        let layout = match class {
+            RuntimeClass::AggregateValue { layout } => Some(layout.data(self.db)),
+            RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
+                None
+            }
+        };
+        let offsets = match layout {
+            Some(Layout::Struct(data)) => {
+                RuntimeMemoryOffsets::Product(self.placed_fields(&data.fields, visiting)?.offsets)
+            }
+            Some(Layout::Enum(data)) => RuntimeMemoryOffsets::Enum {
+                tag_bytes: self
+                    .target()
+                    .scalar_memory_layout(scalar_bits(&data.tag))
+                    .size,
+                payload: self.enum_memory_layout(&data, visiting)?.payload_offset,
+                variants: data
+                    .variants
+                    .iter()
+                    .map(|variant| Ok(self.placed_fields(&variant.fields, visiting)?.offsets))
+                    .collect::<Result<_, RuntimeMemoryLayoutError>>()?,
+            },
+            Some(Layout::Array(_)) | None => RuntimeMemoryOffsets::None,
+        };
+        Ok(RuntimeMemoryFacts { size, offsets })
     }
 
     /// The memory layout of `class` in byte-addressed memory.
