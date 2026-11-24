@@ -20,6 +20,7 @@ fe-web = { path = "crates/fe-web" }
 semantic-indexing = { path = "crates/semantic-indexing", package = "fe-semantic-indexing" }
 language-server = { path = "crates/language-server", package = "fe-language-server" }
 mir = { path = "crates/mir", package = "fe-mir" }
+spec-ir = { path = "crates/spec-ir", package = "fe-spec-ir" }
 matchcov = "0.2.0"
 trace-facts = { path = "crates/trace-facts", package = "fe-trace-facts" }
 debug-export = { path = "crates/debug-export", package = "fe-debug-export" }

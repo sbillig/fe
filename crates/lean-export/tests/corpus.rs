@@ -12,7 +12,7 @@ use codegen::{
 use common::{InputDb, ingot::Ingot};
 use cranelift_entity::EntityRef;
 use driver::{DriverDataBase, init_ingot};
-use fe_lean_export::{IngotExport, Library, Unsupported, export_ir, ir_text};
+use fe_lean_export::{IngotExport, Library};
 use hir::{
     analysis::{
         semantic::{
@@ -29,6 +29,7 @@ use hir::{
 };
 use num_bigint::BigUint;
 use rustc_hash::FxHashSet;
+use spec_ir::{Unsupported, export_ir, ir_text};
 use url::Url;
 
 /// Exports every contract of the colon-separated files and ingot directories

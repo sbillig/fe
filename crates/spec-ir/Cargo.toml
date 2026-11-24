@@ -1,0 +1,18 @@
+[package]
+name = "fe-spec-ir"
+version = "26.5.0"
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/argotorg/fe"
+description = "Serializes Fe's normalized semantic IR for the fe-spec interpreter"
+
+[lib]
+doctest = false
+
+[dependencies]
+common.workspace = true
+cranelift-entity.workspace = true
+hir.workspace = true
+mir.workspace = true
+rustc-hash.workspace = true
+serde_json = "1"

@@ -2,8 +2,8 @@ mod load;
 
 use std::fmt::Write;
 
-use fe_lean_export::{export_ir, ir_text};
 use load::{FIXTURES, compare, with_fixture};
+use spec_ir::{export_ir, ir_text};
 
 /// The normalized IR of the last contract of `tests/fixtures/<name>.fe`, as
 /// `golden/ir/<file>.json` has it, for the last component `file` of `name`.
