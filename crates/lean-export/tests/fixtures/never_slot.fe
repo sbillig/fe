@@ -1,0 +1,25 @@
+// A local of type `!`: the body is cut before anything reaches it, so the
+// model declares no variable of type `Empty`.
+use std::abi::sol
+use std::evm::revert
+
+fn pick(_ c: bool, _ v: u256) -> u256 {
+    if c {
+        var x = revert(v)
+        x
+    }
+    v
+}
+
+msg SlotMsg {
+    #[selector = sol("pick(bool,uint256)")]
+    Pick { c: bool, v: u256 } -> u256,
+}
+
+pub contract NeverSlot {
+    recv SlotMsg {
+        Pick { c, v } -> u256 {
+            pick(c, v)
+        }
+    }
+}

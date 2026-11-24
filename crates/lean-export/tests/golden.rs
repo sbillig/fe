@@ -95,3 +95,17 @@ fn rejects_uninhabited_types() {
     });
     assert!(error.0.contains("uninhabited"), "{}", error.0);
 }
+
+/// An array of a type with no values is not exported, even one of no
+/// elements, which has a value: `uninhabited_array.fe` has a struct with a
+/// `[!; 0]` field.
+#[test]
+fn rejects_arrays_of_uninhabited_types() {
+    let mut library = Library::default();
+    let error = with_fixture("uninhabited_array", |db, contracts| {
+        IngotExport::new(db)
+            .export_contract(contracts[0], true, &mut library)
+            .unwrap_err()
+    });
+    assert!(error.0.contains("of an uninhabited type"), "{}", error.0);
+}

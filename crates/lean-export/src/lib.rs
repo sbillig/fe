@@ -2569,6 +2569,12 @@ impl<'db> Module<'db> {
         }
         if let Some(len) = ty.array_len(self.db) {
             let (_, args) = ty.decompose_ty_app(self.db);
+            // An array of no elements of a type with none has one value,
+            // which Lean's `Vector Empty 0` has but does not derive
+            // `Inhabited` for.
+            if uninhabited(args[0]) {
+                return Err(Unsupported(format!("{pretty}, of an uninhabited type")));
+            }
             return Ok(format!("(Vector {} {len})", self.value_ty(args[0])?));
         }
         let depth = self.begin();
@@ -3617,8 +3623,17 @@ impl<'db> BodyExporter<'_, 'db> {
             params.push(((0, param), self.names[index].clone(), ty));
         }
         let mut state = String::new();
+        let scope = owner.scope();
+        let assumptions = self.body.owner.assumptions(db);
         for (index, root) in self.body.roots.iter().enumerate() {
             let ty = match root.kind {
+                // No statement that executes reaches a local of a type with
+                // no values: the body is cut before it.
+                NRootKind::LocalSlot { .. }
+                    if root.ty.is_uninhabited_in(db, Some(scope), assumptions) =>
+                {
+                    continue;
+                }
                 NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
                     self.module.value_ty(root.ty)?
                 }

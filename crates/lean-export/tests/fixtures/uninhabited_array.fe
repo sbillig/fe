@@ -1,0 +1,27 @@
+// A struct with a zero-length array of `!`: the array has one value, but
+// Lean's `Vector Empty 0` has no `Inhabited` instance for the struct to
+// derive its own from.
+use std::abi::sol
+
+struct Empties {
+    none: [!; 0],
+    value: u256,
+}
+
+fn empties(_ v: u256) -> u256 {
+    let e = Empties { none: [], value: v }
+    e.value
+}
+
+msg M {
+    #[selector = sol("empties(uint256)")]
+    Empties { v: u256 } -> u256,
+}
+
+pub contract UninhabitedArray {
+    recv M {
+        Empties { v } -> u256 {
+            empties(v)
+        }
+    }
+}
