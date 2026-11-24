@@ -45,8 +45,12 @@ use url::Url;
 /// namespace, and the checks of the constants the exports define to
 /// `<file>.checks`, Lean commands that hold after the exports.
 ///
+/// Writes the normalized IR of each exported contract, for fe-spec's
+/// interpreter, to `LEAN_EXPORT_CORPUS_OUT/<file>_<index>.ir.json`, or the
+/// construct the serializer stopped at to `<file>_<index>.ir.refused`.
+///
 /// A file that compiles ends in `Corpus.targets`, the creation and runtime
-/// bytecode, model and interface of each exported contract. A call of
+/// bytecode, model, interface and IR path of each exported contract. A call of
 /// `Fe.EVM.Diff.main` on them and the object the file's tests compile to
 /// runs each test and compares every call it makes on such a contract with
 /// the contract's model. A call of `Fe.EVM.Diff.generated` does the same for
@@ -89,6 +93,16 @@ fn export_corpus() {
                     exported += 1;
                     let name = contract.name(db).unwrap().data(db).to_string();
                     let bytes = contract.code_address_space_slot_count(db) * 32;
+                    // The contract's IR for fe-spec's interpreter, or why it is not
+                    // serialized, which the Lean file reads when it runs.
+                    let ir =
+                        panic::catch_unwind(panic::AssertUnwindSafe(|| export_ir(db, contract)))
+                            .unwrap_or_else(|_| Err(Unsupported("PANIC".to_string())));
+                    match ir {
+                        Ok(json) => fs::write(format!("{out}/{id}.ir.json"), ir_text(&json)),
+                        Err(reason) => fs::write(format!("{out}/{id}.ir.refused"), reason.0),
+                    }
+                    .unwrap();
                     models.push((
                         id.clone(),
                         name,
@@ -159,11 +173,11 @@ fn export_corpus() {
             text.insert_str(0, &creations);
             let targets: Vec<_> = models
                 .iter()
-                .map(|(_, contract, model, interface)| {
+                .map(|(id, contract, model, interface)| {
                     format!(
                         "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{}\", \
                          runtime := Fe.EVM.Diff.hex \"{}\",\n     model := {model},\n     \
-                         interface := {interface} }}",
+                         interface := {interface},\n     ir := \"{out}/{id}\" }}",
                         hex(&code[contract].deploy),
                         hex(&code[contract].runtime)
                     )
