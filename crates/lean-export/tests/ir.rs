@@ -61,6 +61,11 @@ fn review2() {
 }
 
 #[test]
+fn review3() {
+    golden("ir/review3");
+}
+
+#[test]
 fn review() {
     golden("ir/review");
 }

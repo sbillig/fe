@@ -1,0 +1,138 @@
+// Scenarios of the third fe-spec code review: a destructor of an element a
+// collection packs, a codec's `set` that halts while lane copies are held,
+// and a destruction that reads only an enum's tag.
+use core::marker::{Pinned, Storage}
+use core::ops::{Drop, LaneCodec, Location, StateIndex}
+use std::abi::sol
+use std::evm::storage_bytes::encode_bytes_return_from_calldata
+
+/// Returns the 32 bytes after the selector.
+fn halt() -> ! {
+    encode_bytes_return_from_calldata(data_ptr: 4, len: 32)
+}
+
+struct PD { v: u8 }
+
+impl Drop for PD {
+    fn drop(own self) {
+        if self.v == 1 {
+            assert!(false, "one")
+        }
+    }
+}
+
+struct PDLanes {}
+
+impl LaneCodec<PD> for PDLanes {
+    const BITS: u256 = 8
+
+    fn get(_ word: u256, offset: u256) -> PD {
+        PD { v: ((word >> offset) & 0xff).downcast_truncate() }
+    }
+
+    fn set(_ word: u256, offset: u256, value: own PD) -> u256 {
+        let v = value.v
+        core::mem::forget(value)
+        (word & !(0xff << offset)) | ((v as u256) << offset)
+    }
+}
+
+/// Elements of type `PD`, packed into the slot `0x1000` above the collection's own.
+struct PDs { n: u256 }
+
+impl Pinned for PDs {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for PDs {
+    type Key = u256
+    type Entry = PD
+    type Lanes = PDLanes
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + 0x1000, offset: key * 8 }
+    }
+}
+
+/// A `u8` codec whose `set` halts when it writes `0xee`.
+struct HaltLanes {}
+
+impl LaneCodec<u8> for HaltLanes {
+    const BITS: u256 = 8
+
+    fn get(_ word: u256, offset: u256) -> u8 {
+        ((word >> offset) & 0xff).downcast_truncate()
+    }
+
+    fn set(_ word: u256, offset: u256, value: own u8) -> u256 {
+        if value == 0xee {
+            halt()
+        }
+        (word & !(0xff << offset)) | ((value as u256) << offset)
+    }
+}
+
+struct Hs { n: u256 }
+
+impl Pinned for Hs {
+    type Space = Storage
+}
+
+unsafe impl StateIndex for Hs {
+    type Key = u256
+    type Entry = u8
+    type Lanes = HaltLanes
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + 0x1000, offset: key * 8 }
+    }
+}
+
+struct Small { a: u8, b: u8 }
+
+enum Inner { X, Y }
+
+enum E { A(PD), B(Inner) }
+
+fn set_halt(_ p: mut u8, _ q: mut u8) -> ! {
+    p = 0xee
+    q = 5
+    halt()
+}
+
+msg Review3Msg {
+    #[selector = sol("put(uint256,uint8)")]
+    Put { k: u256, v: u8 } -> u256,
+    #[selector = sol("both(uint8)")]
+    Both { x: u8 } -> u256,
+    #[selector = sol("replace()")]
+    Replace -> u256,
+}
+
+pub contract Review3 {
+    mut e: E,
+    mut pds: PDs,
+    mut hs: Hs,
+    mut small: Small,
+
+    recv Review3Msg {
+        // Writing an element destroys the one it replaces, read with the codec's `get`.
+        Put { k, v } -> u256 uses (mut pds) {
+            pds[k] = PD { v }
+            0
+        }
+
+        // A halt stores back the lane copies held, the element's first: its `set` halts
+        // again, and the halt is that one, with `small.a` not stored back.
+        Both { x } -> u256 uses (mut hs, mut small) {
+            set_halt(mut hs[0], mut small.a)
+        }
+
+        // Destroying the value a write replaces reads its tag only: a variant without drop
+        // glue is not read, nor its payload's tag checked.
+        Replace -> u256 uses (mut e) {
+            e = E::B(Inner::X)
+            0
+        }
+    }
+}
