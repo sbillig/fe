@@ -24,6 +24,21 @@ fn erc20() {
     golden("erc20");
 }
 
+#[test]
+fn ints() {
+    golden("ints");
+}
+
+#[test]
+fn enums() {
+    golden("enums");
+}
+
+#[test]
+fn loops() {
+    golden("loops");
+}
+
 /// Whether each contract of each fixture serializes, or the construct that
 /// stops it, as `golden/ir/coverage.txt` has it.
 #[test]
