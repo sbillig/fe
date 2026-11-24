@@ -46,6 +46,11 @@ fn lane_holds() {
 }
 
 #[test]
+fn trust() {
+    golden("trust");
+}
+
+#[test]
 fn immutables() {
     golden("immutables");
 }
