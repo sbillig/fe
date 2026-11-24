@@ -1838,7 +1838,8 @@ def Evm_block_number : FeM UInt256 := do
 inductive Option_u256 where
   | None
   | Some (f0 : UInt256)
-deriving Inhabited
+
+instance : Inhabited Option_u256 := ⟨Option_u256.None⟩
 
 def Option_u256.tag : Option_u256 → UInt256
   | .None => UInt256.ofNat 0
@@ -1962,7 +1963,8 @@ def calldata_ptr_Evm_array_u256_2 (offset : UInt256) : FeM UInt256 := do
 inductive Option_mut_u8 where
   | None
   | Some (f0 : UInt256)
-deriving Inhabited
+
+instance : Inhabited Option_mut_u8 := ⟨Option_mut_u8.None⟩
 
 def Option_mut_u8.tag : Option_mut_u8 → UInt256
   | .None => UInt256.ofNat 0
@@ -2930,7 +2932,8 @@ def Evm_return_value_Sol_u8 (value : UInt256) : FeM Empty := do
 inductive Option_usize where
   | None
   | Some (f0 : UInt256)
-deriving Inhabited
+
+instance : Inhabited Option_usize := ⟨Option_usize.None⟩
 
 def Option_usize.tag : Option_usize → UInt256
   | .None => UInt256.ofNat 0
@@ -4024,7 +4027,8 @@ def Evm_return_value_Sol_tuple_bool_u256_u256 (value : (Bool × UInt256 × UInt2
 inductive Option_array_u256_2 where
   | None
   | Some (f0 : (Vector UInt256 2))
-deriving Inhabited
+
+instance : Inhabited Option_array_u256_2 := ⟨Option_array_u256_2.None⟩
 
 def Option_array_u256_2.tag : Option_array_u256_2 → UInt256
   | .None => UInt256.ofNat 0
@@ -4487,7 +4491,8 @@ def u256_wrapping_sub (self : UInt256) (other : UInt256) : FeM UInt256 := do
 inductive Option_MemBuffer where
   | None
   | Some (f0 : MemBuffer)
-deriving Inhabited
+
+instance : Inhabited Option_MemBuffer := ⟨Option_MemBuffer.None⟩
 
 def Option_MemBuffer.tag : Option_MemBuffer → UInt256
   | .None => UInt256.ofNat 0
@@ -4505,7 +4510,8 @@ def Option_MemBuffer.set_Some_0 (x : Option_MemBuffer) (v : MemBuffer) : Option_
 inductive Option_u8 where
   | None
   | Some (f0 : UInt256)
-deriving Inhabited
+
+instance : Inhabited Option_u8 := ⟨Option_u8.None⟩
 
 def Option_u8.tag : Option_u8 → UInt256
   | .None => UInt256.ofNat 0
@@ -4580,7 +4586,8 @@ deriving Inhabited
 inductive Option_MemArray_u64 where
   | None
   | Some (f0 : MemArray_u64)
-deriving Inhabited
+
+instance : Inhabited Option_MemArray_u64 := ⟨Option_MemArray_u64.None⟩
 
 def Option_MemArray_u64.tag : Option_MemArray_u64 → UInt256
   | .None => UInt256.ofNat 0
@@ -4598,7 +4605,8 @@ def Option_MemArray_u64.set_Some_0 (x : Option_MemArray_u64) (v : MemArray_u64) 
 inductive Option_u64 where
   | None
   | Some (f0 : UInt256)
-deriving Inhabited
+
+instance : Inhabited Option_u64 := ⟨Option_u64.None⟩
 
 def Option_u64.tag : Option_u64 → UInt256
   | .None => UInt256.ofNat 0

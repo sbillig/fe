@@ -5,7 +5,8 @@ deriving Inhabited
 inductive Option_Guard where
   | None
   | Some (f0 : Guard)
-deriving Inhabited
+
+instance : Inhabited Option_Guard := ⟨Option_Guard.None⟩
 
 def Option_Guard.tag : Option_Guard → UInt256
   | .None => UInt256.ofNat 0

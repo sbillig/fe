@@ -2612,7 +2612,9 @@ impl<'db> Module<'db> {
     }
 
     /// The Lean type of an enum named `name` whose variants have fields of
-    /// the Lean types `variants` gives: an inductive type, with its tag, and
+    /// the Lean types `variants` gives: an inductive type, whose default is
+    /// the compiler's zero, the first variant with default fields, with its
+    /// tag, and
     /// for each field of each variant the projection that reads it and the
     /// function that replaces it. Both leave a value of another variant
     /// alone.
@@ -2664,9 +2666,12 @@ impl<'db> Module<'db> {
                 .unwrap();
             }
         }
+        let (first, fields) = &variants[0];
+        let zero = " default".repeat(fields.len());
         self.layout(name, scope, refs, |name| {
             format!(
-                "inductive {name} where\n{ctors}deriving Inhabited\n\n\
+                "inductive {name} where\n{ctors}\n\
+                 instance : Inhabited {name} := ⟨{name}.{first}{zero}⟩\n\n\
                  def {name}.tag : {name} → UInt256\n{tags}{}",
                 parts.replace("NAME", name).trim_end()
             )

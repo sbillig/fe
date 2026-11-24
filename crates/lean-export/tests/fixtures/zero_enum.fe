@@ -1,0 +1,32 @@
+// An enum whose first variant has a field and whose second has none. The
+// compiler's zero of it, which a cleared local holds, is the first variant
+// with a zero field.
+use core::intrinsic::clear
+use std::abi::sol
+
+enum Slot {
+    Payload(u256),
+    Vacant,
+}
+
+fn payload(_ slot: Slot) -> u256 {
+    match slot {
+        Slot::Payload(v) => v + 1,
+        Slot::Vacant => 0,
+    }
+}
+
+msg ZeroMsg {
+    #[selector = sol("cleared()")]
+    Cleared -> u256,
+}
+
+pub contract ZeroEnum {
+    recv ZeroMsg {
+        Cleared -> u256 {
+            var slot = Slot::Vacant
+            unsafe { clear(mut slot) }
+            payload(slot)
+        }
+    }
+}

@@ -41,7 +41,8 @@ inductive Phase where
   | Idle
   | Running (f0 : UInt256) (f1 : UInt256)
   | Done (f0 : Bool)
-deriving Inhabited
+
+instance : Inhabited Phase := ⟨Phase.Idle⟩
 
 def Phase.tag : Phase → UInt256
   | .Idle => UInt256.ofNat 0
