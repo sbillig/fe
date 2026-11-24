@@ -75,6 +75,7 @@ core zero_bytes unsafe-fn the whole body
 core zero_bytes raw-memory core::ptr::zero_mem
 std ByteVector_48_hash_tree_root unsafe-block 1 of 2
 std ByteVector_48_hash_tree_root unsafe-block 2 of 2
+std ByteVector_48_hash_tree_root raw-memory load of u128 through *u128
 std ByteVector_48_hash_tree_root raw-memory std::evm::ops::mload
 std ByteVector_48_hash_tree_root extern core::ptr::offset_bytes<u8>
 std ByteVector_96_hash_tree_root unsafe-block 1 of 1

@@ -2927,10 +2927,23 @@ def Evm_return_value_Sol_u8 (value : UInt256) : FeM Empty := do
     let v63 ← Evm_return_bytes v60
     nomatch v63
 
-structure CallOutcome where
-  success : Bool
-  returndata : MemBuffer
+inductive Option_usize where
+  | None
+  | Some (f0 : UInt256)
 deriving Inhabited
+
+def Option_usize.tag : Option_usize → UInt256
+  | .None => UInt256.ofNat 0
+  | .Some .. => UInt256.ofNat 1
+
+def Option_usize.Some_0 : Option_usize → UInt256
+  | .Some f0 => f0
+  | _ => default
+
+def Option_usize.set_Some_0 (x : Option_usize) (v : UInt256) : Option_usize :=
+  match x with
+  | .Some f0 => .Some v
+  | x => x
 
 /-- `Wei::zero` -/
 def Wei_zero : FeM Wei := do
@@ -3022,12 +3035,109 @@ def bubble_last_revert : FeM Empty := do
   let v7 ← revertData v3 v5
   nomatch v7
 
-/-- `std::evm::effects::copy_call_outcome` -/
-def copy_call_outcome («raw» : RawCallOutcome) : FeM CallOutcome := do
-  -- CallOutcome {
-  let v1 ← RawCallOutcome_success «raw»
-  let v2 ← copy_returndata
-  return CallOutcome.mk v1 v2
+/-- `<u256 as IntDowncast>::downcast` -/
+def downcast_u256_usize (self : UInt256) : FeM Option_usize := do
+  -- let word = IntWord::to_word(self)
+  let word ← u256_to_word self
+  -- if T::IS_SIGNED {
+  let v9 ← usize_IS_SIGNED
+  let join : Option_usize → FeM Option_usize := fun v1 => do
+    return v1
+  if v9 then
+    -- let t_min_word = sign_extend(word: T::SIGN_BIT, mask: T::MASK, sign_bit: T::SIGN_BIT)
+    let v10 ← usize_SIGN_BIT
+    let v11 ← usize_MASK
+    let v12 ← usize_SIGN_BIT
+    let t_min_word ← sign_extend v10 v11 v12
+    -- let t_max_word = T::SIGN_BIT - 1
+    let v15 ← usize_SIGN_BIT
+    let t_max_word ← checkedSub v15 (UInt256.ofNat 1)
+    -- let t_min: i256 = __bitcast(t_min_word)
+    let t_min := t_min_word
+    -- let t_max: i256 = __bitcast(t_max_word)
+    let t_max := t_max_word
+    -- if !S::IS_SIGNED && (word & I256_SIGN_BIT != 0) {
+    let v23 ← u256_IS_SIGNED
+    let join_1 : Option_usize → FeM Option_usize := fun v2 => do
+      join v2
+    let join_2 : FeM Option_usize := do
+      -- let x: i256 = __bitcast(word)
+      let x := word
+      let join_3 : Option_usize → FeM Option_usize := fun v3 => do
+        join_1 v3
+      -- if x < t_min {
+      if UInt256.sltBool x t_min then
+        join_3 Option_usize.None
+      else
+        let join_4 : Option_usize → FeM Option_usize := fun v4 => do
+          join_3 v4
+        if UInt256.sgtBool x t_max then
+          join_4 Option_usize.None
+        else
+          -- Option::Some(T::from_word(word))
+          let v39 ← usize_from_word word
+          join_4 (Option_usize.Some v39)
+    if !v23 then
+      let v25 ← I256_SIGN_BIT
+      if decide ((word &&& v25) ≠ (UInt256.ofNat 0)) then
+        join_1 Option_usize.None
+      else
+        join_2
+    else
+      join_2
+  else
+    -- if S::IS_SIGNED && (word & I256_SIGN_BIT != 0) {
+    let v45 ← u256_IS_SIGNED
+    let join_5 : Option_usize → FeM Option_usize := fun v5 => do
+      join v5
+    let join_6 : FeM Option_usize := do
+      -- if S::IS_SIGNED && (word & I256_SIGN_BIT != 0) {
+      let v52 ← usize_MASK
+      let join_7 : Option_usize → FeM Option_usize := fun v6 => do
+        join_5 v6
+      if decide (v52.toNat < word.toNat) then
+        join_7 Option_usize.None
+      else
+        -- Option::Some(T::from_word(word))
+        let v56 ← usize_from_word word
+        join_7 (Option_usize.Some v56)
+    if v45 then
+      let v46 ← I256_SIGN_BIT
+      if decide ((word &&& v46) ≠ (UInt256.ofNat 0)) then
+        join_5 Option_usize.None
+      else
+        join_6
+    else
+      join_6
+
+/-- `Option<usize>::unwrap` -/
+def Option_unwrap_usize (self : Option_usize) : FeM UInt256 := do
+  -- match self {
+  match self with
+  | .Some .. =>
+    let t := self.Some_0
+    return t
+  | .None =>
+    let v4 ← trap
+    nomatch v4
+
+/-- `std::evm::effects::typed_return_buffer<u256>` -/
+def typed_return_buffer_u256 : FeM MemBuffer := do
+  -- if R::IS_DYNAMIC {
+  let v1 ← u256_IS_DYNAMIC
+  let join : MemBuffer → FeM MemBuffer := fun v0 => do
+    return v0
+  if v1 then
+    -- MemBuffer::empty()
+    let v2 ← MemBuffer_empty
+    join v2
+  else
+    -- MemBuffer::new_uninit(R::HEAD_SIZE.downcast().unwrap())
+    let v4 ← u256_HEAD_SIZE
+    let v5 ← downcast_u256_usize v4
+    let v6 ← Option_unwrap_usize v5
+    let v7 ← MemBuffer_new_uninit v6
+    join v7
 
 /-- `<u256 as Decode>::decode_from<MemSlice<u8>>` -/
 def u256_decode_from_Sol_MemSlice_u8 (input : MemSlice_u8) (pos : UInt256) : FeM UInt256 := do
@@ -3106,25 +3216,41 @@ def decode_returndata_u256 (ret : MemSlice_u8) : FeM UInt256 := do
   let v1 ← decode_output_u256_MemSlice_u8 ret
   return v1
 
-/-- `CallOutcome::decode<u256>` -/
-def CallOutcome_decode_u256 (self : CallOutcome) : FeM UInt256 := do
-  let mut returndata : MemBuffer := default
-  -- let returndata = self.returndata
-  let returndata_3 := self.returndata
-  returndata := returndata_3
+/-- `std::evm::effects::decode_call_output<u256>` -/
+def decode_call_output_u256 (success : Bool) (ret : MemBuffer) : FeM UInt256 := do
+  let mut r0 : MemBuffer := default
   -- if !success {
-  if !self.success then
-    -- ops::revert(offset: returndata.ptr(), len: returndata.len() as u256)
-    let v7 ← MemBuffer_ptr returndata
-    let v9 ← MemBuffer_len returndata
-    let v11 ← revertData v7 v9
-    nomatch v11
+  if !success then
+    -- bubble_last_revert()
+    let v5 ← bubble_last_revert
+    nomatch v5
   else
-    -- decode_returndata(returndata.span())
-    let v15 ← MemBuffer_span_ref returndata
-    let v17 ← decode_returndata_u256 v15
-    let _ ← MemBuffer_drop returndata
-    return v17
+    -- if R::IS_DYNAMIC || ops::returndatasize() != R::HEAD_SIZE {
+    let v8 ← u256_IS_DYNAMIC
+    let join : MemBuffer → UInt256 → FeM UInt256 := fun r0 v2 => do
+      let mut r0 := r0
+      return v2
+    let join_1 : MemBuffer → FeM UInt256 := fun r0 => do
+      let mut r0 := r0
+      -- decode_returndata(copy_returndata().span())
+      let v16 ← copy_returndata
+      r0 := v16
+      let v18 ← MemBuffer_span_ref r0
+      let v20 ← decode_returndata_u256 v18
+      let _ ← MemBuffer_drop r0
+      join r0 v20
+    if v8 then
+      join_1 r0
+    else
+      let v9 ← returndatasize
+      let v10 ← u256_HEAD_SIZE
+      if decide (v9 ≠ v10) then
+        join_1 r0
+      else
+        -- decode_returndata(ret.span())
+        let v12 ← MemBuffer_span_ref ret
+        let v14 ← decode_returndata_u256 v12
+        join r0 v14
 
 /-- `std::evm::crypto::keccak_words<2>` -/
 def keccak_words_2 (words : (Vector UInt256 2)) : FeM UInt256 := do
@@ -4394,6 +4520,10 @@ def Option_u8.set_Some_0 (x : Option_u8) (v : UInt256) : Option_u8 :=
   | .Some f0 => .Some v
   | x => x
 
+/-- `core::ptr::is_null<u8>` -/
+def is_null_u8 (ptr : UInt256) : FeM Bool := do
+  return decide (ptr = (UInt256.ofNat 0))
+
 /-- `core::ptr::try_alloc_bytes` -/
 def try_alloc_bytes (len : UInt256) : FeM Option_u8 := do
   -- if len > MAX_ALLOCATION {
@@ -4403,10 +4533,11 @@ def try_alloc_bytes (len : UInt256) : FeM Option_u8 := do
   else
     -- let ptr = try_alloc_raw(len)
     let ptr ← alloc len
+    -- if is_null(ptr) { Option::None } else { Option::Some(ptr) }
+    let v10 ← is_null_u8 ptr
     let join : Option_u8 → FeM Option_u8 := fun v1 => do
       return v1
-    -- if ptr as usize == 0 { Option::None } else { Option::Some(ptr) }
-    if decide (ptr = (UInt256.ofNat 0)) then
+    if v10 then
       join Option_u8.None
     else
       join (Option_u8.Some ptr)
@@ -5107,6 +5238,10 @@ def MemSlice_slice_ref_u8 (self : MemSlice_u8) (offset : UInt256) (len : UInt256
       let v12 ← MemSlice_from_raw_parts_ref_u8 v11 len
       return v12
 
+/-- `core::ptr::cast<u8, u128>` -/
+def cast_u8_u128 (ptr : UInt256) : FeM UInt256 := do
+  return ptr
+
 /-- `<ByteVector<48> as HashTreeRoot>::hash_tree_root` -/
 def ByteVector_48_hash_tree_root (input : MemSlice_u8) (start : UInt256) (len : UInt256) : FeM UInt256 := do
   -- assert!(len == 48)
@@ -5116,12 +5251,12 @@ def ByteVector_48_hash_tree_root (input : MemSlice_u8) (start : UInt256) (len : 
     let v8 ← downcast_unchecked_u256_usize len
     let v9 ← MemSlice_slice_ref_u8 input v7 v8
     let base ← MemSlice_ptr_u8 v9
-    -- ops::mload(ptr::offset_bytes(base, 32))
-    let tail ← mload (base + (UInt256.ofNat 32))
-    -- alloc_pair(ops::mload(base), (tail >> 128) << 128)
-    let v17 ← mload base
-    let v21 := (tail >>> (UInt256.ofNat 128)) <<< (UInt256.ofNat 128)
-    let scratch ← alloc_pair v17 v21
+    -- *ptr::cast<u8, u128>(ptr::offset_bytes(base, 32))
+    let v15 ← cast_u8_u128 (base + (UInt256.ofNat 32))
+    let v16 ← mloadInt (.u 128) v15
+    -- alloc_pair(ops::mload(base), tail)
+    let v21 ← mload base
+    let scratch ← alloc_pair v21 (v16 <<< (UInt256.ofNat 128))
     -- hash_pair_buffer(scratch)
     let v24 ← hash_pair_buffer scratch
     return v24
@@ -5678,8 +5813,7 @@ def decode_fixed_bytes_word (word : UInt256) (len : UInt256) : FeM UInt256 := do
         else
           -- revert_empty()
           let v32 ← revertEmpty
-          let v32 : UInt256 := nomatch v32
-          return v32
+          nomatch v32
 
 /-- `<FixedBytes<32> as Decode>::decode_from<CallData>` -/
 def FixedBytes_decode_from_Sol_32_CallData (input : CallData) (pos : UInt256) : FeM FixedBytes_32 := do
@@ -6176,8 +6310,7 @@ def Sol_decode_bool_word (word : UInt256) : FeM Bool := do
     else
       -- revert_empty()
       let v13 ← revertEmpty
-      let v13 : Bool := nomatch v13
-      return v13
+      nomatch v13
 
 /-- `<bool as Decode>::decode_from<CallData>` -/
 def bool_decode_from_Sol_CallData (input : CallData) (pos : UInt256) : FeM Bool := do

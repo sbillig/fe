@@ -24,6 +24,7 @@ core MemSlice_from_raw_parts_ref_u8 unsafe-fn the whole body
 core MemSlice_u8_word_at unsafe-block 1 of 1
 core MemSlice_u8_word_at raw-memory core::ptr::read_padded_word
 core MemSlice_u8_word_at extern core::ptr::offset_bytes<u8>
+core Option_unwrap_usize extern core::panic
 core alloc_bytes extern core::panic_code
 core alloc_bytes extern core::ptr::alloc_raw
 core allocation_len extern core::panic_code
@@ -33,6 +34,7 @@ core copy_raw raw-memory core::ptr::copy_mem
 core dealloc_u8 unsafe-fn the whole body
 core dealloc_u8 extern core::ptr::dealloc_raw
 core downcast_saturate_u64_usize extern core::num::__bitcast<u256, i256>
+core downcast_u256_usize extern core::num::__bitcast<u256, i256>
 core encode_alloc_Sol_Address unsafe-block 1 of 1
 core encode_alloc_Sol_tuple unsafe-block 1 of 1
 core encode_alloc_Sol_u256 unsafe-block 1 of 1
@@ -56,8 +58,6 @@ std Address_call_Evm_Get extern std::evm::ops::gas
 std Address_decode_from_Sol_CallData extern std::evm::ops::revert_empty
 std CallData_size extern std::evm::ops::calldatasize
 std CallData_word_at extern std::evm::ops::calldataload
-std CallOutcome_decode_u256 unsafe-block 1 of 1
-std CallOutcome_decode_u256 extern std::evm::ops::revert
 std Evm_return_data unsafe-block 1 of 1
 std Evm_return_data extern std::evm::ops::return_data
 std Evm_return_value_Sol_Address unsafe-block 1 of 3
@@ -70,6 +70,8 @@ std Sol_decode_error extern std::evm::ops::revert_empty
 std Sol_validate_runtime_head extern std::evm::ops::revert_empty
 std bubble_last_revert unsafe-block 1 of 1
 std bubble_last_revert extern std::evm::ops::revert
+std call_Evm_Get unsafe-block 1 of 1
+std call_Evm_Get call std::evm::ops::call
 std contract_init_code_Child unsafe-block 1 of 4
 std contract_init_code_Child unsafe-block 2 of 4
 std contract_init_code_Child unsafe-block 3 of 4
@@ -84,17 +86,15 @@ std copy_returndata raw-memory std::evm::ops::returndatacopy
 std copy_returndata extern std::evm::ops::returndatasize
 std create2_raw_Evm unsafe-block 1 of 1
 std create2_raw_Evm create std::evm::ops::create2
+std decode_call_output_u256 extern std::evm::ops::returndatasize
 std encode_calldata_Get unsafe-block 1 of 2
 std encode_calldata_Get unsafe-block 2 of 2
 std encode_calldata_Get raw-memory std::evm::ops::mstore
 std encode_calldata_Get extern core::ptr::offset_bytes<u8>
-std finish_raw_call unsafe-block 1 of 1
-std finish_raw_call extern std::evm::ops::returndatasize
 std keccak_words_2 extern core::intrinsic::__keccak_words<2>
-std raw_call_Evm unsafe-block 1 of 1
-std raw_call_Evm call std::evm::ops::call
 std read_transient_word_Evm unsafe-block 1 of 1
 std read_transient_word_Evm raw-transient-storage load of u256 through TStorPtr<u256>
 std storage_at_mut_Evm_u256 unsafe-block 1 of 1
 std storage_at_mut_Evm_u256 unsafe-fn the whole body
 std storage_at_mut_Evm_u256 raw-storage mut borrow of u256 through StorPtr<u256>
+std typed_return_buffer_u256 unsafe-block 1 of 1
