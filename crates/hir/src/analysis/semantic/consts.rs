@@ -176,7 +176,7 @@ pub(crate) fn retype_sem_const_description<'db>(
     Some(value)
 }
 
-pub(crate) fn fixed_string_capacity_bytes<'db>(
+pub fn fixed_string_capacity_bytes<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> Option<usize> {

@@ -6,12 +6,13 @@ use fe_lean_export::{export_ir, ir_text};
 use load::{FIXTURES, compare, with_fixture};
 
 /// The normalized IR of the last contract of `tests/fixtures/<name>.fe`, as
-/// `golden/ir/<name>.json` has it.
+/// `golden/ir/<file>.json` has it, for the last component `file` of `name`.
 fn golden(name: &str) {
     let json = with_fixture(name, |db, contracts| {
         export_ir(db, *contracts.last().unwrap()).expect("serialized")
     });
-    compare(&format!("ir/{name}.json"), &ir_text(&json));
+    let file = name.rsplit('/').next().unwrap();
+    compare(&format!("ir/{file}.json"), &ir_text(&json));
 }
 
 #[test]
@@ -42,6 +43,21 @@ fn loops() {
 #[test]
 fn lane_holds() {
     golden("lane_holds");
+}
+
+#[test]
+fn trust() {
+    golden("trust");
+}
+
+#[test]
+fn immutables() {
+    golden("immutables");
+}
+
+#[test]
+fn review() {
+    golden("ir/review");
 }
 
 /// Whether each contract of each fixture serializes, or the construct that

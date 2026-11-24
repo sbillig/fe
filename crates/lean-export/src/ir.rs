@@ -24,8 +24,10 @@ use hir::{
             NValueDefinition, NormalizedBody, Overflow, ReadMode, SConst, SemConstId,
             SemConstScalar, SemConstValue, SemanticCodeRegionRef, SemanticCodeRegionTarget,
             SemanticInstance, SemanticInstanceKey, StructuralRepack, UnaryOp, ViewAccess,
-            core_method_callee_key, drop_elaboration, eval_const_ref,
-            identity_semantic_instance_key, normalize_semantic_body, runtime_size_bytes,
+            core_method_callee_key, drop_elaboration, eval_const_ref, fixed_string_capacity_bytes,
+            identity_semantic_instance_key, normalize_semantic_body, owner_effect_bindings,
+            reify_runtime_const_for_ty, resolved_provider_binding_for_instance_effect,
+            runtime_size_bytes,
         },
         ty::{
             AddressSpace, ProviderKind,
@@ -45,8 +47,8 @@ use hir::{
         expr::{ArithBinOp, CompBinOp},
     },
     semantic::{
-        ProviderBinding, ProviderSource, storage_field_lanes, storage_field_placements,
-        storage_lane_bytes, storage_slot_span,
+        ContractFieldId, ProviderBinding, ProviderSource, storage_field_lanes,
+        storage_field_placements, storage_lane_bytes, storage_slot_span,
     },
 };
 use mir::{MirDb, runtime_needs_drop};
@@ -180,11 +182,15 @@ impl<'db> IrExport<'db> {
             None => None,
         };
         let init_args = contract.init_args_ty(db);
+        // `init` takes the fields of the decoded tuple by the place of its parameters.
+        let init_params = init_key.typed_body(db).input_bindings().len();
         let init = json!({
             "func": self.func(init_key),
             "payable": contract.init(db).is_some_and(|init| init.is_payable(db)),
             "argsTy": self.ty(init_args)?,
+            "argFields": (0..init_params).collect::<Vec<_>>(),
             "decode": init_decode,
+            "effects": self.entry_effects(init_key)?,
         });
         let mut arms = Vec::new();
         let mut root_provider = None;
@@ -222,6 +228,7 @@ impl<'db> IrExport<'db> {
                 "decode": callees.decode.map(|key| self.func(key)),
                 "retTy": info.ret_ty.map(|ty| self.ty(ty)).transpose()?,
                 "returnValue": callees.return_value.map(|key| self.func(key)),
+                "effects": self.entry_effects(identity_semantic_instance_key(db, owner))?,
             }));
         }
         Ok(json!({
@@ -234,6 +241,50 @@ impl<'db> IrExport<'db> {
                 "arms": arms,
             },
         }))
+    }
+
+    /// The effects the entry code passes the body of `key`, an arm or `init`: each effect of
+    /// the body by provider, with where its provider comes from (a contract field, or the root
+    /// object), as MIR's `entry_semantic_args_plan` resolves them.
+    fn entry_effects(&mut self, key: SemanticInstanceKey<'db>) -> Result<Vec<Value>, Unsupported> {
+        let db = self.db;
+        let instance = SemanticInstance::new(db, key);
+        let mut effects = Vec::new();
+        for binding in owner_effect_bindings(db, key.owner(db)) {
+            let Some(provider) =
+                resolved_provider_binding_for_instance_effect(db, instance, binding)
+            else {
+                continue;
+            };
+            let source = match provider.source {
+                ProviderSource::ContractField { field } => json!({ "contractField": {
+                    "field": self.field_index(field)?,
+                }}),
+                ProviderSource::RootProvider { .. } => json!("rootProvider"),
+                ProviderSource::UsesParam { .. } => {
+                    return Err(Unsupported("an entry effect from a uses parameter".into()));
+                }
+            };
+            effects.push(json!({
+                "provider": provider.provider_idx,
+                "ty": self.ty(provider.provider_ty)?,
+                "source": source,
+            }));
+        }
+        Ok(effects)
+    }
+
+    /// The place of `field` among the contract's fields.
+    fn field_index(&self, field: ContractFieldId<'db>) -> Result<usize, Unsupported> {
+        if field.contract != self.contract {
+            return Err(Unsupported("field of another contract".into()));
+        }
+        field
+            .contract
+            .storage_layout(self.db)
+            .values()
+            .position(|layout| layout.field == field)
+            .ok_or_else(|| Unsupported("contract field without a layout".into()))
     }
 
     /// The number of instance `key` in the function table, serialized once
@@ -380,7 +431,8 @@ impl<'db> IrExport<'db> {
         {
             json!({ "int": { "bits": bits, "signed": prim.is_signed_int() } })
         } else if ty.is_string(db) {
-            json!("string")
+            // The capacity, where the compiler has evaluated it.
+            json!({ "string": { "capacity": fixed_string_capacity_bytes(db, ty) } })
         } else if ty.is_array(db) {
             let (_, args) = ty.decompose_ty_app(db);
             let elem = args
@@ -637,6 +689,7 @@ impl<'db> BodyWriter<'_, 'db> {
         });
         let entries = self.entries()?;
         Ok(json!({
+            "paramCount": self.param_count(),
             "inputs": self.inputs()?,
             "values": values,
             "roots": roots,
@@ -648,6 +701,24 @@ impl<'db> BodyWriter<'_, 'db> {
             "drops": drops,
             "entries": entries,
         }))
+    }
+
+    /// The arguments a caller passes the body: a recv arm's, one for each of the arm's
+    /// bindings; any other body's, one for each of its input bindings.
+    fn param_count(&self) -> usize {
+        let db = self.ir.db;
+        let key = self.body.owner.key(db);
+        match key.owner(db) {
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            } => contract
+                .recv(db, recv_idx)
+                .and_then(|recv| recv.arm(db, arm_idx))
+                .map_or(0, |arm| arm.arg_bindings(db).len()),
+            _ => key.typed_body(db).input_bindings().len(),
+        }
     }
 
     /// The name the source gives a binding, for diagnostics.
@@ -726,17 +797,13 @@ impl<'db> BodyWriter<'_, 'db> {
             };
             inputs.push(json!({ "input": input, "target": { "root": { "root": index } } }));
         }
-        // Each argument is taken once, and every argument up to the last.
+        // Each argument is taken once.
         let mut params: Vec<_> = inputs
             .iter()
             .filter_map(|input| input["input"]["param"]["index"].as_u64())
             .collect();
         params.sort_unstable();
-        if params
-            .iter()
-            .enumerate()
-            .any(|(at, param)| at as u64 != *param)
-        {
+        if params.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(Unsupported(format!("inputs {params:?}")));
         }
         Ok(inputs)
@@ -765,22 +832,12 @@ impl<'db> BodyWriter<'_, 'db> {
     }
 
     fn provider(&mut self, binding: &ProviderBinding<'db>) -> Result<Value, Unsupported> {
-        let db = self.ir.db;
         let source = match &binding.source {
             ProviderSource::UsesParam {
                 requirement_idx, ..
             } => json!({ "usesParam": { "requirement": requirement_idx } }),
             ProviderSource::ContractField { field } => {
-                let index = field
-                    .contract
-                    .storage_layout(db)
-                    .values()
-                    .position(|layout| layout.field == *field)
-                    .ok_or_else(|| Unsupported("contract field without a layout".into()))?;
-                if field.contract != self.ir.contract {
-                    return Err(Unsupported("field of another contract".into()));
-                }
-                json!({ "contractField": { "field": index } })
+                json!({ "contractField": { "field": self.ir.field_index(*field)? } })
             }
             ProviderSource::RootProvider { .. } => json!("rootProvider"),
         };
@@ -814,7 +871,8 @@ impl<'db> BodyWriter<'_, 'db> {
     fn statement(&mut self, statement: &NStatement<'db>) -> Result<Value, Unsupported> {
         let kind = match &statement.kind {
             NStatementKind::Define { result, expr } => {
-                json!({ "define": { "result": result.index(), "expr": self.expr(expr)? } })
+                let ty = self.body.values[result.index()].ty;
+                json!({ "define": { "result": result.index(), "expr": self.expr(expr, ty)? } })
             }
             NStatementKind::Store { destination, value } => json!({ "store": {
                 "destination": self.place(destination)?,
@@ -838,7 +896,8 @@ impl<'db> BodyWriter<'_, 'db> {
         Ok(json!({ "id": statement.id.index(), "kind": kind }))
     }
 
-    fn expr(&mut self, expr: &NExpr<'db>) -> Result<Value, Unsupported> {
+    /// `expr`, which defines a value of type `ty`.
+    fn expr(&mut self, expr: &NExpr<'db>, ty: TyId<'db>) -> Result<Value, Unsupported> {
         let db = self.ir.db;
         Ok(match expr {
             NExpr::Forward { src } => json!({ "forward": { "src": operand(src) } }),
@@ -870,7 +929,9 @@ impl<'db> BodyWriter<'_, 'db> {
             NExpr::CodeRegionRef { region } => {
                 json!({ "codeRegionRef": { "region": code_region(db, region) } })
             }
-            NExpr::Const(constant) => json!({ "const": { "constant": self.constant(constant)? } }),
+            NExpr::Const(constant) => {
+                json!({ "const": { "constant": self.constant(constant, ty)? } })
+            }
             NExpr::Unary { op, value } => json!({ "unary": {
                 "op": unary_op(*op),
                 "value": operand(value),
@@ -949,22 +1010,29 @@ impl<'db> BodyWriter<'_, 'db> {
         }))
     }
 
-    fn constant(&mut self, constant: &SConst<'db>) -> Result<Value, Unsupported> {
+    /// A constant that defines a value of type `ty`, each value reified for `ty` as runtime
+    /// lowering reifies it (`reify_runtime_const_for_ty`).
+    fn constant(&mut self, constant: &SConst<'db>, ty: TyId<'db>) -> Result<Value, Unsupported> {
         let db = self.ir.db;
+        let owner = self.body.owner;
+        let reified = |value: SemConstId<'db>| {
+            reify_runtime_const_for_ty(db, owner, ty, value)
+                .ok_or_else(|| Unsupported(format!("constant of type `{}`", ty.pretty_print(db))))
+        };
         Ok(match constant {
             SConst::Value(value) => {
-                json!({ "value": { "value": self.const_value(value.value())? } })
+                json!({ "value": { "value": self.const_value(reified(value.value())?)? } })
             }
             SConst::Description(value) => {
-                json!({ "description": { "value": self.const_value(*value)? } })
+                json!({ "description": { "value": self.const_value(reified(*value)?)? } })
             }
             SConst::Evidence(value) => {
-                json!({ "evidence": { "value": self.const_value(*value)? } })
+                json!({ "evidence": { "value": self.const_value(reified(*value)?)? } })
             }
-            SConst::Invalid(value) => json!({ "invalid": { "value": self.const_value(*value)? } }),
+            SConst::Invalid(_) => json!("invalid"),
             SConst::Ref(reference) => {
                 let value = match eval_const_ref(db, *reference) {
-                    EvalOutcome::Ready(value) => Some(self.const_value(value)?),
+                    EvalOutcome::Ready(value) => Some(self.const_value(reified(value)?)?),
                     _ => None,
                 };
                 json!({ "ref": {

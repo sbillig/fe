@@ -1,0 +1,81 @@
+// Scenarios of the first fe-spec code review, each with the behaviour runtime lowering gives.
+use std::abi::sol
+use std::abi::sol::Bytes4
+use std::evm::RawStorage
+
+msg ReviewMsg {
+    #[selector = sol("maybeWrite(bool)")]
+    MaybeWrite { w: bool },
+    #[selector = sol("bad()")]
+    Bad,
+    #[selector = sol("check()")]
+    Check -> u256,
+    #[selector = sol("sum3()")]
+    Sum3 -> u256,
+    #[selector = sol("flag()")]
+    Flag -> bool,
+}
+
+struct S { flag: bool, big: u256 }
+
+struct Box { x: u256 }
+
+fn read_x(_ b: Box) -> u256 {
+    b.x
+}
+
+fn read_flag(_ f: mut bool) -> bool {
+    f
+}
+
+pub contract Review {
+    mut a: u8,
+    mut b: u8,
+    mut s: S,
+    mut tag: Bytes4,
+    mut c: u8,
+
+    init(_ unused: u256, value: u8) uses (mut b) {
+        b = value
+    }
+
+    recv ReviewMsg {
+        // A packed field an arm writes is written at the store: no store on a path that
+        // writes nothing.
+        MaybeWrite { w } uses (mut a) {
+            if w {
+                a = 1
+            }
+        }
+
+        // The store of a value its lane lacks reverts before the later overflow.
+        Bad uses (mut tag) {
+            tag = Bytes4 { val: 1 << 32 }
+            let x: u8 = 255
+            let _ = x + 1
+        }
+
+        // Storage holds the store at once.
+        Check -> u256 uses (mut a, raw: RawStorage) {
+            a = 1
+            unsafe { raw.sload(0) }
+        }
+
+        // A temporary made in a loop holds each iteration's value.
+        Sum3 -> u256 {
+            var s: u256 = 0
+            var i: u256 = 0
+            while i < 3 {
+                s += read_x(Box { x: i })
+                i += 1
+            }
+            s
+        }
+
+        // A borrow of a bool alone in the low byte of its slot reads the whole word.
+        Flag -> bool uses (mut s, raw: mut RawStorage) {
+            unsafe { raw.sstore(slot: 1, value: 0x0100) }
+            read_flag(mut s.flag)
+        }
+    }
+}
