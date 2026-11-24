@@ -177,15 +177,29 @@ fn export_corpus() {
                     format!(
                         "{{ name := \"{contract}\", creation := Fe.EVM.Diff.hex \"{}\", \
                          runtime := Fe.EVM.Diff.hex \"{}\",\n     model := {model},\n     \
-                         interface := {interface},\n     ir := \"{out}/{id}\" }}",
+                         interface := {interface},\n     ir := \"{out}/{id}\", \
+                         creations := Corpus.creations }}",
                         hex(&code[contract].deploy),
                         hex(&code[contract].runtime)
                     )
                 })
                 .collect();
+            // The interpreter finds the creation code of a contract another deploys by
+            // its name.
+            let all_creations: Vec<_> = code
+                .iter()
+                .map(|(contract, code)| {
+                    format!(
+                        "(\"{contract}\", Fe.EVM.Diff.hex \"{}\")",
+                        hex(&code.deploy)
+                    )
+                })
+                .collect();
             write!(
                 text,
-                "\ndef Corpus.targets : List Fe.EVM.Diff.Target :=\n  [{}]\n",
+                "\ndef Corpus.creations : List (String × ByteArray) :=\n  [{}]\n\n\
+                 def Corpus.targets : List Fe.EVM.Diff.Target :=\n  [{}]\n",
+                all_creations.join(",\n   "),
                 targets.join(",\n   ")
             )
             .unwrap();
