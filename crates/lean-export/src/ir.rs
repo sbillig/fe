@@ -27,7 +27,7 @@ use hir::{
             core_method_callee_key, drop_elaboration, eval_const_ref, fixed_string_capacity_bytes,
             identity_semantic_instance_key, normalize_semantic_body, owner_effect_bindings,
             reify_runtime_const_for_ty, resolved_provider_binding_for_instance_effect,
-            runtime_size_bytes,
+            runtime_size_bytes, semantic_may_return,
         },
         ty::{
             AddressSpace, ProviderKind,
@@ -366,6 +366,7 @@ impl<'db> IrExport<'db> {
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(json!({
                     "name": name,
+                    "mayReturn": semantic_may_return(db, instance),
                     "kind": { "intrinsic": {
                         "kind": intrinsic,
                         "params": params,
@@ -392,6 +393,7 @@ impl<'db> IrExport<'db> {
         .map_err(|error| Unsupported(format!("{name}: {}", error.0)))?;
         Ok(json!({
             "name": name,
+            "mayReturn": semantic_may_return(db, instance),
             "kind": { "body": {
                 "owner": owner_kind,
                 "projection": instance.is_projection(db),
