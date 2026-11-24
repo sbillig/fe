@@ -46,6 +46,11 @@ fn lane_holds() {
 }
 
 #[test]
+fn immutables() {
+    golden("immutables");
+}
+
+#[test]
 fn review() {
     golden("ir/review");
 }
