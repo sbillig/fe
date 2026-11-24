@@ -265,7 +265,11 @@ impl<'db> IrExport<'db> {
                     return Err(Unsupported("an entry effect from a uses parameter".into()));
                 }
             };
-            effects.push(json!({ "provider": provider.provider_idx, "source": source }));
+            effects.push(json!({
+                "provider": provider.provider_idx,
+                "ty": self.ty(provider.provider_ty)?,
+                "source": source,
+            }));
         }
         Ok(effects)
     }
@@ -427,9 +431,8 @@ impl<'db> IrExport<'db> {
         {
             json!({ "int": { "bits": bits, "signed": prim.is_signed_int() } })
         } else if ty.is_string(db) {
-            let capacity = fixed_string_capacity_bytes(db, ty)
-                .ok_or_else(|| Unsupported(format!("string of unknown capacity {pretty}")))?;
-            json!({ "string": { "capacity": capacity } })
+            // The capacity, where the compiler has evaluated it.
+            json!({ "string": { "capacity": fixed_string_capacity_bytes(db, ty) } })
         } else if ty.is_array(db) {
             let (_, args) = ty.decompose_ty_app(db);
             let elem = args
