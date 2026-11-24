@@ -64,6 +64,12 @@ pub enum BuildEmit {
     /// The Sonatina IR a contract's bytecode is compiled from, with the bytes and symbols of
     /// each section, from one compilation (`<Contract>.sidecar.json`).
     Sidecar,
+    /// The normalized semantic IR of each contract for fe-spec's interpreter
+    /// (`<Contract>.spec-ir.json`), and the library its contracts share
+    /// (`spec-ir.library.json`, or the file `--spec-ir-library` names), with
+    /// the provenance of the run: compiler, sources, settings and the hashes
+    /// of the bytecode it compiles.
+    SpecIr,
     Executable,
     /// A native object of the `#[unsafe(export)]` functions (`<name>.o`).
     Object,
@@ -338,6 +344,13 @@ pub enum Command {
         /// compiler's `-l<NAME>`. Repeatable.
         #[arg(long, value_name = "NAME")]
         link_lib: Vec<String>,
+        /// With `--emit spec-ir`, merge this build's spec IR library into the
+        /// library file at `PATH` (created if absent) instead of writing it
+        /// to the output directory, so that separately built contracts share
+        /// one library. A library entry that differs from the file's, or a
+        /// different compiler or library sources, is an error.
+        #[arg(long, value_name = "PATH")]
+        spec_ir_library: Option<Utf8PathBuf>,
         /// Size in bytes of the stack of a WebAssembly module, which holds the
         /// frames of its calls (default: 1048576, 1 MiB). It is rounded up so
         /// that the stack ends on a 64 KiB page boundary. Requires `--backend
@@ -859,6 +872,7 @@ pub fn run(opts: &Options) {
             emit,
             link,
             link_lib,
+            spec_ir_library,
             wasm_stack_size,
             report,
             report_out,
@@ -876,6 +890,10 @@ pub fn run(opts: &Options) {
                 emit.clone()
             };
             if let Some(metadata_path) = from_metadata {
+                if spec_ir_library.is_some() {
+                    eprintln!("Error: `--from-metadata` does not support `--spec-ir-library`");
+                    std::process::exit(1);
+                }
                 if !matches!(backend, BuildBackend::Sonatina) {
                     eprintln!("Error: `--from-metadata` only supports `--backend sonatina`");
                     std::process::exit(1);
@@ -910,6 +928,7 @@ pub fn run(opts: &Options) {
                     paths: link,
                     libraries: link_lib,
                 },
+                spec_ir_library.as_deref(),
                 *wasm_stack_size,
                 out_dir.as_ref(),
                 profile,

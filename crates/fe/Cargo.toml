@@ -26,6 +26,7 @@ smol_str.workspace = true
 hir.workspace = true
 rayon = "1"
 mir.workspace = true
+spec-ir.workspace = true
 trace-facts.workspace = true
 debug-export.workspace = true
 blake3.workspace = true

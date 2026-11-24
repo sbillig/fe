@@ -288,6 +288,10 @@ For each built contract, `fe build` writes (depending on `--emit`):
 - `<out>/<contract>.metadata.json` (Solidity-standard contract metadata for verifiers like Sourcify; only when `--emit metadata`)
 - `<out>/<contract>.sizes.txt` (code bytes of each function in the runtime and init sections, largest first; only when `--emit sizes`)
 - `<out>/<contract>.sidecar.json` (the Sonatina IR the bytecode is compiled from, after optimization, with the bytes, symbol table and lowering record of each section: the section IR after the backend's pipeline, the machine IR the code is emitted from, block offsets, planned entry stacks, spills and the memory plan, from one compilation; only when `--emit sidecar`)
+- `<out>/<contract>.spec-ir.json` (the contract's normalized semantic IR for fe-spec's Lean interpreter, format version 2: its own types and functions by key and its entry plan; only when `--emit spec-ir`, Sonatina backend only)
+- `<out>/spec-ir.library.json` (the spec IR's types and functions that name no item of the built ingot, shared by its contracts; with `--spec-ir-library <path>`, merged into the file at `<path>` instead, created if absent, so that separately built contracts share one library: an entry that differs from the file's, or another compiler or other library sources, is an error)
+
+Each spec IR file carries a `provenance` object: `compiler` (`version`, `commit`), `sources` (path and keccak256 of each source file: the ingot's for a contract file, those of `core`, `std` and the dependencies for the library), and, for a contract file, `settings` (as `--emit metadata` records them, with `backend`), `bytecode` (keccak256 of the `creation` and `runtime` code compiled by the same run, also when no bytecode artifact is requested) and `library` (the provenance of the library it was serialized with).
 
 For the Sonatina backend, `.bin` is the **init section** bytes and `.runtime.bin` is the **runtime section** bytes.
 

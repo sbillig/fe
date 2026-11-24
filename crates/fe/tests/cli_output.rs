@@ -5621,3 +5621,179 @@ fn test_cli_build_payable_return_abi() {
         serde_json::json!([{"name": "", "type": "uint256"}])
     );
 }
+
+const SPEC_IR_STORE: &str = "msg StoreMsg {
+    #[selector = 0x6d4ce63c]
+    Get -> u256,
+    #[selector = 0x60fe47b1]
+    Set { value: u256 },
+}
+
+pub contract Store {
+    mut stored: u256
+
+    init(initial: u256) uses (mut stored) {
+        stored = initial
+    }
+
+    recv StoreMsg {
+        Get -> u256 uses (stored) {
+            stored
+        }
+
+        Set { value } uses (mut stored) {
+            stored = value
+        }
+    }
+}
+";
+
+fn keccak_hex(bytes: &[u8]) -> String {
+    use tiny_keccak::{Hasher, Keccak};
+    let mut hasher = Keccak::v256();
+    hasher.update(bytes);
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    format!("0x{}", hex::encode(out))
+}
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_str(&fs::read_to_string(path).expect("read json")).expect("parse json")
+}
+
+#[test]
+fn test_cli_build_emit_spec_ir_records_provenance() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("store.fe");
+    fs::write(&source, SPEC_IR_STORE).expect("write source");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "spec-ir,bytecode,runtime-bytecode",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        source.to_str().expect("source utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+    let contract = read_json(&out_dir.join("Store.spec-ir.json"));
+    let library = read_json(&out_dir.join("spec-ir.library.json"));
+    assert_eq!(contract["version"], 2);
+    assert_eq!(library["version"], 2);
+    let provenance = &contract["provenance"];
+    assert_eq!(provenance["compiler"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(provenance["compiler"], library["provenance"]["compiler"]);
+    assert_eq!(
+        provenance["sources"],
+        serde_json::json!({ "store.fe": keccak_hex(SPEC_IR_STORE.as_bytes()) })
+    );
+    assert_eq!(provenance["settings"]["backend"], "sonatina");
+    assert_eq!(
+        provenance["settings"]["compilationTarget"]["store.fe"],
+        "Store"
+    );
+    // The hashes are of the bytecode the same run wrote.
+    for (field, file) in [("creation", "Store.bin"), ("runtime", "Store.runtime.bin")] {
+        let code = hex::decode(
+            fs::read_to_string(out_dir.join(file))
+                .expect("read code")
+                .trim(),
+        )
+        .expect("hex code");
+        assert_eq!(provenance["bytecode"][field], keccak_hex(&code), "{field}");
+    }
+    assert_eq!(provenance["library"], library["provenance"]);
+    let library_sources = library["provenance"]["sources"]
+        .as_object()
+        .expect("sources");
+    assert!(
+        library_sources.keys().any(|path| path.starts_with("core/"))
+            && library_sources.keys().any(|path| path.starts_with("std/")),
+        "the library's sources are core's and std's: {library_sources:?}"
+    );
+    // Every reference in the contract file is to the library's entries or its own.
+    let keys = |file: &Value, table: &str| -> Vec<String> {
+        file[table]
+            .as_array()
+            .expect("table")
+            .iter()
+            .map(|entry| entry["key"].as_str().expect("key").to_string())
+            .collect()
+    };
+    let funcs = [keys(&library, "funcs"), keys(&contract, "funcs")].concat();
+    let arm = &contract["contract"]["runtime"]["arms"][0];
+    assert!(funcs.contains(&arm["func"]["$fn"].as_str().expect("func").to_string()));
+    assert!(
+        funcs.contains(
+            &arm["returnValue"]["$fn"]
+                .as_str()
+                .expect("returnValue")
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn test_cli_build_spec_ir_library_accumulates() {
+    let temp = tempdir().expect("tempdir");
+    let library = temp.path().join("library.json");
+    let build = |name: &str, source: &str| {
+        let dir = temp.path().join(name);
+        fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join(format!("{name}.fe"));
+        fs::write(&path, source).expect("write source");
+        run_fe_main(&[
+            "build",
+            "--emit",
+            "spec-ir",
+            "--spec-ir-library",
+            library.to_str().expect("library utf8"),
+            "--out-dir",
+            dir.join("out").to_str().expect("out utf8"),
+            path.to_str().expect("source utf8"),
+        ])
+    };
+    let counter = SPEC_IR_STORE
+        .replace("Store", "Counter")
+        .replace("stored = value", "stored = stored + value");
+    let (output, code) = build("store", SPEC_IR_STORE);
+    assert_eq!(code, 0, "{output}");
+    assert!(!temp.path().join("store/out/spec-ir.library.json").exists());
+    let first = read_json(&library);
+    let (output, code) = build("counter", &counter);
+    assert_eq!(code, 0, "{output}");
+    let both = read_json(&library);
+    // In the other order, the same file.
+    fs::remove_file(&library).expect("remove library");
+    assert_eq!(build("counter", &counter).1, 0);
+    assert_eq!(build("store", SPEC_IR_STORE).1, 0);
+    assert_eq!(read_json(&library), both);
+    assert!(both["funcs"].as_array().unwrap().len() >= first["funcs"].as_array().unwrap().len());
+    // A library from other sources does not merge.
+    let mut other = both.clone();
+    other["provenance"]["sources"]["core/src/lib.fe"] = Value::from("0x00");
+    fs::write(&library, other.to_string()).expect("write library");
+    let (output, code) = build("store", SPEC_IR_STORE);
+    assert_ne!(code, 0, "{output}");
+    assert!(output.contains("does not merge"), "{output}");
+}
+
+#[test]
+fn test_cli_build_spec_ir_library_requires_spec_ir() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("store.fe");
+    fs::write(&source, SPEC_IR_STORE).expect("write source");
+    let (output, code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "bytecode",
+        "--spec-ir-library",
+        temp.path().join("library.json").to_str().expect("utf8"),
+        source.to_str().expect("source utf8"),
+    ]);
+    assert_ne!(code, 0, "{output}");
+    assert!(
+        output.contains("`--spec-ir-library` requires `--emit spec-ir`"),
+        "{output}"
+    );
+}

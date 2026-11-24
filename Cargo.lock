@@ -2419,6 +2419,7 @@ dependencies = [
  "fe-resolver",
  "fe-semantic-indexing",
  "fe-solc-runner",
+ "fe-spec-ir",
  "fe-test-utils",
  "fe-trace-facts",
  "fe-web",

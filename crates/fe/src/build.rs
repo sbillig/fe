@@ -64,7 +64,7 @@ struct IngotBuildAnalysis {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct EmitSelection {
+struct EmitSelection<'a> {
     bytecode: bool,
     runtime_bytecode: bool,
     ir: bool,
@@ -72,6 +72,10 @@ struct EmitSelection {
     metadata: bool,
     sizes: bool,
     sidecar: bool,
+    spec_ir: bool,
+    /// The library file `--emit spec-ir` merges its library into, if not
+    /// `spec-ir.library.json` of the output directory.
+    spec_ir_library: Option<&'a Utf8Path>,
     executable: bool,
     object: bool,
     staticlib: bool,
@@ -79,8 +83,8 @@ struct EmitSelection {
     wasm: bool,
 }
 
-impl EmitSelection {
-    fn from_requested(requested: &[BuildEmit]) -> Self {
+impl<'a> EmitSelection<'a> {
+    fn from_requested(requested: &[BuildEmit], spec_ir_library: Option<&'a Utf8Path>) -> Self {
         let mut selection = Self {
             bytecode: false,
             runtime_bytecode: false,
@@ -89,12 +93,15 @@ impl EmitSelection {
             metadata: false,
             sizes: false,
             sidecar: false,
+            spec_ir: false,
+            spec_ir_library: None,
             executable: false,
             object: false,
             staticlib: false,
             elf: false,
             wasm: false,
         };
+        selection.spec_ir_library = spec_ir_library;
         for emit in requested {
             match emit {
                 BuildEmit::Bytecode => selection.bytecode = true,
@@ -104,6 +111,7 @@ impl EmitSelection {
                 BuildEmit::Metadata => selection.metadata = true,
                 BuildEmit::Sizes => selection.sizes = true,
                 BuildEmit::Sidecar => selection.sidecar = true,
+                BuildEmit::SpecIr => selection.spec_ir = true,
                 BuildEmit::Executable => selection.executable = true,
                 BuildEmit::Object => selection.object = true,
                 BuildEmit::Staticlib => selection.staticlib = true,
@@ -146,7 +154,7 @@ fn validate_build_request(
     backend: BuildBackend,
     ingot: Option<&str>,
     contract: Option<&str>,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     link: NativeLink<'_>,
     wasm_stack_size: Option<u32>,
 ) -> Result<(), String> {
@@ -169,6 +177,13 @@ fn validate_build_request(
     }
     if wasm_stack_size.is_some() && !backend.is_wasm() {
         return Err("`--wasm-stack-size` requires `--backend wasm`".to_string());
+    }
+    // The spec IR records the hashes of the EVM bytecode the same run compiles.
+    if emit.spec_ir && !matches!(backend, BuildBackend::Sonatina) {
+        return Err("`--emit spec-ir` requires `--backend sonatina`".to_string());
+    }
+    if emit.spec_ir_library.is_some() && !emit.spec_ir {
+        return Err("`--spec-ir-library` requires `--emit spec-ir`".to_string());
     }
 
     match backend {
@@ -262,7 +277,7 @@ fn write_build_manifest(
     contract: Option<&str>,
     backend: BuildBackend,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     out_dir: Option<&Utf8PathBuf>,
     has_errors: bool,
 ) {
@@ -307,6 +322,7 @@ pub fn build(
     opt_level: OptLevel,
     emit: &[BuildEmit],
     link: NativeLink<'_>,
+    spec_ir_library: Option<&Utf8Path>,
     wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
     profile: &str,
@@ -314,7 +330,7 @@ pub fn build(
     report_failed_only: bool,
     use_recovery_mode: bool,
 ) {
-    let emit = EmitSelection::from_requested(emit);
+    let emit = EmitSelection::from_requested(emit, spec_ir_library);
     if let Err(err) = validate_build_request(backend, ingot, contract, emit, link, wasm_stack_size)
     {
         eprintln!("Error: {err}");
@@ -492,7 +508,7 @@ pub fn build_from_metadata(
     use_recovery_mode: bool,
 ) {
     let backend = BuildBackend::Sonatina;
-    let emit = EmitSelection::from_requested(emit);
+    let emit = EmitSelection::from_requested(emit, None);
     if let Err(err) =
         validate_build_request(backend, None, contract, emit, NativeLink::default(), None)
     {
@@ -651,7 +667,7 @@ fn build_file(
     contract: Option<&str>,
     backend: BuildBackend,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     link: NativeLink<'_>,
     wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
@@ -748,7 +764,7 @@ fn build_directory(
     target_source: Option<&str>,
     backend: BuildBackend,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     link: NativeLink<'_>,
     wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
@@ -856,7 +872,7 @@ fn build_workspace(
     contract: Option<&str>,
     backend: BuildBackend,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     link: NativeLink<'_>,
     wasm_stack_size: Option<u32>,
     out_dir: Option<&Utf8PathBuf>,
@@ -1064,7 +1080,7 @@ fn build_workspace(
         }
     }
 
-    if (emit.writes_any_bytecode() || emit.metadata)
+    if (emit.writes_any_bytecode() || emit.metadata || emit.spec_ir)
         && let Err(()) = check_workspace_artifact_name_collisions(&contract_names_by_member)
     {
         return true;
@@ -1313,7 +1329,7 @@ fn build_ingot_url(
     target_source: Option<&str>,
     backend: BuildBackend,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     link: NativeLink<'_>,
     wasm_stack_size: Option<u32>,
     out_dir: &Utf8Path,
@@ -1398,7 +1414,7 @@ fn build_ingot(
     contract: Option<&str>,
     target_source: Option<&str>,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
     ir_file_stem: &str,
@@ -1470,7 +1486,7 @@ fn build_ingot(
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
 
     let mut had_errors = false;
-    if emit.ir || emit.writes_any_bytecode() {
+    if emit.ir || emit.writes_any_bytecode() || emit.spec_ir {
         if emit.ir {
             let ir = match target_mod {
                 Some(top_mod) => {
@@ -1492,7 +1508,7 @@ fn build_ingot(
                 had_errors = true;
             }
         }
-        if emit.writes_any_bytecode() {
+        if emit.writes_any_bytecode() || emit.spec_ir {
             let bytecode = match (target_mod, emit.sizes) {
                 (Some(top_mod), false) => {
                     codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
@@ -1514,13 +1530,27 @@ fn build_ingot(
                     return BuildSummary { had_errors: true };
                 }
             };
-            had_errors |= write_sonatina_bytecode_artifacts(
-                &names_to_build,
-                &bytecode,
-                out_dir,
-                report_dir,
-                emit,
-            );
+            if emit.writes_any_bytecode() {
+                had_errors |= write_sonatina_bytecode_artifacts(
+                    &names_to_build,
+                    &bytecode,
+                    out_dir,
+                    report_dir,
+                    emit,
+                );
+            }
+            if emit.spec_ir {
+                had_errors |= write_spec_ir_artifacts(
+                    db,
+                    ingot,
+                    &names_to_build,
+                    &bytecode,
+                    opt_level,
+                    emit,
+                    out_dir,
+                    report_dir,
+                );
+            }
         }
     }
 
@@ -1553,7 +1583,7 @@ fn build_top_mod(
     contract: Option<&str>,
     backend: BuildBackend,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     link: NativeLink<'_>,
     wasm_stack_size: Option<u32>,
     out_dir: &Utf8Path,
@@ -1655,7 +1685,7 @@ fn build_top_mod(
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
 
     let mut had_errors = false;
-    if emit.ir || emit.writes_any_bytecode() {
+    if emit.ir || emit.writes_any_bytecode() || emit.spec_ir {
         if emit.ir {
             let ir = match codegen::emit_module_sonatina_ir_optimized(
                 db, top_mod, opt_level, contract,
@@ -1673,7 +1703,7 @@ fn build_top_mod(
                 had_errors = true;
             }
         }
-        if emit.writes_any_bytecode() {
+        if emit.writes_any_bytecode() || emit.spec_ir {
             let bytecode = if emit.sizes {
                 codegen::emit_module_sonatina_bytecode_with_observability(
                     db, top_mod, opt_level, contract,
@@ -1688,13 +1718,27 @@ fn build_top_mod(
                     return BuildSummary { had_errors: true };
                 }
             };
-            had_errors |= write_sonatina_bytecode_artifacts(
-                &names_to_build,
-                &bytecode,
-                out_dir,
-                report_dir,
-                emit,
-            );
+            if emit.writes_any_bytecode() {
+                had_errors |= write_sonatina_bytecode_artifacts(
+                    &names_to_build,
+                    &bytecode,
+                    out_dir,
+                    report_dir,
+                    emit,
+                );
+            }
+            if emit.spec_ir {
+                had_errors |= write_spec_ir_artifacts(
+                    db,
+                    top_mod.ingot(db),
+                    &names_to_build,
+                    &bytecode,
+                    opt_level,
+                    emit,
+                    out_dir,
+                    report_dir,
+                );
+            }
         }
     }
 
@@ -1736,7 +1780,7 @@ fn build_native_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     link: NativeLink<'_>,
     out_dir: &Utf8Path,
     ir_file_stem: &str,
@@ -1794,7 +1838,7 @@ fn build_sp1_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     out_dir: &Utf8Path,
     ir_file_stem: &str,
     report_dir: Option<&Utf8Path>,
@@ -1849,7 +1893,7 @@ fn build_wasm_top_mod(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     stack_size: Option<u32>,
     out_dir: &Utf8Path,
     ir_file_stem: &str,
@@ -1964,7 +2008,7 @@ fn collect_ingot_abi_artifact_names(
 }
 
 fn workspace_member_ir_out_dir(
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     out_dir: &Utf8Path,
     member_name: &str,
 ) -> Option<Utf8PathBuf> {
@@ -2033,7 +2077,7 @@ fn resolve_names_to_build(
 }
 
 fn ensure_output_dirs(
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
 ) -> Result<(), String> {
@@ -2041,6 +2085,7 @@ fn ensure_output_dirs(
         || emit.abi
         || emit.metadata
         || emit.sidecar
+        || emit.spec_ir
         || emit.executable
         || emit.library()
         || emit.elf
@@ -2311,6 +2356,163 @@ fn ingot_dependencies_json(
     map
 }
 
+/// What a build of an ingot's contracts records for reproducing it: the ingot's sources, those
+/// of its non-builtin dependencies, the settings of each ingot, and where each contract is
+/// declared.
+struct BuildRecord<'db> {
+    /// The root ingot's sources, unprefixed.
+    root_sources: BTreeMap<String, (TopLevelMod<'db>, String)>,
+    /// The root ingot's sources and those of its non-builtin dependencies, each under its
+    /// dependency's namespace.
+    all_sources: BTreeMap<String, (TopLevelMod<'db>, String)>,
+    /// `settings.ingots`.
+    ingots: Vec<serde_json::Value>,
+    root_arithmetic: &'static str,
+    root_dep_arithmetic: &'static str,
+}
+
+impl<'db> BuildRecord<'db> {
+    fn new(db: &'db DriverDataBase, ingot: hir::Ingot<'db>) -> Self {
+        let profile = db.compilation_settings().profile(db);
+        let profile = profile.as_str();
+
+        // Root sources (unprefixed) drive contract -> path/top_mod resolution.
+        let mut root_sources = BTreeMap::new();
+        collect_ingot_sources_prefixed(db, ingot, None, &mut root_sources);
+
+        // Full source set = root + transitive non-builtin dependencies, each under its unique
+        // namespace.
+        let closure = non_builtin_closure(db, ingot);
+        let root_source_keys = root_sources.keys().cloned().collect();
+        let namespaces = assign_namespaces(db, ingot, &closure, &root_source_keys);
+        let mut all_sources = root_sources.clone();
+        for &dep in &closure {
+            if dep.base(db) == ingot.base(db) {
+                continue;
+            }
+            let ns = namespaces.get(dep.base(db)).cloned().unwrap_or_default();
+            collect_ingot_sources_prefixed(db, dep, Some(&ns), &mut all_sources);
+        }
+
+        // `settings.ingots` (shared): one entry per non-builtin ingot, with resolved effective
+        // values.
+        //
+        // `arithmetic` is the *effective* per-ingot value from `Ingot::arithmetic_mode`, which
+        // already folds in `dependency-arithmetic` forcing (forcing is applied only to
+        // external/workspace edges; see `forced_dependency_arithmetic_for`). Because the
+        // post-forcing result is recorded here, the `dependencies` map deliberately keeps only
+        // alias -> namespace and drops the internal-vs-external edge type: a verifier
+        // reproduces the bytecode by pinning each ingot's `arithmetic` and reconstructing
+        // dependencies as plain path edges WITHOUT re-applying `dependency-arithmetic`.
+        // Restoring faithful workspace edges + re-forcing would re-derive the same values, but
+        // only the pin-and-don't-force procedure is guaranteed sufficient. See
+        // `test_cli_build_emit_metadata_preserves_dependency_arithmetic_across_edge_types`.
+        let ingots = closure
+            .iter()
+            .map(|&ing| {
+                let namespace = namespaces.get(ing.base(db)).cloned().unwrap_or_default();
+                let dep_arith = resolve_dependency_arithmetic_mode(
+                    ing.config(db).as_ref(),
+                    ing.workspace_config(db).as_ref(),
+                    profile,
+                );
+                serde_json::json!({
+                    "name": ingot_namespace(db, ing),
+                    "version": ing.version(db).as_ref().map(|v| v.to_string()),
+                    "namespace": namespace,
+                    "arithmetic": arithmetic_str(ing.arithmetic_mode(db)),
+                    "dependencyArithmetic": dependency_arithmetic_str(dep_arith),
+                    "dependencies": serde_json::Value::Object(ingot_dependencies_json(db, ing, &namespaces)),
+                })
+            })
+            .collect();
+
+        Self {
+            root_sources,
+            all_sources,
+            ingots,
+            root_arithmetic: arithmetic_str(ingot.arithmetic_mode(db)),
+            root_dep_arithmetic: dependency_arithmetic_str(resolve_dependency_arithmetic_mode(
+                ingot.config(db).as_ref(),
+                ingot.workspace_config(db).as_ref(),
+                profile,
+            )),
+        }
+    }
+
+    /// The source path of each of the ingot's contracts and its declaration, by artifact name.
+    fn contracts<'a>(
+        &'a self,
+        db: &'db DriverDataBase,
+        ingot: hir::Ingot<'db>,
+    ) -> BTreeMap<&'db str, (&'a str, &'db mir::IngotContract<'db>)> {
+        let mut name_to_loc = BTreeMap::new();
+        for declared in mir::ingot_contracts(db, ingot) {
+            let Some((path_key, _)) = self
+                .root_sources
+                .iter()
+                .find(|(_, (top_mod, _))| *top_mod == declared.top_mod)
+            else {
+                continue;
+            };
+            name_to_loc.insert(declared.name.as_str(), (path_key.as_str(), declared));
+        }
+        name_to_loc
+    }
+
+    /// `settings`: what determines the bytecode of the contract at `path_in_file` of the source
+    /// `source_path`.
+    fn settings(
+        &self,
+        source_path: &str,
+        path_in_file: &str,
+        opt_level: OptLevel,
+    ) -> serde_json::Value {
+        // The source file and the contract's path in it, which identify the
+        // contract wherever the file is built.
+        let mut compilation_target = serde_json::Map::new();
+        compilation_target.insert(
+            source_path.to_string(),
+            serde_json::Value::String(path_in_file.to_string()),
+        );
+        serde_json::json!({
+            "compilationTarget": serde_json::Value::Object(compilation_target),
+            "optimizer": { "level": opt_level.to_string() },
+            "arithmetic": self.root_arithmetic,
+            "dependencyArithmetic": self.root_dep_arithmetic,
+            "evmVersion": "osaka",
+            "ingots": self.ingots.clone(),
+        })
+    }
+}
+
+/// The compiler's identity. `version` is the release SemVer; `commit` pins the exact source
+/// revision when available, disambiguating non-release builds that still carry the previous
+/// release's version number.
+fn compiler_identity() -> serde_json::Value {
+    let mut compiler = serde_json::Map::new();
+    compiler.insert(
+        "version".to_string(),
+        serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
+    );
+    if let Some(hash) = option_env!("FE_GIT_HASH").filter(|hash| !hash.is_empty()) {
+        compiler.insert(
+            "commit".to_string(),
+            serde_json::Value::String(hash.to_string()),
+        );
+    }
+    serde_json::Value::Object(compiler)
+}
+
+/// The keccak256 of each of `sources`, by path.
+fn source_hashes(sources: &BTreeMap<String, (TopLevelMod<'_>, String)>) -> serde_json::Value {
+    sources
+        .iter()
+        .map(|(path, (_, contents))| (path.clone(), keccak256_hex(contents.as_bytes()).into()))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 /// Write one `<out>/<Contract>.metadata.json` per built contract, conforming to the Solidity
 /// Contract Metadata schema (`version: 1`) adapted to Fe. The artifact is a sufficient,
 /// deterministic recompilation input (see `openspec/changes/add-fe-metadata-json`).
@@ -2323,41 +2525,12 @@ fn write_metadata_artifacts(
     report_dir: Option<&Utf8Path>,
 ) -> bool {
     let mut had_errors = false;
-    let profile = db.compilation_settings().profile(db);
-    let profile = profile.as_str();
-
-    // Root sources (unprefixed) drive contract -> path/top_mod resolution.
-    let mut root_sources: BTreeMap<String, (TopLevelMod<'_>, String)> = BTreeMap::new();
-    collect_ingot_sources_prefixed(db, ingot, None, &mut root_sources);
-
-    // Full source set = root + transitive non-builtin dependencies, each under its unique namespace.
-    let closure = non_builtin_closure(db, ingot);
-    let root_source_keys = root_sources.keys().cloned().collect();
-    let namespaces = assign_namespaces(db, ingot, &closure, &root_source_keys);
-    let mut all_sources = root_sources.clone();
-    for &dep in &closure {
-        if dep.base(db) == ingot.base(db) {
-            continue;
-        }
-        let ns = namespaces.get(dep.base(db)).cloned().unwrap_or_default();
-        collect_ingot_sources_prefixed(db, dep, Some(&ns), &mut all_sources);
-    }
-
-    // Map each root contract's artifact name to its source path and declaration.
-    let mut name_to_loc: BTreeMap<&str, (&str, &mir::IngotContract<'_>)> = BTreeMap::new();
-    for declared in mir::ingot_contracts(db, ingot) {
-        let Some((path_key, _)) = root_sources
-            .iter()
-            .find(|(_, (top_mod, _))| *top_mod == declared.top_mod)
-        else {
-            continue;
-        };
-        name_to_loc.insert(&declared.name, (path_key, declared));
-    }
+    let record = BuildRecord::new(db, ingot);
+    let name_to_loc = record.contracts(db, ingot);
 
     // `sources` object (shared across this ingot's contracts), with keccak256 + content.
     let mut sources_obj = serde_json::Map::new();
-    for (key, (_, contents)) in &all_sources {
+    for (key, (_, contents)) in &record.all_sources {
         sources_obj.insert(
             key.clone(),
             serde_json::json!({
@@ -2366,60 +2539,7 @@ fn write_metadata_artifacts(
             }),
         );
     }
-
-    // `settings.ingots` (shared): one entry per non-builtin ingot, with resolved effective values.
-    //
-    // `arithmetic` is the *effective* per-ingot value from `Ingot::arithmetic_mode`, which already
-    // folds in `dependency-arithmetic` forcing (forcing is applied only to external/workspace
-    // edges; see `forced_dependency_arithmetic_for`). Because the post-forcing result is recorded
-    // here, the `dependencies` map deliberately keeps only alias -> namespace and drops the
-    // internal-vs-external edge type: a verifier reproduces the bytecode by pinning each ingot's
-    // `arithmetic` and reconstructing dependencies as plain path edges WITHOUT re-applying
-    // `dependency-arithmetic`. Restoring faithful workspace edges + re-forcing would re-derive the
-    // same values, but only the pin-and-don't-force procedure is guaranteed sufficient. See
-    // `test_cli_build_emit_metadata_preserves_dependency_arithmetic_across_edge_types`.
-    let ingots_arr: Vec<serde_json::Value> = closure
-        .iter()
-        .map(|&ing| {
-            let namespace = namespaces.get(ing.base(db)).cloned().unwrap_or_default();
-            let dep_arith = resolve_dependency_arithmetic_mode(
-                ing.config(db).as_ref(),
-                ing.workspace_config(db).as_ref(),
-                profile,
-            );
-            serde_json::json!({
-                "name": ingot_namespace(db, ing),
-                "version": ing.version(db).as_ref().map(|v| v.to_string()),
-                "namespace": namespace,
-                "arithmetic": arithmetic_str(ing.arithmetic_mode(db)),
-                "dependencyArithmetic": dependency_arithmetic_str(dep_arith),
-                "dependencies": serde_json::Value::Object(ingot_dependencies_json(db, ing, &namespaces)),
-            })
-        })
-        .collect();
-
-    let root_arithmetic = arithmetic_str(ingot.arithmetic_mode(db));
-    let root_dep_arithmetic = dependency_arithmetic_str(resolve_dependency_arithmetic_mode(
-        ingot.config(db).as_ref(),
-        ingot.workspace_config(db).as_ref(),
-        profile,
-    ));
-
-    // Compiler identity (shared across contracts). `version` is the release SemVer; `commit` pins
-    // the exact source revision when available, disambiguating non-release builds that still carry
-    // the previous release's version number.
-    let mut compiler = serde_json::Map::new();
-    compiler.insert(
-        "version".to_string(),
-        serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()),
-    );
-    if let Some(hash) = option_env!("FE_GIT_HASH").filter(|hash| !hash.is_empty()) {
-        compiler.insert(
-            "commit".to_string(),
-            serde_json::Value::String(hash.to_string()),
-        );
-    }
-    let compiler = serde_json::Value::Object(compiler);
+    let compiler = compiler_identity();
 
     for name in names_to_build {
         let Some(&(source_path, declared)) = name_to_loc.get(name.as_str()) else {
@@ -2445,27 +2565,12 @@ fn write_metadata_artifacts(
             }
         };
 
-        // The source file and the contract's path in it, which identify the
-        // contract wherever the file is built.
-        let mut compilation_target = serde_json::Map::new();
-        compilation_target.insert(
-            source_path.to_string(),
-            serde_json::Value::String(declared.path_in_file.clone()),
-        );
-
         let value = serde_json::json!({
             "version": 1,
             "language": "Fe",
             "compiler": compiler.clone(),
             "sources": serde_json::Value::Object(sources_obj.clone()),
-            "settings": {
-                "compilationTarget": serde_json::Value::Object(compilation_target),
-                "optimizer": { "level": opt_level.to_string() },
-                "arithmetic": root_arithmetic,
-                "dependencyArithmetic": root_dep_arithmetic,
-                "evmVersion": "osaka",
-                "ingots": ingots_arr.clone(),
-            },
+            "settings": record.settings(source_path, &declared.path_in_file, opt_level),
             "output": { "abi": abi_value },
         });
 
@@ -2491,6 +2596,148 @@ fn write_metadata_artifacts(
         println!("Wrote {out_dir}/{base}.metadata.json");
     }
     had_errors
+}
+
+/// Write `<out>/<Contract>.spec-ir.json` per built contract, the contract's normalized IR for
+/// fe-spec (`spec_ir::export_ir`), and the library they share to `spec-ir.library.json` of the
+/// output directory, or merged into the file `--spec-ir-library` names. Each file records its
+/// provenance: the compiler, and the sources the file is from (the ingot's for a contract, those
+/// of the other ingots its library entries come from for the library); a contract's also the
+/// settings `--emit metadata` records, the backend, the keccak256 of the creation and runtime
+/// code this run compiled from the same sources, and its library's provenance.
+#[allow(clippy::too_many_arguments)]
+fn write_spec_ir_artifacts(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+    names_to_build: &[String],
+    bytecode: &BTreeMap<String, SonatinaContractBytecode>,
+    opt_level: OptLevel,
+    emit: EmitSelection<'_>,
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+) -> bool {
+    let mut had_errors = false;
+    let record = BuildRecord::new(db, ingot);
+    let name_to_loc = record.contracts(db, ingot);
+    let compiler = compiler_identity();
+    // The sources of every ingot the root's code reaches but the root itself: `core`, `std`
+    // and the root's dependencies.
+    let mut library_sources = BTreeMap::new();
+    let mut deps = vec![ingot];
+    let mut seen = HashSet::from([ingot.base(db).clone()]);
+    while let Some(next) = deps.pop() {
+        for (_, url) in next.dependencies(db) {
+            if seen.insert(url.clone())
+                && let Some(dep) = url.ingot(db)
+            {
+                deps.push(dep);
+            }
+        }
+    }
+    seen.remove(ingot.base(db));
+    for dep in seen.iter().filter_map(|url| url.ingot(db)) {
+        let prefix = match dep.kind(db) {
+            IngotKind::Core => "core".to_string(),
+            IngotKind::Std => "std".to_string(),
+            _ => ingot_namespace(db, dep),
+        };
+        collect_ingot_sources_prefixed(db, dep, Some(&prefix), &mut library_sources);
+    }
+    let library_provenance = serde_json::json!({
+        "compiler": compiler,
+        "sources": source_hashes(&library_sources),
+    });
+    let write = |file: &Utf8Path, text: &str| -> bool {
+        if let Err(err) = fs::write(file.as_std_path(), text) {
+            eprintln!("Error: Failed to write {file}: {err}");
+            return true;
+        }
+        if let (Some(dir), Some(name)) = (report_dir, file.file_name()) {
+            let _ = fs::write(dir.join(name).as_std_path(), text);
+        }
+        println!("Wrote {file}");
+        false
+    };
+    let mut library: Option<serde_json::Value> = None;
+    for name in names_to_build {
+        let Some(&(source_path, declared)) = name_to_loc.get(name.as_str()) else {
+            eprintln!("Error: no source of contract \"{name}\" for its spec IR");
+            had_errors = true;
+            continue;
+        };
+        let (Some(contract), Some(code)) = (declared.contract(), bytecode.get(name)) else {
+            eprintln!("Error: Sonatina did not emit bytecode for contract \"{name}\"");
+            had_errors = true;
+            continue;
+        };
+        let ir = match spec_ir::export_ir(db, contract) {
+            Ok(ir) => ir,
+            Err(spec_ir::Unsupported(reason)) => {
+                eprintln!("Error: Failed to serialize the spec IR of {name}: {reason}");
+                had_errors = true;
+                continue;
+            }
+        };
+        let mut settings = record.settings(source_path, &declared.path_in_file, opt_level);
+        settings["backend"] = "sonatina".into();
+        let mut file = ir.contract;
+        file["provenance"] = serde_json::json!({
+            "compiler": compiler,
+            "sources": source_hashes(&record.root_sources),
+            "settings": settings,
+            "bytecode": {
+                "creation": keccak256_hex(&code.deploy),
+                "runtime": keccak256_hex(&code.runtime),
+            },
+            "library": library_provenance,
+        });
+        let base = sanitize_filename(name);
+        had_errors |= write(
+            &out_dir.join(format!("{base}.spec-ir.json")),
+            &spec_ir::ir_text(&file),
+        );
+        match &mut library {
+            Some(library) => {
+                if let Err(err) = spec_ir::merge_library(library, &ir.library) {
+                    eprintln!("Error: the spec IR libraries of the contracts differ: {err}");
+                    had_errors = true;
+                }
+            }
+            None => library = Some(ir.library),
+        }
+    }
+    let Some(mut library) = library else {
+        return had_errors;
+    };
+    library["provenance"] = library_provenance;
+    let path = match emit.spec_ir_library {
+        Some(path) => path.to_path_buf(),
+        None => out_dir.join("spec-ir.library.json"),
+    };
+    // `--spec-ir-library` accumulates: the file's entries and this build's, which must agree.
+    if emit.spec_ir_library.is_some() && path.exists() {
+        let existing = fs::read_to_string(path.as_std_path())
+            .map_err(|err| err.to_string())
+            .and_then(|text| {
+                serde_json::from_str::<serde_json::Value>(&text).map_err(|err| err.to_string())
+            });
+        match existing {
+            Ok(mut existing) => match spec_ir::merge_library(&mut existing, &library) {
+                Ok(()) => library = existing,
+                Err(err) => {
+                    eprintln!(
+                        "Error: this build's spec IR library does not merge into {path}: {err}"
+                    );
+                    return true;
+                }
+            },
+            Err(err) => {
+                eprintln!("Error: Failed to read the spec IR library {path}: {err}");
+                return true;
+            }
+        }
+    }
+    had_errors | write(&path, &spec_ir::ir_text(&library))
 }
 
 fn remove_file_if_exists(path: &Utf8Path) -> std::io::Result<()> {
@@ -2529,7 +2776,7 @@ fn write_sonatina_bytecode_artifacts(
     bytecode: &BTreeMap<String, SonatinaContractBytecode>,
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
 ) -> bool {
     let mut had_errors = false;
     for name in names_to_build {
@@ -2626,7 +2873,7 @@ fn derive_ingot_ir_file_stem(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> Stri
     sanitize_name_with_default(fallback, "module")
 }
 
-fn describe_emit_selection(emit: EmitSelection) -> String {
+fn describe_emit_selection(emit: EmitSelection<'_>) -> String {
     let mut parts = Vec::new();
     if emit.bytecode {
         parts.push("bytecode");
@@ -2648,6 +2895,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     }
     if emit.sidecar {
         parts.push("sidecar");
+    }
+    if emit.spec_ir {
+        parts.push("spec-ir");
     }
     if emit.executable {
         parts.push("executable");
@@ -2713,7 +2963,7 @@ fn write_native_library_artifacts(
     report_dir: Option<&Utf8Path>,
     file_stem: &str,
     object: &[u8],
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
 ) -> Result<(), String> {
     let base = sanitize_name_with_default(file_stem, "main");
     let object_name = format!("{base}.o");
@@ -2777,7 +3027,7 @@ fn write_contract_artifacts(
     bytecode: &str,
     runtime_bytecode: &str,
     sizes: Option<&str>,
-    emit: EmitSelection,
+    emit: EmitSelection<'_>,
 ) -> Result<(), String> {
     let base = sanitize_filename(contract_name);
     if emit.bytecode {
@@ -2810,7 +3060,7 @@ fn write_contract_artifacts(
     Ok(())
 }
 
-fn print_contract_artifact_paths(out_dir: &Utf8Path, contract_name: &str, emit: EmitSelection) {
+fn print_contract_artifact_paths(out_dir: &Utf8Path, contract_name: &str, emit: EmitSelection<'_>) {
     let base = sanitize_filename(contract_name);
     if emit.bytecode {
         println!("Wrote {out_dir}/{base}.bin");
@@ -2877,6 +3127,8 @@ mod tests {
             metadata: false,
             sizes: false,
             sidecar: false,
+            spec_ir: false,
+            spec_ir_library: None,
             executable: false,
             object: false,
             staticlib: false,
