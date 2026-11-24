@@ -106,7 +106,9 @@ pub struct SidecarSpill {
     /// The points at which the code stores the value into its location, in emission order:
     /// after its definition, at entry for an argument, and before the terminator of each
     /// predecessor (an edge block, for a critical edge) that gives a phi an operand other than
-    /// the phi itself. The stack top holds the value stored: a phi's operand on its edge.
+    /// the phi itself, except where the edge would reload that operand from the phi's own
+    /// location. The stack top holds the value stored, a phi's operand on its edge, and the
+    /// store may take it off the stack.
     pub stores: Vec<SidecarPoint>,
     /// The points at which the code reloads the value from its location onto the stack, in
     /// emission order. A function without code of its own has no points.
