@@ -4,10 +4,11 @@
 //!
 //! An item is named by its path from its ingot (`core`, `std`, or the
 //! ingot's name). A type is rendered as Fe writes it, with every item by its
-//! path and every capability (`view`, `ref`, `mut`) shown. An instance is
-//! the function or constant it is an instance of, by the type its impl is
-//! for and the trait it implements at the instance's types, with its own
-//! type arguments, the body mode of a `mut?` function, the providers its
+//! path and every capability (`view`, `ref`, `mut`) shown, and a type argument
+//! the compiler has not evaluated marked as such. An instance is the function
+//! or constant it is an instance of, by the type its impl is for and the trait
+//! it implements at the instance's types, with its own type arguments, its
+//! receiver if it is `mut self`, the body mode of a `mut?` function, the providers its
 //! effects are bound to, and the spaces of the places its parameters name.
 //! The environment an instance was resolved in (`ImplEnv`) and the proofs
 //! its caller supplied are not part of it: a closed instance means the same
