@@ -2781,7 +2781,7 @@ dependencies = [
 
 [[package]]
 name = "fe-spec-ir"
-version = "26.5.0"
+version = "26.6.0"
 dependencies = [
  "cranelift-entity 0.136.1",
  "fe-common",

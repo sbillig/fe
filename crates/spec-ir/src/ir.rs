@@ -199,18 +199,19 @@ pub fn merge_library(into: &mut Value, other: &Value) -> Result<(), String> {
     }
     for table in ["types", "funcs"] {
         let mut entries = BTreeMap::new();
-        for entry in [&*into, other]
-            .into_iter()
-            .filter_map(|library| library.get(table)?.as_array())
-            .flatten()
-        {
-            let key = entry["key"]
-                .as_str()
-                .ok_or_else(|| format!("an entry of `{table}` without a key"))?;
-            if let Some(existing) = entries.insert(key.to_string(), entry.clone())
-                && existing != *entry
-            {
-                return Err(format!("the libraries differ in `{key}`"));
+        for library in [&*into, other] {
+            let Some(Value::Array(table_entries)) = library.get(table) else {
+                return Err(format!("a library without a `{table}` table"));
+            };
+            for entry in table_entries {
+                let key = entry["key"]
+                    .as_str()
+                    .ok_or_else(|| format!("an entry of `{table}` without a key"))?;
+                if let Some(existing) = entries.insert(key.to_string(), entry.clone())
+                    && existing != *entry
+                {
+                    return Err(format!("the libraries differ in `{key}`"));
+                }
             }
         }
         into.insert(table.into(), Value::Array(entries.into_values().collect()));
@@ -224,14 +225,19 @@ struct Table(BTreeMap<String, (bool, Value)>);
 
 impl Table {
     /// Adds the entry `value` of `key`, which must be the same as the one the
-    /// table has if it has one: instances and types under one key are one.
+    /// table has if it has one, and be the contract's own or not alike:
+    /// instances and types under one key are one.
     fn insert(&mut self, (key, own): (String, bool), mut value: Value) -> Result<(), Unsupported> {
         value["key"] = json!(key);
         match self.0.get(&key) {
             Some((_, existing)) if *existing != value => Err(Unsupported(format!(
                 "two entries under the key `{key}` differ:\n{existing}\n{value}"
             ))),
-            _ => {
+            Some((existing, _)) if *existing != own => Err(Unsupported(format!(
+                "two entries under the key `{key}` are one the contract's, one the library's"
+            ))),
+            Some(_) => Ok(()),
+            None => {
                 self.0.insert(key, (own, value));
                 Ok(())
             }

@@ -78,6 +78,12 @@ fn merge() {
         merge_library(&mut merged, &changed),
         Err(format!("the libraries differ in `{key}`"))
     );
+    let mut no_funcs = b.clone();
+    no_funcs.as_object_mut().unwrap().remove("funcs");
+    assert_eq!(
+        merge_library(&mut a.clone(), &no_funcs),
+        Err("a library without a `funcs` table".to_string())
+    );
     let mut other_target = b;
     other_target["target"]["usizeBits"] = json!(64);
     assert!(merge_library(&mut ab, &other_target).is_err());

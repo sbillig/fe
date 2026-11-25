@@ -12,6 +12,7 @@ use test_utils::{
     normalize::{normalize_newlines, normalize_path_separators, replace_path_token},
     snap_test,
 };
+use tiny_keccak::{Hasher, Keccak};
 
 // Helper function to normalize paths in output for portability
 fn normalize_output(output: &str) -> String {
@@ -5649,7 +5650,6 @@ pub contract Store {
 ";
 
 fn keccak_hex(bytes: &[u8]) -> String {
-    use tiny_keccak::{Hasher, Keccak};
     let mut hasher = Keccak::v256();
     hasher.update(bytes);
     let mut out = [0u8; 32];
