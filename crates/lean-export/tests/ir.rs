@@ -58,7 +58,7 @@ fn library() {
 /// impl leaves unevaluated.
 #[test]
 fn unevaluated_constant_is_contract_entry() {
-    let ir = serialize("ir/string_label");
+    let ir = serialize("string_label");
     let keys = |file: &serde_json::Value| -> Vec<String> {
         file["types"]
             .as_array()
