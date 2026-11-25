@@ -2636,7 +2636,7 @@ impl SpecIrOutput {
         let name = |dep: hir::Ingot<'_>| spec_ir::ingot_name(db, dep, dep.root_mod(db));
         let mut deps = vec![ingot];
         let mut seen = HashSet::from([ingot.base(db).clone()]);
-        let mut named = BTreeMap::new();
+        let mut named = BTreeMap::from([(name(ingot), ingot.base(db).clone())]);
         let mut library_ingots = serde_json::Map::new();
         while let Some(next) = deps.pop() {
             for (_, url) in next.dependencies(db) {

@@ -6151,3 +6151,27 @@ fn test_cli_build_spec_ir_writes_no_contract_without_its_library() {
     assert_ne!(code, 0, "{output}");
     assert!(!out.join("Store.spec-ir.json").exists(), "{output}");
 }
+
+#[test]
+fn test_cli_build_spec_ir_refuses_a_dependency_named_as_the_root() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_dependency(root, "dep", &[("dep", "foo_dep", "1.0.0")]);
+    // The app itself is named `foo`, as its dependency is.
+    let toml = fs::read_to_string(root.join("app/fe.toml")).expect("read app fe.toml");
+    fs::write(
+        root.join("app/fe.toml"),
+        toml.replace("name = \"app\"", "name = \"foo\""),
+    )
+    .expect("write app fe.toml");
+    let (output, code) = build_spec_ir(
+        &root.join("app"),
+        &root.join("app/out"),
+        &root.join("library.json"),
+    );
+    assert_ne!(code, 0, "{output}");
+    assert!(
+        output.contains("two ingots of this build are named `foo`"),
+        "{output}"
+    );
+}
