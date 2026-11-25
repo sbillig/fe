@@ -1,0 +1,12 @@
+// A recv arm whose message returns a fixed string: the arm's body names `String<7>` with the
+// capacity the message's ABI impl (generated in this file) leaves unevaluated.
+msg LabelMsg {
+    #[selector = sol("label()")]
+    Label -> String<7>,
+}
+
+pub contract LabelBox {
+    recv LabelMsg {
+        Label -> String<7> { "deposit" }
+    }
+}

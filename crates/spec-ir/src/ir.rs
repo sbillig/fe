@@ -325,8 +325,8 @@ impl<'db> IrExport<'db> {
         let init_key = identity_semantic_instance_key(db, BodyOwner::ContractInit { contract });
         let init_decode = match init_callees(db, contract)? {
             Some(callees) => Some(json!({
-                "decoderNew": self.func(callees.decoder_new),
-                "decodePayload": self.func(callees.decode_payload),
+                "decoderNew": self.func(callees.decoder_new)?,
+                "decodePayload": self.func(callees.decode_payload)?,
                 "spanTy": self.ty(callees.span_ty)?,
             })),
             None => None,
@@ -344,7 +344,7 @@ impl<'db> IrExport<'db> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let init = json!({
-            "func": self.func(init_key),
+            "func": self.func(init_key)?,
             "payable": contract.init(db).is_some_and(|init| init.is_payable(db)),
             "argsTy": self.ty(init_args)?,
             "argFields": init_fields,
@@ -377,16 +377,16 @@ impl<'db> IrExport<'db> {
             let info = &callees.info;
             arms.push(json!({
                 "name": name,
-                "func": self.func(identity_semantic_instance_key(db, owner)),
+                "func": self.func(identity_semantic_instance_key(db, owner))?,
                 "payable": arm.arm(db).is_some_and(|arm| arm.is_payable(db)),
                 "fallback": info.is_fallback,
                 "selector": info.selector_value,
                 "signature": info.selector_signature,
                 "argsTy": self.ty(info.args_ty)?,
                 "argFields": fields,
-                "decode": callees.decode.map(|key| self.func(key)),
+                "decode": callees.decode.map(|key| self.func(key)).transpose()?,
                 "retTy": info.ret_ty.map(|ty| self.ty(ty)).transpose()?,
-                "returnValue": callees.return_value.map(|key| self.func(key)),
+                "returnValue": callees.return_value.map(|key| self.func(key)).transpose()?,
                 "effects": self.entry_effects(identity_semantic_instance_key(db, owner))?,
             }));
         }
@@ -448,15 +448,15 @@ impl<'db> IrExport<'db> {
 
     /// A reference to instance `key`, serialized once the instances named
     /// before it are.
-    fn func(&mut self, key: SemanticInstanceKey<'db>) -> Value {
+    fn func(&mut self, key: SemanticInstanceKey<'db>) -> Result<Value, Unsupported> {
         if let Some((name, _)) = self.func_ids.get(&key) {
-            return json!({ "$fn": name });
+            return Ok(json!({ "$fn": name }));
         }
-        let id = self.keys.func_key(key);
+        let id = self.keys.func_key(key)?;
         let reference = json!({ "$fn": id.0 });
         self.func_ids.insert(key, id);
         self.pending.push_back(key);
-        reference
+        Ok(reference)
     }
 
     /// The entry of `key` in the function table: a body, or a callee
@@ -576,7 +576,7 @@ impl<'db> IrExport<'db> {
         if let Some((name, _)) = self.type_ids.get(&ty) {
             return Ok(json!({ "$ty": name }));
         }
-        let id = self.keys.ty_key(ty);
+        let id = self.keys.ty_key(ty)?;
         let reference = json!({ "$ty": id.0 });
         self.type_ids.insert(ty, id.clone());
         let entry = self.type_entry(ty)?;
@@ -701,7 +701,7 @@ impl<'db> IrExport<'db> {
             vec![ty],
         )
         .map_err(|error| Unsupported(format!("drop: generated call: {error:?}")))?;
-        Ok(Some(self.func(key)))
+        Ok(Some(self.func(key)?))
     }
 
     fn tys(&mut self, tys: &[TyId<'db>]) -> Result<Vec<Value>, Unsupported> {
@@ -1147,7 +1147,7 @@ impl<'db> BodyWriter<'_, 'db> {
                         CallSiteId::Expr(expr) => format!("expr{}", expr.index()),
                         CallSiteId::ForLoop(stmt, step) => format!("for{}:{step:?}", stmt.index()),
                     },
-                    "callee": self.ir.func(self.callee_key(callee.key, args)),
+                    "callee": self.ir.func(self.callee_key(callee.key, args))?,
                     "args": args.iter().map(operand).collect::<Vec<_>>(),
                     "effectArgs": effects,
                 }})
@@ -1212,7 +1212,7 @@ impl<'db> BodyWriter<'_, 'db> {
                     _ => None,
                 };
                 json!({ "ref": {
-                    "func": self.ir.func(reference.instance(db)),
+                    "func": self.ir.func(reference.instance(db))?,
                     "ty": self.ty(reference.ty(db))?,
                     "value": value,
                 }})
@@ -1377,8 +1377,8 @@ impl<'db> BodyWriter<'_, 'db> {
                             name,
                             vec![lanes.codec, entry.entry_ty],
                         )
-                        .map(|key| self.ir.func(key))
                         .map_err(|_| Unsupported(format!("entry lane of {pretty}")))
+                        .and_then(|key| self.ir.func(key))
                     };
                     Some(json!({ "get": method("get")?, "set": method("set")? }))
                 }
@@ -1386,7 +1386,7 @@ impl<'db> BodyWriter<'_, 'db> {
             };
             entries.push(json!({
                 "collection": self.ty(ty)?,
-                "locate": self.ir.func(entry.callee),
+                "locate": self.ir.func(entry.callee)?,
                 "keyTy": self.ty(entry.key_ty)?,
                 "entryTy": self.ty(entry.entry_ty)?,
                 "space": entry.space.map(space),

@@ -29,6 +29,7 @@ use mir::build_runtime_package;
 use smol_str::SmolStr;
 #[cfg(feature = "sp1")]
 use sonatina_sp1::{Sp1Runtime, Sp1Toolchain};
+use spec_ir::ingot_namespace;
 use tiny_keccak::{Hasher, Keccak};
 use url::Url;
 
@@ -2188,28 +2189,6 @@ fn dependency_arithmetic_str(mode: DependencyArithmeticMode) -> &'static str {
         DependencyArithmeticMode::Checked => "checked",
         DependencyArithmeticMode::Unchecked => "unchecked",
     }
-}
-
-/// The ingot's declared name (falling back to the last segment of its base URL). This is the
-/// human-facing `name` and the *candidate* namespace; see [`assign_namespaces`] for the unique
-/// namespace actually used as a path prefix and dependency-map target.
-fn ingot_namespace(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> String {
-    if let Some(name) = ingot
-        .config(db)
-        .as_ref()
-        .and_then(|config| config.metadata.name.as_ref())
-    {
-        return name.to_string();
-    }
-    ingot
-        .base(db)
-        .path()
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .filter(|segment| !segment.is_empty())
-        .unwrap_or("dep")
-        .to_string()
 }
 
 /// Collect one ingot's `.fe` source files keyed by ingot-relative path (basename for standalone),

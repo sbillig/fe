@@ -35,6 +35,7 @@ use hir::{
 };
 
 pub use ir::{IR_VERSION, SpecIr, export_ir, ir_text, merge_library};
+pub use key::{ingot_name, ingot_namespace};
 
 /// Why a contract is not exported: a construct the exporter has no model
 /// for, or the errors the compiler reports in its ingot.

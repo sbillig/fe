@@ -53,6 +53,25 @@ fn library() {
     compare("ir/library.json", &ir_text(&library));
 }
 
+/// A type whose constant argument is defined in the contract's ingot is the contract's,
+/// although its other parts are the library's: `String<7>` with the capacity the message's ABI
+/// impl leaves unevaluated.
+#[test]
+fn unevaluated_constant_is_contract_entry() {
+    let ir = serialize("ir/string_label");
+    let keys = |file: &serde_json::Value| -> Vec<String> {
+        file["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["key"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let unevaluated = |keys: &[String]| keys.iter().any(|key| key.contains("{unevaluated "));
+    assert!(unevaluated(&keys(&ir.contract)), "{:?}", keys(&ir.contract));
+    assert!(!unevaluated(&keys(&ir.library)), "{:?}", keys(&ir.library));
+}
+
 /// Merging is independent of order, and refuses an entry that differs.
 #[test]
 fn merge() {

@@ -3,13 +3,18 @@
 //! independent of the order a serialization reaches them in.
 //!
 //! An item is named by its path from its ingot (`core`, `std`, or the
-//! ingot's name). A type is rendered as Fe writes it, with every item by its
+//! ingot's name, [`ingot_name`]; two ingots of one name in one serialization
+//! are refused). A type is rendered as Fe writes it, with every item by its
 //! path and every capability (`view`, `ref`, `mut`) shown, and a type argument
 //! the compiler has not evaluated marked as such. An instance is the function
 //! or constant it is an instance of, by the type its impl is for and the trait
 //! it implements at the instance's types, with its own type arguments, its
-//! receiver if it is `mut self`, the body mode of a `mut?` function, the providers its
-//! effects are bound to, and the spaces of the places its parameters name.
+//! receiver unless it is `self`, the body mode of a `mut?` function, the
+//! providers its effects are bound to, and the spaces of the places its
+//! parameters name.
+//!
+//! An entry is the contract's when anything its key names is defined in the
+//! contract's ingot: an item, the scope of a method or a body, or a constant.
 //! The environment an instance was resolved in (`ImplEnv`) and the proofs
 //! its caller supplied are not part of it: a closed instance means the same
 //! wherever it is resolved, and the serializer checks that each instance
@@ -29,12 +34,16 @@ use hir::{
             ty_lower::{CompleteSubst, ParamSchemaId},
         },
     },
-    hir_def::{CallableDef, GenericParamOwner, ItemKind, params::FuncParamMode},
+    hir_def::{
+        CallableDef, GenericParamOwner, ItemKind, TopLevelMod, params::FuncParamMode,
+        scope_graph::ScopeId,
+    },
     semantic::{ProviderBinding, ProviderSource},
 };
 use mir::runtime::stable_key::module_path_components_for_scope;
+use rustc_hash::FxHashMap;
 
-use crate::{assoc_const_name, fe_path};
+use crate::{Unsupported, assoc_const_name};
 
 /// Renders keys for a serialization of a contract of `ingot`, and records
 /// whether a key names an item of `ingot`: such an entry is the contract's,
@@ -43,6 +52,10 @@ pub(crate) struct Keys<'db> {
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     local: bool,
+    /// The ingot each name names so far.
+    ingots: FxHashMap<String, Ingot<'db>>,
+    /// Why the key being rendered is refused.
+    refused: Option<String>,
 }
 
 impl<'db> Keys<'db> {
@@ -51,42 +64,70 @@ impl<'db> Keys<'db> {
             db,
             ingot,
             local: false,
+            ingots: FxHashMap::default(),
+            refused: None,
         }
     }
 
-    /// The key of `ty`, and whether it names an item of the contract's ingot.
-    pub(crate) fn ty_key(&mut self, ty: TyId<'db>) -> (String, bool) {
+    /// The key of `ty`, and whether it names something defined in the contract's ingot.
+    pub(crate) fn ty_key(&mut self, ty: TyId<'db>) -> Result<(String, bool), Unsupported> {
         self.local = false;
         let key = self.ty(ty);
-        (key, self.local)
+        self.finish(key)
     }
 
-    /// The key of the instance `key`, and whether it names an item of the
+    /// The key of the instance `key`, and whether it names something defined in the
     /// contract's ingot.
-    pub(crate) fn func_key(&mut self, key: SemanticInstanceKey<'db>) -> (String, bool) {
+    pub(crate) fn func_key(
+        &mut self,
+        key: SemanticInstanceKey<'db>,
+    ) -> Result<(String, bool), Unsupported> {
         self.local = false;
         let rendered = self.instance(key);
-        (rendered, self.local)
+        self.finish(rendered)
+    }
+
+    fn finish(&mut self, key: String) -> Result<(String, bool), Unsupported> {
+        match self.refused.take() {
+            Some(reason) => Err(Unsupported(format!("no key for `{key}`: {reason}"))),
+            None => Ok((key, self.local)),
+        }
+    }
+
+    /// The name of `ingot` in keys, recording that `ingot` has it: two ingots under one name
+    /// would give their items one key.
+    fn ingot(&mut self, ingot: Ingot<'db>, top_mod: TopLevelMod<'db>) -> String {
+        let db = self.db;
+        self.local |= ingot == self.ingot;
+        let name = ingot_name(db, ingot, top_mod);
+        let named = *self.ingots.entry(name.clone()).or_insert(ingot);
+        if named != ingot {
+            self.refused = Some(format!(
+                "two ingots are named `{name}`: {} and {}",
+                named.base(db),
+                ingot.base(db)
+            ));
+        }
+        name
+    }
+
+    /// The path of `scope`, a body or an item, from its ingot.
+    fn scope(&mut self, scope: ScopeId<'db>) -> String {
+        let db = self.db;
+        let top_mod = scope.top_mod(db);
+        let root = self.ingot(top_mod.ingot(db), top_mod);
+        let path = scope.pretty_path(db).unwrap_or_default();
+        match path.split_once("::") {
+            Some((_, rest)) => format!("{root}::{rest}"),
+            None => root,
+        }
     }
 
     /// The path of `item` from its ingot.
     fn item(&mut self, item: ItemKind<'db>) -> String {
         let db = self.db;
         let top_mod = item.top_mod(db);
-        let ingot = top_mod.ingot(db);
-        self.local |= ingot == self.ingot;
-        let root = match ingot.kind(db) {
-            IngotKind::Core => "core".to_string(),
-            IngotKind::Std => "std".to_string(),
-            _ => ingot
-                .config(db)
-                .clone()
-                .and_then(|config| config.metadata.name)
-                .map_or_else(
-                    || top_mod.name(db).data(db).to_string(),
-                    |name| name.to_string(),
-                ),
-        };
+        let root = self.ingot(top_mod.ingot(db), top_mod);
         let modules = module_path_components_for_scope(db, item.scope());
         let name = item.name(db).map_or_else(
             || item.kind_name().replace(' ', "_"),
@@ -147,7 +188,7 @@ impl<'db> Keys<'db> {
                     let def = closure.def(db);
                     let owner = match BodyOwner::closure_parent(db, def) {
                         Some(owner) => self.owner_path(owner),
-                        None => fe_path(db, def.body.scope()),
+                        None => self.scope(def.body.scope()),
                     };
                     let args = self.args(closure.parent_args(db));
                     format!("{{closure {} in {owner}}}{args}", def.expr.as_u32())
@@ -157,6 +198,17 @@ impl<'db> Keys<'db> {
             // can be a type of its own beside the value's, as what it is.
             TyData::ConstTy(constant) => {
                 let printed = constant.pretty_print_concrete(db);
+                // What the constant is of, and where it is defined, decide whose it is.
+                self.ty(constant.ty(db));
+                match constant.data(db) {
+                    ConstTyData::UnEvaluated { body, .. } => {
+                        self.scope(body.scope());
+                    }
+                    ConstTyData::Computation { source, .. } => {
+                        self.instance(*source);
+                    }
+                    _ => {}
+                }
                 let kind = match constant.data(db) {
                     ConstTyData::Value(_) => return printed.to_string(),
                     ConstTyData::TyVar(..) => "var",
@@ -204,7 +256,7 @@ impl<'db> Keys<'db> {
                 self.item(contract.into())
             ),
             BodyOwner::AnonConstBody { body, .. } => {
-                format!("const block in {}", fe_path(self.db, body.scope()))
+                format!("const block in {}", self.scope(body.scope()))
             }
             BodyOwner::Closure { ty, receiver, .. } => {
                 self.closure_body(TyId::closure(self.db, ty), receiver)
@@ -213,11 +265,7 @@ impl<'db> Keys<'db> {
     }
 
     fn closure_body(&mut self, closure: TyId<'db>, receiver: FuncParamMode) -> String {
-        let receiver = match receiver {
-            FuncParamMode::Mut => "#mut",
-            FuncParamMode::View | FuncParamMode::Own => "",
-        };
-        format!("{}::call{receiver}", self.ty(closure))
+        format!("{}::call{}", self.ty(closure), receiver_suffix(receiver))
     }
 
     fn instance(&mut self, key: SemanticInstanceKey<'db>) -> String {
@@ -252,12 +300,17 @@ impl<'db> Keys<'db> {
                 };
                 match name {
                     Some(name) => (generic, body.scope(), Some(name), None),
+                    // A body reaches a constant body through a constant reference, which names
+                    // a `const` item or an associated constant (`resolve_semantic_const_ref`),
+                    // so a body that is neither has no name to key it by.
                     None => {
+                        let path = self.scope(body.scope());
                         let expected = self.ty(expected);
-                        let args = self.args(args);
-                        let path = fe_path(db, body.scope());
-                        return format!("const block in {path}{args}: {expected}")
-                            + &self.specialization(key);
+                        self.refused = Some(format!(
+                            "a constant body of type `{expected}` in `{path}` that is no named \
+                             constant"
+                        ));
+                        return format!("const block in {path}");
                     }
                 }
             }
@@ -268,6 +321,8 @@ impl<'db> Keys<'db> {
             owner => return self.owner_path(owner) + &self.args(args) + &self.specialization(key),
         };
         let name = name.unwrap_or_else(|| "?".to_string());
+        // A method defined in the contract's ingot is the contract's, whatever it is for.
+        self.local |= scope.ingot(db) == self.ingot;
         // The type an impl is for and the trait it implements, at the
         // instance's types, and the number of those the impl takes.
         let mut instantiate = |ty: TyId<'db>, parent: GenericParamOwner<'db>| {
@@ -317,21 +372,21 @@ impl<'db> Keys<'db> {
             Some(ItemKind::Trait(item)) => (format!("{}::{name}", self.item(item.into())), 0),
             _ => match owner {
                 BodyOwner::Func(func, _) => (self.item(func.into()), 0),
-                _ => (format!("{}::{name}", fe_path(db, scope)), 0),
+                _ => (format!("{}::{name}", self.scope(scope)), 0),
             },
         };
         let own = self.args(args.get(taken..).unwrap_or_default());
         // An impl can implement a `mut?` method by one function per receiver mode, both of its
-        // name: the one that takes `mut self` is told apart by its receiver.
+        // name: each receiver but `self` is marked.
         let receiver = match owner {
-            BodyOwner::Func(func, None)
-                if func.is_method(db)
-                    && func
-                        .params(db)
-                        .next()
-                        .is_some_and(|param| param.mode_at(db, None) == FuncParamMode::Mut) =>
-            {
-                "(mut self)"
+            BodyOwner::Func(func, None) if func.is_method(db) => {
+                func.params(db)
+                    .next()
+                    .map_or("", |param| match param.mode_at(db, None) {
+                        FuncParamMode::View => "",
+                        FuncParamMode::Own => "(own self)",
+                        FuncParamMode::Mut => "(mut self)",
+                    })
             }
             _ => "",
         };
@@ -429,11 +484,52 @@ impl<'db> Keys<'db> {
             EffectParamSite::Closure(def) => {
                 let owner = match BodyOwner::closure_parent(self.db, def) {
                     Some(owner) => self.owner_path(owner),
-                    None => fe_path(self.db, def.body.scope()),
+                    None => self.scope(def.body.scope()),
                 };
                 format!("{{closure {} in {owner}}}", def.expr.as_u32())
             }
         }
+    }
+}
+
+/// The name of `ingot`, whose module `top_mod` is, in keys: `core`, `std`, a standalone file's
+/// module name, or the ingot's declared name (else the last segment of its base URL), as
+/// `--emit metadata` and the spec IR's provenance name it.
+pub fn ingot_name(db: &dyn HirAnalysisDb, ingot: Ingot<'_>, top_mod: TopLevelMod<'_>) -> String {
+    match ingot.kind(db) {
+        IngotKind::Core => "core".to_string(),
+        IngotKind::Std => "std".to_string(),
+        IngotKind::StandAlone => top_mod.name(db).data(db).to_string(),
+        _ => ingot_namespace(db, ingot),
+    }
+}
+
+/// An ingot's declared name, falling back to the last segment of its base URL.
+pub fn ingot_namespace(db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> String {
+    if let Some(name) = ingot
+        .config(db)
+        .as_ref()
+        .and_then(|config| config.metadata.name.as_ref())
+    {
+        return name.to_string();
+    }
+    ingot
+        .base(db)
+        .path()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("dep")
+        .to_string()
+}
+
+/// A closure body's receiver, unless it is `self`.
+fn receiver_suffix(receiver: FuncParamMode) -> &'static str {
+    match receiver {
+        FuncParamMode::View => "",
+        FuncParamMode::Own => "#own",
+        FuncParamMode::Mut => "#mut",
     }
 }
 
