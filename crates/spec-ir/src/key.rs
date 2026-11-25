@@ -195,31 +195,27 @@ impl<'db> Keys<'db> {
                 }
             },
             // A value as Fe writes it; a constant the compiler has not evaluated to one, which
-            // can be a type of its own beside the value's, as what it is.
+            // can be a type of its own beside the value's, as what it is and where the body it
+            // comes from is. What the constant is of, and where it is defined, decide whose it is.
             TyData::ConstTy(constant) => {
                 let printed = constant.pretty_print_concrete(db);
-                // What the constant is of, and where it is defined, decide whose it is.
                 self.ty(constant.ty(db));
-                match constant.data(db) {
-                    ConstTyData::UnEvaluated { body, .. } => {
-                        self.scope(body.scope());
-                    }
-                    ConstTyData::Computation { source, .. } => {
-                        self.instance(*source);
-                    }
-                    _ => {}
-                }
-                let kind = match constant.data(db) {
+                let (kind, scope) = match constant.data(db) {
                     ConstTyData::Value(_) => return printed.to_string(),
-                    ConstTyData::TyVar(..) => "var",
-                    ConstTyData::TyParam(..) => "param",
-                    ConstTyData::Description(_) => "description",
-                    ConstTyData::Invalid(_) => "invalid",
-                    ConstTyData::Abstract(..) => "abstract",
-                    ConstTyData::Computation { .. } => "computation",
-                    ConstTyData::UnEvaluated { .. } => "unevaluated",
+                    ConstTyData::TyVar(..) => ("var", None),
+                    ConstTyData::TyParam(..) => ("param", None),
+                    ConstTyData::Description(_) => ("description", None),
+                    ConstTyData::Invalid(_) => ("invalid", None),
+                    ConstTyData::Abstract(..) => ("abstract", None),
+                    ConstTyData::Computation { source, .. } => {
+                        ("computation", Some(source.owner(db).scope()))
+                    }
+                    ConstTyData::UnEvaluated { body, .. } => ("unevaluated", Some(body.scope())),
                 };
-                format!("{{{kind} {printed}}}")
+                match scope {
+                    Some(scope) => format!("{{{kind} {printed} in {}}}", self.scope(scope)),
+                    None => format!("{{{kind} {printed}}}"),
+                }
             }
             TyData::Never => "!".to_string(),
             TyData::TyParam(_)
