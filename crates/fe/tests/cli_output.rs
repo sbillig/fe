@@ -1,6 +1,6 @@
 use dir_test::{Fixture, dir_test};
 use serde_json::Value;
-use std::{fs, io::IsTerminal, path::Path, process::Command};
+use std::{collections::BTreeMap, fs, io::IsTerminal, path::Path, process::Command};
 #[cfg(all(feature = "cranelift", native_host))]
 use std::{
     path::PathBuf,
@@ -5806,15 +5806,18 @@ fn test_cli_build_spec_ir_library_requires_spec_ir() {
 }
 
 /// Whether `contract`, a spec IR contract file, links against `library`, as fe-spec's
-/// `Program.link` checks it: every reference names an entry of the two, and the library has
-/// the compiler and each library ingot the contract file records.
+/// `Program.link` checks it: a key both have is an equal entry, the library's; a reference in
+/// the library names one of the library's entries, and one in the contract file one of either's,
+/// each type and function key among the entries of its own table; and the library has the
+/// compiler and each library ingot the contract file records.
 fn links(contract: &Value, library: &Value) -> bool {
-    fn refs<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+    fn refs<'a>(value: &'a Value, out: &mut Vec<(&'a str, &'a str)>) {
         match value {
             Value::Object(fields) => {
                 for (tag, value) in fields {
                     match (tag.as_str(), value) {
-                        ("$ty" | "$fn", Value::String(key)) => out.push(key),
+                        ("$ty", Value::String(key)) => out.push(("types", key)),
+                        ("$fn", Value::String(key)) => out.push(("funcs", key)),
                         _ => refs(value, out),
                     }
                 }
@@ -5823,20 +5826,44 @@ fn links(contract: &Value, library: &Value) -> bool {
             _ => {}
         }
     }
-    let keys: Vec<&str> = [contract, library]
-        .iter()
-        .flat_map(|file| ["types", "funcs"].map(|table| &file[table]))
-        .filter_map(Value::as_array)
-        .flatten()
-        .filter_map(|entry| entry["key"].as_str())
-        .collect();
-    let mut references = Vec::new();
-    refs(&contract["contract"], &mut references);
-    refs(&contract["funcs"], &mut references);
-    refs(&contract["types"], &mut references);
+    let entries = |file: &Value, table: &str| -> BTreeMap<String, Value> {
+        file[table]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                (
+                    entry["key"].as_str().unwrap_or_default().to_string(),
+                    entry.clone(),
+                )
+            })
+            .collect()
+    };
+    let mut library_refs = Vec::new();
+    refs(&library["types"], &mut library_refs);
+    refs(&library["funcs"], &mut library_refs);
+    let mut contract_refs = Vec::new();
+    refs(&contract["contract"], &mut contract_refs);
+    refs(&contract["types"], &mut contract_refs);
+    refs(&contract["funcs"], &mut contract_refs);
+    let shared_equal = ["types", "funcs"].iter().all(|table| {
+        let library = entries(library, table);
+        entries(contract, table)
+            .iter()
+            .all(|(key, entry)| library.get(key).is_none_or(|existing| existing == entry))
+    });
+    let resolves = |refs: &[(&str, &str)], files: &[&Value]| {
+        refs.iter().all(|(table, key)| {
+            files
+                .iter()
+                .any(|file| entries(file, table).contains_key(*key))
+        })
+    };
     let recorded = &contract["provenance"]["library"];
     let ingots = &library["provenance"]["ingots"];
-    references.iter().all(|key| keys.contains(key))
+    shared_equal
+        && resolves(&library_refs, &[library])
+        && resolves(&contract_refs, &[library, contract])
         && recorded["compiler"] == library["provenance"]["compiler"]
         && recorded["ingots"]
             .as_object()
@@ -5969,4 +5996,67 @@ fn test_cli_build_spec_ir_library_creates_its_directory() {
         &read_json(&temp.path().join("out/Store.spec-ir.json")),
         &read_json(&library)
     ));
+}
+
+#[test]
+fn test_cli_build_spec_ir_workspace_member_dependency() {
+    // `a` calls `b::helper`, which is `Bar`'s own and in `Foo`'s library: one entry, in both
+    // the library and `Bar.spec-ir.json`.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"ws\"\nversion = \"0.1.0\"\nmembers = [\n  { path = \"ingots/a\", name = \"a\" },\n  { path = \"ingots/b\", name = \"b\" },\n]\n",
+    )
+    .expect("write workspace fe.toml");
+    fs::create_dir_all(root.join("ingots/a/src")).expect("a dir");
+    fs::create_dir_all(root.join("ingots/b/src")).expect("b dir");
+    fs::write(
+        root.join("ingots/a/fe.toml"),
+        "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nb = { path = \"../b\" }\n",
+    )
+    .expect("write a fe.toml");
+    fs::write(
+        root.join("ingots/b/fe.toml"),
+        "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write b fe.toml");
+    let contract = |name: &str| {
+        format!(
+            "pub msg {name}Msg {{\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}}\n\npub contract {name} {{\n    recv {name}Msg {{\n        Run -> u256 {{\n            helper()\n        }}\n    }}\n}}\n"
+        )
+    };
+    fs::write(
+        root.join("ingots/a/src/main.fe"),
+        format!("use b::helper\n\n{}", contract("Foo")),
+    )
+    .expect("write a main.fe");
+    fs::write(
+        root.join("ingots/b/src/lib.fe"),
+        format!(
+            "pub fn helper() -> u256 {{\n    return 41 + 1\n}}\n\n{}",
+            contract("Bar")
+        ),
+    )
+    .expect("write b lib.fe");
+    let out = root.join("out");
+    let (output, code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "spec-ir",
+        "--out-dir",
+        out.to_str().expect("out utf8"),
+        root.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(code, 0, "{output}");
+    let library = read_json(&out.join("spec-ir.library.json"));
+    let bar = read_json(&out.join("Bar.spec-ir.json"));
+    let in_table = |file: &Value| {
+        file["funcs"]
+            .as_array()
+            .is_some_and(|funcs| funcs.iter().any(|entry| entry["key"] == "b::helper"))
+    };
+    assert!(in_table(&library) && in_table(&bar));
+    assert!(links(&bar, &library));
+    assert!(links(&read_json(&out.join("Foo.spec-ir.json")), &library));
 }
