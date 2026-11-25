@@ -6138,3 +6138,16 @@ fn test_cli_build_spec_ir_refuses_two_ingots_of_one_name() {
         "{output}"
     );
 }
+
+#[test]
+fn test_cli_build_spec_ir_writes_no_contract_without_its_library() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("store.fe");
+    fs::write(&source, SPEC_IR_STORE).expect("write source");
+    // The library's directory cannot be made: a file is in its place.
+    fs::write(temp.path().join("blocker"), "").expect("write blocker");
+    let out = temp.path().join("out");
+    let (output, code) = build_spec_ir(&source, &out, &temp.path().join("blocker/lib.json"));
+    assert_ne!(code, 0, "{output}");
+    assert!(!out.join("Store.spec-ir.json").exists(), "{output}");
+}

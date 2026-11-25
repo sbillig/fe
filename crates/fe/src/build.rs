@@ -2589,10 +2589,11 @@ struct SpecIrOutput {
 
 #[derive(Debug, Default)]
 struct SpecIrFiles {
-    /// Each contract file: its path, the report directory to copy it to, and its text.
-    contracts: Vec<(Utf8PathBuf, Option<Utf8PathBuf>, String)>,
-    /// Each library file by path, with the report directory to copy it to.
-    libraries: BTreeMap<Utf8PathBuf, (Option<Utf8PathBuf>, serde_json::Value)>,
+    /// Each contract file: its path, the report directories to copy it to, and its text.
+    contracts: Vec<(Utf8PathBuf, Vec<Utf8PathBuf>, String)>,
+    /// Each library file by path, with the report directories to copy it to: one for each
+    /// build of a workspace member that asked for one.
+    libraries: BTreeMap<Utf8PathBuf, (Vec<Utf8PathBuf>, serde_json::Value)>,
     /// Whether a library did not merge.
     failed: bool,
 }
@@ -2718,13 +2719,18 @@ impl SpecIrOutput {
             let base = sanitize_filename(name);
             pending.contracts.push((
                 out_dir.join(format!("{base}.spec-ir.json")),
-                report_dir.map(Utf8Path::to_path_buf),
+                report_dir.map(Utf8Path::to_path_buf).into_iter().collect(),
                 spec_ir::ir_text(&file),
             ));
             let mut library = ir.library;
             library["provenance"] = library_provenance.clone();
             match pending.libraries.get_mut(&library_path) {
-                Some((_, merged)) => {
+                Some((report_dirs, merged)) => {
+                    if let Some(dir) = report_dir
+                        && !report_dirs.iter().any(|known| known == dir)
+                    {
+                        report_dirs.push(dir.to_path_buf());
+                    }
                     if let Err(err) = spec_ir::merge_library(merged, &library) {
                         eprintln!("Error: the spec IR library of {name} does not merge: {err}");
                         pending.failed = true;
@@ -2734,7 +2740,10 @@ impl SpecIrOutput {
                 None => {
                     pending.libraries.insert(
                         library_path.clone(),
-                        (report_dir.map(Utf8Path::to_path_buf), library),
+                        (
+                            report_dir.map(Utf8Path::to_path_buf).into_iter().collect(),
+                            library,
+                        ),
                     );
                 }
             }
@@ -2743,7 +2752,8 @@ impl SpecIrOutput {
     }
 
     /// Write the build's spec IR files: each library merged into the file `--spec-ir-library`
-    /// names if it exists, and nothing if a library does not merge.
+    /// names if it exists, and then the contract files; nothing if a library does not merge, and
+    /// no contract file if a library cannot be written.
     fn finish(&self) -> bool {
         let SpecIrFiles {
             contracts,
@@ -2755,7 +2765,7 @@ impl SpecIrOutput {
             return true;
         }
         let mut merged = Vec::new();
-        for (path, (report_dir, mut library)) in libraries {
+        for (path, (report_dirs, mut library)) in libraries {
             if self.library.is_some() && path.exists() {
                 let existing = fs::read_to_string(path.as_std_path())
                     .map_err(|err| err.to_string())
@@ -2778,10 +2788,9 @@ impl SpecIrOutput {
                     }
                 }
             }
-            merged.push((path, report_dir, spec_ir::ir_text(&library)));
+            merged.push((path, report_dirs, spec_ir::ir_text(&library)));
         }
-        let mut had_errors = false;
-        for (path, report_dir, text) in contracts.into_iter().chain(merged) {
+        let write = |(path, report_dirs, text): (Utf8PathBuf, Vec<Utf8PathBuf>, String)| {
             let written = path
                 .parent()
                 .filter(|parent| !parent.as_str().is_empty())
@@ -2789,15 +2798,34 @@ impl SpecIrOutput {
                 .and_then(|()| fs::write(path.as_std_path(), &text));
             if let Err(err) = written {
                 eprintln!("Error: Failed to write {path}: {err}");
-                had_errors = true;
-                continue;
+                return false;
             }
-            if let (Some(dir), Some(name)) = (report_dir, path.file_name()) {
-                let _ = fs::write(dir.join(name).as_std_path(), &text);
+            if let Some(name) = path.file_name() {
+                for dir in report_dirs {
+                    let _ = fs::write(dir.join(name).as_std_path(), &text);
+                }
             }
             println!("Wrote {path}");
+            true
+        };
+        // The libraries first: a contract file is written only with the library it links
+        // against.
+        if merged
+            .into_iter()
+            .map(write)
+            .filter(|written| !written)
+            .count()
+            > 0
+        {
+            eprintln!("Error: no spec IR contract file is written: a library is not written");
+            return true;
         }
-        had_errors
+        contracts
+            .into_iter()
+            .map(write)
+            .filter(|written| !written)
+            .count()
+            > 0
     }
 }
 
