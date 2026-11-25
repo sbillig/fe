@@ -22,6 +22,7 @@ use hir::{
         ty::{
             AddressSpace, RootProviderScope,
             binder::Binder,
+            const_ty::ConstTyData,
             ty_check::{BodyOwner, EffectParamSite},
             ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
             ty_lower::{CompleteSubst, ParamSchemaId},
@@ -151,7 +152,22 @@ impl<'db> Keys<'db> {
                     format!("{{closure {} in {owner}}}{args}", def.expr.as_u32())
                 }
             },
-            TyData::ConstTy(constant) => constant.pretty_print_concrete(db).to_string(),
+            // A value as Fe writes it; a constant the compiler has not evaluated to one, which
+            // can be a type of its own beside the value's, as what it is.
+            TyData::ConstTy(constant) => {
+                let printed = constant.pretty_print_concrete(db);
+                let kind = match constant.data(db) {
+                    ConstTyData::Value(_) => return printed.to_string(),
+                    ConstTyData::TyVar(..) => "var",
+                    ConstTyData::TyParam(..) => "param",
+                    ConstTyData::Description(_) => "description",
+                    ConstTyData::Invalid(_) => "invalid",
+                    ConstTyData::Abstract(..) => "abstract",
+                    ConstTyData::Computation { .. } => "computation",
+                    ConstTyData::UnEvaluated { .. } => "unevaluated",
+                };
+                format!("{{{kind} {printed}}}")
+            }
             TyData::Never => "!".to_string(),
             TyData::TyParam(_)
             | TyData::AssocTy(_)
@@ -304,8 +320,22 @@ impl<'db> Keys<'db> {
             },
         };
         let own = self.args(args.get(taken..).unwrap_or_default());
+        // An impl can implement a `mut?` method by one function per receiver mode, both of its
+        // name: the one that takes `mut self` is told apart by its receiver.
+        let receiver = match owner {
+            BodyOwner::Func(func, None)
+                if func.is_method(db)
+                    && func
+                        .params(db)
+                        .next()
+                        .is_some_and(|param| param.mode_at(db, None) == FuncParamMode::Mut) =>
+            {
+                "(mut self)"
+            }
+            _ => "",
+        };
         format!(
-            "{path}{own}{}{}",
+            "{path}{own}{receiver}{}{}",
             mode_suffix(mode),
             self.specialization(key)
         )
