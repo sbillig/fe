@@ -60,7 +60,7 @@ use mir::{
     MirDb, RuntimeMemoryLayout, RuntimeMemoryOffsets, panic_payload_revert_key, runtime_needs_drop,
     stored_class_in_instance,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -113,6 +113,7 @@ pub fn export_ir<'db>(db: &'db dyn MirDb, contract: Contract<'db>) -> Result<Spe
         keys: Keys::new(db, ingot),
         types: Table::default(),
         type_ids: FxHashMap::default(),
+        type_scopes: FxHashSet::default(),
         funcs: Table::default(),
         func_ids: FxHashMap::default(),
         pending: VecDeque::new(),
@@ -292,6 +293,8 @@ struct IrExport<'db> {
     types: Table,
     /// The key of each type named so far, and whether it is the contract's own.
     type_ids: FxHashMap<TyId<'db>, (String, bool)>,
+    /// Each type with each instance its entry has been resolved in.
+    type_scopes: FxHashSet<(TyId<'db>, SemanticInstance<'db>)>,
     funcs: Table,
     /// The key of each instance named so far, and whether it is the contract's own.
     func_ids: FxHashMap<SemanticInstanceKey<'db>, (String, bool)>,
@@ -572,15 +575,22 @@ impl<'db> IrExport<'db> {
     }
 
     /// A reference to `ty`, with its entry in the type table.
+    /// The entry is resolved in each instance that names the type, and must be the same in
+    /// every one (`Table::insert`).
     fn ty(&mut self, ty: TyId<'db>) -> Result<Value, Unsupported> {
-        if let Some((name, _)) = self.type_ids.get(&ty) {
-            return Ok(json!({ "$ty": name }));
-        }
-        let id = self.keys.ty_key(ty)?;
+        let id = match self.type_ids.get(&ty) {
+            Some(id) => id.clone(),
+            None => {
+                let id = self.keys.ty_key(ty)?;
+                self.type_ids.insert(ty, id.clone());
+                id
+            }
+        };
         let reference = json!({ "$ty": id.0 });
-        self.type_ids.insert(ty, id.clone());
-        let entry = self.type_entry(ty)?;
-        self.types.insert(id, entry)?;
+        if self.type_scopes.insert((ty, self.scope)) {
+            let entry = self.type_entry(ty)?;
+            self.types.insert(id, entry)?;
+        }
         Ok(reference)
     }
 
