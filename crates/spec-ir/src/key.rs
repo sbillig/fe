@@ -197,24 +197,31 @@ impl<'db> Keys<'db> {
             // A value as Fe writes it; a constant the compiler has not evaluated to one, which
             // can be a type of its own beside the value's, as what it is and where the body it
             // comes from is. What the constant is of, and where it is defined, decide whose it is.
+            // A type a closed instance names holds no other constant: no variable or parameter
+            // (the instance is closed), no invalid constant (the program has no errors), no
+            // abstract expression (a closed one is evaluated), and no description, which the
+            // serializer refuses as a constant value too; one is refused by what it is.
             TyData::ConstTy(constant) => {
                 let printed = constant.pretty_print_concrete(db);
                 self.ty(constant.ty(db));
                 let (kind, scope) = match constant.data(db) {
                     ConstTyData::Value(_) => return printed.to_string(),
-                    ConstTyData::TyVar(..) => ("var", None),
-                    ConstTyData::TyParam(..) => ("param", None),
-                    ConstTyData::Description(_) => ("description", None),
-                    ConstTyData::Invalid(_) => ("invalid", None),
-                    ConstTyData::Abstract(..) => ("abstract", None),
                     ConstTyData::Computation { source, .. } => {
                         ("computation", Some(source.owner(db).scope()))
                     }
                     ConstTyData::UnEvaluated { body, .. } => ("unevaluated", Some(body.scope())),
+                    ConstTyData::TyVar(..) => ("variable", None),
+                    ConstTyData::TyParam(..) => ("parameter", None),
+                    ConstTyData::Description(_) => ("description", None),
+                    ConstTyData::Invalid(_) => ("invalid constant", None),
+                    ConstTyData::Abstract(..) => ("abstract expression", None),
                 };
                 match scope {
                     Some(scope) => format!("{{{kind} {printed} in {}}}", self.scope(scope)),
-                    None => format!("{{{kind} {printed}}}"),
+                    None => {
+                        self.refused = Some(format!("a constant `{printed}` that is a {kind}"));
+                        format!("{{{kind} {printed}}}")
+                    }
                 }
             }
             TyData::Never => "!".to_string(),
