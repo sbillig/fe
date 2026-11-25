@@ -2345,8 +2345,6 @@ struct BuildRecord<'db> {
     all_sources: BTreeMap<String, (TopLevelMod<'db>, String)>,
     /// `settings.ingots`.
     ingots: Vec<serde_json::Value>,
-    /// The namespace of each non-builtin ingot of the closure (`assign_namespaces`).
-    namespaces: HashMap<Url, String>,
     root_arithmetic: &'static str,
     root_dep_arithmetic: &'static str,
 }
@@ -2411,7 +2409,6 @@ impl<'db> BuildRecord<'db> {
             root_sources,
             all_sources,
             ingots,
-            namespaces,
             root_arithmetic: arithmetic_str(ingot.arithmetic_mode(db)),
             root_dep_arithmetic: dependency_arithmetic_str(resolve_dependency_arithmetic_mode(
                 ingot.config(db).as_ref(),
@@ -2631,10 +2628,14 @@ impl SpecIrOutput {
         let record = BuildRecord::new(db, ingot);
         let name_to_loc = record.contracts(db, ingot);
         let compiler = compiler_identity();
-        // Every ingot the root reaches but the root itself, by the name `--emit metadata`
-        // gives it: `core`, `std`, and the dependencies by their namespaces.
+        // Every ingot the root reaches but the root itself, by the name keys give it
+        // (`spec_ir::ingot_name`), which does not depend on the root: a library made by one
+        // build names an ingot as one made by another does. Two ingots of one name cannot be
+        // told apart that way.
+        let name = |dep: hir::Ingot<'_>| spec_ir::ingot_name(db, dep, dep.root_mod(db));
         let mut deps = vec![ingot];
         let mut seen = HashSet::from([ingot.base(db).clone()]);
+        let mut named = BTreeMap::new();
         let mut library_ingots = serde_json::Map::new();
         while let Some(next) = deps.pop() {
             for (_, url) in next.dependencies(db) {
@@ -2645,23 +2646,30 @@ impl SpecIrOutput {
                     continue;
                 };
                 deps.push(dep);
-                let name = match dep.kind(db) {
-                    IngotKind::Core => "core".to_string(),
-                    IngotKind::Std => "std".to_string(),
-                    _ => record
-                        .namespaces
-                        .get(dep.base(db))
-                        .cloned()
-                        .unwrap_or_else(|| ingot_namespace(db, dep)),
-                };
+                let dep_name = name(dep);
+                if let Some(other) = named.insert(dep_name.clone(), dep.base(db).clone()) {
+                    eprintln!(
+                        "Error: two ingots of this build are named `{dep_name}`, {other} and {}: \
+                         the spec IR names an ingot by its name",
+                        dep.base(db)
+                    );
+                    return true;
+                }
                 let mut sources = BTreeMap::new();
                 collect_ingot_sources_prefixed(db, dep, None, &mut sources);
+                let dependencies: serde_json::Map<_, _> = dep
+                    .dependencies(db)
+                    .iter()
+                    .filter_map(|(alias, url)| {
+                        Some((alias.to_string(), name(url.ingot(db)?).into()))
+                    })
+                    .collect();
                 library_ingots.insert(
-                    name,
+                    dep_name,
                     serde_json::json!({
                         "sources": source_hashes(&sources),
                         "arithmetic": arithmetic_str(dep.arithmetic_mode(db)),
-                        "dependencies": ingot_dependencies_json(db, dep, &record.namespaces),
+                        "dependencies": dependencies,
                     }),
                 );
             }

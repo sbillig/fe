@@ -6060,3 +6060,81 @@ fn test_cli_build_spec_ir_workspace_member_dependency() {
     assert!(links(&bar, &library));
     assert!(links(&read_json(&out.join("Foo.spec-ir.json")), &library));
 }
+
+/// An app calling `{dir}::helper`, with the dependencies `deps` as (alias, directory, version),
+/// each an ingot named by its directory up to a `_`.
+fn write_app_with_dependency(root: &Path, dir: &str, deps: &[(&str, &str, &str)]) {
+    fs::create_dir_all(root.join("app/src")).expect("app dir");
+    let dependencies: String = deps
+        .iter()
+        .map(|(alias, path, _)| format!("{alias} = {{ path = \"../{path}\" }}\n"))
+        .collect();
+    fs::write(
+        root.join("app/fe.toml"),
+        format!("[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n{dependencies}"),
+    )
+    .expect("write app fe.toml");
+    fs::write(
+        root.join("app/src/main.fe"),
+        format!(
+            "use {dir}::helper\n\npub msg FooMsg {{\n    #[selector = sol(\"run()\")]\n    Run -> u256,\n}}\n\npub contract Foo {{\n    recv FooMsg {{\n        Run -> u256 {{\n            helper()\n        }}\n    }}\n}}\n"
+        ),
+    )
+    .expect("write app main.fe");
+    for (_, path, version) in deps {
+        fs::create_dir_all(root.join(format!("{path}/src"))).expect("dep dir");
+        let name = path.split('_').next().unwrap_or(path);
+        fs::write(
+            root.join(format!("{path}/fe.toml")),
+            format!("[ingot]\nname = \"{name}\"\nversion = \"{version}\"\n"),
+        )
+        .expect("write dep fe.toml");
+        fs::write(
+            root.join(format!("{path}/src/lib.fe")),
+            "pub fn helper() -> u256 {\n    return 41 + 1\n}\n",
+        )
+        .expect("write dep lib.fe");
+    }
+}
+
+#[test]
+fn test_cli_build_spec_ir_names_ingots_as_keys_do() {
+    // A dependency named `src`, a directory of the app's sources, which `--emit metadata`
+    // renames: the spec IR names it `src`, as its keys do.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_dependency(root, "src", &[("src", "src", "1.0.0")]);
+    let out = root.join("app/out");
+    let (output, code) = build_spec_ir(&root.join("app"), &out, &root.join("library.json"));
+    assert_eq!(code, 0, "{output}");
+    let library = read_json(&root.join("library.json"));
+    let ingots = library["provenance"]["ingots"].as_object().expect("ingots");
+    assert_eq!(ingots.keys().collect::<Vec<_>>(), ["core", "src", "std"]);
+    assert!(
+        library["funcs"]
+            .as_array()
+            .is_some_and(|funcs| funcs.iter().any(|entry| entry["key"] == "src::helper"))
+    );
+    assert!(links(&read_json(&out.join("Foo.spec-ir.json")), &library));
+}
+
+#[test]
+fn test_cli_build_spec_ir_refuses_two_ingots_of_one_name() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    write_app_with_dependency(
+        root,
+        "one",
+        &[("one", "dep_1", "1.0.0"), ("two", "dep_2", "2.0.0")],
+    );
+    let (output, code) = build_spec_ir(
+        &root.join("app"),
+        &root.join("app/out"),
+        &root.join("library.json"),
+    );
+    assert_ne!(code, 0, "{output}");
+    assert!(
+        output.contains("two ingots of this build are named `dep`"),
+        "{output}"
+    );
+}
