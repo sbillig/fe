@@ -1,6 +1,7 @@
 #[cfg(feature = "cranelift")]
 use crate::native::{archive_objects, link_executable};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
 };
@@ -73,10 +74,8 @@ struct EmitSelection<'a> {
     metadata: bool,
     sizes: bool,
     sidecar: bool,
-    spec_ir: bool,
-    /// The library file `--emit spec-ir` merges its library into, if not
-    /// `spec-ir.library.json` of the output directory.
-    spec_ir_library: Option<&'a Utf8Path>,
+    /// Where `--emit spec-ir` keeps its files until the build ends.
+    spec_ir: Option<&'a SpecIrOutput>,
     executable: bool,
     object: bool,
     staticlib: bool,
@@ -85,7 +84,7 @@ struct EmitSelection<'a> {
 }
 
 impl<'a> EmitSelection<'a> {
-    fn from_requested(requested: &[BuildEmit], spec_ir_library: Option<&'a Utf8Path>) -> Self {
+    fn from_requested(requested: &[BuildEmit], spec_ir: &'a SpecIrOutput) -> Self {
         let mut selection = Self {
             bytecode: false,
             runtime_bytecode: false,
@@ -94,15 +93,13 @@ impl<'a> EmitSelection<'a> {
             metadata: false,
             sizes: false,
             sidecar: false,
-            spec_ir: false,
-            spec_ir_library: None,
+            spec_ir: None,
             executable: false,
             object: false,
             staticlib: false,
             elf: false,
             wasm: false,
         };
-        selection.spec_ir_library = spec_ir_library;
         for emit in requested {
             match emit {
                 BuildEmit::Bytecode => selection.bytecode = true,
@@ -112,7 +109,7 @@ impl<'a> EmitSelection<'a> {
                 BuildEmit::Metadata => selection.metadata = true,
                 BuildEmit::Sizes => selection.sizes = true,
                 BuildEmit::Sidecar => selection.sidecar = true,
-                BuildEmit::SpecIr => selection.spec_ir = true,
+                BuildEmit::SpecIr => selection.spec_ir = Some(spec_ir),
                 BuildEmit::Executable => selection.executable = true,
                 BuildEmit::Object => selection.object = true,
                 BuildEmit::Staticlib => selection.staticlib = true,
@@ -180,11 +177,8 @@ fn validate_build_request(
         return Err("`--wasm-stack-size` requires `--backend wasm`".to_string());
     }
     // The spec IR records the hashes of the EVM bytecode the same run compiles.
-    if emit.spec_ir && !matches!(backend, BuildBackend::Sonatina) {
+    if emit.spec_ir.is_some() && !matches!(backend, BuildBackend::Sonatina) {
         return Err("`--emit spec-ir` requires `--backend sonatina`".to_string());
-    }
-    if emit.spec_ir_library.is_some() && !emit.spec_ir {
-        return Err("`--spec-ir-library` requires `--emit spec-ir`".to_string());
     }
 
     match backend {
@@ -331,7 +325,12 @@ pub fn build(
     report_failed_only: bool,
     use_recovery_mode: bool,
 ) {
-    let emit = EmitSelection::from_requested(emit, spec_ir_library);
+    if spec_ir_library.is_some() && !emit.contains(&BuildEmit::SpecIr) {
+        eprintln!("Error: `--spec-ir-library` requires `--emit spec-ir`");
+        std::process::exit(1);
+    }
+    let spec_ir = SpecIrOutput::new(spec_ir_library);
+    let emit = EmitSelection::from_requested(emit, &spec_ir);
     if let Err(err) = validate_build_request(backend, ingot, contract, emit, link, wasm_stack_size)
     {
         eprintln!("Error: {err}");
@@ -427,7 +426,7 @@ pub fn build(
         }
     }
 
-    let had_errors = match target {
+    let mut had_errors = match target {
         CliTarget::StandaloneFile(file_path) => build_file(
             &mut db,
             &file_path,
@@ -461,6 +460,7 @@ pub fn build(
             report_ctx.as_ref(),
         ),
     };
+    had_errors |= spec_ir.finish();
 
     if let Some((out, staging)) = report_root {
         let should_write = !report_failed_only || had_errors;
@@ -509,7 +509,8 @@ pub fn build_from_metadata(
     use_recovery_mode: bool,
 ) {
     let backend = BuildBackend::Sonatina;
-    let emit = EmitSelection::from_requested(emit, None);
+    let spec_ir = SpecIrOutput::new(None);
+    let emit = EmitSelection::from_requested(emit, &spec_ir);
     if let Err(err) =
         validate_build_request(backend, None, contract, emit, NativeLink::default(), None)
     {
@@ -652,7 +653,7 @@ pub fn build_from_metadata(
         None,
         Some(&out_dir),
         None,
-    );
+    ) | spec_ir.finish();
 
     drop(temp);
     if had_errors {
@@ -1081,7 +1082,7 @@ fn build_workspace(
         }
     }
 
-    if (emit.writes_any_bytecode() || emit.metadata || emit.spec_ir)
+    if (emit.writes_any_bytecode() || emit.metadata || emit.spec_ir.is_some())
         && let Err(()) = check_workspace_artifact_name_collisions(&contract_names_by_member)
     {
         return true;
@@ -1487,7 +1488,7 @@ fn build_ingot(
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
 
     let mut had_errors = false;
-    if emit.ir || emit.writes_any_bytecode() || emit.spec_ir {
+    if emit.ir || emit.writes_any_bytecode() || emit.spec_ir.is_some() {
         if emit.ir {
             let ir = match target_mod {
                 Some(top_mod) => {
@@ -1509,7 +1510,7 @@ fn build_ingot(
                 had_errors = true;
             }
         }
-        if emit.writes_any_bytecode() || emit.spec_ir {
+        if emit.writes_any_bytecode() || emit.spec_ir.is_some() {
             let bytecode = match (target_mod, emit.sizes) {
                 (Some(top_mod), false) => {
                     codegen::emit_module_sonatina_bytecode(db, top_mod, opt_level, contract)
@@ -1540,14 +1541,13 @@ fn build_ingot(
                     emit,
                 );
             }
-            if emit.spec_ir {
-                had_errors |= write_spec_ir_artifacts(
+            if let Some(spec_ir) = emit.spec_ir {
+                had_errors |= spec_ir.add(
                     db,
                     ingot,
                     &names_to_build,
                     &bytecode,
                     opt_level,
-                    emit,
                     out_dir,
                     report_dir,
                 );
@@ -1686,7 +1686,7 @@ fn build_top_mod(
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
 
     let mut had_errors = false;
-    if emit.ir || emit.writes_any_bytecode() || emit.spec_ir {
+    if emit.ir || emit.writes_any_bytecode() || emit.spec_ir.is_some() {
         if emit.ir {
             let ir = match codegen::emit_module_sonatina_ir_optimized(
                 db, top_mod, opt_level, contract,
@@ -1704,7 +1704,7 @@ fn build_top_mod(
                 had_errors = true;
             }
         }
-        if emit.writes_any_bytecode() || emit.spec_ir {
+        if emit.writes_any_bytecode() || emit.spec_ir.is_some() {
             let bytecode = if emit.sizes {
                 codegen::emit_module_sonatina_bytecode_with_observability(
                     db, top_mod, opt_level, contract,
@@ -1728,14 +1728,13 @@ fn build_top_mod(
                     emit,
                 );
             }
-            if emit.spec_ir {
-                had_errors |= write_spec_ir_artifacts(
+            if let Some(spec_ir) = emit.spec_ir {
+                had_errors |= spec_ir.add(
                     db,
                     top_mod.ingot(db),
                     &names_to_build,
                     &bytecode,
                     opt_level,
-                    emit,
                     out_dir,
                     report_dir,
                 );
@@ -2086,7 +2085,7 @@ fn ensure_output_dirs(
         || emit.abi
         || emit.metadata
         || emit.sidecar
-        || emit.spec_ir
+        || emit.spec_ir.is_some()
         || emit.executable
         || emit.library()
         || emit.elf
@@ -2346,6 +2345,8 @@ struct BuildRecord<'db> {
     all_sources: BTreeMap<String, (TopLevelMod<'db>, String)>,
     /// `settings.ingots`.
     ingots: Vec<serde_json::Value>,
+    /// The namespace of each non-builtin ingot of the closure (`assign_namespaces`).
+    namespaces: HashMap<Url, String>,
     root_arithmetic: &'static str,
     root_dep_arithmetic: &'static str,
 }
@@ -2410,6 +2411,7 @@ impl<'db> BuildRecord<'db> {
             root_sources,
             all_sources,
             ingots,
+            namespaces,
             root_arithmetic: arithmetic_str(ingot.arithmetic_mode(db)),
             root_dep_arithmetic: dependency_arithmetic_str(resolve_dependency_arithmetic_mode(
                 ingot.config(db).as_ref(),
@@ -2577,146 +2579,218 @@ fn write_metadata_artifacts(
     had_errors
 }
 
-/// Write `<out>/<Contract>.spec-ir.json` per built contract, the contract's normalized IR for
-/// fe-spec (`spec_ir::export_ir`), and the library they share to `spec-ir.library.json` of the
-/// output directory, or merged into the file `--spec-ir-library` names. Each file records its
-/// provenance: the compiler, and the sources the file is from (the ingot's for a contract, those
-/// of the other ingots its library entries come from for the library); a contract's also the
-/// settings `--emit metadata` records, the backend, the keccak256 of the creation and runtime
-/// code this run compiled from the same sources, and its library's provenance.
-#[allow(clippy::too_many_arguments)]
-fn write_spec_ir_artifacts(
-    db: &DriverDataBase,
-    ingot: hir::Ingot<'_>,
-    names_to_build: &[String],
-    bytecode: &BTreeMap<String, SonatinaContractBytecode>,
-    opt_level: OptLevel,
-    emit: EmitSelection<'_>,
-    out_dir: &Utf8Path,
-    report_dir: Option<&Utf8Path>,
-) -> bool {
-    let mut had_errors = false;
-    let record = BuildRecord::new(db, ingot);
-    let name_to_loc = record.contracts(db, ingot);
-    let compiler = compiler_identity();
-    // The sources of every ingot the root's code reaches but the root itself: `core`, `std`
-    // and the root's dependencies.
-    let mut library_sources = BTreeMap::new();
-    let mut deps = vec![ingot];
-    let mut seen = HashSet::from([ingot.base(db).clone()]);
-    while let Some(next) = deps.pop() {
-        for (_, url) in next.dependencies(db) {
-            if seen.insert(url.clone())
-                && let Some(dep) = url.ingot(db)
-            {
+/// The spec IR files of a build (`--emit spec-ir`), kept until the build has serialized every
+/// contract: the contracts of one build share one library file, `spec-ir.library.json` of their
+/// output directory or the file `--spec-ir-library` names, and nothing is written if a library
+/// does not merge.
+#[derive(Debug)]
+struct SpecIrOutput {
+    /// The library file `--spec-ir-library` names, which this build's library merges into.
+    library: Option<Utf8PathBuf>,
+    pending: RefCell<SpecIrFiles>,
+}
+
+#[derive(Debug, Default)]
+struct SpecIrFiles {
+    /// Each contract file: its path, the report directory to copy it to, and its text.
+    contracts: Vec<(Utf8PathBuf, Option<Utf8PathBuf>, String)>,
+    /// Each library file by path, with the report directory to copy it to.
+    libraries: BTreeMap<Utf8PathBuf, (Option<Utf8PathBuf>, serde_json::Value)>,
+    /// Whether a library did not merge.
+    failed: bool,
+}
+
+impl SpecIrOutput {
+    fn new(library: Option<&Utf8Path>) -> Self {
+        Self {
+            library: library.map(Utf8Path::to_path_buf),
+            pending: RefCell::default(),
+        }
+    }
+
+    /// Serialize each of `names_to_build`, contracts of `ingot`, as `<out>/<Contract>.spec-ir.json`
+    /// with the contract's normalized IR for fe-spec (`spec_ir::export_ir`), and merge their
+    /// libraries into this build's library. Each file records its provenance: the compiler; a
+    /// contract's also its ingot's sources, the settings `--emit metadata` records with the
+    /// backend, the keccak256 of the creation and runtime code this run compiled from them, and
+    /// the provenance of the library ingots it was serialized with; a library's, each of its
+    /// ingots (`core`, `std`, dependencies) with what determines its entries: its sources, its
+    /// effective arithmetic and the ingots its dependencies name.
+    #[allow(clippy::too_many_arguments)]
+    fn add(
+        &self,
+        db: &DriverDataBase,
+        ingot: hir::Ingot<'_>,
+        names_to_build: &[String],
+        bytecode: &BTreeMap<String, SonatinaContractBytecode>,
+        opt_level: OptLevel,
+        out_dir: &Utf8Path,
+        report_dir: Option<&Utf8Path>,
+    ) -> bool {
+        let mut had_errors = false;
+        let record = BuildRecord::new(db, ingot);
+        let name_to_loc = record.contracts(db, ingot);
+        let compiler = compiler_identity();
+        // Every ingot the root reaches but the root itself, by the name `--emit metadata`
+        // gives it: `core`, `std`, and the dependencies by their namespaces.
+        let mut deps = vec![ingot];
+        let mut seen = HashSet::from([ingot.base(db).clone()]);
+        let mut library_ingots = serde_json::Map::new();
+        while let Some(next) = deps.pop() {
+            for (_, url) in next.dependencies(db) {
+                if !seen.insert(url.clone()) {
+                    continue;
+                }
+                let Some(dep) = url.ingot(db) else {
+                    continue;
+                };
                 deps.push(dep);
+                let name = match dep.kind(db) {
+                    IngotKind::Core => "core".to_string(),
+                    IngotKind::Std => "std".to_string(),
+                    _ => record
+                        .namespaces
+                        .get(dep.base(db))
+                        .cloned()
+                        .unwrap_or_else(|| ingot_namespace(db, dep)),
+                };
+                let mut sources = BTreeMap::new();
+                collect_ingot_sources_prefixed(db, dep, None, &mut sources);
+                library_ingots.insert(
+                    name,
+                    serde_json::json!({
+                        "sources": source_hashes(&sources),
+                        "arithmetic": arithmetic_str(dep.arithmetic_mode(db)),
+                        "dependencies": ingot_dependencies_json(db, dep, &record.namespaces),
+                    }),
+                );
             }
         }
-    }
-    seen.remove(ingot.base(db));
-    for dep in seen.iter().filter_map(|url| url.ingot(db)) {
-        let prefix = match dep.kind(db) {
-            IngotKind::Core => "core".to_string(),
-            IngotKind::Std => "std".to_string(),
-            _ => ingot_namespace(db, dep),
+        let library_provenance = serde_json::json!({
+            "compiler": compiler,
+            "ingots": library_ingots,
+        });
+        let library_path = match &self.library {
+            Some(path) => path.clone(),
+            None => out_dir.join("spec-ir.library.json"),
         };
-        collect_ingot_sources_prefixed(db, dep, Some(&prefix), &mut library_sources);
+        let mut pending = self.pending.borrow_mut();
+        for name in names_to_build {
+            let Some(&(source_path, declared)) = name_to_loc.get(name.as_str()) else {
+                eprintln!("Error: no source of contract \"{name}\" for its spec IR");
+                had_errors = true;
+                continue;
+            };
+            let (Some(contract), Some(code)) = (declared.contract(), bytecode.get(name)) else {
+                eprintln!("Error: Sonatina did not emit bytecode for contract \"{name}\"");
+                had_errors = true;
+                continue;
+            };
+            let ir = match spec_ir::export_ir(db, contract) {
+                Ok(ir) => ir,
+                Err(spec_ir::Unsupported(reason)) => {
+                    eprintln!("Error: Failed to serialize the spec IR of {name}: {reason}");
+                    had_errors = true;
+                    continue;
+                }
+            };
+            let mut settings = record.settings(source_path, &declared.path_in_file, opt_level);
+            settings["backend"] = "sonatina".into();
+            let mut file = ir.contract;
+            file["provenance"] = serde_json::json!({
+                "compiler": compiler,
+                "sources": source_hashes(&record.root_sources),
+                "settings": settings,
+                "bytecode": {
+                    "creation": keccak256_hex(&code.deploy),
+                    "runtime": keccak256_hex(&code.runtime),
+                },
+                "library": library_provenance,
+            });
+            let base = sanitize_filename(name);
+            pending.contracts.push((
+                out_dir.join(format!("{base}.spec-ir.json")),
+                report_dir.map(Utf8Path::to_path_buf),
+                spec_ir::ir_text(&file),
+            ));
+            let mut library = ir.library;
+            library["provenance"] = library_provenance.clone();
+            match pending.libraries.get_mut(&library_path) {
+                Some((_, merged)) => {
+                    if let Err(err) = spec_ir::merge_library(merged, &library) {
+                        eprintln!("Error: the spec IR library of {name} does not merge: {err}");
+                        pending.failed = true;
+                        had_errors = true;
+                    }
+                }
+                None => {
+                    pending.libraries.insert(
+                        library_path.clone(),
+                        (report_dir.map(Utf8Path::to_path_buf), library),
+                    );
+                }
+            }
+        }
+        had_errors
     }
-    let library_provenance = serde_json::json!({
-        "compiler": compiler,
-        "sources": source_hashes(&library_sources),
-    });
-    let write = |file: &Utf8Path, text: &str| -> bool {
-        if let Err(err) = fs::write(file.as_std_path(), text) {
-            eprintln!("Error: Failed to write {file}: {err}");
+
+    /// Write the build's spec IR files: each library merged into the file `--spec-ir-library`
+    /// names if it exists, and nothing if a library does not merge.
+    fn finish(&self) -> bool {
+        let SpecIrFiles {
+            contracts,
+            libraries,
+            failed,
+        } = self.pending.take();
+        if failed {
+            eprintln!("Error: no spec IR file is written: a library does not merge");
             return true;
         }
-        if let (Some(dir), Some(name)) = (report_dir, file.file_name()) {
-            let _ = fs::write(dir.join(name).as_std_path(), text);
+        let mut merged = Vec::new();
+        for (path, (report_dir, mut library)) in libraries {
+            if self.library.is_some() && path.exists() {
+                let existing = fs::read_to_string(path.as_std_path())
+                    .map_err(|err| err.to_string())
+                    .and_then(|text| {
+                        serde_json::from_str::<serde_json::Value>(&text)
+                            .map_err(|err| err.to_string())
+                    })
+                    .and_then(|mut existing| {
+                        spec_ir::merge_library(&mut existing, &library)?;
+                        Ok(existing)
+                    });
+                match existing {
+                    Ok(existing) => library = existing,
+                    Err(err) => {
+                        eprintln!(
+                            "Error: this build's spec IR library does not merge into {path}, \
+                             so no spec IR file is written: {err}"
+                        );
+                        return true;
+                    }
+                }
+            }
+            merged.push((path, report_dir, spec_ir::ir_text(&library)));
         }
-        println!("Wrote {file}");
-        false
-    };
-    let mut library: Option<serde_json::Value> = None;
-    for name in names_to_build {
-        let Some(&(source_path, declared)) = name_to_loc.get(name.as_str()) else {
-            eprintln!("Error: no source of contract \"{name}\" for its spec IR");
-            had_errors = true;
-            continue;
-        };
-        let (Some(contract), Some(code)) = (declared.contract(), bytecode.get(name)) else {
-            eprintln!("Error: Sonatina did not emit bytecode for contract \"{name}\"");
-            had_errors = true;
-            continue;
-        };
-        let ir = match spec_ir::export_ir(db, contract) {
-            Ok(ir) => ir,
-            Err(spec_ir::Unsupported(reason)) => {
-                eprintln!("Error: Failed to serialize the spec IR of {name}: {reason}");
+        let mut had_errors = false;
+        for (path, report_dir, text) in contracts.into_iter().chain(merged) {
+            let written = path
+                .parent()
+                .filter(|parent| !parent.as_str().is_empty())
+                .map_or(Ok(()), |parent| fs::create_dir_all(parent.as_std_path()))
+                .and_then(|()| fs::write(path.as_std_path(), &text));
+            if let Err(err) = written {
+                eprintln!("Error: Failed to write {path}: {err}");
                 had_errors = true;
                 continue;
             }
-        };
-        let mut settings = record.settings(source_path, &declared.path_in_file, opt_level);
-        settings["backend"] = "sonatina".into();
-        let mut file = ir.contract;
-        file["provenance"] = serde_json::json!({
-            "compiler": compiler,
-            "sources": source_hashes(&record.root_sources),
-            "settings": settings,
-            "bytecode": {
-                "creation": keccak256_hex(&code.deploy),
-                "runtime": keccak256_hex(&code.runtime),
-            },
-            "library": library_provenance,
-        });
-        let base = sanitize_filename(name);
-        had_errors |= write(
-            &out_dir.join(format!("{base}.spec-ir.json")),
-            &spec_ir::ir_text(&file),
-        );
-        match &mut library {
-            Some(library) => {
-                if let Err(err) = spec_ir::merge_library(library, &ir.library) {
-                    eprintln!("Error: the spec IR libraries of the contracts differ: {err}");
-                    had_errors = true;
-                }
+            if let (Some(dir), Some(name)) = (report_dir, path.file_name()) {
+                let _ = fs::write(dir.join(name).as_std_path(), &text);
             }
-            None => library = Some(ir.library),
+            println!("Wrote {path}");
         }
+        had_errors
     }
-    let Some(mut library) = library else {
-        return had_errors;
-    };
-    library["provenance"] = library_provenance;
-    let path = match emit.spec_ir_library {
-        Some(path) => path.to_path_buf(),
-        None => out_dir.join("spec-ir.library.json"),
-    };
-    // `--spec-ir-library` accumulates: the file's entries and this build's, which must agree.
-    if emit.spec_ir_library.is_some() && path.exists() {
-        let existing = fs::read_to_string(path.as_std_path())
-            .map_err(|err| err.to_string())
-            .and_then(|text| {
-                serde_json::from_str::<serde_json::Value>(&text).map_err(|err| err.to_string())
-            });
-        match existing {
-            Ok(mut existing) => match spec_ir::merge_library(&mut existing, &library) {
-                Ok(()) => library = existing,
-                Err(err) => {
-                    eprintln!(
-                        "Error: this build's spec IR library does not merge into {path}: {err}"
-                    );
-                    return true;
-                }
-            },
-            Err(err) => {
-                eprintln!("Error: Failed to read the spec IR library {path}: {err}");
-                return true;
-            }
-        }
-    }
-    had_errors | write(&path, &spec_ir::ir_text(&library))
 }
 
 fn remove_file_if_exists(path: &Utf8Path) -> std::io::Result<()> {
@@ -2875,7 +2949,7 @@ fn describe_emit_selection(emit: EmitSelection<'_>) -> String {
     if emit.sidecar {
         parts.push("sidecar");
     }
-    if emit.spec_ir {
+    if emit.spec_ir.is_some() {
         parts.push("spec-ir");
     }
     if emit.executable {
@@ -3106,8 +3180,7 @@ mod tests {
             metadata: false,
             sizes: false,
             sidecar: false,
-            spec_ir: false,
-            spec_ir_library: None,
+            spec_ir: None,
             executable: false,
             object: false,
             staticlib: false,

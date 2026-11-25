@@ -34,7 +34,7 @@ use hir::{
     semantic::{RecvArmAbiInfo, RecvArmView},
 };
 
-pub use ir::{IR_VERSION, SpecIr, export_ir, ir_text, merge_library};
+pub use ir::{IR_VERSION, SpecIr, export_ir, ir_text, merge_library, merge_provenance};
 pub use key::{ingot_name, ingot_namespace};
 
 /// Why a contract is not exported: a construct the exporter has no model

@@ -180,10 +180,10 @@ fn references<'a>(value: &'a Value, refs: &mut Vec<(&'a str, &'a str)>) {
 }
 
 /// Merges the library `other` into the library `into`, both [`SpecIr::library`]
-/// outputs, possibly with more fields (such as a `provenance`) than
-/// [`export_ir`] writes: their other fields must be equal, and an entry
-/// both have must be the same in both. The result is sorted by key, so it
-/// does not depend on the order libraries are merged in.
+/// outputs, possibly with a `provenance` (as `fe build --emit spec-ir` writes it): their
+/// version and target must be equal, an entry both have must be the same in both, and their
+/// provenance merges ([`merge_provenance`]). The result is sorted by key, so it does not depend
+/// on the order libraries are merged in.
 pub fn merge_library(into: &mut Value, other: &Value) -> Result<(), String> {
     let (Value::Object(into), Value::Object(other)) = (into, other) else {
         return Err("a library is a JSON object".into());
@@ -191,12 +191,17 @@ pub fn merge_library(into: &mut Value, other: &Value) -> Result<(), String> {
     let fields = |object: &Map<String, Value>| {
         object
             .iter()
-            .filter(|(field, _)| !matches!(field.as_str(), "types" | "funcs"))
+            .filter(|(field, _)| !matches!(field.as_str(), "types" | "funcs" | "provenance"))
             .map(|(field, value)| (field.clone(), value.clone()))
             .collect::<Map<_, _>>()
     };
     if fields(into) != fields(other) {
-        return Err("the libraries differ in their version, target or provenance".into());
+        return Err("the libraries differ in their version or target".into());
+    }
+    match (into.get_mut("provenance"), other.get("provenance")) {
+        (Some(into), Some(other)) => merge_provenance(into, other)?,
+        (None, None) => {}
+        _ => return Err("one library records its provenance, the other none".into()),
     }
     for table in ["types", "funcs"] {
         let mut entries = BTreeMap::new();
@@ -216,6 +221,35 @@ pub fn merge_library(into: &mut Value, other: &Value) -> Result<(), String> {
             }
         }
         into.insert(table.into(), Value::Array(entries.into_values().collect()));
+    }
+    Ok(())
+}
+
+/// Merges the library provenance `other` into `into`: `{compiler, ingots}`, each ingot by name
+/// with what determines its entries. The compilers must be equal; the ingots are the union of
+/// both, and an ingot both have must be the same in both.
+pub fn merge_provenance(into: &mut Value, other: &Value) -> Result<(), String> {
+    if into["compiler"] != other["compiler"] {
+        return Err(format!(
+            "the libraries come from different compilers, {} and {}",
+            into["compiler"], other["compiler"]
+        ));
+    }
+    let (Some(Value::Object(ingots)), Some(Value::Object(others))) =
+        (into.get_mut("ingots"), other.get("ingots"))
+    else {
+        return Err("a library provenance without `ingots`".into());
+    };
+    for (name, ingot) in others {
+        match ingots.get(name) {
+            Some(existing) if existing != ingot => {
+                return Err(format!("the libraries differ in the ingot `{name}`"));
+            }
+            Some(_) => {}
+            None => {
+                ingots.insert(name.clone(), ingot.clone());
+            }
+        }
     }
     Ok(())
 }

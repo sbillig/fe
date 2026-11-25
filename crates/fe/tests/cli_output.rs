@@ -5703,14 +5703,21 @@ fn test_cli_build_emit_spec_ir_records_provenance() {
         assert_eq!(provenance["bytecode"][field], keccak_hex(&code), "{field}");
     }
     assert_eq!(provenance["library"], library["provenance"]);
-    let library_sources = library["provenance"]["sources"]
-        .as_object()
-        .expect("sources");
-    assert!(
-        library_sources.keys().any(|path| path.starts_with("core/"))
-            && library_sources.keys().any(|path| path.starts_with("std/")),
-        "the library's sources are core's and std's: {library_sources:?}"
+    let library_ingots = library["provenance"]["ingots"].as_object().expect("ingots");
+    assert_eq!(
+        library_ingots.keys().collect::<Vec<_>>(),
+        ["core", "std"],
+        "the library's ingots: {library_ingots:?}"
     );
+    for ingot in library_ingots.values() {
+        assert!(
+            ingot["sources"]
+                .as_object()
+                .is_some_and(|sources| !sources.is_empty())
+        );
+        assert_eq!(ingot["arithmetic"], "checked");
+    }
+    assert!(links(&contract, &library));
     // Every reference in the contract file is to the library's entries or its own.
     let keys = |file: &Value, table: &str| -> Vec<String> {
         file[table]
@@ -5771,7 +5778,7 @@ fn test_cli_build_spec_ir_library_accumulates() {
     assert!(both["funcs"].as_array().unwrap().len() >= first["funcs"].as_array().unwrap().len());
     // A library from other sources does not merge.
     let mut other = both.clone();
-    other["provenance"]["sources"]["core/src/lib.fe"] = Value::from("0x00");
+    other["provenance"]["ingots"]["core"]["sources"]["src/lib.fe"] = Value::from("0x00");
     fs::write(&library, other.to_string()).expect("write library");
     let (output, code) = build("store", SPEC_IR_STORE);
     assert_ne!(code, 0, "{output}");
@@ -5796,4 +5803,170 @@ fn test_cli_build_spec_ir_library_requires_spec_ir() {
         output.contains("`--spec-ir-library` requires `--emit spec-ir`"),
         "{output}"
     );
+}
+
+/// Whether `contract`, a spec IR contract file, links against `library`, as fe-spec's
+/// `Program.link` checks it: every reference names an entry of the two, and the library has
+/// the compiler and each library ingot the contract file records.
+fn links(contract: &Value, library: &Value) -> bool {
+    fn refs<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+        match value {
+            Value::Object(fields) => {
+                for (tag, value) in fields {
+                    match (tag.as_str(), value) {
+                        ("$ty" | "$fn", Value::String(key)) => out.push(key),
+                        _ => refs(value, out),
+                    }
+                }
+            }
+            Value::Array(values) => values.iter().for_each(|value| refs(value, out)),
+            _ => {}
+        }
+    }
+    let keys: Vec<&str> = [contract, library]
+        .iter()
+        .flat_map(|file| ["types", "funcs"].map(|table| &file[table]))
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter_map(|entry| entry["key"].as_str())
+        .collect();
+    let mut references = Vec::new();
+    refs(&contract["contract"], &mut references);
+    refs(&contract["funcs"], &mut references);
+    refs(&contract["types"], &mut references);
+    let recorded = &contract["provenance"]["library"];
+    let ingots = &library["provenance"]["ingots"];
+    references.iter().all(|key| keys.contains(key))
+        && recorded["compiler"] == library["provenance"]["compiler"]
+        && recorded["ingots"]
+            .as_object()
+            .is_some_and(|recorded| recorded.iter().all(|(name, ingot)| ingots[name] == *ingot))
+}
+
+/// `fe build --emit spec-ir --spec-ir-library <library>` of `path`, with `out` as the output
+/// directory.
+fn build_spec_ir(path: &Path, out: &Path, library: &Path) -> (String, i32) {
+    run_fe_main(&[
+        "build",
+        "--emit",
+        "spec-ir",
+        "--spec-ir-library",
+        library.to_str().expect("library utf8"),
+        "--out-dir",
+        out.to_str().expect("out utf8"),
+        path.to_str().expect("path utf8"),
+    ])
+}
+
+#[test]
+fn test_cli_build_spec_ir_library_merges_dependency_sets() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    let library = root.join("library.json");
+    // A standalone contract (core and std) and an ingot with a dependency (core, std, mylib).
+    fs::create_dir_all(root.join("store")).expect("store dir");
+    fs::write(root.join("store/store.fe"), SPEC_IR_STORE).expect("write store");
+    write_app_with_path_dependency(root);
+    let (output, code) = build_spec_ir(
+        &root.join("store/store.fe"),
+        &root.join("store/out"),
+        &library,
+    );
+    assert_eq!(code, 0, "{output}");
+    let (output, code) = build_spec_ir(&root.join("app"), &root.join("app/out"), &library);
+    assert_eq!(code, 0, "{output}");
+    let library = read_json(&library);
+    let ingots = library["provenance"]["ingots"].as_object().expect("ingots");
+    assert_eq!(ingots.keys().collect::<Vec<_>>(), ["core", "mylib", "std"]);
+    // mylib's fe.toml sets `arithmetic = "unchecked"`.
+    assert_eq!(ingots["mylib"]["arithmetic"], "unchecked");
+    assert!(links(
+        &read_json(&root.join("store/out/Store.spec-ir.json")),
+        &library
+    ));
+    assert!(links(
+        &read_json(&root.join("app/out/Foo.spec-ir.json")),
+        &library
+    ));
+}
+
+#[test]
+fn test_cli_build_spec_ir_library_refuses_other_dependency_arithmetic() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    let library = root.join("library.json");
+    write_app_with_path_dependency(root);
+    let (output, code) = build_spec_ir(&root.join("app"), &root.join("app/out"), &library);
+    assert_eq!(code, 0, "{output}");
+    // A second app forcing checked arithmetic onto the same mylib.
+    fs::create_dir_all(root.join("app2/src")).expect("app2 dir");
+    fs::write(
+        root.join("app2/fe.toml"),
+        "[ingot]\nname = \"app2\"\nversion = \"0.1.0\"\ndependency-arithmetic = \"checked\"\n\n[dependencies]\nmylib = { path = \"../mylib\" }\n",
+    )
+    .expect("write app2/fe.toml");
+    fs::copy(root.join("app/src/main.fe"), root.join("app2/src/main.fe")).expect("copy main");
+    let before = fs::read_to_string(&library).expect("read library");
+    let (output, code) = build_spec_ir(&root.join("app2"), &root.join("app2/out"), &library);
+    assert_ne!(code, 0, "{output}");
+    assert!(output.contains("the ingot `mylib`"), "{output}");
+    // Nothing is written: neither the contract file nor the library.
+    assert!(!root.join("app2/out/Foo.spec-ir.json").exists());
+    assert_eq!(fs::read_to_string(&library).expect("read library"), before);
+}
+
+#[test]
+fn test_cli_build_spec_ir_workspace_writes_one_library() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"ws\"\nversion = \"0.1.0\"\nmembers = [\n  { path = \"ingots/a\", name = \"a\" },\n  { path = \"ingots/b\", name = \"b\" },\n]\n",
+    )
+    .expect("write workspace fe.toml");
+    for (name, contract) in [("a", "StoreA"), ("b", "StoreB")] {
+        fs::create_dir_all(root.join(format!("ingots/{name}/src"))).expect("member dir");
+        fs::write(
+            root.join(format!("ingots/{name}/fe.toml")),
+            format!("[ingot]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+        )
+        .expect("write member fe.toml");
+        // Different code reaches different library entries.
+        let source = SPEC_IR_STORE.replace("Store", contract);
+        let source = if name == "b" {
+            source.replace("stored = value", "stored = value * 2")
+        } else {
+            source
+        };
+        fs::write(root.join(format!("ingots/{name}/src/main.fe")), source).expect("write main");
+    }
+    let out = root.join("out");
+    let (output, code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "spec-ir",
+        "--out-dir",
+        out.to_str().expect("out utf8"),
+        root.to_str().expect("root utf8"),
+    ]);
+    assert_eq!(code, 0, "{output}");
+    let library = read_json(&out.join("spec-ir.library.json"));
+    for contract in ["StoreA", "StoreB"] {
+        let file = read_json(&out.join(format!("{contract}.spec-ir.json")));
+        assert!(links(&file, &library), "{contract} does not link");
+    }
+}
+
+#[test]
+fn test_cli_build_spec_ir_library_creates_its_directory() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("store.fe");
+    fs::write(&source, SPEC_IR_STORE).expect("write source");
+    let library = temp.path().join("nodir/lib.json");
+    let (output, code) = build_spec_ir(&source, &temp.path().join("out"), &library);
+    assert_eq!(code, 0, "{output}");
+    assert!(links(
+        &read_json(&temp.path().join("out/Store.spec-ir.json")),
+        &read_json(&library)
+    ));
 }
