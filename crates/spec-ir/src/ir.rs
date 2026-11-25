@@ -320,8 +320,8 @@ struct IrExport<'db> {
     /// The contract's `init`, which the entry plan's types are normalized in.
     root: SemanticInstance<'db>,
     /// The instance whose types are being resolved: a type's entry (its fields, pinned space,
-    /// drop impl and layouts) is resolved in the scope and assumptions of the instance that
-    /// first names it.
+    /// drop impl and layouts) is resolved in the scope and assumptions of each instance that
+    /// names it, and must be the same in every one.
     scope: SemanticInstance<'db>,
     keys: Keys<'db>,
     types: Table,
