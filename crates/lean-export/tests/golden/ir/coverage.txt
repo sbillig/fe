@@ -43,3 +43,8 @@ collide Collide: ok
 names Names: ok
 effect_copies Copies: ok
 lane_holds Lanes: ok
+diverging_arm Diverge: ok
+uninhabited_access UninhabitedAccess: ok
+never_mut NeverMut: ok
+never_slot NeverSlot: ok
+zero_enum ZeroEnum: ok
