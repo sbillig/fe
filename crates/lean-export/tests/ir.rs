@@ -53,12 +53,12 @@ fn library() {
     compare("ir/library.json", &ir_text(&library));
 }
 
-/// A type whose constant argument is defined in the contract's ingot is the contract's,
-/// although its other parts are the library's: `String<7>` with the capacity the message's ABI
-/// impl leaves unevaluated.
+/// A type with a constant argument the compiler has not evaluated, here the default of a
+/// constant parameter, is keyed by where the constant's body is, and is the contract's when
+/// that is in the contract's ingot.
 #[test]
 fn unevaluated_constant_is_contract_entry() {
-    let ir = serialize("string_label");
+    let ir = serialize("const_default");
     let keys = |file: &serde_json::Value| -> Vec<String> {
         file["types"]
             .as_array()

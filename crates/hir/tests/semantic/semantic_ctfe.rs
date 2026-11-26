@@ -12,8 +12,10 @@ use fe_hir::{
             identity_semantic_instance_key, reify_runtime_const_for_ty,
         },
         ty::{
+            const_ty::ConstTyData,
             diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
             ty_check::{BodyOwner, check_func_body},
+            ty_def::TyData,
         },
     },
     hir_def::{ItemKind, Partial},
@@ -906,6 +908,54 @@ fn owner_name(db: &HirAnalysisTestDb, owner: BodyOwner<'_>) -> String {
             Partial::Absent => format!("<contract>::recv[{recv_idx}][{arm_idx}]"),
         },
     }
+}
+
+/// A recv arm returns its message variant's `Return` type as the variant's
+/// impl defines it, checked: a constant argument, such as the capacity of
+/// `String<7>`, is evaluated.
+#[test]
+fn recv_arm_return_type_has_evaluated_constants() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "recv_return_const.fe".into(),
+        r#"
+msg LabelMsg {
+    #[selector = 1]
+    Label -> String<7>,
+}
+
+pub contract LabelBox {
+    recv LabelMsg {
+        Label -> String<7> { "deposit" }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let arm = SemanticInstance::new(
+        &db,
+        identity_semantic_instance_key(
+            &db,
+            BodyOwner::ContractRecvArm {
+                contract: top_mod.all_contracts(&db)[0],
+                recv_idx: 0,
+                arm_idx: 0,
+            },
+        ),
+    );
+    let result = arm.normalized_result_ty(&db);
+    let (_, args) = result.decompose_ty_app(&db);
+    let [capacity] = args else {
+        panic!("expected `String<7>`, got `{}`", result.pretty_print(&db));
+    };
+    assert!(
+        matches!(
+            capacity.data(&db),
+            TyData::ConstTy(capacity) if matches!(capacity.data(&db), ConstTyData::Value(_))
+        ),
+        "the capacity of the arm's `{}` is not evaluated",
+        result.pretty_print(&db)
+    );
 }
 
 #[test]

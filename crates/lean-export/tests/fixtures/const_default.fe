@@ -1,0 +1,19 @@
+// A struct with a defaulted constant parameter: the type the recv arm names keeps the default,
+// `{ N + 1 }`, as a constant the compiler has not evaluated.
+struct Tagged<const N: usize, const L: usize = { N + 1 }> {
+    x: u8,
+}
+
+msg TagMsg {
+    #[selector = 1]
+    Get -> u8,
+}
+
+pub contract TagBox {
+    recv TagMsg {
+        Get -> u8 {
+            let tagged = Tagged<1> { x: 3 }
+            tagged.x
+        }
+    }
+}

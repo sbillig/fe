@@ -32,6 +32,7 @@ use crate::{
             provider::AddressSpace,
             trait_def::TraitInstId,
             trait_def::impls_for_ty,
+            trait_lower::complete_impl_assoc_ty,
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
@@ -1064,7 +1065,8 @@ pub(super) fn get_msg_variant_return_type<'db>(
             .copied()
     })?;
 
-    // Get the Return associated type from the impl
+    // The candidate impl leaves the constants of its associated types
+    // unevaluated: take `Return` as the impl defines it, checked.
     let return_name = IdentId::new(db, "Return".to_string());
-    msg_variant_impl.assoc_ty(db, return_name)
+    complete_impl_assoc_ty(db, msg_variant_impl, return_name)?.assoc_ty(db, return_name)
 }
