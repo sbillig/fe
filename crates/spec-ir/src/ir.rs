@@ -38,8 +38,8 @@ use hir::{
             AddressSpace, ProviderKind,
             adt_def::AdtRef,
             corelib::{
-                ContractMetadataKind, NumericExternIntrinsic, RuntimeBuiltinFuncKind,
-                SaturatingArithmetic, core_numeric_const_intrinsic, lib_func_matches,
+                ContractMetadataKind, NumericExternIntrinsic, OverflowArithmetic,
+                RuntimeBuiltinFuncKind, core_numeric_const_intrinsic, lib_func_matches,
                 runtime_builtin_func_kind,
             },
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
@@ -782,7 +782,7 @@ impl<'db> IrExport<'db> {
     /// are lanes apart from the rest of their slots.
     fn storage_layout(&self, ty: TyId<'db>) -> Value {
         let db = self.db;
-        let Ok(slots) = storage_slot_span(db, ty) else {
+        let Ok(Some(slots)) = storage_slot_span(db, ty) else {
             return Value::Null;
         };
         let placement = |placement: &StorageFieldPlacement| {
@@ -1664,9 +1664,15 @@ fn numeric(kind: NumericExternIntrinsic) -> Value {
             json!({ "binary": { "op": { "comp": { "op": comp(op) } } } })
         }
         NumericExternIntrinsic::SaturatingBinary(op) => json!({ "saturating": { "op": match op {
-            SaturatingArithmetic::Add => "add",
-            SaturatingArithmetic::Sub => "sub",
-            SaturatingArithmetic::Mul => "mul",
+            OverflowArithmetic::Add => "add",
+            OverflowArithmetic::Sub => "sub",
+            OverflowArithmetic::Mul => "mul",
+        }}}),
+        // The format has no operation that returns a result with its overflow flag.
+        NumericExternIntrinsic::OverflowingBinary(op) => json!({ "unknown": { "op": match op {
+            OverflowArithmetic::Add => "__overflowing_add",
+            OverflowArithmetic::Sub => "__overflowing_sub",
+            OverflowArithmetic::Mul => "__overflowing_mul",
         }}}),
         NumericExternIntrinsic::CheckedNeg => {
             json!({ "unary": { "op": unary_op(UnaryOp::Neg(Overflow::Checked)) } })

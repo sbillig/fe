@@ -53,8 +53,8 @@ use hir::{
             adt_def::{AdtField, AdtRef, instantiate_adt_field_shape},
             closure::closure_regions,
             corelib::{
-                ContractMetadataKind, NumericExternIntrinsic, RuntimeBuiltinFuncKind,
-                SaturatingArithmetic, core_numeric_const_intrinsic, lib_func_matches,
+                ContractMetadataKind, NumericExternIntrinsic, OverflowArithmetic,
+                RuntimeBuiltinFuncKind, core_numeric_const_intrinsic, lib_func_matches,
                 resolve_lib_type_path, runtime_builtin_func_kind,
             },
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
@@ -2528,7 +2528,9 @@ impl<'db> Module<'db> {
     /// The slots a value of `ty` takes in contract state.
     fn span(&self, ty: TyId<'db>) -> Result<usize, Unsupported> {
         storage_slot_span(self.db, ty)
-            .map_err(|_| Unsupported(format!("layout of {}", ty.pretty_print(self.db))))
+            .ok()
+            .flatten()
+            .ok_or_else(|| Unsupported(format!("layout of {}", ty.pretty_print(self.db))))
     }
 
     /// The bytes a value of `ty` packs into and its one field, if `ty` is a
@@ -5787,9 +5789,9 @@ impl<'db> BodyExporter<'_, 'db> {
             }
             (Kind::SaturatingBinary(op), [lhs, rhs], Some(int)) => {
                 let op = match op {
-                    SaturatingArithmetic::Add => "satAdd",
-                    SaturatingArithmetic::Sub => "satSub",
-                    SaturatingArithmetic::Mul => "satMul",
+                    OverflowArithmetic::Add => "satAdd",
+                    OverflowArithmetic::Sub => "satSub",
+                    OverflowArithmetic::Mul => "satMul",
                 };
                 format!(":= IntTy.{op} {} {lhs} {rhs}", int_ty(int))
             }
