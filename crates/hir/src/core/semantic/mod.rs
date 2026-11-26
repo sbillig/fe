@@ -257,20 +257,8 @@ pub(crate) fn func_body_assumptions<'db>(
             preds,
             trait_self_predicate(db, trait_).with_mode(db, ModeMarker::MaybeMut),
         ),
-        Some(ItemKind::ImplTrait(impl_trait)) => {
-            let is_mut_body = func.name(db).to_opt().is_some_and(|name| {
-                lower_impl_trait(db, impl_trait).is_some_and(|implementor| {
-                    collect_implementor_methods(db, implementor)
-                        .mut_bodies
-                        .get(&name)
-                        == Some(&func)
-                })
-            });
-            if is_mut_body {
-                preds.at_mode(db, Some(BorrowKind::Mut))
-            } else {
-                preds
-            }
+        Some(ItemKind::ImplTrait(_)) if func.is_mut_body(db) => {
+            preds.at_mode(db, Some(BorrowKind::Mut))
         }
         _ => preds,
     }
@@ -764,6 +752,20 @@ impl<'db> Func<'db> {
     /// Whether this is a `mut?` function, used at `ref` or at `mut`.
     pub fn is_maybe_mut(self, db: &'db dyn HirAnalysisDb) -> bool {
         func_is_maybe_mut(db, self)
+    }
+
+    /// Whether this is the `mut` body of a method its implementation gives
+    /// one body per mode: the other function of its name is the `ref` body.
+    pub fn is_mut_body(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.containing_impl_trait(db)
+            .and_then(|impl_trait| lower_impl_trait(db, impl_trait))
+            .zip(self.name(db).to_opt())
+            .is_some_and(|(implementor, name)| {
+                collect_implementor_methods(db, implementor)
+                    .mut_bodies
+                    .get(&name)
+                    == Some(&self)
+            })
     }
 
     /// The modes the function is checked and used at: `ref` and `mut` for a

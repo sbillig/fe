@@ -10,7 +10,9 @@ use hir::{
             ty_def::{BorrowKind, ClosureDef, ClosureTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{CallableDef, ItemKind, TopLevelMod, params::FuncParamMode, scope_graph::ScopeId},
+    hir_def::{
+        CallableDef, Func, ItemKind, TopLevelMod, params::FuncParamMode, scope_graph::ScopeId,
+    },
     semantic::{ProviderBinding, ProviderSource},
 };
 
@@ -63,6 +65,13 @@ fn mode_identity(mode: Option<BorrowKind>) -> &'static str {
     }
 }
 
+/// The mode of `func` as a body of its name in its impl: `mut` for the `mut`
+/// body of a method with one body per mode, which shares its name with the
+/// `ref` body.
+fn mode_body<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> Option<BorrowKind> {
+    func.is_mut_body(db).then_some(BorrowKind::Mut)
+}
+
 fn body_owner_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> String {
     match owner {
         BodyOwner::Func(func, mode) => {
@@ -70,7 +79,7 @@ fn body_owner_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -
             format!(
                 "func${}${owner_context}{}",
                 item_identity(db, func.into()),
-                mode_identity(mode)
+                mode_identity(mode.or(mode_body(db, func)))
             )
         }
         BodyOwner::Const(const_) => format!("const${}", item_identity(db, const_.into())),
@@ -172,7 +181,11 @@ pub fn semantic_owner_context_trace_identity<'db>(
 pub fn body_owner_trace_identity<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> String {
     if let BodyOwner::Func(func, _) = owner {
         let owner_context = semantic_owner_context_trace_identity(db, owner).unwrap_or_default();
-        format!("func${}${owner_context}", item_identity(db, func.into()))
+        format!(
+            "func${}${owner_context}{}",
+            item_identity(db, func.into()),
+            mode_identity(mode_body(db, func))
+        )
     } else {
         body_owner_identity(db, owner)
     }
@@ -380,7 +393,7 @@ fn effect_param_site_identity<'db>(
         EffectParamSite::Func(func, mode) => format!(
             "func${}{}",
             item_identity(db, func.into()),
-            mode_identity(mode)
+            mode_identity(mode.or(mode_body(db, func)))
         ),
         EffectParamSite::Contract(contract) => {
             format!("contract${}", item_identity(db, contract.into()))

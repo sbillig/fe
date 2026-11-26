@@ -1,9 +1,14 @@
 use common::InputDb;
 use driver::DriverDataBase;
 use fe_mir::{
-    RuntimeInstanceOwnerKey, RuntimePackage, build_runtime_package, trace::emit_mir_facts,
+    RuntimeInstanceOwnerKey, RuntimePackage, build_runtime_package,
+    runtime::stable_key::body_owner_trace_identity, trace::emit_mir_facts,
 };
-use hir::hir_def::{Func, TopLevelMod};
+use hir::{
+    analysis::ty::ty_check::BodyOwner,
+    hir_def::{Func, TopLevelMod},
+};
+use std::collections::BTreeSet;
 use trace_facts::{TraceFact, TraceValidator};
 use url::Url;
 
@@ -324,7 +329,7 @@ pub fn main() -> u256 {
     assert_eq!(pick_instances, 2, "expected two instantiations of `pick`");
 
     // Owners of HIR targets reached from runtime origins of `pick` instances.
-    let mut pick_hir_owners = std::collections::BTreeSet::new();
+    let mut pick_hir_owners = BTreeSet::new();
     for fact in &facts {
         if let TraceFact::OriginEdge(edge) = fact
             && matches!(edge.from.kind(), "runtime.stmt" | "runtime.terminator")
@@ -392,7 +397,7 @@ pub fn main() -> u256 {
     let facts = emit_mir_facts(&db, package);
     TraceValidator::validate(&facts).expect("distinct impl identities must validate");
 
-    let mut get_hir_owners = std::collections::BTreeSet::new();
+    let mut get_hir_owners = BTreeSet::new();
     for fact in &facts {
         if let TraceFact::OriginEdge(edge) = fact
             && matches!(edge.from.kind(), "runtime.stmt" | "runtime.terminator")
@@ -412,5 +417,54 @@ pub fn main() -> u256 {
         owners.iter().any(|owner| owner.contains("Foo"))
             && owners.iter().any(|owner| owner.contains("Bar")),
         "impl context must be textual (type names visible), got {owners:?}"
+    );
+}
+
+/// A `mut?` trait method implemented by one body per mode is two functions
+/// of one name in one impl: each is its own HIR body.
+#[test]
+fn mode_bodies_mint_distinct_hir_identities() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse("file:///hir_identity_mode_bodies.fe").unwrap();
+    let file = db.workspace().touch(
+        &mut db,
+        file_url,
+        Some(
+            r#"
+trait Slot {
+    fn slot(mut? self) -> mut? u256
+}
+
+struct Halved {
+    word: u256,
+}
+
+impl Slot for Halved {
+    fn slot(self) -> ref u256 {
+        self.word / 2
+    }
+
+    fn slot(mut self) -> mut u256 {
+        var value = self.word / 2
+        yield mut value
+        self.word = value * 2
+    }
+}
+"#
+            .to_string(),
+        ),
+    );
+    let bodies = db
+        .top_mod(file)
+        .all_funcs(&db)
+        .iter()
+        .filter(|func| func.containing_impl_trait(&db).is_some())
+        .map(|func| body_owner_trace_identity(&db, BodyOwner::Func(*func, None)))
+        .collect::<Vec<_>>();
+    assert_eq!(bodies.len(), 2, "expected both bodies of `slot`");
+    assert_ne!(bodies[0], bodies[1], "one HIR identity for both bodies");
+    assert!(
+        bodies[1].strip_prefix(&bodies[0]) == Some("$mut"),
+        "the `mut` body is the method at `mut`: {bodies:?}"
     );
 }
