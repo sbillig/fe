@@ -2,7 +2,7 @@
 source: crates/fe/tests/packed_string_abi.rs
 expression: report
 ---
-runtime bytes: 300
-name() gas: 534
-symbol() gas: 552
-empty() gas: 504
+runtime bytes: 319
+name() gas: 577
+symbol() gas: 595
+empty() gas: 561
