@@ -379,22 +379,14 @@ impl<'db> Keys<'db> {
             },
         };
         let own = self.args(args.get(taken..).unwrap_or_default());
-        // An impl can implement a `mut?` method by one function per receiver mode, both of its
-        // name: each receiver but `self` is marked.
-        let receiver = match owner {
-            BodyOwner::Func(func, None) if func.is_method(db) => {
-                func.params(db)
-                    .next()
-                    .map_or("", |param| match param.mode_at(db, None) {
-                        FuncParamMode::View => "",
-                        FuncParamMode::Own => "(own self)",
-                        FuncParamMode::Mut => "(mut self)",
-                    })
-            }
-            _ => "",
+        // An impl can implement a `mut?` method by one function per mode, both of its name:
+        // the `mut` body is the method at `mut`.
+        let mode = match owner {
+            BodyOwner::Func(func, None) if func.is_mut_body(db) => Some(BorrowKind::Mut),
+            _ => mode,
         };
         format!(
-            "{path}{own}{receiver}{}{}",
+            "{path}{own}{}{}",
             mode_suffix(mode),
             self.specialization(key)
         )

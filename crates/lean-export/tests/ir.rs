@@ -72,6 +72,29 @@ fn unevaluated_constant_is_contract_entry() {
     assert!(!unevaluated(&keys(&ir.library)), "{:?}", keys(&ir.library));
 }
 
+/// An impl's two bodies of a `mut?` method, one per mode, have keys of their own, whether a
+/// receiver or another parameter tells them apart: the `mut` body is the method at `mut`.
+#[test]
+fn mode_bodies_have_their_own_keys() {
+    let ir = serialize("mode_bodies");
+    let keys: Vec<_> = ir.contract["funcs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["key"].as_str().unwrap())
+        .filter(|key| key.contains(" as mode_bodies::"))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "<mode_bodies::Halved as mode_bodies::Slot>::slot",
+            "<mode_bodies::Halved as mode_bodies::Slot>::slot#mut",
+            "<mode_bodies::Picker as mode_bodies::Pick>::pick",
+            "<mode_bodies::Picker as mode_bodies::Pick>::pick#mut",
+        ]
+    );
+}
+
 /// Merging is independent of order, and refuses an entry that differs.
 #[test]
 fn merge() {

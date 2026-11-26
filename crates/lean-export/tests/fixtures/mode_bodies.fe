@@ -1,0 +1,60 @@
+// A `mut?` trait method implemented by one body per mode: two functions of one name, told
+// apart by a receiver (`slot`) or by another parameter (`pick`).
+trait Slot {
+    fn slot(mut? self) -> mut? u256
+}
+
+struct Halved {
+    word: u256,
+}
+
+impl Slot for Halved {
+    fn slot(self) -> ref u256 {
+        self.word / 2
+    }
+
+    fn slot(mut self) -> mut u256 {
+        var value = self.word / 2
+        yield mut value
+        self.word = value * 2
+    }
+}
+
+trait Pick {
+    fn pick(_ a: mut u256, _ b: mut? u256) -> (mut u256, mut? u256)
+}
+
+struct Picker {}
+
+impl Pick for Picker {
+    fn pick(_ a: mut u256, _ b: u256) -> (mut u256, ref u256) {
+        (mut a, ref b)
+    }
+
+    fn pick(_ a: mut u256, _ b: mut u256) -> (mut u256, mut u256) {
+        (mut a, mut b)
+    }
+}
+
+msg ModeMsg {
+    #[selector = 1]
+    Go { v: u256 } -> u256,
+}
+
+pub contract ModeBodies {
+    recv ModeMsg {
+        Go { v } -> u256 {
+            var halved = Halved { word: v }
+            let half = mut halved.slot()
+            half += 1
+            var a: u256 = halved.slot()
+            var b: u256 = 2
+            let (mut x, y) = Picker::pick(mut a, b)
+            x = y + 1
+            let (mut p, mut q) = Picker::pick(mut a, mut b)
+            p += 1
+            q += 1
+            a + b
+        }
+    }
+}
