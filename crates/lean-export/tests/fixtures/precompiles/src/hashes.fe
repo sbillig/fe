@@ -1,7 +1,7 @@
 use core::num::swap_bytes
 use core::ops::WrappingAdd
 use keccak::ByteSource
-use std::native::sha256_compress
+use core::hash::sha256_compress
 
 // FIPS 180-4 SHA-256 initial state.
 const SHA256_IV: [u32; 8] = [
