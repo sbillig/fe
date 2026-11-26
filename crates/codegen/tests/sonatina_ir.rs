@@ -13,6 +13,7 @@ use fe_codegen::{
     OptLevel, SonatinaSidecar, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized,
 };
 use hir::hir_def::TopLevelMod;
+use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashSet},
     path::Path,
@@ -157,8 +158,25 @@ fn observability_preserves_creation_and_runtime_bytecode(fixture: Fixture<&str>)
     });
 }
 
+/// The passes of the machine stage's pass round, which `-O0` does not run.
+const MACHINE_ROUND: [&str; 7] = [
+    "cfg_cleanup",
+    "branch_canonicalize",
+    "scalar_canonicalize",
+    "known_bits_simplify",
+    "sccp",
+    "gvn",
+    "adce",
+];
+
+fn array(value: &Value) -> &Vec<Value> {
+    value.as_array().expect("a JSON array")
+}
+
 /// The sidecars of `top_mod` at `level`, checked against its bytecode and IR: each symbol is
 /// a function or global of its section's IR, and each function's symbol is where its code starts.
+/// In the JSON of each sidecar, the machine steps of each section compose to its `machine_ir`,
+/// and at `-O0` no pass of the pass round runs.
 fn checked_sidecars(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -228,6 +246,104 @@ fn checked_sidecars(
                 }
             }
         }
+        let json: Value = serde_json::from_str(&serde_json::to_string(sidecar).unwrap()).unwrap();
+        assert_eq!(json["version"], 5);
+        for section in array(&json["sections"]) {
+            let lowering = &section["lowering"];
+            let steps = &lowering["machine_steps"];
+            let text = |snap: &Value| snap["text"].as_str().unwrap().to_string();
+            let mut funcs: BTreeMap<_, _> = array(&steps["lowered"])
+                .iter()
+                .map(|snap| (snap["func"].as_str().unwrap().to_string(), snap))
+                .collect();
+            for pass in array(&steps["passes"]) {
+                for func in array(&pass["steps"])
+                    .iter()
+                    .flat_map(|step| array(&step["funcs"]))
+                {
+                    let out = &func["out"];
+                    let input = funcs
+                        .insert(out["func"].as_str().unwrap().to_string(), out)
+                        .unwrap_or_else(|| panic!("{name}: a new function"));
+                    // Each inserted phi heads its block of the output, each replaced value
+                    // has one, and each term's instructions are of the step input.
+                    let gvn = &func["facts"]["gvn"];
+                    if gvn.is_null() {
+                        continue;
+                    }
+                    let inserted = array(&gvn["phis"]);
+                    for phi in inserted {
+                        let line = format!("v{}.i256 = phi ", phi["phi"]);
+                        assert!(
+                            text(out).split("\n\n").any(|block| block
+                                .contains(&format!("    block{}:\n", phi["block"]))
+                                && block.contains(&line)),
+                            "{name}: no inserted {line} in block{}",
+                            phi["block"]
+                        );
+                    }
+                    for value_phi in array(&gvn["value_phis"]) {
+                        assert!(inserted.iter().any(|phi| phi["phi"] == value_phi[1]));
+                    }
+                    let insts: HashSet<_> = array(&input["insts"])
+                        .iter()
+                        .flat_map(array)
+                        .filter_map(Value::as_u64)
+                        .collect();
+                    let mut terms: Vec<_> = inserted.iter().map(|phi| &phi["term"]).collect();
+                    while let Some(term) = terms.pop() {
+                        match term.get("inst") {
+                            Some(inst) => {
+                                assert!(
+                                    inst["inst"].as_u64().is_some_and(|id| insts.contains(&id)),
+                                    "{name}: {term}"
+                                );
+                                terms.extend(array(&inst["args"]));
+                            }
+                            None => assert!(
+                                term.is_null()
+                                    || term.get("value").is_some_and(Value::is_u64)
+                                    || term.get("imm").is_some_and(Value::is_string),
+                                "{name}: {term}"
+                            ),
+                        }
+                    }
+                }
+            }
+            let funcs: BTreeMap<_, _> = funcs
+                .into_iter()
+                .map(|(func, snap)| (func, text(snap)))
+                .collect();
+            let mut machine = BTreeMap::new();
+            let mut current: Option<(String, String)> = None;
+            for line in lowering["machine_ir"]
+                .as_str()
+                .unwrap()
+                .split_inclusive('\n')
+            {
+                if line.starts_with("func ") {
+                    let func = line.split_once('%').unwrap().1.split('(').next().unwrap();
+                    current = Some((func.to_string(), String::new()));
+                }
+                if let Some((func, text)) = &mut current {
+                    text.push_str(line);
+                    if line == "}\n" {
+                        machine.insert(func.clone(), text.clone());
+                        current = None;
+                    }
+                }
+            }
+            assert_eq!(funcs, machine, "{name}, {level:?}: the composed steps");
+            if level == OptLevel::O0 {
+                assert_eq!(steps["profile"], "off");
+                assert!(
+                    array(&steps["passes"])
+                        .iter()
+                        .all(|pass| !MACHINE_ROUND.contains(&pass["kind"].as_str().unwrap())),
+                    "{name}: a pass of the pass round at -O0"
+                );
+            }
+        }
     }
     sidecars
 }
@@ -235,9 +351,41 @@ fn checked_sidecars(
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "observability_preserves_creation_and_runtime_bytecode.fe")]
 fn sidecar_holds_compiled_ir_and_sections(fixture: Fixture<&str>) {
     with_top_mod_for_source(&fixture, |db, top_mod| {
-        for level in [OptLevel::O0, OptLevel::O1] {
-            checked_sidecars(db, top_mod, level);
-        }
+        checked_sidecars(db, top_mod, OptLevel::O0);
+        let sidecars = checked_sidecars(db, top_mod, OptLevel::O1);
+        let round_steps = sidecars
+            .values()
+            .flat_map(|sidecar| &sidecar.sections)
+            .flat_map(|section| &section.lowering.machine_steps.passes)
+            .filter(|pass| MACHINE_ROUND.contains(&pass.kind))
+            .map(|pass| pass.steps.len())
+            .sum::<usize>();
+        assert!(round_steps > 0, "-O1 records no step of the pass round");
+    });
+}
+
+/// The paymaster's runtime gets a phi from GVN's rewrite, so the checks of `checked_sidecars`
+/// see an inserted phi with an instruction term.
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "sidecar_gvn_inserted_phi.fe")]
+fn sidecar_records_phis_gvn_inserts(fixture: Fixture<&str>) {
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        let sidecars = checked_sidecars(db, top_mod, OptLevel::O1);
+        let json = serde_json::to_value(&sidecars["Paymaster"]).unwrap();
+        let terms = array(&json["sections"])
+            .iter()
+            .flat_map(|section| array(&section["lowering"]["machine_steps"]["passes"]))
+            .flat_map(|pass| array(&pass["steps"]))
+            .filter(|step| step["kind"] == "gvn_rewrite")
+            .flat_map(|step| array(&step["funcs"]))
+            .flat_map(|func| {
+                func["facts"]["gvn"]["phis"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+            })
+            .filter(|phi| phi["term"].get("inst").is_some())
+            .count();
+        assert!(terms > 0, "no inserted phi with an instruction term");
     });
 }
 

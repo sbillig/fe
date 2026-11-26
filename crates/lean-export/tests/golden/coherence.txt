@@ -1,4 +1,4 @@
-instances compared: 577
+instances compared: 637
 
 expected: drops opaque in the generic body: 20
   Address::call<Evm, Get>: drop of Get, which destroys nothing, is not there
@@ -10,12 +10,12 @@ expected: drops opaque in the generic body: 20
   core::abi::encode_alloc<Sol, (u256)>: drop of (u256), which destroys nothing, is not there
   core::mem::drop<u64>: drop of u64, which destroys nothing, is not there
   std::evm::effects::Call::call<Evm, Get>: drop of Get, which destroys nothing, is not there
-  std::evm::effects::Call::try_call<Evm, Get>: drop of Get, which destroys nothing, is not there
   std::evm::effects::Log::emit<Evm, Approval>: drop of Approval, which destroys nothing, is not there
   std::evm::effects::Log::emit<Evm, Deposit>: drop of Deposit, which destroys nothing, is not there
   std::evm::effects::Log::emit<Evm, DepositEvent>: drop of DepositEvent runs its type's code
   std::evm::effects::Log::emit<Evm, Transfer>: drop of Transfer, which destroys nothing, is not there
   std::evm::effects::Log::emit<Evm, Withdrawal>: drop of Withdrawal, which destroys nothing, is not there
+  std::evm::effects::decode_call_output<u256>: drop of u256, which destroys nothing, is not there
   std::evm::effects::encode_abi_payload<(Bytes, Bytes, Bytes, Bytes, Bytes)>: drop of (Bytes, Bytes, Bytes, Bytes, Bytes) runs its type's code
   std::evm::effects::encode_calldata<Get>: drop of Get, which destroys nothing, is not there
   std::evm::effects::encode_calldata<Panic>: drop of Panic, which destroys nothing, is not there
@@ -28,7 +28,7 @@ places of parameters in another space: 4
   lane_holds::pair<u8, u8>: root 0 in storage where the generic body has memory
   lane_holds::pair<u8, u8>: root 1 in storage where the generic body has memory
 
-unexpected: the first other difference: 83
+unexpected: the first other difference: 85
   (T0)::encode<Sol, u256>: v6 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 4 }, Some("Load"))
   (T0)::payload_size<u256>: v2 (Statement { block: NBlockId(0), statement: 1 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 1 }, Some("Load"))
   (T0, T1)::decode_from_prechecked_head<Sol, u256, u256, CallData>: v18 (Statement { block: NBlockId(0), statement: 17 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 17 }, Some("AggregateMake"))
@@ -38,16 +38,17 @@ unexpected: the first other difference: 83
   (T0, T1, T2, T3, T4, T5, T6, T7)::append_to<[u8; 8], [u8; 1], String<7>, [u8; 1], String<7>, [u8; 1], String<7>, [u8; 1], 33>: v2 (Statement { block: NBlockId(0), statement: 0 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Load"))
   (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)::append_to<[u8; 12], [u8; 1], String<5>, [u8; 1], String<5>, [u8; 1], String<5>, [u8; 1], String<5>, [u8; 1], String<5>, [u8; 1], 43>: v2 (Statement { block: NBlockId(0), statement: 0 }, Some("Borrow")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Load"))
   Address::call<Evm, Get>: block 0: terminator Return(Some(NOperand { value: NValueId(8), origin: Some(ExprId(8)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(8), origin: Some(ExprId(8)), mode: Copy }))
-  CallOutcome::decode<u256>: block 3: terminator Return(Some(NOperand { value: NValueId(17), origin: Some(ExprId(20)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(17), origin: Some(ExprId(20)), mode: Copy }))
   Evm::decode_args<(u256, u256)>: block 0: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Copy }))
   MemBuffer::write_be<u256>: v2: type View u256 where the instance has u256
   MemBuffer::write_le<u64>: v2: type View u64 where the instance has u64
   MemSlice<u8>::read_le<u64>: v5 (Statement { block: NBlockId(0), statement: 4 }, Some("MakeView")) where the instance has (Statement { block: NBlockId(0), statement: 3 }, Some("Call"))
+  Option<T>::unwrap<usize>: v4 (Statement { block: NBlockId(2), statement: 2 }, Some("Forward")) where the instance has (Statement { block: NBlockId(3), statement: 0 }, Some("Call"))
   PackedBytes<const N: usize>::zero<14>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
   PackedBytes<const N: usize>::zero<24>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
   PackedBytes<const N: usize>::zero<27>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
   PackedBytes<const N: usize>::zero<33>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
   PackedBytes<const N: usize>::zero<43>: v2 (Statement { block: NBlockId(0), statement: 2 }, Some("StructuralRepack")) where the instance has (Statement { block: NBlockId(0), statement: 2 }, Some("AggregateMake"))
+  S::downcast<u256, usize>: v0: type View u256 where the instance has u256
   S::downcast_saturate<u256, usize>: v0: type View u256 where the instance has u256
   S::downcast_saturate<u64, usize>: v0: type View u64 where the instance has u64
   S::downcast_truncate<i128, i64>: v0: type View i128 where the instance has i128
@@ -105,9 +106,10 @@ unexpected: the first other difference: 83
   std::abi::sol::decode_input_at<(u256, u256), CallData>: block 0: terminator Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(4), origin: Some(ExprId(7)), mode: Copy }))
   std::abi::sol::decode_output<u256, MemSlice<u8>>: block 0: terminator Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(4)), mode: Copy }))
   std::abi::sol::decode_output_at<u256, MemSlice<u8>>: block 1: terminator Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(5), origin: Some(ExprId(7)), mode: Copy }))
-  std::evm::effects::Call::call<Evm, Get>: block 0: terminator Return(Some(NOperand { value: NValueId(7), origin: Some(ExprId(7)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(7), origin: Some(ExprId(7)), mode: Copy }))
+  std::evm::effects::Call::call<Evm, Get>: block 0: terminator Return(Some(NOperand { value: NValueId(28), origin: Some(ExprId(30)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(28), origin: Some(ExprId(30)), mode: Copy }))
   std::evm::effects::Create::create2<Evm, Child>: v4 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Call"))
   std::evm::effects::contract_init_code<Child>: v20 (Statement { block: NBlockId(2), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(2), statement: 0 }, Some("Call"))
+  std::evm::effects::decode_call_output<u256>: block 6: terminator Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(23)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(2), origin: Some(ExprId(23)), mode: Copy }))
   std::evm::effects::decode_returndata<u256>: block 0: terminator Return(Some(NOperand { value: NValueId(1), origin: Some(ExprId(3)), mode: Move })) where the instance has Return(Some(NOperand { value: NValueId(1), origin: Some(ExprId(3)), mode: Copy }))
   std::evm::effects::encode_abi_payload<()>: v1 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Call"))
   std::evm::effects::encode_abi_payload<(u256)>: v1 (Statement { block: NBlockId(0), statement: 0 }, Some("Forward")) where the instance has (Statement { block: NBlockId(0), statement: 0 }, Some("Call"))

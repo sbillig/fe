@@ -10,7 +10,8 @@ deriving Inhabited
 inductive Option_Exponent where
   | None
   | Some (f0_1 : Exponent)
-deriving Inhabited
+
+instance : Inhabited Option_Exponent := ⟨Option_Exponent.None⟩
 
 def Option_Exponent.tag : Option_Exponent → UInt256
   | .None => UInt256.ofNat 0
@@ -35,7 +36,8 @@ deriving Inhabited
 inductive Option_Modulus where
   | None
   | Some (f0_1 : Modulus)
-deriving Inhabited
+
+instance : Inhabited Option_Modulus := ⟨Option_Modulus.None⟩
 
 def Option_Modulus.tag : Option_Modulus → UInt256
   | .None => UInt256.ofNat 0

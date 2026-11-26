@@ -1,0 +1,4 @@
+set_option maxRecDepth 10000 in
+example : Read_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl
+set_option maxRecDepth 10000 in
+example : Borrow_HEAD_SIZE = pure (UInt256.ofNat 0) := rfl

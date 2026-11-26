@@ -42,6 +42,7 @@ use crate::hir_def::{
     params::FuncParamMode, scope_graph::ScopeId,
 };
 use crate::{
+    diagnosable::is_c_scalar,
     hir_def::{
         ArithBinOp, BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr,
         ExprId, Func, GenericParam, GenericParamOwner, IntegerId, LitKind, ManualContractRootAttr,
@@ -78,6 +79,7 @@ use salsa::SalsaValue;
 use crate::analysis::place::{
     Place, PlaceBase, PlaceProjection, is_grant_place_expr, is_pointer_place_expr,
 };
+use crate::core::semantic::ProviderSource;
 
 use super::{
     adt_def::ConcreteTypeView,
@@ -1466,6 +1468,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_ty: SecondaryMap::new(),
         yield_shapes: SecondaryMap::new(),
         place_entries: FxHashSet::default(),
+        never_coercions: FxHashSet::default(),
         unsafe_splits: FxHashSet::default(),
         product_args: FxHashSet::default(),
         value_calls: FxHashSet::default(),
@@ -1968,25 +1971,46 @@ impl<'db> TyChecker<'db> {
                 Some(binding)
                     if matches!(
                         binding.provider.source,
-                        crate::core::semantic::ProviderSource::ContractField { .. }
-                            | crate::core::semantic::ProviderSource::RootProvider { .. }
+                        ProviderSource::ContractField { .. } | ProviderSource::RootProvider { .. }
                     ) =>
                 {
-                    // Contract fields are immutable unless declared `mut`. The
-                    // one exception — assigning immutable code-backed fields in
-                    // `init` — is already reflected in the provider's
-                    // site-specific mutability.
-                    if binding.requirement.is_mut
-                        && !binding.provider.is_mut
-                        && let crate::core::semantic::ProviderSource::ContractField { field } =
-                            binding.provider.source
-                    {
-                        self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
-                            primary: owner.effect_param_ty_span(self.db, idx).into(),
-                            field: binding.requirement.binding_name,
-                            field_span: crate::hir_def::FieldParent::Contract(field.contract)
-                                .field_name_span(field.index as usize),
-                        });
+                    match binding.provider.source {
+                        // Contract fields are immutable unless declared `mut`.
+                        // The one exception — assigning immutable code-backed
+                        // fields in `init` — is already reflected in the
+                        // provider's site-specific mutability.
+                        ProviderSource::ContractField { field }
+                            if binding.requirement.is_mut && !binding.provider.is_mut =>
+                        {
+                            self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
+                                primary: owner.effect_param_ty_span(self.db, idx).into(),
+                                field: binding.requirement.binding_name,
+                                field_span: FieldParent::Contract(field.contract)
+                                    .field_name_span(field.index as usize),
+                            });
+                        }
+                        // Every contract effect comes from the contract's
+                        // root, which is always mutable; the contract's own
+                        // declaration says whether the effect may be `mut`.
+                        ProviderSource::RootProvider { .. } if binding.requirement.is_mut => {
+                            if let Some(decl) = contract
+                                .effect_requirements(self.db)
+                                .iter()
+                                .find(|decl| decl.binding_name == binding.requirement.binding_name)
+                                && !decl.is_mut
+                            {
+                                self.push_diag(BodyDiag::ImmutableContractEffectMutBinding {
+                                    primary: owner.effect_param_ty_span(self.db, idx).into(),
+                                    effect: decl.binding_name,
+                                    effect_span: contract
+                                        .span()
+                                        .effects()
+                                        .param_idx(decl.binding_idx as usize)
+                                        .into(),
+                                });
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 // A field whose layout failed has reported its own error.
@@ -4032,6 +4056,14 @@ impl<'db> TyChecker<'db> {
     fn retype_expr_or_pat(&mut self, typeable: Typeable<'db>, ty: TyId<'db>) {
         match typeable {
             Typeable::Expr(expr, mut typed_expr) => {
+                if typed_expr
+                    .ty
+                    .fold_with(self.db, &mut self.table)
+                    .is_never(self.db)
+                    && !ty.is_never(self.db)
+                {
+                    self.env.set_never_coercion(expr, true);
+                }
                 typed_expr.ty = ty;
                 if typed_expr.borrow_provider.is_none() {
                     typed_expr.borrow_provider =
@@ -4603,6 +4635,9 @@ mod typed_body_tables {
         /// Index expressions naming an entry of a collection whose elements
         /// are places.
         pub(super) place_entries: FxHashSet<ExprId>,
+        /// The expressions of type `!` whose recorded type is the type their
+        /// context expects.
+        pub(super) never_coercions: FxHashSet<ExprId>,
         /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
         /// of accesses, granted by one session.
         pub(super) unsafe_splits: FxHashSet<ExprId>,
@@ -5468,6 +5503,12 @@ impl<'db> TypedBody<'db> {
     /// whose elements are places (`core::ops::StateIndex`), a path step.
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains(&expr)
+    }
+
+    /// Whether `expr` has type `!` and its recorded type, [`Self::expr_ty`],
+    /// is the type its context expects.
+    pub fn is_never_coerced(&self, expr: ExprId) -> bool {
+        self.tables.never_coercions.contains(&expr)
     }
 
     pub fn builtin_op(&self, expr: ExprId) -> Option<BuiltinOp> {
@@ -7119,6 +7160,7 @@ impl<'db> TypedBody<'db> {
             expr_ty: SecondaryMap::new(),
             yield_shapes: SecondaryMap::new(),
             place_entries: FxHashSet::default(),
+            never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
@@ -7421,7 +7463,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
     ) {
         let ty = self.body.pat_ty(self.db, pat);
         let span = ctxt.span().unwrap();
-        self.check_unknown(ty, span.clone().into());
+        self.check_unknown(ty, span.clone().into(), false);
         if let Pat::Lit(Partial::Present(LitKind::Int(int))) = pat_data
             && self.body.body() == Some(ctxt.body())
         {
@@ -7449,7 +7491,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         if !matches!(expr_data, Expr::Block(..)) {
             let prop = self.body.expr_prop(self.db, expr);
             let span = ctxt.span().unwrap();
-            self.check_unknown(prop.ty, span.clone().into());
+            self.check_unknown(prop.ty, span.clone().into(), false);
             // A string literal only gets an oversized `String<N>` type through
             // inference fallback; report it here instead of leaving an invalid
             // literal type for constant evaluation to trip over.
@@ -7489,7 +7531,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
-            self.check_unknown(callable_ty, span.into());
+            self.check_unknown(callable_ty, span.into(), false);
         }
 
         match expr_data {
@@ -7612,6 +7654,9 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
                 {
                     self.check_view_call(&callable, expr, ctxt.span().unwrap().into());
                     self.check_state_only_call(&callable, expr, ctxt.span().unwrap().into());
+                    if let Expr::Call(_, args) = expr_data {
+                        self.check_variadic_args(&callable, args);
+                    }
                 }
             }
             _ => {}
@@ -7713,7 +7758,10 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
     }
 
-    fn check_unknown(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) {
+    /// Reports `ty`, of the expression or pattern at `span`, if inference
+    /// left it unknown; with `variadic`, of an extra argument of a variadic
+    /// call.
+    fn check_unknown(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>, variadic: bool) {
         let flags = ty.flags(self.db);
         if flags.contains(TyFlags::HAS_INVALID) || !flags.contains(TyFlags::HAS_VAR) {
             return;
@@ -7736,8 +7784,27 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
 
         if !skip_diag {
-            let diag = BodyDiag::TypeAnnotationNeeded { span, ty };
+            let diag = BodyDiag::TypeAnnotationNeeded { span, ty, variadic };
             self.diags.push(diag.into())
+        }
+    }
+
+    /// Each extra argument of a variadic call is a C integer or a raw
+    /// pointer. Its type comes from the argument alone, as no parameter
+    /// gives it one.
+    fn check_variadic_args(&mut self, callable: &Callable<'db>, args: &[CallArg<'db>]) {
+        let (db, extras) = (self.db, callable.variadic_arg_tys());
+        let Some(body) = self.body.body() else {
+            return;
+        };
+        for (arg, &ty) in args[args.len() - extras.len()..].iter().zip(extras) {
+            let span: DynLazySpan<'db> = arg.expr.span(body).into();
+            if ty.has_var(db) {
+                self.check_unknown(ty, span, true);
+            } else if !ty.has_invalid(db) && !is_c_scalar(db, ty) {
+                self.diags
+                    .push(BodyDiag::InvalidVariadicArg { primary: span, ty }.into());
+            }
         }
     }
 

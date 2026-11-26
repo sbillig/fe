@@ -104,7 +104,6 @@ def recv_Arg : FeM Empty := do
   let some v1 := v1_u.ret? | do
     storeIntAt (.u 8) Field.a ⟨0, 1, true⟩ h0
     Fe.M.stop v1_u.data
-  storeIntAt (.u 8) Field.a ⟨0, 1, true⟩ h0
   nomatch v1
 
 /-- `lane_holds::bump_effect_halt` -/
@@ -473,7 +472,6 @@ def recv_TagVal : FeM Empty := do
   let some v1 := v1_u.ret? | do
     storeIntAt (.u 256) Field.tagged.tag ⟨0, 4, false⟩ h0
     Fe.M.stop v1_u.data
-  storeIntAt (.u 256) Field.tagged.tag ⟨0, 4, false⟩ h0
   nomatch v1
 
 /-- `<Arg as AbiSize>::HEAD_SIZE` -/

@@ -1,4 +1,4 @@
-export Lib (AbiFrame AbiFrame_from_raw_parts CallData CallOutcome CallOutcome_decode_u256 Evm_input Evm_return_value_Sol_Address Evm_return_value_Sol_u256 Location Location.mk MemBuffer MemBuffer_drop MemBuffer_empty MemBuffer_len MemBuffer_new_uninit MemBuffer_ptr MemBuffer_set_len MemBuffer_span_ref RawCallOutcome Sol_SELECTOR_SIZE Sol_validate_runtime_head Wei Wei_zero abi_field_head_size_Address abi_field_head_size_u256 bubble_last_revert copy copy_call_outcome create2_raw_Evm decode_msg_field_from_Sol_Address_CallData decode_msg_field_from_Sol_u256_CallData downcast_unchecked_u256_usize encode_abi_payload_tuple keccak_words_2 len_CallData raw_call_Evm read_transient_word_Evm storage_at_mut_Evm_u256 tuple_HEAD_SIZE tuple_IS_DYNAMIC zero_bytes)
+export Lib (AbiFrame AbiFrame_from_raw_parts CallData Evm_input Evm_return_value_Sol_Address Evm_return_value_Sol_u256 Location Location.mk MemBuffer MemBuffer_drop MemBuffer_len MemBuffer_new_uninit MemBuffer_ptr MemBuffer_set_len MemBuffer_span_ref Sol_SELECTOR_SIZE Sol_validate_runtime_head Wei Wei_as_wei Wei_zero abi_field_head_size_Address abi_field_head_size_u256 bubble_last_revert copy create2_raw_Evm decode_call_output_u256 decode_msg_field_from_Sol_Address_CallData decode_msg_field_from_Sol_u256_CallData downcast_unchecked_u256_usize encode_abi_payload_tuple keccak_words_2 len_CallData read_transient_word_Evm storage_at_mut_Evm_u256 tuple_HEAD_SIZE tuple_IS_DYNAMIC typed_return_buffer_u256 zero_bytes)
 
 structure Get where
 deriving Inhabited
@@ -184,37 +184,29 @@ def encode_calldata_Get (selector : UInt256) (message : Get) : FeM MemBuffer := 
   else
     join_1 message buffer r2
 
-/-- `std::evm::effects::Call::try_call<Evm, Get>` -/
-def try_call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message : Get) : FeM CallOutcome := do
-  let mut addr := addr
-  let mut args : MemBuffer := default
-  let mut ret : MemBuffer := default
-  let mut «raw» : RawCallOutcome := default
-  -- let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-  let v4 ← Get_SELECTOR
-  let args_6 ← encode_calldata_Get v4 message
-  args := args_6
-  -- var ret = MemBuffer::empty()
-  let ret_8 ← MemBuffer_empty
-  ret := ret_8
-  -- let raw = self.raw_call(addr, gas, value, args: args.span(), ret: mut ret)
-  let v11 ← MemBuffer_span_ref args
-  let addr_13 := addr
-  let (raw_15, raw_15_0) ← raw_call_Evm addr_13 gas_1 value v11 ret
-  ret := raw_15_0
-  «raw» := raw_15
-  -- copy_call_outcome(raw)
-  let v18 ← copy_call_outcome «raw»
-  let _ ← MemBuffer_drop ret
-  let _ ← MemBuffer_drop args
-  return v18
-
 /-- `std::evm::effects::Call::call<Evm, Get>` -/
 def call_Evm_Get (addr : UInt256) (gas_1 : UInt256) (value : Wei) (message : Get) : FeM UInt256 := do
-  -- self.try_call(addr, gas, value, message).decode()
-  let v6 ← try_call_Evm_Get addr gas_1 value message
-  let v7 ← CallOutcome_decode_u256 v6
-  return v7
+  let mut args : MemBuffer := default
+  let mut ret : MemBuffer := default
+  -- let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+  let v5 ← Get_SELECTOR
+  let args_7 ← encode_calldata_Get v5 message
+  args := args_7
+  -- let ret = typed_return_buffer<M::Return>()
+  let ret_9 ← typed_return_buffer_u256
+  ret := ret_9
+  -- ops::call(
+  let v12 ← Wei_as_wei value
+  let v14 ← MemBuffer_ptr args
+  let v16 ← MemBuffer_len args
+  let v19 ← MemBuffer_ptr ret
+  let v21 ← MemBuffer_len ret
+  let v23 ← Fe.EVM.call gas_1 addr v12 v14 v16 v19 v21
+  -- decode_call_output(success, ret)
+  let v28 ← decode_call_output_u256 (decide (v23 ≠ (UInt256.ofNat 0))) ret
+  let _ ← MemBuffer_drop ret
+  let _ ← MemBuffer_drop args
+  return v28
 
 /-- `Address::call<Evm, Get>` -/
 def Address_call_Evm_Get (self : UInt256) (message : Get) : FeM UInt256 := do

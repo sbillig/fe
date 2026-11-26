@@ -28,7 +28,8 @@ deriving Inhabited
 inductive Option_PublicKey where
   | None
   | Some (f0_1 : PublicKey)
-deriving Inhabited
+
+instance : Inhabited Option_PublicKey := ⟨Option_PublicKey.None⟩
 
 def Option_PublicKey.tag : Option_PublicKey → UInt256
   | .None => UInt256.ofNat 0
@@ -66,7 +67,8 @@ deriving Inhabited
 inductive Option_Point_Mont_Bn254Base where
   | None
   | Some (f0_1 : Point_Mont_Bn254Base)
-deriving Inhabited
+
+instance : Inhabited Option_Point_Mont_Bn254Base := ⟨Option_Point_Mont_Bn254Base.None⟩
 
 def Option_Point_Mont_Bn254Base.tag : Option_Point_Mont_Bn254Base → UInt256
   | .None => UInt256.ofNat 0

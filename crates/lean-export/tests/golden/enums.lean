@@ -4,7 +4,8 @@ inductive Shape where
   | Empty
   | Square (f0 : UInt256)
   | Rect (f0 : UInt256) (f1 : UInt256)
-deriving Inhabited
+
+instance : Inhabited Shape := ⟨Shape.Empty⟩
 
 def Shape.tag : Shape → UInt256
   | .Empty => UInt256.ofNat 0

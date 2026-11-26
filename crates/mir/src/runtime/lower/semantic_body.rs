@@ -2,13 +2,11 @@ use cranelift_entity::EntityRef;
 use hir::analysis::{
     HirAnalysisDb,
     semantic::{
-        ExecutableBlock, PlaceProvenance, SLocal, SLocalId, SemOrigin, SemanticBody,
-        SemanticInstance, SemanticLocalRole,
+        PlaceProvenance, SLocal, SLocalId, SemanticBody, SemanticInstance, SemanticLocalRole,
         normalized::{
-            NBlock, NBlockId, NDataProjection, NExpr, NIndex, NLayoutBackingSource, NLayoutLocals,
-            NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind,
-            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
-            normalize_runtime_semantic_body,
+            NDataProjection, NExpr, NIndex, NLayoutBackingSource, NLayoutLocals, NLayoutPlan,
+            NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind, NValueDefinition,
+            NValueId, NormalizedBody, normalize_runtime_semantic_body,
         },
         semantic_executable_control_flow,
     },
@@ -109,63 +107,7 @@ impl<'db> RuntimeSemanticBody<'db> {
         let executable = semantic_executable_control_flow(db, instance)
             .expect("runtime lowering requires a solved borrow check");
         let body = &mut artifacts.body;
-        assert_eq!(
-            executable.0.len(),
-            body.blocks.len(),
-            "executable control flow must cover the runtime body"
-        );
-        let trap = NBlockId::new(body.blocks.len());
-        let mut trapped = false;
-        for (block, executable_block) in body.blocks.iter_mut().zip(&executable.0) {
-            match executable_block {
-                ExecutableBlock::Unreachable => {
-                    block.params = Box::default();
-                    block.statements.clear();
-                    block.terminator.kind = NTerminatorKind::Unreachable;
-                }
-                ExecutableBlock::Diverges(call) => {
-                    let end = block
-                        .statements
-                        .iter()
-                        .position(|statement| statement.source == Some(*call))
-                        .expect("a diverging call survives runtime normalization");
-                    block.statements.truncate(end + 1);
-                    block.terminator.kind = NTerminatorKind::Unreachable;
-                }
-                ExecutableBlock::Continues(feasible) => {
-                    for (successor, feasible) in block
-                        .terminator
-                        .kind
-                        .successors_mut()
-                        .into_iter()
-                        .zip(feasible)
-                    {
-                        if !feasible
-                            || matches!(
-                                executable.0[successor.block.index()],
-                                ExecutableBlock::Unreachable
-                            )
-                        {
-                            *successor = NSuccessor {
-                                block: trap,
-                                args: Box::default(),
-                            };
-                            trapped = true;
-                        }
-                    }
-                }
-            }
-        }
-        if trapped {
-            body.blocks.push(NBlock {
-                params: Box::default(),
-                statements: Vec::new(),
-                terminator: NTerminator {
-                    origin: SemOrigin::Synthetic,
-                    kind: NTerminatorKind::Unreachable,
-                },
-            });
-        }
+        executable.restrict(body);
         let defined = |value: NValueId| match body.values[value.index()].definition {
             NValueDefinition::EntryParam { .. } => true,
             NValueDefinition::BlockParam { block, index } => {

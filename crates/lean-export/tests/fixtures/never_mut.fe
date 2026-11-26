@@ -1,0 +1,29 @@
+// A helper that never returns, with a `mut` parameter and a `mut` effect.
+use std::abi::sol
+use std::evm::revert
+
+struct Tally {
+    count: u256,
+}
+
+fn fail_mut(_ x: mut u256) -> u256 uses (tally: mut Tally) {
+    x += 1
+    tally.count += x
+    revert(x)
+}
+
+msg NeverMsg {
+    #[selector = sol("fail(uint256)")]
+    Fail { value: u256 } -> u256,
+}
+
+pub contract NeverMut {
+    mut tally: Tally,
+
+    recv NeverMsg {
+        Fail { value } -> u256 uses (mut tally) {
+            var a: u256 = value
+            fail_mut(mut a)
+        }
+    }
+}

@@ -45,7 +45,8 @@ use hir::{
             SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
             SemanticInstanceKey, UnaryOp, VariantIndex, core_method_callee_key, drop_elaboration,
             eval_const_ref, identity_semantic_instance_key, normalize_semantic_body,
-            projection_component_spaces, runtime_size_bytes,
+            projection_component_spaces, runtime_size_bytes, semantic_executable_control_flow,
+            semantic_may_return,
         },
         ty::{
             AddressSpace,
@@ -782,8 +783,11 @@ impl<'db> IngotExport<'db> {
         let mut defined = FxHashMap::<_, Vec<String>>::default();
         for (name, doc, owner) in entries {
             let key = identity_semantic_instance_key(db, owner);
-            let (body, _, refs) = module.body(&name, key, &Carriers::default())?;
+            let (body, never, refs) = module.body(&name, key, &Carriers::default())?;
             module.define(&name, &doc, &body, Scope::Contract, refs);
+            if never {
+                module.nevers.insert(name.clone());
+            }
             defined.entry(key).or_default().push(name);
         }
         if with_entries {
@@ -1210,8 +1214,14 @@ impl<'db> Module<'db> {
         key: SemanticInstanceKey<'db>,
         carriers: &Carriers,
     ) -> Result<(String, bool, Vec<String>), Unsupported> {
-        let normalized = normalize_semantic_body(self.db, SemanticInstance::new(self.db, key))
+        let instance = SemanticInstance::new(self.db, key);
+        let mut normalized = normalize_semantic_body(self.db, instance)
             .map_err(|_| Unsupported(format!("{name}: body does not normalize")))?;
+        // The model runs the paths the compiled code runs: runtime lowering
+        // cuts the body where it cannot continue.
+        semantic_executable_control_flow(self.db, instance)
+            .ok_or_else(|| Unsupported(format!("{name}: no executable control flow")))?
+            .restrict(&mut normalized.body);
         let depth = self.begin();
         let exported = BodyExporter {
             module: self,
@@ -1375,6 +1385,10 @@ impl<'db> Module<'db> {
                 None => {
                     writeln!(lines, "  let _ ← {name}{args}").unwrap();
                     lines.push_str("  returnData (UInt256.ofNat 0) (UInt256.ofNat 0)\n");
+                }
+                // An arm that never returns gives nothing to return.
+                Some(_) if self.nevers.contains(name) => {
+                    writeln!(lines, "  let {result} ← {name}{args}\n  nomatch {result}").unwrap();
                 }
                 Some(key) => {
                     let carriers = vec![Some(Carrier::Erased), None];
@@ -1908,17 +1922,9 @@ impl<'db> Module<'db> {
         self.halts[&key]
     }
 
-    /// Whether the body of `key` never returns: it has no `Return`.
+    /// Whether the body of `key` never returns: no `Return` of it executes.
     fn never_returns(&self, key: SemanticInstanceKey<'db>) -> bool {
-        normalize_semantic_body(self.db, SemanticInstance::new(self.db, key)).is_ok_and(
-            |normalized| {
-                !normalized
-                    .body
-                    .blocks
-                    .iter()
-                    .any(|block| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
-            },
-        )
+        !semantic_may_return(self.db, SemanticInstance::new(self.db, key))
     }
 
     /// Whether the slides of the projection `key` do nothing but end
@@ -2345,12 +2351,22 @@ impl<'db> Module<'db> {
         if ty.is_never(self.db) {
             return Ok("Empty".to_string());
         }
+        // Each type the export defines derives `Inhabited`, and reads a
+        // field of another variant as the field type's default, so no other
+        // uninhabited type, nor a variant field of one, has a definition.
+        let db = self.db;
+        let scope = self.root.key(db).owner(db).scope();
+        let assumptions = self.root.assumptions(db);
+        let uninhabited = |ty: TyId<'db>| ty.is_uninhabited_in(db, Some(scope), assumptions);
+        let pretty = ty.pretty_print(self.db);
+        if uninhabited(ty) {
+            return Err(Unsupported(format!("uninhabited type {pretty}")));
+        }
         // An access that is part of a value is the place it reaches in
         // contract state; a view of a snapshot type is the value.
         if let Some((kind, inner)) = ty.as_capability(self.db) {
-            let scope = self.root.key(self.db).owner(self.db).scope();
             let snapshot = kind == CapabilityKind::View
-                && ty_is_snapshot(self.db, scope, inner, self.root.assumptions(self.db))
+                && ty_is_snapshot(self.db, scope, inner, assumptions)
                 && self.root.pinned_space(self.db, inner).is_none();
             let held = held
                 .iter()
@@ -2363,7 +2379,6 @@ impl<'db> Module<'db> {
                 Some((_, Carrier::Place)) | None => Ok("Place".to_string()),
             };
         }
-        let pretty = ty.pretty_print(self.db);
         match pretty.as_str() {
             // An address is its word.
             "Address" => return Ok("UInt256".to_string()),
@@ -2372,6 +2387,15 @@ impl<'db> Module<'db> {
             _ => {}
         }
         if let Some(variants) = self.variants(ty) {
+            if variants
+                .iter()
+                .flat_map(|(_, fields)| fields)
+                .any(|&field| uninhabited(field))
+            {
+                return Err(Unsupported(format!(
+                    "{pretty}, with an uninhabited variant"
+                )));
+            }
             let depth = self.begin();
             let mut lean = Vec::new();
             for (variant, (name, fields)) in variants.into_iter().enumerate() {
@@ -2392,6 +2416,12 @@ impl<'db> Module<'db> {
         }
         if let Some(len) = ty.array_len(self.db) {
             let (_, args) = ty.decompose_ty_app(self.db);
+            // An array of no elements of a type with none has one value,
+            // which Lean's `Vector Empty 0` has but does not derive
+            // `Inhabited` for.
+            if uninhabited(args[0]) {
+                return Err(Unsupported(format!("{pretty}, of an uninhabited type")));
+            }
             return Ok(format!("(Vector {} {len})", self.value_ty(args[0])?));
         }
         let depth = self.begin();
@@ -2429,7 +2459,9 @@ impl<'db> Module<'db> {
     }
 
     /// The Lean type of an enum named `name` whose variants have fields of
-    /// the Lean types `variants` gives: an inductive type, with its tag, and
+    /// the Lean types `variants` gives: an inductive type, whose default is
+    /// the compiler's zero, the first variant with default fields, with its
+    /// tag, and
     /// for each field of each variant the projection that reads it and the
     /// function that replaces it. Both leave a value of another variant
     /// alone.
@@ -2481,9 +2513,12 @@ impl<'db> Module<'db> {
                 .unwrap();
             }
         }
+        let (first, fields) = &variants[0];
+        let zero = " default".repeat(fields.len());
         self.layout(name, scope, refs, |name| {
             format!(
-                "inductive {name} where\n{ctors}deriving Inhabited\n\n\
+                "inductive {name} where\n{ctors}\n\
+                 instance : Inhabited {name} := ⟨{name}.{first}{zero}⟩\n\n\
                  def {name}.tag : {name} → UInt256\n{tags}{}",
                 parts.replace("NAME", name).trim_end()
             )
@@ -3440,8 +3475,17 @@ impl<'db> BodyExporter<'_, 'db> {
             params.push(((0, param), self.names[index].clone(), ty));
         }
         let mut state = String::new();
+        let scope = owner.scope();
+        let assumptions = self.body.owner.assumptions(db);
         for (index, root) in self.body.roots.iter().enumerate() {
             let ty = match root.kind {
+                // No statement that executes reaches a local of a type with
+                // no values: the body is cut before it.
+                NRootKind::LocalSlot { .. }
+                    if root.ty.is_uninhabited_in(db, Some(scope), assumptions) =>
+                {
+                    continue;
+                }
                 NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
                     self.module.value_ty(root.ty)?
                 }
@@ -3694,7 +3738,8 @@ impl<'db> BodyExporter<'_, 'db> {
                 ));
             }
             self.result_ty = format!("(Unwound {} × {})", self.result_ty, returned.join(" × "));
-        } else if !returned.is_empty() {
+        } else if !returned.is_empty() && !never {
+            // A body that never returns gives back no values either.
             self.result_ty = format!("({} × {})", self.result_ty, returned.join(" × "));
         }
         self.holds_at = self.open_holds();
@@ -4288,7 +4333,9 @@ impl<'db> BodyExporter<'_, 'db> {
                 writeln!(out, "{pad}return ({granted}, {slide})").unwrap();
             }
             // Control stops at a call that never returns, whose result has
-            // no values.
+            // no values, or where the compiled code cannot continue, which
+            // panics with code 0x01 there, as after a call that never
+            // returns but whose result has a type with values.
             NTerminatorKind::Unreachable => {
                 let never =
                     data.statements
@@ -4302,9 +4349,10 @@ impl<'db> BodyExporter<'_, 'db> {
                             }
                             _ => None,
                         });
-                let never = never
-                    .ok_or_else(|| Unsupported("unreachable code after no call".to_string()))?;
-                writeln!(out, "{pad}nomatch {}", self.value(never)).unwrap();
+                match never {
+                    Some(never) => writeln!(out, "{pad}nomatch {}", self.value(never)).unwrap(),
+                    None => writeln!(out, "{pad}M.panic 0x01").unwrap(),
+                }
             }
         }
         Ok(())

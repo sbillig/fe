@@ -1,0 +1,25 @@
+// A `Result` whose `Err` variant holds an enum with no variants: the
+// variant is uninhabited, so its arm is unreachable.
+use std::abi::sol
+
+enum Never {}
+
+fn ok_of(_ r: Result<Never, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v,
+        Result::Err(_) => 7
+    }
+}
+
+msg M {
+    #[selector = sol("get(uint256)")]
+    Get { x: u256 } -> u256,
+}
+
+pub contract Uninhabited {
+    recv M {
+        Get { x } -> u256 {
+            ok_of(Result::Ok(x))
+        }
+    }
+}

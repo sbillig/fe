@@ -178,8 +178,18 @@ fn debug_ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerErr
     }
 }
 
+/// Fe's declared EVM fixed scratch memory region is `[0x00, 0x40)` (covering
+/// the `[0x00, 0x20)` `init_abi -> init_root` immutable-pointer handoff and
+/// `[0x00, 0x24)` panic revert payloads, strictly below Sonatina's
+/// backend-owned `0x40..0x60` and `0x80..0xa0` slots).
+const FE_EVM_FIXED_MEMORY_LIMIT: u32 = 0x40;
+
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
-    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Full));
+    let mut cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    if matches!(module.ctx.triple.architecture, Architecture::Evm) {
+        cfg = cfg.with_evm_fixed_memory_limit(FE_EVM_FIXED_MEMORY_LIMIT);
+    }
+    let report = verify_module(module, &cfg);
     if report.has_errors() {
         return Err(LowerError::Internal(format_verification_report(
             module, &report,
@@ -2162,6 +2172,8 @@ pub fn emit_test_suite_sonatina(
             selector: arm.selector,
             expected_revert: metadata.expected_revert,
             initial_balance: metadata.initial_balance,
+            timestamp: metadata.timestamp,
+            block_number: metadata.block_number,
         });
     }
 
@@ -2580,6 +2592,95 @@ pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
             vec!["Foo"],
             "selected contract bytecode should exclude unselected roots"
         );
+    }
+
+    #[test]
+    fn checked_constant_base_powers_use_exp() {
+        for (base, ty) in [
+            ("10", "u256"),
+            ("3", "u8"),
+            ("3", "i8"),
+            ("0", "u256"),
+            ("1", "i256"),
+        ] {
+            let mut db = DriverDataBase::default();
+            let file_url = temp_fixture_url("checked_constant_base_pow.fe");
+            db.workspace().touch(
+                &mut db,
+                file_url.clone(),
+                Some(format!(
+                    r#"
+msg PowerMsg {{
+    #[selector = sol("power(uint256)")]
+    Power {{ exponent: {ty} }} -> {ty},
+}}
+pub contract Power {{
+    recv PowerMsg {{
+        Power {{ exponent }} -> {ty} {{ ({base} as {ty}) ** exponent }}
+    }}
+}}
+"#,
+                )),
+            );
+            let file = db.workspace().get(&db, &file_url).expect("fixture loaded");
+            let top_mod = db.top_mod(file);
+            let output = emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O1, None)
+                .expect("constant-base power should compile");
+            if base != "0" && base != "1" {
+                assert!(
+                    output.contains("evm_exp"),
+                    "{base}:{ty} should use EXP:\n{output}"
+                );
+            }
+            assert!(
+                !output.contains("umulo") && !output.contains("smulo"),
+                "{base}:{ty} should not retain checked multiplication loops:\n{output}",
+            );
+        }
+    }
+
+    #[test]
+    fn small_constant_exponents_use_straight_line_multiplication() {
+        for ty in ["u256", "i256", "u8", "i8"] {
+            for (exponent, products) in [(0, 0), (1, 0), (2, 1), (3, 2), (4, 2)] {
+                let mut db = DriverDataBase::default();
+                let file_url = temp_fixture_url("small_constant_exponent.fe");
+                let file = db.workspace().touch(
+                    &mut db,
+                    file_url,
+                    Some(format!(
+                        r#"
+msg PowerMsg {{
+    #[selector = 1]
+    Power {{ base: {ty} }} -> {ty},
+}}
+pub contract Power {{
+    recv PowerMsg {{
+        Power {{ base }} -> {ty} {{ base ** {exponent} }}
+    }}
+}}
+"#,
+                    )),
+                );
+                let output =
+                    emit_module_sonatina_ir_optimized(&db, db.top_mod(file), OptLevel::O1, None)
+                        .expect("constant exponent should compile");
+                assert!(
+                    !output.contains("phi ") && !output.contains("evm_exp"),
+                    "{ty} ** {exponent} should not retain a power loop or EXP:\n{output}",
+                );
+                let multiply = if ty.starts_with('i') {
+                    " = smulo "
+                } else {
+                    " = umulo "
+                };
+                assert_eq!(
+                    output.matches(multiply).count(),
+                    products,
+                    "{ty} ** {exponent} should use {products} checked products:\n{output}",
+                );
+            }
+        }
     }
 
     #[test]

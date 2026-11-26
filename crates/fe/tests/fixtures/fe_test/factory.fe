@@ -90,12 +90,12 @@ fn test_factory() uses (evm: mut Evm) {
     assert!(factory.word() != 0)
 
     // Create child 1
-    let child1_inner: u256 = evm.call(addr: factory, gas: 500000, value: Wei::zero(), message: FactoryMsg::CreateChild {})
+    let child1_inner: u256 = evm.call(addr: factory, gas: 5000000, value: Wei::zero(), message: FactoryMsg::CreateChild {})
     assert!(child1_inner != 0)
     let child1 = Address::new(child1_inner)
 
     // Create child 2
-    let child2_inner: u256 = evm.call(addr: factory, gas: 500000, value: Wei::zero(), message: FactoryMsg::CreateChild {})
+    let child2_inner: u256 = evm.call(addr: factory, gas: 5000000, value: Wei::zero(), message: FactoryMsg::CreateChild {})
     assert!(child2_inner != 0)
     let child2 = Address::new(child2_inner)
 

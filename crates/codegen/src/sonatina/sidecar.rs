@@ -5,10 +5,13 @@
 //!
 //! In a lowering record values are numbered as `v<n>` and blocks as `block<n>` in the text of
 //! the module they belong to: `sources` and `mallocs` name the source IR, everything else the
-//! machine IR. Immediates are decimal strings of their unsigned value. A point of a function's
-//! code is `"entry"`, or `{"before": {"block", "index"}}`, `{"after": {"block", "index"}}` or
+//! machine IR. Immediates and other 256-bit words are decimal strings of their unsigned value;
+//! only the signed bounds of a range are signed. A point of a function's code is `"entry"`, or
+//! `{"before": {"block", "index"}}`, `{"after": {"block", "index"}}` or
 //! `{"case": {"block", "index", "case"}}`, where `index` is an instruction's position in its
-//! block, phis included.
+//! block, phis included. In `machine_steps`, the values, blocks and instructions of a step's
+//! facts are those of the function before the step, except the inserted phis of `phis` and
+//! `value_phis`, which are of the function after it.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -17,13 +20,18 @@ use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use mir::{RuntimePackage, build_runtime_package};
 use serde::Serialize;
-use sonatina_codegen::object::{
-    ObjectArtifact,
-    lowering::{
-        CodeLabel, CodePoint, DynSpInitLowering, MallocLowering, SectionLowering, SpillLocation,
-        StableLowering, StackSlot,
+use sonatina_codegen::{
+    isa::evm::LateCleanupProfile,
+    object::{
+        ObjectArtifact,
+        lowering::{
+            CodeLabel, CodePoint, DynSpInitLowering, FuncSnap, GvnOperand, GvnTerm,
+            MachinePassKind, MachineSteps, MallocLowering, SectionLowering, SpillLocation,
+            StableLowering, StackSlot, StepFacts, StepKind,
+        },
     },
 };
+use sonatina_ir::{BlockId, Immediate};
 
 use super::{
     IsolatedObjectCompiler, LowerError, select_ingot_runtime_packages,
@@ -32,7 +40,7 @@ use super::{
 use crate::{OptLevel, runtime_package::ensure_runtime_package_has_roots};
 
 /// The version of the sidecar format, raised with each change to it.
-pub const SIDECAR_VERSION: u32 = 4;
+pub const SIDECAR_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SonatinaSidecar {
@@ -68,6 +76,373 @@ pub struct SidecarLowering {
     pub funcs: Vec<SidecarFunc>,
     pub units: Vec<SidecarUnit>,
     pub redirects: Vec<SidecarRedirect>,
+    /// How the machine stage turned the machine IR lowering built into `machine_ir`.
+    pub machine_steps: SidecarMachineSteps,
+}
+
+/// Each step of the machine stage (`MachineSteps` of Sonatina): `lowered`, with the `out` of
+/// each step's functions put in place in order, is `machine_ir`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarMachineSteps {
+    /// `off`, `speed` or `size`.
+    pub profile: &'static str,
+    /// Every function of the section as lowering built it, in the section's order.
+    pub lowered: Vec<SidecarFuncSnap>,
+    /// The passes in the order they ran.
+    pub passes: Vec<SidecarMachinePass>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarMachinePass {
+    /// The pass, as the snake case of `MachinePassKind`.
+    pub kind: &'static str,
+    /// The behavior the pass read of every function of the module, if it reads any.
+    pub func_behavior: Option<Vec<SidecarFuncSummary>>,
+    /// The steps that changed some function, in order.
+    pub steps: Vec<SidecarMachineStep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarFuncSummary {
+    pub func: String,
+    pub noreturn: bool,
+    pub will_return: bool,
+    pub reads: bool,
+    pub writes: bool,
+    pub mutates: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarMachineStep {
+    /// The step, as the snake case of `StepKind`.
+    pub kind: &'static str,
+    /// The functions the step changed, in the section's order.
+    pub funcs: Vec<SidecarFuncStep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarFuncStep {
+    /// The whole function after the step.
+    pub out: SidecarFuncSnap,
+    pub facts: SidecarStepFacts,
+}
+
+/// A function of the machine module at one point of the machine stage.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarFuncSnap {
+    pub func: String,
+    pub func_ref: u32,
+    /// The function's IR text, values and blocks named by their ids.
+    pub text: String,
+    /// The instruction id of each line of each block of `text`, phis and terminators included.
+    pub insts: Vec<Vec<u32>>,
+}
+
+/// What a step relied on, of the function before it. A value without a fact is unknown, except
+/// that a value `demanded_bits` does not list has no bit demanded.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarStepFacts {
+    /// `[value, known_zero, known_one]`.
+    pub known_bits: Vec<(u32, String, String)>,
+    /// `[value, mask]`.
+    pub demanded_bits: Option<Vec<(u32, String)>>,
+    pub sccp: Option<SidecarSccpFacts>,
+    pub finite_loops: Vec<SidecarFiniteLoop>,
+    pub gvn: Option<SidecarGvnFacts>,
+    pub ranges: Option<SidecarRangeFacts>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarSccpFacts {
+    /// `[value, constant]`.
+    pub consts: Vec<(u32, String)>,
+    /// `[block, slot]`, slots numbered in the order of the terminator's destinations.
+    pub dead_edges: Vec<(u32, u32)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarFiniteLoop {
+    pub header: u32,
+    pub latch: u32,
+    pub iv: u32,
+    pub step: u32,
+    pub exit: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarGvnFacts {
+    /// `[block, slot]`.
+    pub dead_edges: Vec<(u32, u32)>,
+    /// `[value, representative]`.
+    pub class: Vec<(u32, SidecarGvnOperand)>,
+    /// `[block, slot, lhs, rhs]`: `lhs` equals `rhs` once the edge is taken.
+    pub preds: Vec<(u32, u32, SidecarGvnOperand, SidecarGvnOperand)>,
+    /// The phis the step inserted, of the function after it, in the order inserted.
+    pub phis: Vec<SidecarInsertedPhi>,
+    /// `[value, phi]`: the step replaced `value` with `phi`, one of `phis`.
+    pub value_phis: Vec<(u32, u32)>,
+}
+
+/// A phi a `gvn_rewrite` step inserted at the top of `block`, with the term of the step input
+/// it stands for there, if GVN's reasoning reduces to one.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarInsertedPhi {
+    pub phi: u32,
+    pub block: u32,
+    pub term: Option<SidecarGvnTerm>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarGvnTerm {
+    Value(u32),
+    Imm(String),
+    /// The operation of instruction `inst` of the step input, on `args` in place of its
+    /// operands.
+    Inst {
+        inst: u32,
+        args: Vec<SidecarGvnTerm>,
+    },
+}
+
+impl From<&GvnTerm> for SidecarGvnTerm {
+    fn from(term: &GvnTerm) -> Self {
+        match term {
+            GvnTerm::Value(value) => Self::Value(value.as_u32()),
+            GvnTerm::Imm(imm) => Self::Imm(word(*imm)),
+            GvnTerm::Inst { inst, args } => Self::Inst {
+                inst: inst.as_u32(),
+                args: args.iter().map(Self::from).collect(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarGvnOperand {
+    Value(u32),
+    Imm(String),
+}
+
+impl From<&GvnOperand> for SidecarGvnOperand {
+    fn from(operand: &GvnOperand) -> Self {
+        match *operand {
+            GvnOperand::Value(value) => Self::Value(value.as_u32()),
+            GvnOperand::Imm(imm) => Self::Imm(word(imm)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarRangeFacts {
+    pub unreachable: Vec<u32>,
+    /// `[block, ranges]`, the ranges of values at the block's entry.
+    pub entry: Vec<(u32, Vec<SidecarValueRange>)>,
+    /// Instruction ids.
+    pub guarded_subs: Vec<u32>,
+}
+
+/// The value is in both intervals, bounds included; `signed` bounds are signed decimals.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarValueRange {
+    pub value: u32,
+    pub unsigned: (String, String),
+    pub signed: (String, String),
+}
+
+/// An immediate as a decimal string of its unsigned value.
+fn word(imm: Immediate) -> String {
+    imm.as_i256().to_u256().to_string()
+}
+
+impl From<&FuncSnap> for SidecarFuncSnap {
+    fn from(snap: &FuncSnap) -> Self {
+        Self {
+            func: snap.func.clone(),
+            func_ref: snap.func_ref.as_u32(),
+            text: snap.text.clone(),
+            insts: snap
+                .insts
+                .iter()
+                .map(|block| block.iter().map(|inst| inst.as_u32()).collect())
+                .collect(),
+        }
+    }
+}
+
+impl From<&StepFacts> for SidecarStepFacts {
+    fn from(facts: &StepFacts) -> Self {
+        let edges = |edges: &[(BlockId, u32)]| {
+            edges
+                .iter()
+                .map(|&(block, slot)| (block.as_u32(), slot))
+                .collect()
+        };
+        Self {
+            known_bits: facts
+                .known_bits
+                .iter()
+                .map(|(value, zero, one)| (value.as_u32(), zero.to_string(), one.to_string()))
+                .collect(),
+            demanded_bits: facts.demanded_bits.as_ref().map(|demanded| {
+                demanded
+                    .iter()
+                    .map(|(value, mask)| (value.as_u32(), mask.to_string()))
+                    .collect()
+            }),
+            sccp: facts.sccp.as_ref().map(|sccp| SidecarSccpFacts {
+                consts: sccp
+                    .consts
+                    .iter()
+                    .map(|&(value, imm)| (value.as_u32(), word(imm)))
+                    .collect(),
+                dead_edges: edges(&sccp.dead_edges),
+            }),
+            finite_loops: facts
+                .finite_loops
+                .iter()
+                .map(|finite| SidecarFiniteLoop {
+                    header: finite.header.as_u32(),
+                    latch: finite.latch.as_u32(),
+                    iv: finite.iv.as_u32(),
+                    step: finite.step.as_u32(),
+                    exit: finite.exit.as_u32(),
+                })
+                .collect(),
+            gvn: facts.gvn.as_ref().map(|gvn| SidecarGvnFacts {
+                dead_edges: edges(&gvn.dead_edges),
+                class: gvn
+                    .class
+                    .iter()
+                    .map(|(value, rep)| (value.as_u32(), rep.into()))
+                    .collect(),
+                preds: gvn
+                    .preds
+                    .iter()
+                    .map(|(block, slot, lhs, rhs)| (block.as_u32(), *slot, lhs.into(), rhs.into()))
+                    .collect(),
+                phis: gvn
+                    .phis
+                    .iter()
+                    .map(|inserted| SidecarInsertedPhi {
+                        phi: inserted.phi.as_u32(),
+                        block: inserted.block.as_u32(),
+                        term: inserted.term.as_ref().map(SidecarGvnTerm::from),
+                    })
+                    .collect(),
+                value_phis: gvn
+                    .value_phis
+                    .iter()
+                    .map(|(value, phi)| (value.as_u32(), phi.as_u32()))
+                    .collect(),
+            }),
+            ranges: facts.ranges.as_ref().map(|ranges| SidecarRangeFacts {
+                unreachable: ranges
+                    .unreachable
+                    .iter()
+                    .map(|block| block.as_u32())
+                    .collect(),
+                entry: ranges
+                    .entry
+                    .iter()
+                    .map(|(block, env)| {
+                        let env = env
+                            .iter()
+                            .map(|range| SidecarValueRange {
+                                value: range.value.as_u32(),
+                                unsigned: (
+                                    range.unsigned.0.to_string(),
+                                    range.unsigned.1.to_string(),
+                                ),
+                                signed: (range.signed.0.to_string(), range.signed.1.to_string()),
+                            })
+                            .collect();
+                        (block.as_u32(), env)
+                    })
+                    .collect(),
+                guarded_subs: ranges
+                    .guarded_subs
+                    .iter()
+                    .map(|inst| inst.as_u32())
+                    .collect(),
+            }),
+        }
+    }
+}
+
+impl From<&MachineSteps> for SidecarMachineSteps {
+    fn from(steps: &MachineSteps) -> Self {
+        Self {
+            profile: match steps.profile {
+                LateCleanupProfile::Off => "off",
+                LateCleanupProfile::Speed => "speed",
+                LateCleanupProfile::Size => "size",
+            },
+            lowered: steps.lowered.iter().map(SidecarFuncSnap::from).collect(),
+            passes: steps
+                .passes
+                .iter()
+                .map(|pass| SidecarMachinePass {
+                    kind: match pass.kind {
+                        MachinePassKind::CfgCleanup => "cfg_cleanup",
+                        MachinePassKind::BranchCanonicalize => "branch_canonicalize",
+                        MachinePassKind::ScalarCanonicalize => "scalar_canonicalize",
+                        MachinePassKind::KnownBitsSimplify => "known_bits_simplify",
+                        MachinePassKind::Sccp => "sccp",
+                        MachinePassKind::Gvn => "gvn",
+                        MachinePassKind::Adce => "adce",
+                        MachinePassKind::LowerSwitches => "lower_switches",
+                        MachinePassKind::BranchConditions => "branch_conditions",
+                        MachinePassKind::CoalesceCopies => "coalesce_copies",
+                        MachinePassKind::EdgeSplit => "edge_split",
+                    },
+                    func_behavior: pass.func_behavior.as_ref().map(|summaries| {
+                        summaries
+                            .iter()
+                            .map(|summary| SidecarFuncSummary {
+                                func: summary.func.clone(),
+                                noreturn: summary.noreturn,
+                                will_return: summary.will_return,
+                                reads: summary.reads,
+                                writes: summary.writes,
+                                mutates: summary.mutates,
+                            })
+                            .collect()
+                    }),
+                    steps: pass
+                        .steps
+                        .iter()
+                        .map(|step| SidecarMachineStep {
+                            kind: match step.kind {
+                                StepKind::CfgCleanup => "cfg_cleanup",
+                                StepKind::BranchCanonicalize => "branch_canonicalize",
+                                StepKind::ScalarCanonicalize => "scalar_canonicalize",
+                                StepKind::KnownBitsSimplify => "known_bits_simplify",
+                                StepKind::SccpPrune => "sccp_prune",
+                                StepKind::SccpFold => "sccp_fold",
+                                StepKind::Adce => "adce",
+                                StepKind::GvnPrune => "gvn_prune",
+                                StepKind::GvnRewrite => "gvn_rewrite",
+                                StepKind::LowerSwitches => "lower_switches",
+                                StepKind::BranchConditions => "branch_conditions",
+                                StepKind::CoalesceCopies => "coalesce_copies",
+                                StepKind::EdgeSplit => "edge_split",
+                            },
+                            funcs: step
+                                .funcs
+                                .iter()
+                                .map(|func| SidecarFuncStep {
+                                    out: (&func.out).into(),
+                                    facts: (&func.facts).into(),
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,10 +481,14 @@ pub struct SidecarSpill {
     /// The points at which the code stores the value into its location, in emission order:
     /// after its definition, at entry for an argument, and before the terminator of each
     /// predecessor (an edge block, for a critical edge) that gives a phi an operand other than
-    /// the phi itself. The stack top holds the value stored: a phi's operand on its edge.
+    /// the phi itself, except where the edge would reload that operand from the phi's own
+    /// location. The stack top holds the value stored, a phi's operand on its edge, and the
+    /// store may take it off the stack.
     pub stores: Vec<SidecarPoint>,
     /// The points at which the code reloads the value from its location onto the stack, in
-    /// emission order. A function without code of its own has no points.
+    /// emission order. A reload of a phi's operand from the phi's own location, for the phi's
+    /// store on the edge, is left out with that store, so a value may have stores and no
+    /// reloads. A function without code of its own has no points.
     pub reloads: Vec<SidecarPoint>,
 }
 
@@ -250,9 +629,7 @@ impl From<&SectionLowering> for SidecarLowering {
                             .iter()
                             .map(|slot| match slot {
                                 StackSlot::Value(value) => SidecarSlot::Value(value.as_u32()),
-                                StackSlot::Imm(imm) => {
-                                    SidecarSlot::Imm(imm.as_i256().to_u256().to_string())
-                                }
+                                StackSlot::Imm(imm) => SidecarSlot::Imm(word(*imm)),
                                 StackSlot::FuncReturn => SidecarSlot::FuncReturn,
                                 StackSlot::CallReturn => SidecarSlot::CallReturn,
                             })
@@ -343,6 +720,7 @@ impl From<&SectionLowering> for SidecarLowering {
                     to: label(to),
                 })
                 .collect(),
+            machine_steps: (&lowering.machine_steps).into(),
         }
     }
 }
