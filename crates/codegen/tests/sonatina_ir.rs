@@ -675,7 +675,9 @@ fn folded_const_data_leaves_no_runtime_data(fixture: Fixture<&str>) {
         word
     };
     with_top_mod_for_source(&fixture, |db, top_mod| {
-        for level in [OptLevel::O0, OptLevel::O1, OptLevel::Os] {
+        // `-O0` neither specializes `clamp` for `LIMITS` nor runs the machine pass round, so
+        // the loads stay.
+        for level in [OptLevel::O1, OptLevel::Os] {
             let bytecode = fe_codegen::emit_module_sonatina_bytecode(db, top_mod, level, None)
                 .expect("bytecode should emit");
             let runtime = &bytecode["Clamp"].runtime;
