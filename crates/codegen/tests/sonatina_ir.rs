@@ -158,7 +158,7 @@ fn observability_preserves_creation_and_runtime_bytecode(fixture: Fixture<&str>)
     });
 }
 
-/// The passes of the machine stage's pass round.
+/// The passes of the machine stage's pass round, which `-O0` does not run.
 const MACHINE_ROUND: [&str; 7] = [
     "cfg_cleanup",
     "branch_canonicalize",
@@ -177,7 +177,7 @@ fn array(value: &Value) -> &Vec<Value> {
 /// a function or global of its section's IR, and each function's symbol is where its code starts.
 /// In the JSON of each sidecar, the machine steps of each section compose to its `machine_ir`,
 /// every `alloca` and `evm_malloc` of a function's source IR has its placement, and at `-O0`
-/// no function restores the free pointer.
+/// no pass of the pass round runs and no function restores the free pointer.
 fn checked_sidecars(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -365,6 +365,12 @@ fn checked_sidecars(
             assert_eq!(funcs, machine, "{name}, {level:?}: the composed steps");
             if level == OptLevel::O0 {
                 assert_eq!(steps["profile"], "off");
+                assert!(
+                    array(&steps["passes"])
+                        .iter()
+                        .all(|pass| !MACHINE_ROUND.contains(&pass["kind"].as_str().unwrap())),
+                    "{name}: a pass of the pass round at -O0"
+                );
             }
         }
     }
