@@ -61,18 +61,16 @@ func private %__Book_recv_0_1(v0.i64, v1.i256) {
         br v9 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v16.i256 = zext v8 i256;
-        v18.i256 = and v16 18446744073709551615.i256;
-        v19.i256 = shl 128.i256 v18;
-        v20.i256 = evm_sload v1;
-        v22.i256 = and v20 -6277101735386680763495507056286727952638980837032266301441.i256;
-        v23.i256 = or v22 v19;
-        evm_sstore v1 v23;
+        v13.i256 = zext v8 i256;
+        v15.i256 = and v13 18446744073709551615.i256;
+        v16.i256 = shl 128.i256 v15;
+        v17.i256 = evm_sload v1;
+        v19.i256 = and v17 -6277101735386680763495507056286727952638980837032266301441.i256;
+        v20.i256 = or v19 v16;
+        evm_sstore v1 v20;
         return;
 }
 
@@ -106,9 +104,7 @@ func private %abi_field_size(v0.i64) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -152,17 +148,15 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func inline(always) private %alloc__g1d2b() -> @layout_0 {
@@ -205,16 +199,14 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.i256 = call %word_to_usize v0;
-        return v10;
+        v7.i256 = call %word_to_usize v0;
+        return v7;
 }
 
 func private %cast(v0.i256) -> i256 {
@@ -294,9 +286,9 @@ func private %contract_init_root_Book() {
 
     block1:
         call %contract_init_abi_Book;
-        v2.i256 = sym_addr &Book_runtime;
-        v3.i256 = sym_size &Book_runtime;
-        evm_return_code v2 v3;
+        v1.i256 = sym_addr &Book_runtime;
+        v2.i256 = sym_size &Book_runtime;
+        evm_return_code v1 v2;
 }
 
 func private %contract_recv_abi_Book_1() {
@@ -614,92 +606,90 @@ func private %downcast(v0.i256) -> @layout_5 {
         br 0.i1 block18 block16;
 
     block4:
-        v14.@layout_5 = phi (v20 block7) (v42 block17);
-        return v14;
+        v12.@layout_5 = phi (v18 block7) (v40 block17);
+        return v12;
 
     block5:
-        v15.@layout_5 = enum.make @layout_5 #variant_0;
-        v16.@layout_5 = enum.make @layout_5 #variant_0;
+        v13.@layout_5 = enum.make @layout_5 #variant_0;
+        v14.@layout_5 = enum.make @layout_5 #variant_0;
         jump block7;
 
     block6:
-        v19.i1 = slt v2 0.i256;
-        br v19 block9 block10;
+        v17.i1 = slt v2 0.i256;
+        br v17 block9 block10;
 
     block7:
-        v20.@layout_5 = phi (v16 block5) (v31 block11);
+        v18.@layout_5 = phi (v14 block5) (v29 block11);
         jump block4;
 
     block8:
-        v23.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v24.i1 = eq v23 0.i256;
-        v25.i1 = is_zero v24;
-        br v25 block5 block6;
+        v21.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+        v22.i1 = eq v21 0.i256;
+        v23.i1 = is_zero v22;
+        br v23 block5 block6;
 
     block9:
-        v26.@layout_5 = enum.make @layout_5 #variant_0;
-        v27.@layout_5 = enum.make @layout_5 #variant_0;
+        v24.@layout_5 = enum.make @layout_5 #variant_0;
+        v25.@layout_5 = enum.make @layout_5 #variant_0;
         jump block11;
 
     block10:
-        v30.i1 = slt v7 v2;
-        br v30 block12 block13;
+        v28.i1 = slt v7 v2;
+        br v28 block12 block13;
 
     block11:
-        v31.@layout_5 = phi (v27 block9) (v37 block14);
+        v29.@layout_5 = phi (v25 block9) (v35 block14);
         jump block7;
 
     block12:
-        v32.@layout_5 = enum.make @layout_5 #variant_0;
-        v33.@layout_5 = enum.make @layout_5 #variant_0;
+        v30.@layout_5 = enum.make @layout_5 #variant_0;
+        v31.@layout_5 = enum.make @layout_5 #variant_0;
         jump block14;
 
     block13:
-        v35.i64 = call %impl_trait_u64__from_word v2;
-        v36.@layout_5 = enum.make @layout_5 #variant_1 v35;
+        v33.i64 = call %impl_trait_u64__from_word v2;
+        v34.@layout_5 = enum.make @layout_5 #variant_1 v33;
         jump block14;
 
     block14:
-        v37.@layout_5 = phi (v33 block12) (v36 block13);
+        v35.@layout_5 = phi (v31 block12) (v34 block13);
         jump block11;
 
     block15:
-        v38.@layout_5 = enum.make @layout_5 #variant_0;
-        v39.@layout_5 = enum.make @layout_5 #variant_0;
+        v36.@layout_5 = enum.make @layout_5 #variant_0;
+        v37.@layout_5 = enum.make @layout_5 #variant_0;
         jump block17;
 
     block16:
-        v41.i1 = gt v2 18446744073709551615.i256;
-        br v41 block19 block20;
+        v39.i1 = gt v2 18446744073709551615.i256;
+        br v39 block19 block20;
 
     block17:
-        v42.@layout_5 = phi (v39 block15) (v52 block21);
+        v40.@layout_5 = phi (v37 block15) (v50 block21);
         jump block4;
 
     block18:
-        v44.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v45.i1 = eq v44 0.i256;
-        v46.i1 = is_zero v45;
-        br v46 block15 block16;
+        v42.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+        v43.i1 = eq v42 0.i256;
+        v44.i1 = is_zero v43;
+        br v44 block15 block16;
 
     block19:
-        v47.@layout_5 = enum.make @layout_5 #variant_0;
-        v48.@layout_5 = enum.make @layout_5 #variant_0;
+        v45.@layout_5 = enum.make @layout_5 #variant_0;
+        v46.@layout_5 = enum.make @layout_5 #variant_0;
         jump block21;
 
     block20:
-        v50.i64 = call %impl_trait_u64__from_word v2;
-        v51.@layout_5 = enum.make @layout_5 #variant_1 v50;
+        v48.i64 = call %impl_trait_u64__from_word v2;
+        v49.@layout_5 = enum.make @layout_5 #variant_1 v48;
         jump block21;
 
     block21:
-        v52.@layout_5 = phi (v48 block19) (v51 block20);
+        v50.@layout_5 = phi (v46 block19) (v49 block20);
         jump block17;
 
     block22:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block23:
         br 1.i1 block8 block6;
@@ -844,9 +834,7 @@ func private %index_out_of_bounds() {
         jump block1;
 
     block1:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 }
 
 func private %input() -> @layout_1 {
@@ -1131,16 +1119,14 @@ func inline(always) private %size(v0.@layout_1) -> i64 {
         br v11 block5 block6;
 
     block4:
-        v17.i64 = phi (0.i64 block2) (v16 block6);
-        return v17;
+        v15.i64 = phi (0.i64 block2) (v14 block6);
+        return v15;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        v16.i64 = call %downcast_truncate v10;
+        v14.i64 = call %downcast_truncate v10;
         jump block4;
 }
 

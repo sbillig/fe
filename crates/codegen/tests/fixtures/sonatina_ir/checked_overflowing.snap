@@ -79,25 +79,23 @@ func private %checked_div(v0.i32, v1.i32) -> @layout_2 {
         br v9 block7 block8;
 
     block4:
-        v17.@layout_2 = phi (v6 block2) (v16 block8);
-        return v17;
+        v14.@layout_2 = phi (v6 block2) (v13 block8);
+        return v14;
 
     block5:
-        v20.i1 = eq v0 -2147483648.i32;
-        br v20 block6 block3;
+        v17.i1 = eq v0 -2147483648.i32;
+        br v17 block6 block3;
 
     block6:
-        v23.i1 = eq v1 -1.i32;
-        br v23 block2 block3;
+        v20.i1 = eq v1 -1.i32;
+        br v20 block2 block3;
 
     block7:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 18.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 18.i256;
 
     block8:
-        v15.i32 = evm_sdiv v0 v1;
-        v16.@layout_2 = enum.make @layout_2 #variant_1 v15;
+        v12.i32 = evm_sdiv v0 v1;
+        v13.@layout_2 = enum.make @layout_2 #variant_1 v12;
         jump block4;
 }
 

@@ -33,7 +33,7 @@ func private %main() -> i256 {
         jump block2;
 
     block2:
-        v26.i256 = phi (0.i256 block1) (v18 block4);
+        v24.i256 = phi (0.i256 block1) (v18 block4);
         v6.i256 = phi (v4 block1) (v12 block4);
         v7.i1 = call %has v3 v6;
         br v7 block3 block5;
@@ -47,7 +47,7 @@ func private %main() -> i256 {
         jump block2;
 
     block5:
-        return v26;
+        return v24;
 
     block6:
         v15.i256 = obj.load v0;
@@ -57,16 +57,14 @@ func private %main() -> i256 {
         jump block6;
 
     block8:
-        (v18.i256, v19.i1) = uaddo v26 v15;
+        (v18.i256, v19.i1) = uaddo v24 v15;
         br v19 block10 block11;
 
     block9:
         jump block8;
 
     block10:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block11:
         jump block4;

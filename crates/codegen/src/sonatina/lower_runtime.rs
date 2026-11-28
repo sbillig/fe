@@ -72,9 +72,9 @@ use sonatina_ir::{
             EvmKeccak256, EvmKeccak256Words, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
             EvmMalloc, EvmMcopy, EvmMloadBytes, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber,
             EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnCode, EvmReturnDataCopy,
-            EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance, EvmSelfDestruct, EvmSignExtend,
-            EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
-            EvmTstore, EvmUdiv, EvmUmod,
+            EvmReturnDataSize, EvmRevert, EvmRevertWord, EvmSdiv, EvmSelfBalance, EvmSelfDestruct,
+            EvmSignExtend, EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp,
+            EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Bswap, Clz, Ctz, Not, Or, Xor},
     },
@@ -6952,7 +6952,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     /// a constant global, so the check that panics allocates nothing and makes
     /// a call of two arguments.
     fn insert_panic_revert(&mut self, code: ValueId) -> Result<(), LowerError> {
-        let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+        let Some(has_revert_word) = EvmRevertWord::belongs_to(self.module.inst_set()) else {
             if self.module.panics.reverts_to_host()
                 && let Value::Immediate { imm, .. } = self.fb.func.dfg.value(code)
             {
@@ -6972,24 +6972,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             return self.insert_native_panic(NativePanic::Code, &[code]);
         };
-        let zero = self.fb.make_imm_value(I256::zero());
-        let selector = self.fb.make_imm_value(panic_selector_immediate());
-        let code_offset = self.fb.make_imm_value(I256::from(4u64));
-        let len = self.fb.make_imm_value(I256::from(36u64));
-        self.fb.insert_inst_no_result(Mstore::new(
-            self.module.inst_set(),
-            zero,
-            selector,
-            Type::I256,
-        ));
-        self.fb.insert_inst_no_result(Mstore::new(
-            self.module.inst_set(),
-            code_offset,
-            code,
-            Type::I256,
-        ));
+        let selector = self
+            .fb
+            .make_imm_value(Immediate::I32(i32::from_be_bytes(PANIC_SELECTOR)));
         self.fb
-            .insert_inst_no_result(EvmRevert::new(has_revert, zero, len));
+            .insert_inst_no_result(EvmRevertWord::new(has_revert_word, selector, code));
         Ok(())
     }
 
@@ -7597,12 +7584,6 @@ fn bytes_to_i256(bytes: &[u8], signed: bool) -> I256 {
 
 /// The selector of Solidity's `Panic(uint256)`.
 const PANIC_SELECTOR: [u8; 4] = [0x4e, 0x48, 0x7b, 0x71];
-
-fn panic_selector_immediate() -> Immediate {
-    let mut bytes = [0; 32];
-    bytes[..4].copy_from_slice(&PANIC_SELECTOR);
-    Immediate::from_i256(bytes_to_i256(&bytes, false), Type::I256)
-}
 
 /// The value of `ty` whose bits are all zero: an immediate for an integer or
 /// enum tag, `zero.T` for the unit value and compound types.

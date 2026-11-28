@@ -67,9 +67,7 @@ func private %abi_field_size(v0.@layout_0) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -122,17 +120,15 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func inline(always) private %alloc__g1d2b() -> @layout_2 {
@@ -175,16 +171,14 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.i256 = call %word_to_usize v0;
-        return v10;
+        v7.i256 = call %word_to_usize v0;
+        return v7;
 }
 
 func private %as_wei(v0.@layout_3) -> i256 {
@@ -300,24 +294,22 @@ func inline(always) private %contract_init_abi_Child() {
         br v12 block6 block7;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v17.*i8 = evm_malloc v11;
-        v18.i256 = ptr_to_int v17 i256;
-        evm_code_copy v18 v6 v11;
-        v21.objref<i256> = obj.proj v0 0.i256;
-        obj.store v21 v18;
-        v23.objref<i256> = obj.proj v0 1.i256;
-        obj.store v23 v11;
-        v24.@layout_1 = call %decoder_new;
-        obj.store v1 v24;
-        v25.@layout_1 = call %decode_payload__g6c12 v1 v0;
-        v26.i256 = extract_value v25 0.i256;
-        v27.i256 = extract_value v25 1.i256;
-        call %__Child_init v26 v27 0.i256;
+        v15.*i8 = evm_malloc v11;
+        v16.i256 = ptr_to_int v15 i256;
+        evm_code_copy v16 v6 v11;
+        v19.objref<i256> = obj.proj v0 0.i256;
+        obj.store v19 v16;
+        v21.objref<i256> = obj.proj v0 1.i256;
+        obj.store v21 v11;
+        v22.@layout_1 = call %decoder_new;
+        obj.store v1 v22;
+        v23.@layout_1 = call %decode_payload__g6c12 v1 v0;
+        v24.i256 = extract_value v23 0.i256;
+        v25.i256 = extract_value v23 1.i256;
+        call %__Child_init v24 v25 0.i256;
         return;
 }
 
@@ -363,27 +355,27 @@ func inline(always) private %contract_init_code(v0.@layout_1) -> @layout_4 {
         br v18 block14 block15;
 
     block4:
-        v32.@layout_4 = phi (v8 block2) (v24 block10);
-        return v32;
+        v29.@layout_4 = phi (v8 block2) (v21 block10);
+        return v29;
 
     block5:
         br 0.i1 block2 block3;
 
     block6:
-        call %copy v30 v1;
+        call %copy v27 v1;
         jump block11;
 
     block7:
-        v37.i256 = extract_value v13 0.i256;
-        v39.i256 = extract_value v13 1.i256;
+        v35.i256 = extract_value v13 0.i256;
+        v37.i256 = extract_value v13 1.i256;
         jump block9;
 
     block8:
         jump block6;
 
     block9:
-        v43.@layout_5 = agg.make @layout_5 v37 v39;
-        obj.store v1 v43;
+        v41.@layout_5 = agg.make @layout_5 v35 v37;
+        obj.store v1 v41;
         jump block8;
 
     block10:
@@ -399,16 +391,14 @@ func inline(always) private %contract_init_code(v0.@layout_1) -> @layout_4 {
         jump block12;
 
     block14:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block15:
-        v24.@layout_4 = call %new_uninit v17;
-        v25.i256 = call %impl_MemBuffer__ptr v24;
-        evm_code_copy v25 v3 v2;
-        v28.i256 = call %impl_MemBuffer__ptr v24;
-        v30.i256 = add v28 v15;
+        v21.@layout_4 = call %new_uninit v17;
+        v22.i256 = call %impl_MemBuffer__ptr v21;
+        evm_code_copy v22 v3 v2;
+        v25.i256 = call %impl_MemBuffer__ptr v21;
+        v27.i256 = add v25 v15;
         jump block7;
 }
 
@@ -418,9 +408,9 @@ func private %contract_init_root_Child() {
 
     block1:
         call %contract_init_abi_Child;
-        v2.i256 = sym_addr &Child_runtime;
-        v3.i256 = sym_size &Child_runtime;
-        evm_return_code v2 v3;
+        v1.i256 = sym_addr &Child_runtime;
+        v2.i256 = sym_size &Child_runtime;
+        evm_return_code v1 v2;
 }
 
 func private %contract_init_root_Factory() {
@@ -429,9 +419,9 @@ func private %contract_init_root_Factory() {
 
     block1:
         call %contract_init_abi_Factory;
-        v2.i256 = sym_addr &Factory_runtime;
-        v3.i256 = sym_size &Factory_runtime;
-        evm_return_code v2 v3;
+        v1.i256 = sym_addr &Factory_runtime;
+        v2.i256 = sym_size &Factory_runtime;
+        evm_return_code v1 v2;
 }
 
 func private %contract_recv_abi_Factory_1() {
@@ -777,23 +767,21 @@ func inline(always) private %impl_trait_Deploy2__decode_from__g8f43(v0.@layout_3
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from v0 v1 v7 v3;
-        (v18.i256, v19.i1) = uaddo v1 32.i256;
-        br v19 block2 block4;
+        v14.i256 = call %decode_msg_field_from v0 v1 v7 v3;
+        (v15.i256, v16.i1) = uaddo v1 32.i256;
+        br v16 block2 block4;
 
     block4:
-        (v20.i256, v21.i1) = uaddo v18 32.i256;
-        br v21 block2 block5;
+        (v17.i256, v18.i1) = uaddo v15 32.i256;
+        br v18 block2 block5;
 
     block5:
-        v25.i256 = call %decode_msg_field_from v0 v1 v20 v3;
-        v28.@layout_6 = agg.make @layout_6 v5 v17 v25;
-        return v28;
+        v22.i256 = call %decode_msg_field_from v0 v1 v17 v3;
+        v25.@layout_6 = agg.make @layout_6 v5 v14 v22;
+        return v25;
 }
 
 func private %decode_from_bounded(v0.@layout_3, v1.i256, v2.i256) -> i256 {
@@ -826,14 +814,12 @@ func inline(always) private %impl_trait_Deploy__decode_from__g8f43(v0.@layout_3,
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from v0 v1 v7 v3;
-        v19.@layout_1 = agg.make @layout_1 v5 v17;
-        return v19;
+        v14.i256 = call %decode_msg_field_from v0 v1 v7 v3;
+        v16.@layout_1 = agg.make @layout_1 v5 v14;
+        return v16;
 }
 
 func inline(always) private %decode_from_prechecked_head__gdea7(v0.@layout_3, v1.i256, v2.i256) -> @layout_6 {
@@ -1200,9 +1186,7 @@ func private %index_out_of_bounds() {
         jump block1;
 
     block1:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 }
 
 func private %input() -> @layout_3 {
@@ -1398,28 +1382,26 @@ func inline(always) private %read_word(noalias nocapture v0.objref<@layout_1>, n
         jump block4;
 
     block4:
-        v18.objref<i256> = obj.proj v0 0.i256;
-        v19.i256 = obj.load v18;
-        v21.i256 = call %impl_trait_MemSlice__word_at v1 v19;
-        v23.objref<i256> = obj.proj v0 0.i256;
-        obj.store v23 v7;
-        return v21;
+        v16.objref<i256> = obj.proj v0 0.i256;
+        v17.i256 = obj.load v16;
+        v19.i256 = call %impl_trait_MemSlice__word_at v1 v17;
+        v21.objref<i256> = obj.proj v0 0.i256;
+        obj.store v21 v7;
+        return v19;
 
     block5:
-        v25.i256 = call %len__g140d v1;
-        v27.i1 = gt v7 v25;
-        br v27 block2 block3;
+        v23.i256 = call %len__g140d v1;
+        v25.i1 = gt v7 v23;
+        br v25 block2 block3;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v14.objref<i256> = obj.proj v0 0.i256;
-        v15.i256 = obj.load v14;
-        v16.i1 = lt v7 v15;
-        br v16 block2 block5;
+        v12.objref<i256> = obj.proj v0 0.i256;
+        v13.i256 = obj.load v12;
+        v14.i1 = lt v7 v13;
+        br v14 block2 block5;
 }
 
 func private %return_bytes(noalias nocapture readonly v0.objref<@layout_5>) {
@@ -1601,16 +1583,14 @@ func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
         br v11 block5 block6;
 
     block4:
-        v17.i64 = phi (0.i64 block2) (v16 block6);
-        return v17;
+        v15.i64 = phi (0.i64 block2) (v14 block6);
+        return v15;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        v16.i64 = call %downcast_truncate__gaa81 v10;
+        v14.i64 = call %downcast_truncate__gaa81 v10;
         jump block4;
 }
 

@@ -90,16 +90,14 @@ func private %param_local_collision(v0.i32) -> i32 {
         br v4 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        (v11.i32, v12.i1) = uaddo v3 2.i32;
-        br v12 block2 block4;
+        (v8.i32, v9.i1) = uaddo v3 2.i32;
+        br v9 block2 block4;
 
     block4:
-        return v11;
+        return v8;
 }
 
 func private %name_collisions__impl_a__impl_Widget__process(v0.@layout_1) -> i32 {
@@ -112,9 +110,7 @@ func private %name_collisions__impl_a__impl_Widget__process(v0.@layout_1) -> i32
         br v6 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v5;
@@ -130,9 +126,7 @@ func private %name_collisions__impl_b__impl_Widget__process(v0.@layout_0) -> i64
         br v6 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v5;
@@ -147,9 +141,7 @@ func private %ret_param_collision(v0.i32) -> i32 {
         br v4 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v3;
@@ -165,9 +157,7 @@ func private %impl_trait_MultiTraitImpl_b140__same_method(v0.@layout_1) -> i32 {
         br v6 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v5;
@@ -183,9 +173,7 @@ func private %impl_trait_MultiTraitImpl_5bd8__same_method(v0.@layout_1) -> i32 {
         br v6 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v5;
@@ -241,9 +229,7 @@ func private %test_module_qualifier_flatten_collision() -> i32 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v2;
@@ -282,9 +268,7 @@ func private %test_trait_method_collision() -> i32 {
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v7;

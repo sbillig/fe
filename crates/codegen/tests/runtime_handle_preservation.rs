@@ -1871,7 +1871,7 @@ pub fn main() -> u256 uses (evm: std::evm::RawOps) {
     // its enum tags before the call, panicking with `Panic(0x21)`.
     let read_input = sonatina_function_body(&ir, "read_input");
     assert!(
-        read_input.contains("mstore 4.i256 33.i256 i256;"),
+        read_input.contains("evm_revert_word 1313373041.i32 33.i256;"),
         "snapshotting nested enums must still validate their tags before the call:\n{ir}"
     );
 }

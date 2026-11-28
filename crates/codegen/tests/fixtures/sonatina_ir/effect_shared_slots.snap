@@ -36,9 +36,7 @@ func private %__C_recv_0_0() -> i256 {
         br v16 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v15;
@@ -63,9 +61,7 @@ func private %abi_field_size(v0.i256) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -120,17 +116,15 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func inline(always) private %alloc_uninit__g1d2b() -> @layout_0 {
@@ -162,16 +156,14 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.i256 = call %word_to_usize v0;
-        return v10;
+        v7.i256 = call %word_to_usize v0;
+        return v7;
 }
 
 func private %both(nocapture v0.objref<@layout_1>, nocapture v1.objref<@layout_1>, noalias nocapture v2.objref<@layout_1>) -> i256 {
@@ -185,9 +177,7 @@ func private %both(nocapture v0.objref<@layout_1>, nocapture v1.objref<@layout_1
         br v9 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v8;
@@ -224,9 +214,9 @@ func private %contract_init_root_C() {
 
     block1:
         call %contract_init_abi_C;
-        v2.i256 = sym_addr &C_runtime;
-        v3.i256 = sym_size &C_runtime;
-        evm_return_code v2 v3;
+        v1.i256 = sym_addr &C_runtime;
+        v2.i256 = sym_size &C_runtime;
+        evm_return_code v1 v2;
 }
 
 func private %contract_recv_abi_C_1() {
@@ -284,16 +274,14 @@ func private %impl_trait_Ones__count(noalias nocapture v0.objref<@layout_1>) -> 
         br v7 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v13.objref<i256> = obj.proj v0 0.i256;
-        obj.store v13 v6;
-        v14.objref<i256> = obj.proj v0 0.i256;
-        v15.i256 = obj.load v14;
-        return v15;
+        v11.objref<i256> = obj.proj v0 0.i256;
+        obj.store v11 v6;
+        v12.objref<i256> = obj.proj v0 0.i256;
+        v13.i256 = obj.load v12;
+        return v13;
 }
 
 func private %impl_trait_Tallied__count(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_1>) -> i256 {
@@ -307,24 +295,22 @@ func private %impl_trait_Tallied__count(noalias nocapture v0.objref<@layout_1>, 
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v14.objref<i256> = obj.proj v1 0.i256;
-        obj.store v14 v7;
-        v17.objref<i256> = obj.proj v0 0.i256;
-        v18.i256 = obj.load v17;
-        (v19.i256, v20.i1) = uaddo v18 100.i256;
-        br v20 block2 block4;
+        v12.objref<i256> = obj.proj v1 0.i256;
+        obj.store v12 v7;
+        v15.objref<i256> = obj.proj v0 0.i256;
+        v16.i256 = obj.load v15;
+        (v17.i256, v18.i1) = uaddo v16 100.i256;
+        br v18 block2 block4;
 
     block4:
-        v22.objref<i256> = obj.proj v0 0.i256;
-        obj.store v22 v19;
-        v23.objref<i256> = obj.proj v0 0.i256;
-        v24.i256 = obj.load v23;
-        return v24;
+        v20.objref<i256> = obj.proj v0 0.i256;
+        obj.store v20 v17;
+        v21.objref<i256> = obj.proj v0 0.i256;
+        v22.i256 = obj.load v21;
+        return v22;
 }
 
 func inline(always) private %decode_from(v0.@layout_1, v1.i256) {
@@ -494,9 +480,7 @@ func private %index_out_of_bounds() {
         jump block1;
 
     block1:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 }
 
 func private %input() -> @layout_1 {
@@ -634,18 +618,16 @@ func private %read_after_write(v0.@layout_1, nocapture v1.objref<@layout_1>, noc
         br v13 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v19.objref<i256> = obj.proj v4 0.i256;
-        v20.i256 = obj.load v19;
-        (v21.i256, v22.i1) = uaddo v12 v20;
-        br v22 block2 block4;
+        v17.objref<i256> = obj.proj v4 0.i256;
+        v18.i256 = obj.load v17;
+        (v19.i256, v20.i1) = uaddo v12 v18;
+        br v20 block2 block4;
 
     block4:
-        return v21;
+        return v19;
 }
 
 func private %return_bytes(noalias nocapture readonly v0.objref<@layout_4>) {
@@ -807,16 +789,14 @@ func inline(always) private %size(v0.@layout_1) -> i64 {
         br v11 block5 block6;
 
     block4:
-        v17.i64 = phi (0.i64 block2) (v16 block6);
-        return v17;
+        v15.i64 = phi (0.i64 block2) (v14 block6);
+        return v15;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        v16.i64 = call %downcast_truncate v10;
+        v14.i64 = call %downcast_truncate v10;
         jump block4;
 }
 

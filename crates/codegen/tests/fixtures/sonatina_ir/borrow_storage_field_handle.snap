@@ -15,14 +15,12 @@ func private %borrow_storage_field_handle(v0.i256) -> i256 {
         br v5 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         evm_sstore v0 v4;
-        v13.i256 = evm_sload v0;
-        return v13;
+        v10.i256 = evm_sload v0;
+        return v10;
 }
 
 func private %main() -> i256 {

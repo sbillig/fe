@@ -49,9 +49,7 @@ func private %abi_field_size(v0.i256) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -95,17 +93,15 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func inline(always) private %alloc__g03ed() -> @layout_0 {
@@ -148,16 +144,14 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.i256 = call %word_to_usize v0;
-        return v10;
+        v7.i256 = call %word_to_usize v0;
+        return v7;
 }
 
 func private %bump(v0.i256) {
@@ -170,9 +164,7 @@ func private %bump(v0.i256) {
         br v5 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         evm_sstore v0 v4;
@@ -211,9 +203,9 @@ func private %contract_init_root_NewtypeStorageFieldMutMethodCall() {
 
     block1:
         call %contract_init_abi_NewtypeStorageFieldMutMethodCall;
-        v2.i256 = sym_addr &NewtypeStorageFieldMutMethodCall_runtime;
-        v3.i256 = sym_size &NewtypeStorageFieldMutMethodCall_runtime;
-        evm_return_code v2 v3;
+        v1.i256 = sym_addr &NewtypeStorageFieldMutMethodCall_runtime;
+        v2.i256 = sym_size &NewtypeStorageFieldMutMethodCall_runtime;
+        evm_return_code v1 v2;
 }
 
 func private %contract_recv_abi_NewtypeStorageFieldMutMethodCall_1() {
@@ -427,9 +419,7 @@ func private %index_out_of_bounds() {
         jump block1;
 
     block1:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 }
 
 func private %input() -> @layout_1 {
@@ -714,16 +704,14 @@ func inline(always) private %size(v0.@layout_1) -> i64 {
         br v11 block5 block6;
 
     block4:
-        v17.i64 = phi (0.i64 block2) (v16 block6);
-        return v17;
+        v15.i64 = phi (0.i64 block2) (v14 block6);
+        return v15;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        v16.i64 = call %downcast_truncate v10;
+        v14.i64 = call %downcast_truncate v10;
         jump block4;
 }
 

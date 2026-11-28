@@ -169,9 +169,7 @@ func private %__CoolCoin_recv_1_3(v0.@layout_0, v1.i256, v2.i256) -> i1 {
         br v12 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         call %approve v3 v0 v11 v2;
@@ -195,21 +193,17 @@ func private %__CoolCoin_recv_1_4(v0.@layout_0, v1.i256, v2.i256) -> i1 {
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
-        (v20.i256, v21.i1) = usubo v9 v1;
-        br v21 block5 block6;
+        (v17.i256, v18.i1) = usubo v9 v1;
+        br v18 block5 block6;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        call %approve v3 v0 v20 v2;
+        call %approve v3 v0 v17 v2;
         return 1.i1;
 }
 
@@ -232,9 +226,7 @@ func private %abi_field_size__gda9b(v0.i1) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -259,9 +251,7 @@ func private %abi_field_size__g79ff(v0.i8) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -286,9 +276,7 @@ func private %abi_field_size__g5535(v0.i256) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -313,9 +301,7 @@ func private %abi_field_size__ge513(v0.i256) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -340,9 +326,7 @@ func private %abi_field_size__g65da(v0.i256) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -478,17 +462,15 @@ func inline(always) private %core__lib__ptr__alloc_bytes_8b3e(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func inline(always) private %core__lib__ptr__alloc_bytes_de6b(v0.i256) -> i256 {
@@ -500,17 +482,15 @@ func inline(always) private %core__lib__ptr__alloc_bytes_de6b(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func inline(always) private %alloc_uninit__g1d2b() -> @layout_2 {
@@ -542,16 +522,14 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.i256 = call %word_to_usize v0;
-        return v10;
+        v7.i256 = call %word_to_usize v0;
+        return v7;
 }
 
 func private %approve(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
@@ -567,29 +545,25 @@ func private %approve(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
-        v12.@layout_0 = call %zero;
-        v14.i1 = call %ne v1 v12;
-        br v14 block5 block6;
+        v9.@layout_0 = call %zero;
+        v11.i1 = call %ne v1 v9;
+        br v11 block5 block6;
 
     block5:
         jump block7;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block7:
-        v17.@layout_8 = agg.make @layout_8 v0 v1;
-        v21.i256 = add v3 2.i256;
-        call %set__g4007 v21 v17 v2;
-        v23.@layout_6 = agg.make @layout_6 v0 v1 v2;
-        call %emit__g9cd0 v23;
+        v14.@layout_8 = agg.make @layout_8 v0 v1;
+        v18.i256 = add v3 2.i256;
+        call %set__g4007 v18 v14 v2;
+        v20.@layout_6 = agg.make @layout_6 v0 v1 v2;
+        call %emit__g9cd0 v20;
         return;
 }
 
@@ -625,46 +599,40 @@ func private %burn(v0.@layout_0, v1.i256, v2.i256) {
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
-        v12.i256 = add v2 1.i256;
-        v14.i256 = call %get__g5cd5 v12 v0;
-        v16.i1 = lt v14 v1;
-        v17.i1 = is_zero v16;
-        br v17 block5 block6;
+        v9.i256 = add v2 1.i256;
+        v11.i256 = call %get__g5cd5 v9 v0;
+        v13.i1 = lt v11 v1;
+        v14.i1 = is_zero v13;
+        br v14 block5 block6;
 
     block5:
         jump block7;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block7:
-        (v20.i256, v21.i1) = usubo v14 v1;
-        br v21 block8 block9;
+        (v17.i256, v18.i1) = usubo v11 v1;
+        br v18 block8 block9;
 
     block8:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block9:
-        v24.i256 = add v2 1.i256;
-        call %set__g5cd5 v24 v0 v20;
-        v28.i256 = evm_sload v2;
-        (v29.i256, v30.i1) = usubo v28 v1;
-        br v30 block8 block10;
+        v21.i256 = add v2 1.i256;
+        call %set__g5cd5 v21 v0 v17;
+        v25.i256 = evm_sload v2;
+        (v26.i256, v27.i1) = usubo v25 v1;
+        br v27 block8 block10;
 
     block10:
-        evm_sstore v2 v29;
-        v33.@layout_0 = call %zero;
-        v35.@layout_6 = agg.make @layout_6 v0 v33 v1;
-        call %emit__g4c3d v35;
+        evm_sstore v2 v26;
+        v30.@layout_0 = call %zero;
+        v32.@layout_6 = agg.make @layout_6 v0 v30 v1;
+        call %emit__g4c3d v32;
         return;
 }
 
@@ -761,24 +729,22 @@ func inline(always) private %contract_init_abi_CoolCoin() {
         br v12 block6 block7;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v17.*i8 = evm_malloc v11;
-        v18.i256 = ptr_to_int v17 i256;
-        evm_code_copy v18 v6 v11;
-        v21.objref<i256> = obj.proj v0 0.i256;
-        obj.store v21 v18;
-        v23.objref<i256> = obj.proj v0 1.i256;
-        obj.store v23 v11;
-        v24.@layout_3 = call %decoder_new;
-        obj.store v1 v24;
-        v25.@layout_9 = call %decode_payload__g8163 v1 v0;
-        v26.i256 = extract_value v25 0.i256;
-        v27.@layout_0 = extract_value v25 1.i256;
-        call %__CoolCoin_init v26 v27 0.i256 3.i256;
+        v15.*i8 = evm_malloc v11;
+        v16.i256 = ptr_to_int v15 i256;
+        evm_code_copy v16 v6 v11;
+        v19.objref<i256> = obj.proj v0 0.i256;
+        obj.store v19 v16;
+        v21.objref<i256> = obj.proj v0 1.i256;
+        obj.store v21 v11;
+        v22.@layout_3 = call %decoder_new;
+        obj.store v1 v22;
+        v23.@layout_9 = call %decode_payload__g8163 v1 v0;
+        v24.i256 = extract_value v23 0.i256;
+        v25.@layout_0 = extract_value v23 1.i256;
+        call %__CoolCoin_init v24 v25 0.i256 3.i256;
         return;
 }
 
@@ -788,9 +754,9 @@ func private %contract_init_root_CoolCoin() {
 
     block1:
         call %contract_init_abi_CoolCoin;
-        v2.i256 = sym_addr &CoolCoin_runtime;
-        v3.i256 = sym_size &CoolCoin_runtime;
-        evm_return_code v2 v3;
+        v1.i256 = sym_addr &CoolCoin_runtime;
+        v2.i256 = sym_size &CoolCoin_runtime;
+        evm_return_code v1 v2;
 }
 
 func private %contract_recv_abi_CoolCoin_1086394137() {
@@ -1340,14 +1306,12 @@ func inline(always) private %impl_trait_Approve__decode_from__g8f43(v0.@layout_1
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v19.@layout_5 = agg.make @layout_5 v5 v17;
-        return v19;
+        v14.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
+        v16.@layout_5 = agg.make @layout_5 v5 v14;
+        return v16;
 }
 
 func inline(always) private %impl_trait_u256__decode_from__gc8cd(v0.@layout_1, v1.i256) -> i256 {
@@ -1389,14 +1353,12 @@ func inline(always) private %impl_trait_DecreaseAllowance__decode_from__g8f43(v0
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v19.@layout_5 = agg.make @layout_5 v5 v17;
-        return v19;
+        v14.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
+        v16.@layout_5 = agg.make @layout_5 v5 v14;
+        return v16;
 }
 
 func inline(always) private %impl_trait_Decimals__decode_from__g8f43(v0.@layout_1, v1.i256) {
@@ -1418,23 +1380,21 @@ func inline(always) private %impl_trait_TransferFrom__decode_from__g8f43(v0.@lay
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v7 v3;
-        (v18.i256, v19.i1) = uaddo v1 32.i256;
-        br v19 block2 block4;
+        v14.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v7 v3;
+        (v15.i256, v16.i1) = uaddo v1 32.i256;
+        br v16 block2 block4;
 
     block4:
-        (v20.i256, v21.i1) = uaddo v18 32.i256;
-        br v21 block2 block5;
+        (v17.i256, v18.i1) = uaddo v15 32.i256;
+        br v18 block2 block5;
 
     block5:
-        v25.i256 = call %decode_msg_field_from__g7f14 v0 v1 v20 v3;
-        v28.@layout_6 = agg.make @layout_6 v5 v17 v25;
-        return v28;
+        v22.i256 = call %decode_msg_field_from__g7f14 v0 v1 v17 v3;
+        v25.@layout_6 = agg.make @layout_6 v5 v14 v22;
+        return v25;
 }
 
 func inline(always) private %impl_trait_Mint__decode_from__g8f43(v0.@layout_1, v1.i256) -> @layout_5 {
@@ -1448,14 +1408,12 @@ func inline(always) private %impl_trait_Mint__decode_from__g8f43(v0.@layout_1, v
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v19.@layout_5 = agg.make @layout_5 v5 v17;
-        return v19;
+        v14.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
+        v16.@layout_5 = agg.make @layout_5 v5 v14;
+        return v16;
 }
 
 func inline(always) private %impl_trait_TotalSupply__decode_from__g8f43(v0.@layout_1, v1.i256) {
@@ -1477,14 +1435,12 @@ func inline(always) private %impl_trait_IncreaseAllowance__decode_from__g8f43(v0
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v19.@layout_5 = agg.make @layout_5 v5 v17;
-        return v19;
+        v14.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
+        v16.@layout_5 = agg.make @layout_5 v5 v14;
+        return v16;
 }
 
 func inline(always) private %impl_trait_BalanceOf__decode_from__g8f43(v0.@layout_1, v1.i256) -> @layout_7 {
@@ -1509,14 +1465,12 @@ func inline(always) private %impl_trait_Transfer__decode_from__g8f43(v0.@layout_
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v19.@layout_5 = agg.make @layout_5 v5 v17;
-        return v19;
+        v14.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
+        v16.@layout_5 = agg.make @layout_5 v5 v14;
+        return v16;
 }
 
 func private %decode_from_bounded__g447b(v0.@layout_1, v1.i256, v2.i256) -> @layout_0 {
@@ -1550,14 +1504,12 @@ func inline(always) private %impl_trait_BurnFrom__decode_from__g8f43(v0.@layout_
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
-        v19.@layout_5 = agg.make @layout_5 v5 v17;
-        return v19;
+        v14.i256 = call %decode_msg_field_from__g7f14 v0 v1 v7 v3;
+        v16.@layout_5 = agg.make @layout_5 v5 v14;
+        return v16;
 }
 
 func inline(always) private %impl_trait_Allowance__decode_from__g8f43(v0.@layout_1, v1.i256) -> @layout_8 {
@@ -1571,14 +1523,12 @@ func inline(always) private %impl_trait_Allowance__decode_from__g8f43(v0.@layout
         br v8 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v17.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v7 v3;
-        v19.@layout_8 = agg.make @layout_8 v5 v17;
-        return v19;
+        v14.@layout_0 = call %decode_msg_field_from__g877a v0 v1 v7 v3;
+        v16.@layout_8 = agg.make @layout_8 v5 v14;
+        return v16;
 }
 
 func inline(always) private %impl_trait_Address__decode_from__gc8cd(v0.@layout_1, v1.i256) -> @layout_0 {
@@ -2010,8 +1960,8 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_1501(v
         br v10 block27 block28;
 
     block4:
-        v15.i256 = phi (v25 block11) (v33 block14);
-        return v15;
+        v13.i256 = phi (v23 block11) (v31 block14);
+        return v13;
 
     block5:
         jump block7;
@@ -2020,92 +1970,90 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_1501(v
         jump block7;
 
     block7:
-        v16.i256 = phi (0.i256 block5) (v2 block6);
-        v17.i1 = gt v16 -1.i256;
-        br v17 block9 block10;
+        v14.i256 = phi (0.i256 block5) (v2 block6);
+        v15.i1 = gt v14 -1.i256;
+        br v15 block9 block10;
 
     block8:
-        v20.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v21.i1 = eq v20 0.i256;
-        v22.i1 = is_zero v21;
-        br v22 block5 block6;
+        v18.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+        v19.i1 = eq v18 0.i256;
+        v20.i1 = is_zero v19;
+        br v20 block5 block6;
 
     block9:
         jump block11;
 
     block10:
-        v24.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v16;
+        v22.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v14;
         jump block11;
 
     block11:
-        v25.i256 = phi (-1.i256 block9) (v24 block10);
+        v23.i256 = phi (-1.i256 block9) (v22 block10);
         jump block4;
 
     block12:
-        v28.i1 = slt v2 0.i256;
-        br v28 block15 block16;
+        v26.i1 = slt v2 0.i256;
+        br v26 block15 block16;
 
     block13:
-        v30.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v31.i1 = eq v30 0.i256;
-        v32.i1 = is_zero v31;
-        br v32 block21 block22;
+        v28.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+        v29.i1 = eq v28 0.i256;
+        v30.i1 = is_zero v29;
+        br v30 block21 block22;
 
     block14:
-        v33.i256 = phi (v37 block17) (v48 block23);
+        v31.i256 = phi (v35 block17) (v46 block23);
         jump block4;
 
     block15:
         jump block17;
 
     block16:
-        v36.i1 = slt v9 v2;
-        br v36 block18 block19;
+        v34.i1 = slt v9 v2;
+        br v34 block18 block19;
 
     block17:
-        v37.i256 = phi (0.i256 block15) (v42 block20);
+        v35.i256 = phi (0.i256 block15) (v40 block20);
         jump block14;
 
     block18:
-        v39.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v9;
+        v37.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v9;
         jump block20;
 
     block19:
-        v41.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v2;
+        v39.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v2;
         jump block20;
 
     block20:
-        v42.i256 = phi (v39 block18) (v41 block19);
+        v40.i256 = phi (v37 block18) (v39 block19);
         jump block17;
 
     block21:
-        v44.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v9;
+        v42.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v9;
         jump block23;
 
     block22:
-        v47.i1 = slt v9 v2;
-        br v47 block24 block25;
+        v45.i1 = slt v9 v2;
+        br v45 block24 block25;
 
     block23:
-        v48.i256 = phi (v44 block21) (v53 block26);
+        v46.i256 = phi (v42 block21) (v51 block26);
         jump block14;
 
     block24:
-        v50.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v9;
+        v48.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v9;
         jump block26;
 
     block25:
-        v52.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v2;
+        v50.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_d5cf v2;
         jump block26;
 
     block26:
-        v53.i256 = phi (v50 block24) (v52 block25);
+        v51.i256 = phi (v48 block24) (v50 block25);
         jump block23;
 
     block27:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block28:
         br 0.i1 block12 block13;
@@ -2127,8 +2075,8 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405(v
         br v10 block27 block28;
 
     block4:
-        v15.i256 = phi (v25 block11) (v33 block14);
-        return v15;
+        v13.i256 = phi (v23 block11) (v31 block14);
+        return v13;
 
     block5:
         jump block7;
@@ -2137,92 +2085,90 @@ func private %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405(v
         jump block7;
 
     block7:
-        v16.i256 = phi (0.i256 block5) (v2 block6);
-        v17.i1 = gt v16 -1.i256;
-        br v17 block9 block10;
+        v14.i256 = phi (0.i256 block5) (v2 block6);
+        v15.i1 = gt v14 -1.i256;
+        br v15 block9 block10;
 
     block8:
-        v20.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v21.i1 = eq v20 0.i256;
-        v22.i1 = is_zero v21;
-        br v22 block5 block6;
+        v18.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+        v19.i1 = eq v18 0.i256;
+        v20.i1 = is_zero v19;
+        br v20 block5 block6;
 
     block9:
         jump block11;
 
     block10:
-        v24.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v16;
+        v22.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v14;
         jump block11;
 
     block11:
-        v25.i256 = phi (-1.i256 block9) (v24 block10);
+        v23.i256 = phi (-1.i256 block9) (v22 block10);
         jump block4;
 
     block12:
-        v28.i1 = slt v2 0.i256;
-        br v28 block15 block16;
+        v26.i1 = slt v2 0.i256;
+        br v26 block15 block16;
 
     block13:
-        v30.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
-        v31.i1 = eq v30 0.i256;
-        v32.i1 = is_zero v31;
-        br v32 block21 block22;
+        v28.i256 = and v2 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+        v29.i1 = eq v28 0.i256;
+        v30.i1 = is_zero v29;
+        br v30 block21 block22;
 
     block14:
-        v33.i256 = phi (v37 block17) (v48 block23);
+        v31.i256 = phi (v35 block17) (v46 block23);
         jump block4;
 
     block15:
         jump block17;
 
     block16:
-        v36.i1 = slt v9 v2;
-        br v36 block18 block19;
+        v34.i1 = slt v9 v2;
+        br v34 block18 block19;
 
     block17:
-        v37.i256 = phi (0.i256 block15) (v42 block20);
+        v35.i256 = phi (0.i256 block15) (v40 block20);
         jump block14;
 
     block18:
-        v39.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v37.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
         jump block20;
 
     block19:
-        v41.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
+        v39.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
         jump block20;
 
     block20:
-        v42.i256 = phi (v39 block18) (v41 block19);
+        v40.i256 = phi (v37 block18) (v39 block19);
         jump block17;
 
     block21:
-        v44.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v42.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
         jump block23;
 
     block22:
-        v47.i1 = slt v9 v2;
-        br v47 block24 block25;
+        v45.i1 = slt v9 v2;
+        br v45 block24 block25;
 
     block23:
-        v48.i256 = phi (v44 block21) (v53 block26);
+        v46.i256 = phi (v42 block21) (v51 block26);
         jump block14;
 
     block24:
-        v50.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v48.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
         jump block26;
 
     block25:
-        v52.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
+        v50.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
         jump block26;
 
     block26:
-        v53.i256 = phi (v50 block24) (v52 block25);
+        v51.i256 = phi (v48 block24) (v50 block25);
         jump block23;
 
     block27:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block28:
         br 0.i1 block12 block13;
@@ -2934,9 +2880,7 @@ func inline(always) private %encoded_len__g6d15(v0.@layout_9) -> i256 {
         br v9 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v8;
@@ -2963,9 +2907,7 @@ func inline(always) private %encoded_len__g7528(v0.@layout_8) -> i256 {
         br v9 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v8;
@@ -3072,9 +3014,7 @@ func private %index_out_of_bounds() {
         jump block1;
 
     block1:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 }
 
 func private %input() -> @layout_1 {
@@ -3209,38 +3149,36 @@ func inline(always) private %mapping_slot__g67a8(v0.i256, v1.@layout_0) -> i256 
         br v7 block6 block7;
 
     block2:
-        v27.i256 = call %std__lib__evm__crypto__keccak256_42d1 v2;
+        v24.i256 = call %std__lib__evm__crypto__keccak256_42d1 v2;
         jump block5;
 
     block3:
-        v30.@layout_4 = agg.make @layout_4 v15 v24;
-        obj.store v2 v30;
+        v27.@layout_4 = agg.make @layout_4 v12 v21;
+        obj.store v2 v27;
         jump block2;
 
     block4:
-        return v27;
+        return v24;
 
     block5:
         jump block4;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v13.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405 v6;
-        v14.@layout_12 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d v13;
-        v15.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8 v14;
-        call %std__lib__evm__storage_map__impl_trait_Address_4d4e__write_key_aec5 v15 v1;
-        v19.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v4;
-        v20.i256 = add v15 v19;
-        mstore v20 v0 i256;
-        (v22.i256, v23.i1) = uaddo v4 32.i256;
-        br v23 block6 block8;
+        v10.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405 v6;
+        v11.@layout_12 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d v10;
+        v12.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8 v11;
+        call %std__lib__evm__storage_map__impl_trait_Address_4d4e__write_key_aec5 v12 v1;
+        v16.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v4;
+        v17.i256 = add v12 v16;
+        mstore v17 v0 i256;
+        (v19.i256, v20.i1) = uaddo v4 32.i256;
+        br v20 block6 block8;
 
     block8:
-        v24.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v22;
+        v21.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v19;
         jump block3;
 }
 
@@ -3255,38 +3193,36 @@ func inline(always) private %mapping_slot__g9379(v0.i256, v1.@layout_9) -> i256 
         br v7 block6 block7;
 
     block2:
-        v27.i256 = call %std__lib__evm__crypto__keccak256_68f3 v2;
+        v24.i256 = call %std__lib__evm__crypto__keccak256_68f3 v2;
         jump block5;
 
     block3:
-        v30.@layout_4 = agg.make @layout_4 v15 v24;
-        obj.store v2 v30;
+        v27.@layout_4 = agg.make @layout_4 v12 v21;
+        obj.store v2 v27;
         jump block2;
 
     block4:
-        return v27;
+        return v24;
 
     block5:
         jump block4;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v13.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_1501 v6;
-        v14.@layout_12 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_f2be v13;
-        v15.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b935 v14;
-        call %write_key__g6d15 v15 v1;
-        v19.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_9705 v4;
-        v20.i256 = add v15 v19;
-        mstore v20 v0 i256;
-        (v22.i256, v23.i1) = uaddo v4 32.i256;
-        br v23 block6 block8;
+        v10.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_1501 v6;
+        v11.@layout_12 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_f2be v10;
+        v12.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_b935 v11;
+        call %write_key__g6d15 v12 v1;
+        v16.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_9705 v4;
+        v17.i256 = add v12 v16;
+        mstore v17 v0 i256;
+        (v19.i256, v20.i1) = uaddo v4 32.i256;
+        br v20 block6 block8;
 
     block8:
-        v24.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_9705 v22;
+        v21.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_9705 v19;
         jump block3;
 }
 
@@ -3301,38 +3237,36 @@ func inline(always) private %mapping_slot__g7bf4(v0.i256, v1.@layout_8) -> i256 
         br v7 block6 block7;
 
     block2:
-        v27.i256 = call %std__lib__evm__crypto__keccak256_42d1 v2;
+        v24.i256 = call %std__lib__evm__crypto__keccak256_42d1 v2;
         jump block5;
 
     block3:
-        v30.@layout_4 = agg.make @layout_4 v15 v24;
-        obj.store v2 v30;
+        v27.@layout_4 = agg.make @layout_4 v12 v21;
+        obj.store v2 v27;
         jump block2;
 
     block4:
-        return v27;
+        return v24;
 
     block5:
         jump block4;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v13.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405 v6;
-        v14.@layout_12 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d v13;
-        v15.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8 v14;
-        call %write_key__g7528 v15 v1;
-        v19.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v4;
-        v20.i256 = add v15 v19;
-        mstore v20 v0 i256;
-        (v22.i256, v23.i1) = uaddo v4 32.i256;
-        br v23 block6 block8;
+        v10.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_saturate__g7548_6405 v6;
+        v11.@layout_12 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d v10;
+        v12.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8 v11;
+        call %write_key__g7528 v12 v1;
+        v16.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v4;
+        v17.i256 = add v12 v16;
+        mstore v17 v0 i256;
+        (v19.i256, v20.i1) = uaddo v4 32.i256;
+        br v20 block6 block8;
 
     block8:
-        v24.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v22;
+        v21.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v19;
         jump block3;
 }
 
@@ -3349,33 +3283,29 @@ func private %standalone_erc20__erc20__mint__gcd5c_3f20(v0.@layout_0, v1.i256, v
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
-        v13.i256 = evm_sload v2;
-        (v14.i256, v15.i1) = uaddo v13 v1;
-        br v15 block5 block6;
+        v10.i256 = evm_sload v2;
+        (v11.i256, v12.i1) = uaddo v10 v1;
+        br v12 block5 block6;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        evm_sstore v2 v14;
-        v18.i256 = add v2 1.i256;
-        v20.i256 = call %get__g5cd5 v18 v0;
-        (v22.i256, v23.i1) = uaddo v20 v1;
-        br v23 block5 block7;
+        evm_sstore v2 v11;
+        v15.i256 = add v2 1.i256;
+        v17.i256 = call %get__g5cd5 v15 v0;
+        (v19.i256, v20.i1) = uaddo v17 v1;
+        br v20 block5 block7;
 
     block7:
-        v25.i256 = add v2 1.i256;
-        call %set__g5cd5 v25 v0 v22;
-        v28.@layout_0 = call %zero;
-        v30.@layout_6 = agg.make @layout_6 v28 v0 v1;
-        call %emit__g4c3d v30;
+        v22.i256 = add v2 1.i256;
+        call %set__g5cd5 v22 v0 v19;
+        v25.@layout_0 = call %zero;
+        v27.@layout_6 = agg.make @layout_6 v25 v0 v1;
+        call %emit__g4c3d v27;
         return;
 }
 
@@ -3392,33 +3322,29 @@ func private %standalone_erc20__erc20__mint__gcd5c_8bb8(v0.@layout_0, v1.i256, v
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
-        v13.i256 = evm_sload v2;
-        (v14.i256, v15.i1) = uaddo v13 v1;
-        br v15 block5 block6;
+        v10.i256 = evm_sload v2;
+        (v11.i256, v12.i1) = uaddo v10 v1;
+        br v12 block5 block6;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        evm_sstore v2 v14;
-        v18.i256 = add v2 1.i256;
-        v20.i256 = call %get__g5cd5 v18 v0;
-        (v22.i256, v23.i1) = uaddo v20 v1;
-        br v23 block5 block7;
+        evm_sstore v2 v11;
+        v15.i256 = add v2 1.i256;
+        v17.i256 = call %get__g5cd5 v15 v0;
+        (v19.i256, v20.i1) = uaddo v17 v1;
+        br v20 block5 block7;
 
     block7:
-        v25.i256 = add v2 1.i256;
-        call %set__g5cd5 v25 v0 v22;
-        v28.@layout_0 = call %zero;
-        v30.@layout_6 = agg.make @layout_6 v28 v0 v1;
-        call %emit__g4c3d v30;
+        v22.i256 = add v2 1.i256;
+        call %set__g5cd5 v22 v0 v19;
+        v25.@layout_0 = call %zero;
+        v27.@layout_6 = agg.make @layout_6 v25 v0 v1;
+        call %emit__g4c3d v27;
         return;
 }
 
@@ -3520,9 +3446,7 @@ func inline(always) private %packed_string_len(v0.i256) -> i256 {
         br v52 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         return v51;
@@ -3697,28 +3621,26 @@ func inline(always) private %read_word(noalias nocapture v0.objref<@layout_3>, n
         jump block4;
 
     block4:
-        v18.objref<i256> = obj.proj v0 0.i256;
-        v19.i256 = obj.load v18;
-        v21.i256 = call %impl_trait_MemSlice__word_at v1 v19;
-        v23.objref<i256> = obj.proj v0 0.i256;
-        obj.store v23 v7;
-        return v21;
+        v16.objref<i256> = obj.proj v0 0.i256;
+        v17.i256 = obj.load v16;
+        v19.i256 = call %impl_trait_MemSlice__word_at v1 v17;
+        v21.objref<i256> = obj.proj v0 0.i256;
+        obj.store v21 v7;
+        return v19;
 
     block5:
-        v25.i256 = call %len__g140d v1;
-        v27.i1 = gt v7 v25;
-        br v27 block2 block3;
+        v23.i256 = call %len__g140d v1;
+        v25.i1 = gt v7 v23;
+        br v25 block2 block3;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v14.objref<i256> = obj.proj v0 0.i256;
-        v15.i256 = obj.load v14;
-        v16.i1 = lt v7 v15;
-        br v16 block2 block5;
+        v12.objref<i256> = obj.proj v0 0.i256;
+        v13.i256 = obj.load v12;
+        v14.i1 = lt v7 v13;
+        br v14 block2 block5;
 }
 
 func private %require(v0.i256, v1.i256) {
@@ -3739,9 +3661,7 @@ func private %require(v0.i256, v1.i256) {
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
         return;
@@ -4346,16 +4266,14 @@ func inline(always) private %impl_trait_CallData__size(v0.@layout_1) -> i64 {
         br v11 block5 block6;
 
     block4:
-        v17.i64 = phi (0.i64 block2) (v16 block6);
-        return v17;
+        v15.i64 = phi (0.i64 block2) (v14 block6);
+        return v15;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        v16.i64 = call %downcast_truncate__gaa81 v10;
+        v14.i64 = call %downcast_truncate__gaa81 v10;
         jump block4;
 }
 
@@ -4404,23 +4322,19 @@ func private %spend_allowance(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
-        v21.@layout_8 = agg.make @layout_8 v0 v1;
-        (v24.i256, v25.i1) = usubo v10 v2;
-        br v25 block5 block6;
+        v18.@layout_8 = agg.make @layout_8 v0 v1;
+        (v21.i256, v22.i1) = usubo v10 v2;
+        br v22 block5 block6;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        v28.i256 = add v3 2.i256;
-        call %set__g4007 v28 v21 v24;
+        v25.i256 = add v3 2.i256;
+        call %set__g4007 v25 v18 v21;
         return;
 }
 
@@ -4525,60 +4439,52 @@ func private %transfer(v0.@layout_0, v1.@layout_0, v2.i256, v3.i256) {
         jump block4;
 
     block3:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block4:
-        v12.@layout_0 = call %zero;
-        v14.i1 = call %ne v1 v12;
-        br v14 block5 block6;
+        v9.@layout_0 = call %zero;
+        v11.i1 = call %ne v1 v9;
+        br v11 block5 block6;
 
     block5:
         jump block7;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block7:
-        v16.i256 = add v3 1.i256;
-        v18.i256 = call %get__g5cd5 v16 v0;
-        v20.i1 = lt v18 v2;
-        v21.i1 = is_zero v20;
-        br v21 block8 block9;
+        v13.i256 = add v3 1.i256;
+        v15.i256 = call %get__g5cd5 v13 v0;
+        v17.i1 = lt v15 v2;
+        v18.i1 = is_zero v17;
+        br v18 block8 block9;
 
     block8:
         jump block10;
 
     block9:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block10:
-        (v24.i256, v25.i1) = usubo v18 v2;
-        br v25 block11 block12;
+        (v21.i256, v22.i1) = usubo v15 v2;
+        br v22 block11 block12;
 
     block11:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block12:
+        v25.i256 = add v3 1.i256;
+        call %set__g5cd5 v25 v0 v21;
         v28.i256 = add v3 1.i256;
-        call %set__g5cd5 v28 v0 v24;
-        v31.i256 = add v3 1.i256;
-        v33.i256 = call %get__g5cd5 v31 v1;
-        (v35.i256, v36.i1) = uaddo v33 v2;
-        br v36 block11 block13;
+        v30.i256 = call %get__g5cd5 v28 v1;
+        (v32.i256, v33.i1) = uaddo v30 v2;
+        br v33 block11 block13;
 
     block13:
-        v38.i256 = add v3 1.i256;
-        call %set__g5cd5 v38 v1 v35;
-        v42.@layout_6 = agg.make @layout_6 v0 v1 v2;
-        call %emit__g4c3d v42;
+        v35.i256 = add v3 1.i256;
+        call %set__g5cd5 v35 v1 v32;
+        v39.@layout_6 = agg.make @layout_6 v0 v1 v2;
+        call %emit__g4c3d v39;
         return;
 }
 

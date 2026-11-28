@@ -14,29 +14,25 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         br v5 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        (v12.i64, v13.i1) = umulo v4 2.i64;
-        br v13 block2 block4;
+        (v9.i64, v10.i1) = umulo v4 2.i64;
+        br v10 block2 block4;
 
     block4:
-        v15.i1 = eq 2.i64 0.i64;
-        br v15 block5 block6;
+        v12.i1 = eq 2.i64 0.i64;
+        br v12 block5 block6;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 18.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 18.i256;
 
     block6:
-        (v17.i64, v18.i1) = evm_udivo v12 2.i64;
-        br v18 block2 block7;
+        (v14.i64, v15.i1) = evm_udivo v9 2.i64;
+        br v15 block2 block7;
 
     block7:
-        return v17;
+        return v14;
 }
 
 func private %main() -> i64 {

@@ -45,45 +45,41 @@ func private %test_ref_is_not_a_copy() {
         jump block11;
 
     block4:
-        v6.i256 = const.load v14;
+        v6.i256 = const.load v12;
         jump block13;
 
     block5:
         jump block7;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block7:
         return;
 
     block8:
-        obj.store v0 v20;
-        v13.constref<i256> = extract_value v20 0.i256;
-        v14.constref<i256> = extract_value v20 1.i256;
-        v15.i256 = const.load v13;
-        v16.i1 = eq v15 10.i256;
-        br v16 block2 block3;
+        obj.store v0 v18;
+        v11.constref<i256> = extract_value v18 0.i256;
+        v12.constref<i256> = extract_value v18 1.i256;
+        v13.i256 = const.load v11;
+        v14.i1 = eq v13 10.i256;
+        br v14 block2 block3;
 
     block9:
-        v18.constref<i256> = const.proj v4 0.i256;
-        v19.constref<i256> = const.proj v4 1.i256;
-        v20.@layout_1 = agg.make @layout_1 v18 v19;
+        v16.constref<i256> = const.proj v4 0.i256;
+        v17.constref<i256> = const.proj v4 1.i256;
+        v18.@layout_1 = agg.make @layout_1 v16 v17;
         jump block8;
 
     block10:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 1.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 1.i256;
 
     block11:
         jump block10;
 
     block12:
-        v22.i1 = eq v6 20.i256;
-        br v22 block5 block6;
+        v20.i1 = eq v6 20.i256;
+        br v20 block5 block6;
 
     block13:
         jump block12;

@@ -27,7 +27,7 @@ func private %main() -> i64 {
         jump block2;
 
     block2:
-        v43.i64 = phi (0.i64 block1) (v38 block4);
+        v40.i64 = phi (0.i64 block1) (v35 block4);
         v15.i256 = phi (v13 block1) (v21 block4);
         v16.i1 = call %has v11 v15;
         br v16 block3 block5;
@@ -40,10 +40,10 @@ func private %main() -> i64 {
         jump block2;
 
     block5:
-        return v43;
+        return v40;
 
     block6:
-        v24.i64 = const.load v35;
+        v24.i64 = const.load v32;
         jump block9;
 
     block7:
@@ -52,25 +52,21 @@ func private %main() -> i64 {
         br v28 block10 block11;
 
     block8:
-        (v38.i64, v39.i1) = uaddo v43 v24;
-        br v39 block12 block13;
+        (v35.i64, v36.i1) = uaddo v40 v24;
+        br v36 block12 block13;
 
     block9:
         jump block8;
 
     block10:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 
     block11:
-        v35.constref<i64> = const.index v11 v15;
+        v32.constref<i64> = const.index v11 v15;
         jump block6;
 
     block12:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block13:
         jump block4;

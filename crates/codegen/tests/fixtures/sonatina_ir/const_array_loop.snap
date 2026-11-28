@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 431
 expression: output
 input_file: crates/codegen/tests/fixtures/const_array_loop.fe
 ---
@@ -34,8 +33,8 @@ func private %sum_loop(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v31.i256 = phi (0.i256 block1) (v22 block11);
-        v2.i256 = phi (0.i256 block1) (v27 block11);
+        v29.i256 = phi (0.i256 block1) (v20 block11);
+        v2.i256 = phi (0.i256 block1) (v25 block11);
         v4.i1 = lt v2 v0;
         br v4 block3 block4;
 
@@ -44,39 +43,33 @@ func private %sum_loop(v0.i256) -> i256 {
         br v7 block5 block6;
 
     block4:
-        return v31;
+        return v29;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 18.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 18.i256;
 
     block6:
-        v12.i256 = evm_umod v2 3.i256;
-        v14.constref<[i256; 3]> = const.ref $const_region_0;
-        v15.i1 = lt v12 3.i256;
-        v16.i1 = is_zero v15;
-        br v16 block7 block8;
+        v10.i256 = evm_umod v2 3.i256;
+        v12.constref<[i256; 3]> = const.ref $const_region_0;
+        v13.i1 = lt v10 3.i256;
+        v14.i1 = is_zero v13;
+        br v14 block7 block8;
 
     block7:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 
     block8:
-        v19.constref<i256> = const.index v14 v12;
-        v20.i256 = const.load v19;
-        (v22.i256, v23.i1) = uaddo v31 v20;
-        br v23 block9 block10;
+        v17.constref<i256> = const.index v12 v10;
+        v18.i256 = const.load v17;
+        (v20.i256, v21.i1) = uaddo v29 v18;
+        br v21 block9 block10;
 
     block9:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block10:
-        (v27.i256, v28.i1) = uaddo v2 1.i256;
-        br v28 block9 block11;
+        (v25.i256, v26.i1) = uaddo v2 1.i256;
+        br v26 block9 block11;
 
     block11:
         jump block2;

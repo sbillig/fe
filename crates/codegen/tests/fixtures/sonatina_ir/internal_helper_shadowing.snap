@@ -17,14 +17,12 @@ func private %call_internal_helpers(v0.i64, v1.i64) -> @layout_0 {
         br v5 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v13.i64 = call %saturating_add v0 v1;
-        v14.@layout_0 = agg.make @layout_0 v4 v13;
-        return v14;
+        v10.i64 = call %saturating_add v0 v1;
+        v11.@layout_0 = agg.make @layout_0 v4 v10;
+        return v11;
 }
 
 func private %call_user_helpers(v0.i64, v1.i64) -> @layout_0 {

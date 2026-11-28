@@ -764,8 +764,7 @@ fn constant_oob_index_terminates_without_continuation_projection(fixture: Fixtur
     });
 
     assert!(
-        output.contains("mstore 4.i256 50.i256 i256;")
-            && output.contains("evm_revert 0.i256 36.i256"),
+        output.contains("evm_revert_word 1313373041.i32 50.i256;"),
         "constant out-of-bounds array access should lower to a `Panic(0x32)` revert:\n{output}"
     );
     assert!(

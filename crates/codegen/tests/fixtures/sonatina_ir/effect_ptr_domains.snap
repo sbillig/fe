@@ -28,17 +28,15 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func private %standalone_effect_ptr_domains__effect_ptr_domains__bump_2946(noalias nocapture v0.objref<@layout_0>) {
@@ -52,21 +50,19 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump_2946(noali
         br v7 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v13.objref<i256> = obj.proj v0 0.i256;
-        obj.store v13 v6;
-        v14.objref<i256> = obj.proj v0 1.i256;
-        v15.i256 = obj.load v14;
-        (v17.i256, v18.i1) = uaddo v15 2.i256;
-        br v18 block2 block4;
+        v11.objref<i256> = obj.proj v0 0.i256;
+        obj.store v11 v6;
+        v12.objref<i256> = obj.proj v0 1.i256;
+        v13.i256 = obj.load v12;
+        (v15.i256, v16.i1) = uaddo v13 2.i256;
+        br v16 block2 block4;
 
     block4:
-        v20.objref<i256> = obj.proj v0 1.i256;
-        obj.store v20 v17;
+        v18.objref<i256> = obj.proj v0 1.i256;
+        obj.store v18 v15;
         return;
 }
 
@@ -80,20 +76,18 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump_b87b(v0.i2
         br v5 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         evm_sstore v0 v4;
-        v12.i256 = add v0 1.i256;
-        v13.i256 = evm_sload v12;
-        (v15.i256, v16.i1) = uaddo v13 2.i256;
-        br v16 block2 block4;
+        v9.i256 = add v0 1.i256;
+        v10.i256 = evm_sload v9;
+        (v12.i256, v13.i1) = uaddo v10 2.i256;
+        br v13 block2 block4;
 
     block4:
-        v18.i256 = add v0 1.i256;
-        evm_sstore v18 v15;
+        v15.i256 = add v0 1.i256;
+        evm_sstore v15 v12;
         return;
 }
 
@@ -107,20 +101,18 @@ func private %standalone_effect_ptr_domains__effect_ptr_domains__bump_fe9f(v0.i2
         br v5 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
         mstore v0 v4 i256;
-        v13.i256 = add v0 32.i256;
-        v14.i256 = mload v13 i256;
-        (v16.i256, v17.i1) = uaddo v14 2.i256;
-        br v17 block2 block4;
+        v10.i256 = add v0 32.i256;
+        v11.i256 = mload v10 i256;
+        (v13.i256, v14.i1) = uaddo v11 2.i256;
+        br v14 block2 block4;
 
     block4:
-        v19.i256 = add v0 32.i256;
-        mstore v19 v16 i256;
+        v16.i256 = add v0 32.i256;
+        mstore v16 v13 i256;
         return;
 }
 
