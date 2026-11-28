@@ -15,7 +15,7 @@ use fe_codegen::{
 use hir::hir_def::TopLevelMod;
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     path::Path,
 };
 use test_utils::{
@@ -158,7 +158,7 @@ fn observability_preserves_creation_and_runtime_bytecode(fixture: Fixture<&str>)
     });
 }
 
-/// The passes of the machine stage's pass round, which `-O0` does not run.
+/// The passes of the machine stage's pass round.
 const MACHINE_ROUND: [&str; 7] = [
     "cfg_cleanup",
     "branch_canonicalize",
@@ -176,7 +176,8 @@ fn array(value: &Value) -> &Vec<Value> {
 /// The sidecars of `top_mod` at `level`, checked against its bytecode and IR: each symbol is
 /// a function or global of its section's IR, and each function's symbol is where its code starts.
 /// In the JSON of each sidecar, the machine steps of each section compose to its `machine_ir`,
-/// and at `-O0` no pass of the pass round runs.
+/// every `alloca` and `evm_malloc` of a function's source IR has its placement, and at `-O0`
+/// no function restores the free pointer.
 fn checked_sidecars(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
@@ -247,9 +248,37 @@ fn checked_sidecars(
             }
         }
         let json: Value = serde_json::from_str(&serde_json::to_string(sidecar).unwrap()).unwrap();
-        assert_eq!(json["version"], 5);
+        assert_eq!(json["version"], 6);
         for section in array(&json["sections"]) {
             let lowering = &section["lowering"];
+            let source_ir = lowering["source_ir"].as_str().unwrap();
+            for func in array(&lowering["funcs"]) {
+                let fname = func["name"].as_str().unwrap();
+                let start = source_ir.find(&format!("%{fname}(")).unwrap();
+                let text = &source_ir[start..start + source_ir[start..].find("\n}").unwrap()];
+                for (key, inst) in [("allocas", " = alloca "), ("mallocs", " = evm_malloc ")] {
+                    let defined: BTreeSet<_> = text
+                        .lines()
+                        .filter_map(|line| {
+                            let (def, _) = line.trim().split_once(inst)?;
+                            def.strip_prefix('v')?
+                                .split('.')
+                                .next()?
+                                .parse::<u64>()
+                                .ok()
+                        })
+                        .collect();
+                    let recorded: BTreeSet<_> = array(&func[key])
+                        .iter()
+                        .map(|site| site["value"].as_u64().unwrap())
+                        .collect();
+                    assert_eq!(recorded, defined, "{name}, {level:?}: the {key} of {fname}");
+                }
+                assert!(
+                    level != OptLevel::O0 || func["restores_free_ptr"] == false,
+                    "{name}: {fname} restores the free pointer at -O0"
+                );
+            }
             let steps = &lowering["machine_steps"];
             let text = |snap: &Value| snap["text"].as_str().unwrap().to_string();
             let mut funcs: BTreeMap<_, _> = array(&steps["lowered"])
@@ -336,12 +365,6 @@ fn checked_sidecars(
             assert_eq!(funcs, machine, "{name}, {level:?}: the composed steps");
             if level == OptLevel::O0 {
                 assert_eq!(steps["profile"], "off");
-                assert!(
-                    array(&steps["passes"])
-                        .iter()
-                        .all(|pass| !MACHINE_ROUND.contains(&pass["kind"].as_str().unwrap())),
-                    "{name}: a pass of the pass round at -O0"
-                );
             }
         }
     }

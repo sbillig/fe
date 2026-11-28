@@ -4,14 +4,20 @@
 //! trusted.
 //!
 //! In a lowering record values are numbered as `v<n>` and blocks as `block<n>` in the text of
-//! the module they belong to: `sources` and `mallocs` name the source IR, everything else the
-//! machine IR. Immediates and other 256-bit words are decimal strings of their unsigned value;
+//! the module they belong to: `sources`, `mallocs` and `allocas` name the source IR, everything
+//! else the machine IR. Immediates and other 256-bit words are decimal strings of their unsigned value;
 //! only the signed bounds of a range are signed. A point of a function's code is `"entry"`, or
 //! `{"before": {"block", "index"}}`, `{"after": {"block", "index"}}` or
 //! `{"case": {"block", "index", "case"}}`, where `index` is an instruction's position in its
 //! block, phis included. In `machine_steps`, the values, blocks and instructions of a step's
 //! facts are those of the function before the step, except the inserted phis of `phis` and
 //! `value_phis`, which are of the function after it.
+//!
+//! Version 6 adds the placement record: each function's `lowered_blocks` and `allocas`
+//! (location and size), the `rule` of each fixed malloc, `needs_dyn_sp_clamp` and
+//! `free_ptr_floor` of each heap malloc, each function's `restores_free_ptr` and
+//! `spill_reserve`, and the section's `fixed_slot_spills`. Frame words are counted from the
+//! arena base: frame word `w` is the bytes at `arena_base + 32 * w`.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -25,9 +31,10 @@ use sonatina_codegen::{
     object::{
         ObjectArtifact,
         lowering::{
-            CodeLabel, CodePoint, DynSpInitLowering, FuncSnap, GvnOperand, GvnTerm,
-            MachinePassKind, MachineSteps, MallocLowering, SectionLowering, SpillLocation,
-            StableLowering, StackSlot, StepFacts, StepKind,
+            CodeLabel, CodePoint, DynSpInitLowering, FixedMallocRule, FuncSnap, GvnOperand,
+            GvnTerm, MachinePassKind, MachineSteps, MallocLowering, ObjLocLowering,
+            SectionLowering, SpillLocation, StableLowering, StackSlot, StepFacts, StepKind,
+            WordRange,
         },
     },
 };
@@ -40,7 +47,7 @@ use super::{
 use crate::{OptLevel, runtime_package::ensure_runtime_package_has_roots};
 
 /// The version of the sidecar format, raised with each change to it.
-pub const SIDECAR_VERSION: u32 = 5;
+pub const SIDECAR_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SonatinaSidecar {
@@ -73,6 +80,8 @@ pub struct SidecarLowering {
     pub arena_base: u32,
     pub dyn_base: u32,
     pub entry_free_ptr: Option<u32>,
+    /// Some function spills to the fixed slots, the words at `0` and `0x20`.
+    pub fixed_slot_spills: bool,
     pub funcs: Vec<SidecarFunc>,
     pub units: Vec<SidecarUnit>,
     pub redirects: Vec<SidecarRedirect>,
@@ -450,9 +459,60 @@ pub struct SidecarFunc {
     pub name: String,
     pub offset: Option<u32>,
     pub blocks: Vec<SidecarBlock>,
+    /// `[source block, lowered block]`: each block of the source IR, in layout order, with the
+    /// block of `machine_steps.lowered` lowering made for it.
+    pub lowered_blocks: Vec<(u32, u32)>,
     pub spills: Vec<SidecarSpill>,
     pub frame: SidecarFrame,
     pub mallocs: Vec<SidecarMalloc>,
+    pub allocas: Vec<SidecarAlloca>,
+    /// Each `return` stores back at `0x40` the free pointer the function loaded at entry.
+    pub restores_free_ptr: bool,
+    pub spill_reserve: SidecarSpillReserve,
+}
+
+/// An `alloca`'s `words` words at `loc`, its type's size rounded up to a word.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarAlloca {
+    pub value: u32,
+    pub loc: SidecarObjLoc,
+    pub words: u32,
+}
+
+/// A frame word, counted from the arena base: `scratch_abs` (in the scratch overlay) and
+/// `stable_abs` (in the stable frame) word `w` is at `arena_base + 32 * w`; `stable_frame` is a
+/// word of the dynamic frame.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarObjLoc {
+    ScratchAbs(u32),
+    StableAbs(u32),
+    StableFrame(u32),
+}
+
+/// The words reserved for the function's spills; `stable` is `None` without an `abs` stable
+/// frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarSpillReserve {
+    pub scratch: SidecarWordRange,
+    pub stable: Option<SidecarWordRange>,
+}
+
+/// The frame words `[start, start + words)`, frame word `w` being the bytes at
+/// `arena_base + 32 * w`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SidecarWordRange {
+    pub start: u32,
+    pub words: u32,
+}
+
+impl From<WordRange> for SidecarWordRange {
+    fn from(range: WordRange) -> Self {
+        Self {
+            start: range.start,
+            words: range.words,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -568,11 +628,18 @@ pub struct SidecarMalloc {
 pub enum SidecarPlacement {
     Fixed {
         base: u32,
+        /// `terminal`, `program`, `exact_entry` or `private_static`.
+        rule: &'static str,
     },
     Heap {
         min_base: u32,
         exact_base: Option<u32>,
         update_free_ptr: bool,
+        /// The base is also raised to the dynamic stack pointer at `0x80`.
+        needs_dyn_sp_clamp: bool,
+        /// A lower bound of the free pointer before the malloc; at least `min_base`, it drops
+        /// the raise to `min_base`.
+        free_ptr_floor: Option<u32>,
     },
 }
 
@@ -636,6 +703,11 @@ impl From<&SectionLowering> for SidecarLowering {
                             .collect(),
                     })
                     .collect(),
+                lowered_blocks: func
+                    .lowered_blocks
+                    .iter()
+                    .map(|(source, lowered)| (source.as_u32(), lowered.as_u32()))
+                    .collect(),
                 spills: func
                     .spills
                     .iter()
@@ -680,19 +752,49 @@ impl From<&SectionLowering> for SidecarLowering {
                     .map(|(value, malloc)| SidecarMalloc {
                         value: value.as_u32(),
                         placement: match *malloc {
-                            MallocLowering::Fixed { base } => SidecarPlacement::Fixed { base },
+                            MallocLowering::Fixed { base, rule } => SidecarPlacement::Fixed {
+                                base,
+                                rule: match rule {
+                                    FixedMallocRule::Terminal => "terminal",
+                                    FixedMallocRule::Program => "program",
+                                    FixedMallocRule::ExactEntry => "exact_entry",
+                                    FixedMallocRule::PrivateStatic => "private_static",
+                                },
+                            },
                             MallocLowering::Heap {
                                 min_base,
                                 exact_base,
                                 update_free_ptr,
+                                needs_dyn_sp_clamp,
+                                free_ptr_floor,
                             } => SidecarPlacement::Heap {
                                 min_base,
                                 exact_base,
                                 update_free_ptr,
+                                needs_dyn_sp_clamp,
+                                free_ptr_floor,
                             },
                         },
                     })
                     .collect(),
+                allocas: func
+                    .allocas
+                    .iter()
+                    .map(|(value, alloca)| SidecarAlloca {
+                        value: value.as_u32(),
+                        loc: match alloca.loc {
+                            ObjLocLowering::ScratchAbs(word) => SidecarObjLoc::ScratchAbs(word),
+                            ObjLocLowering::StableAbs(word) => SidecarObjLoc::StableAbs(word),
+                            ObjLocLowering::StableFrame(word) => SidecarObjLoc::StableFrame(word),
+                        },
+                        words: alloca.words,
+                    })
+                    .collect(),
+                restores_free_ptr: func.restores_free_ptr,
+                spill_reserve: SidecarSpillReserve {
+                    scratch: func.spill_reserve.scratch.into(),
+                    stable: func.spill_reserve.stable.map(SidecarWordRange::from),
+                },
             })
             .collect();
         Self {
@@ -702,6 +804,7 @@ impl From<&SectionLowering> for SidecarLowering {
             arena_base: lowering.arena_base,
             dyn_base: lowering.dyn_base,
             entry_free_ptr: lowering.entry_free_ptr,
+            fixed_slot_spills: lowering.fixed_slot_spills,
             funcs,
             units: lowering
                 .units
