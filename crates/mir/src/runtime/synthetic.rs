@@ -73,11 +73,21 @@ pub(crate) fn runtime_synthetic_interface_signature<'db>(
     db: &'db dyn MirDb,
     spec: RuntimeSyntheticSpec<'db>,
 ) -> RuntimeInterfaceSignature<'db> {
-    let RuntimeSyntheticSpec::ExportRoot { callee, entry_args } = spec else {
-        return RuntimeInterfaceSignature {
-            params: Vec::new(),
-            ret: None,
-        };
+    let (callee, entry_args) = match spec {
+        RuntimeSyntheticSpec::ExportRoot { callee, entry_args } => (callee, entry_args),
+        // The contract init ABI returns the buffer of its contract's immutables.
+        spec => {
+            let returns_immutables = matches!(
+                &spec,
+                RuntimeSyntheticSpec::ContractInitAbi { plan }
+                    if plan.contract.code_address_space_slot_count(db) != 0
+            );
+            return RuntimeInterfaceSignature {
+                params: Vec::new(),
+                ret: returns_immutables
+                    .then(|| RuntimeClass::Scalar(pointer_class(db, AddressSpace::Memory))),
+            };
+        }
     };
     // The callee takes its own parameters, then its effects.
     let callee = runtime_declaration_signature(db, callee.key(db));
@@ -557,19 +567,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
             }
         }
 
-        // Publish the immutable buffer pointer at scratch 0x00, where the contract init root
-        // reads it after `init_abi` returns. This must happen after the user init runs, since
-        // init may clobber scratch memory.
-        if let Some(immut_ptr) = immut_ptr {
-            self.push_side_effect_builtin(
-                cont_bb,
-                RuntimeBuiltin::Mstore {
-                    addr: zero,
-                    value: immut_ptr,
-                },
-            );
-        }
-        self.blocks[cont_bb.index()].terminator = RTerminator::Return(None);
+        // The contract init root appends the immutable buffer to the runtime bytecode.
+        self.blocks[cont_bb.index()].terminator = RTerminator::Return(immut_ptr);
         Ok(())
     }
 
@@ -659,9 +658,32 @@ impl<'db> SyntheticBodyBuilder<'db> {
         runtime_region: crate::runtime::RuntimeCodeRegion<'db>,
     ) {
         let entry = RBlockId::from_u32(0);
-        let zero = self.push_const_word(entry, 0);
-
-        let _ = self.push_ignored_call(entry, init_abi, Vec::new());
+        let immut_slots = self.contract_code_address_space_slots(contract);
+        let immut_ptr = if immut_slots == 0 {
+            let _ = self.push_ignored_call(entry, init_abi, Vec::new());
+            None
+        } else {
+            let (callee, _, args) = self.prepare_call(entry, init_abi, Vec::new());
+            let immut_ptr = self.push_local(
+                TyId::ptr_to(self.db, TyId::u8(self.db)),
+                RuntimeCarrier::Value(RuntimeClass::Scalar(pointer_class(
+                    self.db,
+                    AddressSpace::Memory,
+                ))),
+                RuntimeLocalRoot::None,
+            );
+            self.push_stmt(
+                entry,
+                RStmt::Assign {
+                    dst: immut_ptr,
+                    expr: RExpr::Call {
+                        callee,
+                        args: args.into_boxed_slice(),
+                    },
+                },
+            );
+            Some(immut_ptr)
+        };
 
         let runtime_offset = self.push_builtin_value(
             entry,
@@ -680,21 +702,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
             },
         );
 
-        let immut_slots = self.contract_code_address_space_slots(contract);
-        if immut_slots == 0 {
+        let Some(immut_ptr) = immut_ptr else {
             self.blocks[entry.index()].terminator = RTerminator::ReturnCode {
                 offset: runtime_offset,
                 len: runtime_len,
             };
             return;
-        }
-
-        let immut_ptr = self.push_builtin_value(
-            entry,
-            TyId::u256(self.db),
-            RuntimeClass::Scalar(word_scalar_class()),
-            RuntimeBuiltin::Mload { addr: zero },
-        );
+        };
         let immut_len = self.push_const_word(
             entry,
             immut_slots

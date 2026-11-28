@@ -50,9 +50,7 @@ func private %abi_field_size(v0.i256) -> i256 {
         return v2;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
         return v6;
@@ -107,17 +105,15 @@ func inline(always) private %alloc_bytes(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
+        v7.*i8 = evm_malloc v0;
+        v8.i256 = ptr_to_int v7 i256;
+        return v8;
 }
 
 func inline(always) private %alloc_uninit__g1d2b() -> @layout_0 {
@@ -149,16 +145,14 @@ func inline(always) private %allocation_len(v0.i256) -> i256 {
         br v3 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 65.i256;
 
     block3:
         jump block4;
 
     block4:
-        v10.i256 = call %word_to_usize v0;
-        return v10;
+        v7.i256 = call %word_to_usize v0;
+        return v7;
 }
 
 func private %base(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
@@ -200,7 +194,7 @@ func inline(always) private %checked_tail(v0.i256, v1.i256) -> i256 {
         return v10;
 }
 
-func inline(always) private %contract_init_abi_ImmutableContractFieldInitSet() {
+func inline(always) private %contract_init_abi_ImmutableContractFieldInitSet() -> i256 {
     block0:
         v0.objref<@layout_2> = obj.alloc @layout_2;
         v1.objref<@layout_1> = obj.alloc @layout_1;
@@ -229,36 +223,33 @@ func inline(always) private %contract_init_abi_ImmutableContractFieldInitSet() {
         br v12 block6 block7;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v17.*i8 = evm_malloc v11;
-        v18.i256 = ptr_to_int v17 i256;
-        evm_code_copy v18 v6 v11;
-        v21.objref<i256> = obj.proj v0 0.i256;
-        obj.store v21 v18;
-        v23.objref<i256> = obj.proj v0 1.i256;
-        obj.store v23 v11;
-        v24.@layout_1 = call %decoder_new;
-        obj.store v1 v24;
-        v25.@layout_3 = call %decode_payload__gad4c v1 v0;
-        v26.i256 = extract_value v25 0.i256;
-        v28.*i8 = evm_malloc 32.i256;
-        v29.i256 = ptr_to_int v28 i256;
-        memzero v29 32.i256;
-        v30.objref<i256> = obj.alloc i256;
-        call %__ImmutableContractFieldInitSet_init v26 v30;
-        v31.i256 = obj.load v30;
-        (v32.i256, v33.i1) = umulo 0.i256 32.i256;
-        br v33 block6 block8;
+        v15.*i8 = evm_malloc v11;
+        v16.i256 = ptr_to_int v15 i256;
+        evm_code_copy v16 v6 v11;
+        v19.objref<i256> = obj.proj v0 0.i256;
+        obj.store v19 v16;
+        v21.objref<i256> = obj.proj v0 1.i256;
+        obj.store v21 v11;
+        v22.@layout_1 = call %decoder_new;
+        obj.store v1 v22;
+        v23.@layout_3 = call %decode_payload__gad4c v1 v0;
+        v24.i256 = extract_value v23 0.i256;
+        v26.*i8 = evm_malloc 32.i256;
+        v27.i256 = ptr_to_int v26 i256;
+        memzero v27 32.i256;
+        v28.objref<i256> = obj.alloc i256;
+        call %__ImmutableContractFieldInitSet_init v24 v28;
+        v29.i256 = obj.load v28;
+        (v30.i256, v31.i1) = umulo 0.i256 32.i256;
+        br v31 block6 block8;
 
     block8:
-        v35.i256 = add v29 v32;
-        mstore v35 v31 i256;
-        mstore 0.i256 v29 i256;
-        return;
+        v33.i256 = add v27 v30;
+        mstore v33 v29 i256;
+        return v27;
 }
 
 func private %contract_init_root_ImmutableContractFieldInitSet() {
@@ -266,25 +257,22 @@ func private %contract_init_root_ImmutableContractFieldInitSet() {
         jump block1;
 
     block1:
-        call %contract_init_abi_ImmutableContractFieldInitSet;
-        v2.i256 = sym_addr &ImmutableContractFieldInitSet_runtime;
-        v3.i256 = sym_size &ImmutableContractFieldInitSet_runtime;
-        v4.i256 = mload 0.i256 i256;
-        (v6.i256, v7.i1) = uaddo v3 32.i256;
-        br v7 block2 block3;
+        v0.i256 = call %contract_init_abi_ImmutableContractFieldInitSet;
+        v1.i256 = sym_addr &ImmutableContractFieldInitSet_runtime;
+        v2.i256 = sym_size &ImmutableContractFieldInitSet_runtime;
+        (v4.i256, v5.i1) = uaddo v2 32.i256;
+        br v5 block2 block3;
 
     block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block3:
-        v12.*i8 = evm_malloc v6;
-        v13.i256 = ptr_to_int v12 i256;
-        evm_code_copy v13 v2 v3;
-        v16.i256 = add v13 v3;
-        evm_mcopy v16 v4 32.i256;
-        evm_return v13 v6;
+        v8.*i8 = evm_malloc v4;
+        v9.i256 = ptr_to_int v8 i256;
+        evm_code_copy v9 v1 v2;
+        v13.i256 = add v9 v2;
+        evm_mcopy v13 v0 32.i256;
+        evm_return v9 v4;
 }
 
 func private %contract_recv_abi_ImmutableContractFieldInitSet_1() {
@@ -587,9 +575,7 @@ func private %index_out_of_bounds() {
         jump block1;
 
     block1:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 50.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 50.i256;
 }
 
 func private %input() -> @layout_3 {
@@ -752,28 +738,26 @@ func inline(always) private %read_word(noalias nocapture v0.objref<@layout_1>, n
         jump block4;
 
     block4:
-        v18.objref<i256> = obj.proj v0 0.i256;
-        v19.i256 = obj.load v18;
-        v21.i256 = call %word_at v1 v19;
-        v23.objref<i256> = obj.proj v0 0.i256;
-        obj.store v23 v7;
-        return v21;
+        v16.objref<i256> = obj.proj v0 0.i256;
+        v17.i256 = obj.load v16;
+        v19.i256 = call %word_at v1 v17;
+        v21.objref<i256> = obj.proj v0 0.i256;
+        obj.store v21 v7;
+        return v19;
 
     block5:
-        v25.i256 = call %len__g140d v1;
-        v27.i1 = gt v7 v25;
-        br v27 block2 block3;
+        v23.i256 = call %len__g140d v1;
+        v25.i1 = gt v7 v23;
+        br v25 block2 block3;
 
     block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block7:
-        v14.objref<i256> = obj.proj v0 0.i256;
-        v15.i256 = obj.load v14;
-        v16.i1 = lt v7 v15;
-        br v16 block2 block5;
+        v12.objref<i256> = obj.proj v0 0.i256;
+        v13.i256 = obj.load v12;
+        v14.i1 = lt v7 v13;
+        br v14 block2 block5;
 }
 
 func private %return_bytes(noalias nocapture readonly v0.objref<@layout_2>) {
@@ -965,16 +949,14 @@ func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
         br v11 block5 block6;
 
     block4:
-        v17.i64 = phi (0.i64 block2) (v16 block6);
-        return v17;
+        v15.i64 = phi (0.i64 block2) (v14 block6);
+        return v15;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        evm_revert_word 1313373041.i32 17.i256;
 
     block6:
-        v16.i64 = call %downcast_truncate__gaa81 v10;
+        v14.i64 = call %downcast_truncate__gaa81 v10;
         jump block4;
 }
 
